@@ -4,7 +4,7 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 
 | # | Component | Phase | Size | Design status |
 |---|---|---|---|---|
-| 1 | KnowledgeGraphProvider contract (6-tool MCP surface + ontology schema + probe format + conformance) | P2 | M | not started — **do first (highest-stakes interface)** |
+| 1 | KnowledgeGraphProvider contract (6-tool MCP surface + ontology schema + probe format + conformance) | P2 | M | **draft — in review** (`01-knowledgegraph-provider-contract.md`) |
 | 2 | Agent CRD + agent-operator | P1 | L | not started |
 | 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | not started |
 | 4 | Receipt tap + receipt envelope schema | P1 | M | not started |
