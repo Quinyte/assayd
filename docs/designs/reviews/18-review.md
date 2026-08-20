@@ -45,3 +45,24 @@
 **REVISE.** This is a strong, security-literate design — the trust chain, the closed catalog, and the in-use uninstall semantics all hold up under the requested scrutiny. The single MAJOR is a real architectural gap rather than an oversight: packs are the first *multi-source* contributor to gateway concerns, and ADR-0020's one-concern rule needs a composition amendment before "filter live on all agents" can be both true and safe. The four minors are alignment and honesty fixes.
 
 VERDICT: REVISE — 5 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (1 residual nit)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved.** Filter contributions carry an explicit `priority` with defined **bands** — platform/compliance outrank pack contributions *by construction* (ADR-0014 guards unreorderable by packs, the exact property demanded); the compiler merges per concern sorted by `(priority band, source name)` — byte-deterministic; same-field contributions remain a hard install error naming both sources; recorded as an ADR-0020 amendment note + a design-03 golden-test case. The one-concern rule now has its multi-source story. |
+| 2 | MINOR | **Resolved.** Pack CR cluster-scoped, install gated by RBAC + source allowlist; filter facets take an optional selector (default all-agents); hard tenancy partitions allowlists per tenant (design 26 seam). |
+| 3 | MINOR | **Resolved.** `plume pack adopt <ref>` wraps the existing 09/19 artifacts in Pack CRs at the *same digest* — nothing moves, nothing re-signs — and the degenerate direct-fetch path is then retired. The handover is now mechanics, not vibes. |
+| 4 | MINOR | **Resolved.** `requires.contracts` uses ledger-resident identifiers (`gateway-filter/v1`, `template/v1`), and design 07's ledger now enumerates every socket contract (verified). |
+| 5 | MINOR | **Resolved.** The registry-outage row split by facet class; small text facets get a **content-addressed, hash-verified KV cache** (a cache that cannot drift — D2's intent preserved with honest wording); images registry-only for new pulls. **Residual nit**: template facets are *directories* — NATS KV values carry size limits (~1MB class); large template trees may not fit KV. The JetStream **object store** (already substrate, already used for receipt bodies) is the right cache home for anything beyond small text; one clause in D2/§7 choosing per-size or just defaulting content caches to the object store. |
+
+### Verdict
+
+**PASS.** The MAJOR — the platform's first multi-source policy composition — is resolved with exactly the deterministic, band-ordered, compliance-protected merge the finding demanded, recorded at ADR-0020 and tested at 03. Fold into ADR-0024 with the KV-vs-object-store cache clause.

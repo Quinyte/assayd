@@ -1,6 +1,6 @@
 # Design 16: EvalSuite CRD, gate controller, dataset builder
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/16-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/16-review.md) · ADR-0024
 - **Phase**: P3 · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0006 (eval-as-admission), 0019 (revision holding), 0020 (candidate isolation), 0021 (receipts) · interfaces: 02 (rollout machine), 12 §3.8 (golden-set seeds), 15 (probe/eval distinction), 17 (session sampling), 18 (runner images via packs)
 - **Research**: `docs/research/evals-2026-08.md` — DeepEval 4.x: programmatic `evaluate()`/`evals_iterator()` APIs, built-in agentic metrics (task completion, tool correctness), pytest-style CI integration; Inspect AI as the second runner.

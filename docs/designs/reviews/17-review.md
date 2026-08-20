@@ -42,3 +42,23 @@
 **REVISE.** The session model, the views-not-copies discipline, divergence-as-finding, and recursive receipting are all exactly right, and the sampler passes its scrutiny untouched. But the three MAJORs cluster on the mocked-replay mode: its determinism claim ignores LLM hops, its capture prerequisite misreads the receipt contract, and its mock placement doesn't route. All three have clean fixes that make the mode simpler and stronger — mock the model too, require `full` (or amend 04 deliberately), run the mock in-cluster.
 
 VERDICT: REVISE — 4 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (1 wording residual)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved.** LLM hops mocked by default in mocked replay — the fully-frozen-world guarantee is now true re-execution; `--live-llm` is the explicit drift-probing variant with the determinism claim dropped for it; the §9 determinism test is updated and now passable ("the test that r1 f1 made passable" — the design says it itself). A model call the recording never saw is divergence, which is exactly the interesting debugging signal. |
+| 2 | MINOR→ | **Resolved** (was MAJOR). Re-drive requires `capture: full` on the initial hop — the honest option, no contract change; below-full sessions listed as non-replayable with the reason. **Residual R2-a**: §5's sampler text still says "Non-replayable (**metadata-level**) sessions are excluded" — with the corrected boundary, `headers`-level sessions are excluded too; update the parenthetical (and the example count's label) to "below-`full` capture". One word, but it's the exclusion boundary the dataset reports will print. |
+| 3 | MAJOR | **Resolved.** The mock is in-cluster: short-lived mock Job + Service created by the verb/eval Job, seeded from content-addressed refs, torn down after; the CLI is a controller, never a data-plane endpoint. Recorded bodies stay in-cluster — the privacy bonus, taken. |
+| 4 | MINOR | **Resolved.** The replay-mock route is recorded in design 03 §3.4 now (verified: "Replay-mock route — replay-principal backends → in-cluster mock Service, fail-closed"), alongside the eval temporary-grant row. |
+
+### Verdict
+
+**PASS.** All three MAJORs closed with the simplifying fixes — mock the model too, require `full`, run the mock in-cluster — and the cross-design row landed as a record, not a promise. Fix the §5 boundary wording at ADR-0024 time.

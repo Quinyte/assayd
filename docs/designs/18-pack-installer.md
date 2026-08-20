@@ -1,6 +1,6 @@
 # Design 18: Pack format + installer (`pack/v1`)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 5 findings addressed; reviews/18-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/18-review.md) · ADR-0024
 - **Phase**: P3 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0008 (packs are the fast plane's delivery vehicle) · interfaces: 07 (contracts ledger), 08 (`plume pack` verbs, wizard consumption), 09 (template packs — the recorded constraint: formalize around the existing artifact), 19 (knowledge patterns), 16 (runner images), 11 (reader/catalog types), 10 (dashboards/signals)
 - **Research**: `docs/research/oci-packs-2026-08.md` — OCI 1.1 referrers API finalized (2024; Harbor/Quay/ECR support landed 2024-25); cosign v3 defaults to referrers + the new bundle format; `oras discover` audits the attestation chain.

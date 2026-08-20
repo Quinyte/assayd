@@ -44,3 +44,23 @@
 **REVISE.** The eval machinery itself — content-addressed datasets, honest judged-vs-mechanical metric taxonomy, fail-closed verdicts, the once-pre-canary scope pin — is the flagship design it needs to be. The one MAJOR is real and central: candidate isolation was design 02's hardest-won security property, and this design's identity story for reaching the candidate un-does it as written. The fix (per-run compiled principal grants) uses only machinery that already exists.
 
 VERDICT: REVISE — 4 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (1 residual — a stale contradicting sentence to strike)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved in the normative sections.** §4.2 now has the right identity model: per-run eval SVID via the existing label template (`…/eval/<suite>/<run>`), compiler-managed admitted-set add/remove at Job launch/end (the design 01 A2 pattern applied to routes — recorded as the "Eval temporary grant" row in 03 §3.4, verified), gate controller never proxies, and the runner trust bar stated (signed image; fail-closed reachability = exactly {candidate route, pinned KG version, judge egress}; budget-bounded). **Residual R2-a**: §10's first sentence still carries the *old* model verbatim ("Eval Jobs hold: the candidate-route credential (gate-controller SVID)") — a direct contradiction of §4.2 sitting in the Security section, where implementers look first. Strike/rewrite it to the per-run-SVID wording before ADR-0024. |
+| 2 | MINOR | **Resolved.** Eval-principal posture pinned independently (capture `full`, KG scope mirroring the target, compiled with the temporary grant); `tool_correctness`'s normative v1 variant named (target-sequence), argument-aware as the posture-enabled option. |
+| 3 | MINOR | **Resolved.** `evalrunner/v1` + `evalreport/v1` in §8 and in design 07's ledger (verified — the ledger now enumerates every socket contract). |
+| 4 | MINOR | **Resolved.** Trailing 7-day median from the design-04 aggregate; window + statistic recorded in the report alongside the digests. |
+
+### Verdict
+
+**PASS.** The MAJOR's fix is structurally correct and recorded at the compiler where it belongs; the architecture slot list also gained EvalRunner as shipped (erratum handled the established way). One editorial residual: the §10 sentence contradicting §4.2 must go — fold into ADR-0024.

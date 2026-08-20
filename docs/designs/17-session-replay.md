@@ -1,6 +1,6 @@
 # Design 17: Session replay engine
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/17-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/17-review.md) · ADR-0024
 - **Phase**: P3 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0021 (receipts, fidelity consumers, capture levels) · interfaces: 04 (the stream + object store), 16 (dataset sampler), 08 (`plume session` verbs), 02 (dev-revision targets)
 
