@@ -61,3 +61,31 @@
 **REVISE.** This is close to a very good contract: the closed type system, mandatory descriptions-as-prompt-substrate (D4), self-contained pattern instantiation, and loud evolution rules are all correct instincts. The three MAJORs share one root — the spec still contains under-determined constructs (`ref()`, bare-VERB references, unstated derivation rules) in exactly the places where downstream designs 13–16 will harden assumptions first and ask questions never. Tighten those and the rest is completion work.
 
 VERDICT: REVISE — 8 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS**
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved.** `ref()` dropped from v1 — all entity-to-entity facts are relations, one modeling path (D1 updated with the rationale). The recommended resolution, taken cleanly. |
+| 2 | MAJOR | **Resolved.** Canonical relation reference = full triple string, defined once in §3.3 and applied uniformly; bare VERB legal only when globally unique (validation error otherwise, JSONPath-located). Examples regenerated — `acyclic` now uses the triple form; the remaining bare `rel: COVERS` is legal under the new rule (COVERS is globally unique in the example doc). |
+| 3 | MAJOR | **Resolved.** §3.9 is the normative mapping table the finding demanded — attr types, Literal-not-Enum (with the readable-prompt reason), optionality, keys handling, the edge-model naming rule, and the docstring composition rule stated as rules with goldens demoted to regressions. The one-line contracts for invariant-query and golden-set derivations landed too. |
+| 4 | MINOR | **Resolved.** Relation-level `cardinality:` lowers to the cardinality invariant — one enforcement path, stated inline where both appear. |
+| 5 | MINOR | **Resolved.** `via` = list of canonical refs; `"A|B"` sugar normalizes to the list. |
+| 6 | MINOR | **Resolved.** Closed generator set (`per_branch`, `per_entity_sample`); packs use, never define; unknown ⇒ validation error; new generators = contract revision. |
+| 7 | MINOR | **Resolved.** `migrates` fully shaped (entities/attrs/relations/enums rename maps) + `removed:` acknowledgment for non-rename breaks + silent disappearance = validation error. "Loud intent is the rule" — exactly. |
+| 8 | MINOR | **Resolved.** Security section added: push authz cited to existing machinery; `custom` invariant containment (read-only, staging-only, under commit scope) + the hardened-profile deny flag. |
+
+### Nit (non-blocking)
+
+§4's semantic-validation list still says "referential closure (**refs**/relations name declared entities)" — the word "refs" is stale now that `ref()` is gone; strike it at ADR-0023 time.
+
+### Verdict
+
+**PASS.** All eight findings addressed; the contract now has one modeling path, one reference grammar, and normative derivations — the three properties designs 13–16 needed pinned. Fold into ADR-0023 with the wording nit.

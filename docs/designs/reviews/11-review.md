@@ -59,3 +59,30 @@
 **REVISE.** The facet model, credential-once design, and scope honesty (CDC deferred *explicitly*, events actionable-from-P4 *documented*) are strong. But three MAJORs are trust-boundary gaps — internet bytes in the control plane, admin credentials in pack code, and unhandled webhook retries — and the fourth is a cited spec claim the released spec contradicts. All have concrete fixes, two of which reuse mechanisms the platform already built (split-mode, derived-identity dedup).
 
 VERDICT: REVISE — 7 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS**
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved.** Split-mode is the default for the events facet (`--mode event-receiver`, one shared deployment) with a minimal mount set (HMAC secrets + tenant publish creds; no operator RBAC, no IdP keys, no system creds); in-operator embedding restricted to `local`; the hardening contract stated either way. D1 records the trust rationale in the design's own words — the tap-analogy break is now the argument, not the oversight. |
+| 2 | MAJOR | **Resolved.** Workers get a compiler-emitted route scoped to `kg.admin.write_batch` on one staging version; `begin/commit/promote/drop` stay platform-only; design 01 §11 A2 records the per-tool authz consequence ("platform identity only" = default, narrow grants = exception); negative test added (reader image cannot call commit/promote); pre-decides design 14's Jobs as asked. |
+| 3 | MAJOR | **Resolved.** Derived CloudEvents `id` (sender event id, else signed-payload hash) + `Nats-Msg-Id` + sized window; poll cursor persisted in KV, advanced after publish (crash ⇒ re-poll ⇒ dedup absorbs); per-connector ordering only, stated; failure row + duplicate-delivery and poll-crash e2e tests. The ADR-0021 pattern, correctly transplanted. |
+| 4 | MAJOR | **Resolved.** Structured content mode adopted; the research note corrected and pinned to the released binding v1.0.2 with the pre-NATS-headers context explained and a re-check note before any wire-format change. Honest fix. |
+| 5 | MINOR | **Resolved.** Design 03 gained both rows (webhook ingress: rate-limit + size-cap, HMAC explicitly receiver-side pending capability verification; scoped kgp-admin grant). |
+| 6 | MINOR | **Resolved.** Per-tenant `EVENTS` stream, tenant account, design-07 bootstrap job, 7d retention. |
+| 7 | MINOR | **Resolved.** `EventsDegraded` added to the conditions list; visibility corrected to Connector CR status + `events_pending` metric. |
+
+### Nit (non-blocking)
+
+§4 references "Gate B" — design 14 terminology not yet approved at this doc's writing; once 14 lands, make the reference a citation (`design 14 Gate B`).
+
+### Verdict
+
+**PASS.** All seven findings addressed, the two trust-boundary MAJORs structurally (split-mode with minimal mounts; scoped single-tool admin grants) rather than by caveat. Fold into ADR-0023 with the Gate-B citation nit.

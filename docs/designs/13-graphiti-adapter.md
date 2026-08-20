@@ -1,6 +1,6 @@
 # Design 13: Graphiti provider adapter (first kgp/v1alpha1 implementation)
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/13-review.md)
 - **Phase**: P2 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0017 (contract), 0018 (FalkorDB default, license caveat) · interfaces: 01 (implements it), 12 (consumes Pydantic derivations), 14 (admin surface caller), 15 (probe execution)
 - **Research**: `docs/research/connectors-2026-08.md` §graphiti (Pydantic custom types; `add_episode_bulk` empty-graph constraint; `group_id` namespacing)
@@ -18,11 +18,11 @@ The reference kgp provider: a container wrapping **graphiti-core as a library** 
 
 ### 3.1 Versions = `group_id` namespaces
 
-Graph version `vN` ⇔ graphiti `group_id = "<graph>@vN"`. The adapter's HTTP mux serves `/kgp/<graph>/<version>/mcp` by binding each request's group_id from the path — version isolation is namespace isolation (research: group_id scopes episodes + extracted entities). `begin_version(from: vN)` copy-on-write: v1 implements **copy-forward** (bulk re-add of vN's episodes into vN+1's namespace) — simple, correct, O(corpus); an incremental CoW is a recorded optimization, not a v1 promise.
+**Contract property: a version fork is a deterministic data-level copy — never re-extraction** (r1 f2). Backend mapping is an adapter detail: on **FalkorDB, version = graph-key-per-version** and `begin_version(from: vN)` = `GRAPH.COPY vN vN+1` (whole-graph copy incl. nodes/edges/schema/indices — cheap, deterministic); on Neo4j, a scoped subgraph copy or dump/restore per version. `group_id` remains available for intra-version organization but is not the version boundary. The adapter's HTTP mux serves `/kgp/<graph>/<version>/mcp` by binding the request's backend key from the path.
 
-### 3.2 Extraction = ontology-derived Pydantic types
+### 3.2 Typing without extraction (r1 f1 — the seam, pinned)
 
-The design-12 derivation hands the adapter generated Pydantic entity/edge models (descriptions as docstrings = prompt substrate); the adapter passes them to `add_episode` / `add_episode_bulk` so extraction classifies against the ontology. **Bulk constraint honored**: `add_episode_bulk` only into *fresh* staging namespaces (our snapshot model guarantees this — the research-noted "empty graph / no edge invalidation" precondition is structural for us); incremental additions to a staging version use plain `add_episode`.
+**Extraction lives in the pipeline (design 14), not the adapter.** `kg.admin.write_batch`/`load_artifact` are **structured node/edge upserts** exactly as design 01 §3.4 specifies — the adapter persists typed elements via graphiti's lower-level node/edge persistence (or the backend driver directly), attaching provenance per element; graphiti's `add_episode` extraction path is **not** the ingestion write path. The design-12 Pydantic models still configure the adapter's typing and search behavior (typed nodes, hybrid search over ontology types) — they just never trigger adapter-side LLM calls. Consequences: Gate A genuinely runs *before any write* (14 D2), the LLM caller is the build Job so budget attribution is automatic (14 D4), and the adapter contains **zero LLM dependencies** (embedding calls for search indexing use the pinned embedder via the gateway; extraction never happens here).
 
 ### 3.3 Query tools
 
@@ -35,11 +35,11 @@ The design-12 derivation hands the adapter generated Pydantic entity/edge models
 | `kg.schema` | the embedded ontology doc verbatim + `{contract, version, pattern?, embedder: {model, dim}}` |
 | `kg.probe` | executes the probe set via the same query paths agents use; matchers per design 12 §3.6 |
 
-**Scope enforcement (design 01 A1)**: every request carries the gateway-injected `X-Plume-KG-Scope` header (signed; adapter verifies the gateway's signature/SVID); all four fact-bearing tools filter to scoped entity types and answer `KG_SCOPE_DENIED` otherwise. The closed error set (ADR-0017) maps from adapter errors — never provider-native errors on the wire.
+**Scope enforcement (design 01 A1)**: every request carries the gateway-injected `X-Plume-KG-Scope` header — **trust derives from the mTLS connection's verified gateway SVID** (ingress is gateway-only, §6); no separate header signature exists or is needed (r1 f4; design 03's row wording aligned). All four fact-bearing tools filter to scoped entity types and answer `KG_SCOPE_DENIED` otherwise. The closed error set (ADR-0017) maps from adapter errors — never provider-native errors on the wire.
 
 ### 3.4 Admin tools & provenance
 
-`write_batch`/`load_artifact` wrap typed episode adds with **mandatory provenance per element** (source_uri, span, pipeline_run) stored as episode metadata; idempotency by `(batch_id, seq)` recorded in a small adapter-local ledger table (in FalkorDB itself — no extra store). `commit_version` runs the invariant queries compiled from the ontology (design 12 derivations) against the staging namespace: violations ⇒ quarantine (namespace kept for inspection, never promoted). `promote` flips the adapter's version routing table; `drop_version` deletes a namespace (refused for active).
+`write_batch`/`load_artifact` perform structured upserts with **mandatory provenance per element** (source_uri, span, pipeline_run) stored as episode metadata; idempotency by `(batch_id, seq)` recorded in a small adapter-local ledger table (in FalkorDB itself — no extra store). `commit_version` runs the invariant queries compiled from the ontology (design 12 derivations) against the staging namespace: violations ⇒ quarantine (namespace kept for inspection, never promoted). `promote` flips the adapter's version routing table; `drop_version` deletes a namespace (refused for active).
 
 ### 3.5 Embedder pinning
 
@@ -54,7 +54,7 @@ The KG CR names the embedding model; the adapter records `{model, dim}` in versi
 | Failure | Behavior |
 |---|---|
 | FalkorDB down | All tools return typed unavailable; KG CR `Ready=False` via probe failure; agents degrade per design 02 |
-| Extraction LLM errors mid-batch | DBOS-side retry (design 14 owns); adapter idempotency makes replays safe |
+| Pipeline write retries | Adapter idempotency by `(batch_id, seq)` makes replays safe (extraction errors are wholly design 14's — no LLM here) |
 | Copy-forward interrupted | Staging namespace incomplete; `commit_version` invariants fail ⇒ quarantine; rebuild resumes by batch idempotency |
 | Scope header missing/unsigned | Deny-all (`KG_SCOPE_DENIED`) — absence of scope is never scope-everything |
 | Backend switch on existing graph | Refused in-place; new backend = new graph build (documented; no silent migration) |
@@ -66,13 +66,13 @@ Ingress mTLS from gateway only; admin endpoint additionally requires platform SV
 
 ## 7. Testing
 
-**The kgp conformance suite is the acceptance test** (design 01 §8, all 10 points + the scope battery from A1). Adapter-specific additions: copy-forward interruption/resume; embedder-mismatch refusal; bulk-vs-incremental path equivalence (same corpus, same graph modulo episode ids); backend matrix (falkordb required, neo4j weekly).
+**The kgp conformance suite is the acceptance test** (design 01 §8, all 10 points + the scope battery from A1). Adapter-specific additions: fork determinism (`GRAPH.COPY` result equals source, byte-stable across repeats); interrupted-fork cleanup; embedder-mismatch refusal (wire code asserted); structured-write path never invokes an LLM (network-egress assertion in test harness); backend matrix (falkordb required, neo4j weekly).
 
 ## 8. Decisions for async review
 
-- **D1 — Copy-forward (bulk re-add) for `begin_version(from)`** in v1; incremental CoW recorded as optimization with a trigger (corpus > ~500k episodes or build > nightly window).
-- **D2 — Extraction LLM traffic egresses via the gateway** — receipted and budgeted like all model traffic; a KG build has a visible cost.
-- **D3 — `KG_EMBEDDER_MISMATCH` as a documented adapter extension code** (candidate for kgp/v1beta1 promotion).
+- **D1 — Version fork = deterministic data copy** (FalkorDB `GRAPH.COPY`, key-per-version; Neo4j scoped copy) — never re-extraction (r1 f2).
+- **D2 — The adapter is LLM-free** (r1 f1): extraction is pipeline-side; only embedding-for-search egresses via the gateway under the build/probe principals.
+- **D3 — Embedder mismatch surfaces as closed-set `KG_VERSION_GONE` + `data.detail`** (r1 f3); first-class code deferred to kgp/v1beta1.
 
 ## 9. Resulting ADRs
 

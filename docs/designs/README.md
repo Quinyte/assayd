@@ -14,11 +14,11 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 8 | CLI | P1+ | L | r2 — critique **PASS** (`08-…`, `reviews/08-review.md`; awaiting user approval, ADR-0022) |
 | 9 | SDK templates | P1 | M | r2 — critique **PASS** (`09-…`, `reviews/09-review.md`; awaiting user approval, ADR-0022) |
 | 10 | Observability pack | P1+ | M | r2 — critique **PASS** (`10-…`, `reviews/10-review.md`; awaiting user approval, ADR-0022) |
-| 11 | Connector CRD | P2 | M | draft — critique **REVISE** (`11-…`, `reviews/11-review.md`) |
-| 12 | Ontology spec | P2 | M | draft — critique **REVISE** (`12-…`, `reviews/12-review.md`) |
-| 13 | Graphiti provider adapter | P2 | M | draft — in review (`13-…`) |
-| 14 | Ingestion pipeline + extraction QA | P2 | L | draft — in review (`14-…`) |
-| 15 | Probe engine | P2 | M | draft — in review (`15-…`) |
+| 11 | Connector CRD | P2 | M | r2 — critique **PASS** (`11-…`, `reviews/11-review.md`; awaiting user approval, ADR-0023) |
+| 12 | Ontology spec | P2 | M | r2 — critique **PASS** (`12-…`, `reviews/12-review.md`; awaiting user approval, ADR-0023) |
+| 13 | Graphiti provider adapter | P2 | M | draft — critique **REVISE** (`13-…`, `reviews/13-review.md`) |
+| 14 | Ingestion pipeline + extraction QA | P2 | L | draft — critique **REVISE** (`14-…`, `reviews/14-review.md`) |
+| 15 | Probe engine | P2 | M | draft — critique **REVISE** (`15-…`, `reviews/15-review.md`) |
 | 16 | EvalSuite CRD + controller + dataset builder | P3 | L | not started |
 | 17 | Session replay engine | P3 | M | not started |
 | 18 | Pack format + installer | P3 | M | not started |

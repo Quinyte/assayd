@@ -1,6 +1,6 @@
 # Design 11: Connector CRD (three facets)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 7 findings addressed; reviews/11-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/11-review.md) · ADR-0023
 - **Phase**: P2 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0009 (three planes) · interfaces: 03 (tool Backends/policies), 05 (tools.* directory), 06 (credentials/OAuth), 14 (ingestion readers), 21-workflow (event triggers, P4 seam)
 - **Research**: `docs/research/connectors-2026-08.md` — **released NATS binding (v1.0.2) blesses structured mode only** (r1 f4, corrected + pinned); sdk-go `nats_jetstream/v2` is the implementation vehicle.

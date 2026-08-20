@@ -1,6 +1,6 @@
 # Design 12: The ontology/v1 specification
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 8 findings addressed; reviews/12-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/12-review.md) · ADR-0023
 - **Phase**: P2 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0005, 0017 (kgp contract carries the document) · interfaces: 01 (served by `kg.schema`), 13 (drives Graphiti extraction), 14 (drives pipeline gates), 15 (probes), 16 (golden-set derivation), 19 (patterns instantiate it)
 - **Research**: `docs/research/connectors-2026-08.md` §graphiti — custom entity/edge types in graphiti-core are **Pydantic models** passed to `add_episode`; the ontology→extraction mapping is therefore mechanical.
@@ -161,3 +161,7 @@ The spec ships executable: `ontology-v1.schema.json` + a semantic-validation tes
 ## 9. Resulting ADRs
 
 Folded into ADR-0023 (P2 knowledge layer) after critique PASS.
+
+## 10. Amendments
+
+- **A1 (2026-08-20, from design 15 r1 f1/f3)**: (a) probe **`via` is required** — `via: {bundle, params}` or `via: {search: {query, top_k}}`; a probe without `via` fails validation; `q` is the display label, never the executable. Matchers are defined against the named output shape (bundle `text`/`citations`; search hit fields). (b) New `health: {pass_threshold: 1.0}` section — the promotion threshold is ontology content, versioned with its probes; the KG CR may tighten, never loosen.
