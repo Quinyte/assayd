@@ -1,6 +1,6 @@
 # Design 04: Receipt tap + receipt envelope (`receipt/v1`)
 
-- **Status**: revised r2 — awaiting re-critique (r1 verdict REVISE, 12 findings — all addressed; see reviews/04-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/04-review.md) · ADR-0021
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0002, 0003 (semconv — see pin note §3.1), 0010 (principal chain), 0013 (tenancy), 0014 (compliance hooks) · interfaces: 03 (OTLP config + pricing + **budget backstop consumer**), 16/17 (fidelity consumers), 26 (tenant fan-out seam)
 - **Research**: `docs/research/agentgateway-2.2-2026-08.md` (OTLP export claims) · `docs/research/otel-genai-semconv-2026-08.md` (pin mechanism)

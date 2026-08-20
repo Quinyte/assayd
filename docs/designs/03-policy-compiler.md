@@ -1,6 +1,6 @@
 # Design 03: Policy compiler (PolicyIntent → agentgateway 2.2 resources)
 
-- **Status**: revised r2 — awaiting re-critique (r1 verdict REVISE, 11 findings — all addressed; see reviews/03-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/03-review.md; residuals R2-a/R2-b folded in) · ADR-0020
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0003, 0014, 0019 · interfaces: designs 02 (caller; amendments recorded there §11), 04 (spend aggregation owner), 22 (loop governance)
 - **Research**: `docs/research/agentgateway-2.2-2026-08.md` (load-bearing claims, cited)
@@ -30,6 +30,7 @@ PolicyIntent {
   budget:      {tokensPerDay, usdPerDay, taskTimeout, maxHops}
   expose:      [{protocol, visibility, auth, consumerBudgets?}]
   captureLevel: metadata|headers|full
+  gatewayReplicas: int          // R2-a: declared compile input; scale change ⇒ recompile of rate policies
 }
 ```
 
@@ -69,6 +70,8 @@ New failure rows in §5 cover applied-but-not-accepted and partial-apply.
 | Guards / egress | prompt-guard policies; LLM egress allowlist as Backend restriction | ADR-0014; guards consume budget after rate-limit (native order) — documented |
 | Expose visibility | listener class cluster / org / public (+ OAuth clients, consumer budgets) | |
 | Candidate isolation | header route matched only with gate-controller SVID | design 02 review f2; protected by §3.3 ordering |
+| Credential scrub | `-transform` policy stripping the mandatory header denylist **before export** | design 04 §6 (R2-b) |
+| Card discovery route | `/.well-known/agent-card.json` routed to the **agent container** (SoT = code, ADR-0019) | design 05 review f1 |
 | Receipts | OTLP tracing config (`frontendPolicies`), capture level → attribute verbosity | design 04 |
 
 ### 3.5 Pricing table

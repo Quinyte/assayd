@@ -6,11 +6,11 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 |---|---|---|---|---|
 | 1 | KnowledgeGraphProvider contract (6-tool MCP surface + ontology schema + probe format + conformance) | P2 | M | **approved** (`01-…`, ADR-0017/0018, review PASS) |
 | 2 | Agent CRD + agent-operator | P1 | L | **approved** (`02-…`, ADR-0019, review PASS) |
-| 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | draft — critique **REVISE** (`03-…`, `reviews/03-review.md`) |
-| 4 | Receipt tap + receipt envelope schema | P1 | M | draft — critique **REVISE** (`04-…`, `reviews/04-review.md`) |
-| 5 | Agent directory (OASF on JetStream KV) | P1 | S | not started |
-| 6 | Identity glue (SPIRE registrar, IdP bootstrap, token exchange) | P1 | M | not started |
-| 7 | Umbrella chart, profiles, e2e CI | P1 | M | not started |
+| 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | r2 — critique **PASS** (`03-…`, `reviews/03-review.md`; awaiting user approval + ADR-0020) |
+| 4 | Receipt tap + receipt envelope schema | P1 | M | r2 — critique **PASS** (`04-…`, `reviews/04-review.md`; awaiting user approval + ADR-0021) |
+| 5 | Agent directory (OASF on JetStream KV) | P1 | S | draft — critique **REVISE** (`05-…`, `reviews/05-review.md`) |
+| 6 | Identity glue | P1 | M | draft — in review (`06-…`) |
+| 7 | Umbrella chart, profiles, e2e CI | P1 | M | draft — in review (`07-…`) |
 | 8 | CLI (init/dev/build/deploy/invoke + verb map) | P1+ | L | not started |
 | 9 | SDK templates (per-SDK A2A wrappers) | P1 | M | not started |
 | 10 | Observability pack (OTel semconv pin, dashboards, alerts) | P1+ | M | not started |

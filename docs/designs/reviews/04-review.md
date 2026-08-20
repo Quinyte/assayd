@@ -83,3 +83,31 @@ Two aggravations, verified this session: [JetStream dedup is a sliding window, d
 ## Disposition
 
 **REVISE.** This is a stronger draft than 03 — D1 (derive receipts from the gateway's own export rather than a bespoke intercept) is well-argued and now verified, the tiered delivery guarantee (D3) is honestly stated, and the failure table has real numbers. But finding 1 falsifies a guarantee the design explicitly claims (exactly-once append) on which audit integrity and 03's budget backstop both stand, and findings 2–6 each leave a promised property (pinned evolution, tenant-isolated audit, backstop feed, credential safety, control-plane availability) without a mechanism. Fix, land/refresh the research notes, re-run critique.
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (1 cross-doc residual, tracked as 03-review R2-b; nothing blocks this design)
+- **Independence note**: same independent session as r1; did not author the draft or the r2 revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | BLOCKER | **Resolved — and the guarantee restated honestly.** `receipt_id` = uuidv5 over `(trace_id, span_id)` — a pure function of the span, so redelivered batches re-derive the same ID and `Nats-Msg-Id` actually dedupes; object keys idempotent likewise. Dedup window sized to the exporter retry horizon (10m → 15m) as one tunable pair; memory stated and correct (500/s × 900s × ~150B ≈ 70MB) and alarmed. Beyond-horizon duplicates are *counted* (`late_redelivery`), and D3 now claims "effectively-once within a sized, alarmed horizon" instead of exactly-once — the honest version of the property. Redelivery test covers both sides of the window. |
+| 2 | MAJOR | **Resolved.** Pin = commit-SHA snapshot of `semantic-conventions-genai` (recorded in transform + fixture-set name), v1.41 monolithic release as frozen fallback; `docs/research/otel-genai-semconv-2026-08.md` landed with the repo-split facts and explicitly supersedes the stale landscape line; ADR-0021 to state the mechanism, ADR-0003 wording gets the clarifying note. Fully executable now. |
+| 3 | MAJOR | **Resolved.** Per-tenant `RECEIPTS` stream in the tenant's NATS account; core = the same model at n=1 (`default` account), multi-account fan-out is the design-26 seam; tenant token dropped from subjects. Composes correctly with ADR-0013, and the core/enterprise continuity argument is elegant. D4 records it. |
+| 4 | MAJOR | **Resolved.** Consumer table with fidelity/aggregate classes; budget backstop named with its contract — projector-owned per-agent daily spend, 00:00 UTC windows, staleness bound = reconcile interval + index lag (alarmed >60s), nulls-as-unknown. The "never the index" rule correctly rescoped to fidelity consumers. Closes the gap from both sides (with 03 r2 §3.4). |
+| 5 | MAJOR | **Resolved on this design's side.** Mandatory, non-configurable denylist at every capture level, applied gateway-side before export *and* re-checked in the tap; scrub fixture in §8. Residual: the gateway-side transform must appear in design 03's mapping table — recorded as 03-review **R2-b** (the fix lands in 03, not here). |
+| 6 | MAJOR | **Resolved.** Failure row for operator blast radius: hard per-subsystem caps, shed-telemetry-before-reconcile priority (drops visible via `ReceiptsDegraded`), split-trigger thresholds explicitly tied to this risk. D2 records the engineering. |
+| 7 | MINOR | **Resolved.** Both research notes landed with citations. |
+| 8 | MINOR | **Resolved.** Artifact claim dropped; body refs correctly labeled internal storage. |
+| 9 | MINOR | **Resolved.** `ReceiptsDegraded` recorded in design 02 §11 A1; gap-metrics ingest path specified (gateway OTLP metrics on the same pipe, exporter-drop counters). The `hop.type` classification clause (backend class stamped via design-03 resources) also added. |
+| 10 | MINOR | **Resolved.** Header lists 0002/0003/0010/0013/0014. |
+| 11 | MINOR | **Resolved.** `usd_est: null` + `pricing: "unresolved"` + counter; aggregates treat null as unknown; failure row present. |
+| 12 | MINOR | **Resolved.** Redelivery (in/out of window), tenant isolation, and credential-scrub tests all added; backstop-aggregate e2e includes null-pricing receipts. |
+
+### Verdict
+
+**PASS.** All 12 r1 findings genuinely addressed; the BLOCKER fix is structural (derived identity) rather than a wider window papering over random IDs, and the delivery guarantee was *weakened to the truth* rather than defended — the right move. Record ADR-0021; the single residual (scrub row in 03's mapping) is tracked as 03-review R2-b.

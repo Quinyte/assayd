@@ -84,3 +84,35 @@ Also unanswered: how "remaining budget in status" (design 02 §3.1) gets fed fro
 ## Disposition
 
 **REVISE.** The core shape is right — pure-function compiler as a library, one-concern-per-policy for diffability, explicit OSS-only stance, honest two-tier budget semantics (D3 is the best paragraph in the doc). But finding 1 is a fail-open hole in the platform's central security promise, and findings 2–6 show the two load-bearing decisions (D1, D2) resting on unlanded research while quietly amending an approved design. Fix, land the research note, re-run critique.
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (2 residual MINORs noted below — fix in place when recording ADR-0020; neither blocks approval)
+- **Independence note**: same independent session as r1; did not author the draft or the r2 revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | BLOCKER | **Resolved.** §3.3 apply protocol: Backends → Policies → verified `Accepted` (bounded wait) → Routes last; removal reversed; `PolicyApplyIncomplete`; crash mid-sequence is safe *because* routes are last; candidate-isolation policies verified before the candidate route exists. Failure rows added. The fail-open window is closed by construction. |
+| 2 | MAJOR | **Resolved.** `docs/research/agentgateway-2.2-2026-08.md` landed with citations for CRD names, rate-limit modes, enterprise budget features, evaluation order, `frontendPolicies`, `Mcp-Name` matching. The overwrite claim is honestly downgraded to open item R1 with a reproducing test at implementation; D2's justification rewritten (ambiguity-avoidance-by-construction + diffability) so it no longer depends on the unproven claim. Exactly what the finding asked for. |
+| 3 | MAJOR | **Resolved.** No external RLS/Redis — doctrine holds. Gateway tier is explicitly a *local approximation* (rate ÷ replicas, continuous refill), exact tier is design 04's spend aggregation with the approved 00:00 UTC windows; status fed from the aggregation. Deltas recorded in design 02 §11 A1. `BudgetEnforcementDegraded` covers the aggregation-down case. The two-tier story is now coherent end to end. |
+| 4 | MAJOR | **Resolved.** Max-price conservative compile; unmatched model pattern ⇒ compile error (failure row added); multi-provider golden fixture. Totality claim now true. |
+| 5 | MAJOR | **Resolved.** Design 04 owns spend aggregation (04 §3.4 names the backstop as a consumer with a staleness bound); design 02 §11 A1 records all four deltas (conditions, reconcile input, weight-0 guard state, tier split) — the silent amendment is now a recorded amendment. |
+| 6 | MAJOR | **Resolved.** Scope is gateway-injected (signed header, inbound occurrences stripped) and provider-enforced across all four fact-bearing tools with `KG_SCOPE_DENIED`; gateway stays body-free (consistent with design 01 §3.1); trust consequence stated; design 01 §11 A1 records the amendment + conformance scope-battery. This is the right mechanism. |
+| 7 | MINOR | **Resolved.** `scope.bundles?` dropped. |
+| 8 | MINOR | **Resolved.** Header now 0003/0014/0019; 0012 dropped. |
+| 9 | MINOR | **Resolved.** Truncate + 8-hex-hash rule, collision-checked, max-length golden fixture. |
+| 10 | MINOR | **Resolved.** `PricingStale` carried on every Agent CR with a usd budget; ConfigMap operator-writable by default; backstop-bounds-tampering noted in §6. |
+| 11 | MINOR | **Resolved.** e2e adds synthetic-receipt backstop, `PricingStale`, and bad-policy → `PolicyApplyIncomplete`. |
+
+### Residual items (new in r2, both MINOR, non-blocking)
+
+- **R2-a — `gateway_replicas` is an undeclared compile input.** §3.4's rate formula divides by replica count, but `PolicyIntent` doesn't carry it and §4's purity/totality statement doesn't name it. Declare it as a compiler input and state that a gateway scale change triggers recompile of all rate-limit policies (else the ÷replicas approximation silently drifts).
+- **R2-b — the credential-scrub transform is claimed but not mapped.** Design 04 r2 §6 says the credential-header scrub runs gateway-side via "a transform policy emitted by design 03" — correct place, but 03 §3.4's mapping table has no such row. Add it to the `-transform` concern (alongside scope injection and lineage headers) so the emission is contractual, not implied.
+
+### Verdict
+
+**PASS.** All 11 r1 findings genuinely addressed — none papered over; the two hard ones (apply ordering, two-tier budgets) are resolved structurally rather than by caveat. Record ADR-0020 with R2-a/R2-b folded in; open item R1 (overlap reproducing test) correctly rides to implementation.
