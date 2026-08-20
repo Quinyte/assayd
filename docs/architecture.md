@@ -7,21 +7,31 @@
 
 ## 00 · What v1.0 incorporates
 
-v0.1 was the strategy document written before any component was designed. v1.0 folds in what the design phase actually settled — including the places it **corrected** v0.1. The load-bearing corrections, each forced by critique and recorded in an ADR:
+v0.1 was the strategy document, written before any component was designed. v1.0 folds in what the design phase settled. Two distinct things happened, and conflating them would flatter the process — so they are listed separately.
 
-| v0.1 said | The design phase established | Where |
+### Corrections to v0.1 itself
+
+| v0.1 said | v1.0 says | Where |
 |---|---|---|
-| The KG adapter would extract entities at write time | **Extraction lives in the ingestion pipeline; the adapter is LLM-free.** `write_batch` is a structured upsert — otherwise the extraction-quality gate would run *after* the write it exists to prevent | ADR-0023 (13/14) |
-| Version forks were a copy-forward of source episodes | **A fork is a deterministic data copy** (`GRAPH.COPY`, key-per-version) — re-extraction would make vN+1 differ from vN and break `kg diff` at the root | ADR-0023 (13) |
-| Receipts carried generated IDs | **`receipt_id` = UUIDv5 over (trace_id, span_id)** — a minted ID defeats the dedup that audit integrity depends on under retry | ADR-0021 |
-| Hash-chaining would run in the tap | **A single-writer chainer downstream of the stream** — parallel tap replicas cannot share one chain | ADR-0026 (27) |
-| Eval jobs would use the gate controller's identity | **Per-run eval SVIDs with temporary route grants** — SPIFFE identities are pod-attested and are never lent | ADR-0024 (16) |
-| Tenancy "adds no new isolation primitives" | **It adds exactly two** — tenant-scoped quota intents, and per-tenant SPIRE federated to the host trust domain | ADR-0026 (26) |
-| Six CRDs | Six *core* CRDs plus `Connector`, `Pack`, `Grant`, `Tenant` as the design phase made them concrete | §03 |
+| Subgraph scoping is **enforced at the gateway** | **Gateway-injected, provider-enforced** — the gateway never parses MCP bodies, so providers carry scope and the conformance suite gains a scope battery | design 01 A1 · ADR-0020 |
+| An approval-gated tool pauses and "the agent just sees a slow tool" | A typed, retryable **`APPROVAL_PENDING`** the caller must handle — protection is fail-closed either way, but black-box agents that treat it as fatal will fail the task, which is documented rather than hidden | ADR-0025 (22) |
+| Budgets are enforced at the gateway | **Two tiers, stated**: the gateway is a conservative *local approximation* (rate ÷ replicas, priced at the max model), the **receipt backstop is exact** and trails by one reconcile interval | ADR-0020 |
+| Six CRDs | Six *core* CRDs plus `Connector`, `Pack`, `Grant`, `Tenant` | §03 |
 
-Everything else in v0.1 survived critique. The full decision record is indexed in §20.
+### Draft errors that critique caught before implementation
 
----
+None of these ever reached code — they were caught in review, and each produced a decision that is now load-bearing. They are recorded because the *reasoning* is reusable, not because the strategy was wrong.
+
+| The design draft proposed | Why it failed review | Now |
+|---|---|---|
+| The KG adapter extracts at write time | The extraction-quality gate would run *after* the write it exists to prevent | Extraction is the pipeline's; **the adapter is LLM-free** (ADR-0023) |
+| Version forks copy source episodes forward | Re-extraction is non-deterministic, so vN+1 would differ from vN and `kg diff` breaks at the root | A fork is a **deterministic data copy** (ADR-0023) |
+| Receipt IDs minted at transform time | A fresh ID per retry defeats the dedup that audit integrity depends on | **`receipt_id` derived from the span** (ADR-0021) |
+| Hash-chaining inside the tap | Parallel tap replicas cannot share one chain | **Single-writer chainer downstream of the stream** (ADR-0026) |
+| Eval jobs borrow the gate controller's identity | SPIFFE identities are pod-attested and cannot be lent | **Per-run eval SVIDs** with temporary route grants (ADR-0024) |
+| Tenancy "adds no new isolation primitives" | It adds two — the thesis was asserted, not tested | Two named mechanisms, priced and recorded (ADR-0026) |
+
+Everything else in v0.1 survived critique. The full decision record is indexed in §20; open items carried into implementation are listed there too.
 
 ## 01 · The lightweight doctrine
 
@@ -38,7 +48,7 @@ Every design decision passes six rules. This is the product: competitors ship pl
 
 Three planes:
 
-- **Control plane** (GitOps): Git repo of CRs → Argo CD/Flux → **three plume operators** (agent, workflow, model) that reconcile CRs into bindings — routes, identity, gates. The CLI is sugar over CRs.
+- **Control plane** (GitOps): Git repo of CRs → Argo CD/Flux → **three core plume operators** (agent, workflow, model) — plus the enterprise tenant-operator that reconcile CRs into bindings — routes, identity, gates. The CLI is sugar over CRs.
 - **Data plane**: **agentgateway** — one data plane for A2A · MCP · LLM · HTTP traffic. AuthN via SPIFFE + OAuth; guardrail filters; rate limits; **policy compiled from Agent CR budgets/tools/expose blocks**. Every hop crosses it — which is where guarantees live, so they hold for black-box agents regardless of SDK.
 - **Substrate**: **NATS JetStream** (events · KV directory · object store · session receipts) + **Postgres** (DBOS durable workflows · eval results · audit index).
 
@@ -122,16 +132,17 @@ spec:
 kind: KnowledgeGraph
 spec:
   provider: graphiti | cognee | trustgraph | neo4j | byo   # byo = any MCP endpoint
-  endpoint: {mcp: "http://payer-kg:8080/mcp"}
-  ontology: {configMapRef: payer-ontology}   # the DOMAIN CONTRACT
-  ingestion: {workflowRef: policy-ingest}
+  ontology: {configMapRef: payer-ontology}   # THE domain contract — entities, relations,
+                                             # invariants, bundles, probes, health.pass_threshold
+  ingestion:
+    connectorRef: sharepoint-sops            # a Connector's ingestion facet (design 11)
+    schedule: "0 2 * * *"                    # builds run as Jobs (design 14), not Workflow CRs
   versioning: {strategy: snapshot}           # immutable version per ontology/corpus change
-  health:
-    probes:
-      - {name: coverage, query: "known-answer probe set", threshold: 0.9}
+  build:  {budget: {tokensPerRun: 2M, usdPerRun: 20}}
+  probes: {budget: {tokensPerDay: 100k}}     # probes live in the ontology; the CR budgets them
 ```
 
-**The contract, as designed (`kgp/v1alpha1`, ADR-0017)**: six query tools (`search · neighbors · get_context_bundle · cite · schema · probe`) and six admin tools (`begin_version · write_batch · load_artifact · commit_version · promote · drop_version`), all MCP — no dual protocol. **Every version is its own endpoint** (`/kgp/<graph>/<version>/mcp`), so an agent structurally cannot cross versions and rollback is pure routing. Scope is **gateway-injected and provider-enforced** across all four fact-bearing tools. A version fork is a **deterministic data copy**, never re-extraction. Providers pass a conformance suite or they do not claim support.
+Probes, their `via` execution, and the promotion threshold live in the **ontology document**, not the CR — the CR may tighten `health.pass_threshold` but never loosen it (design 12 §10 A1). The version-scoped endpoint is derived, not declared.
 
 Three properties nobody else has:
 
@@ -146,7 +157,7 @@ Three properties nobody else has:
 | Job | Binding | Why · weight |
 |---|---|---|
 | Agent↔agent messaging, events, KV, receipts | **NATS JetStream** | CNCF-graduated, one binary, KV + object store built in · 1 pod |
-| Durable execution inside workflows | **DBOS** (library on Postgres) | Crash-resume/retries/idempotency via decorated functions; the anti-Temporal choice · 0 pods |
+| Durable execution inside workflows | **DBOS** (library on Postgres) | Crash-resume/retries/idempotency via decorated functions; the anti-Temporal choice. DBOS-the-library costs 0 pods; the `Workflow` CRD's **event triggers require standing workers**, so design 21 adds workflow-operator + runtime (+2, plus tier) — §17 |
 | Batch DAGs (ingestion, training, nightly evals) | **Argo Workflows** | plus tier; never for agent loops |
 
 ### Exposure — everything that runs here is also a server
@@ -156,8 +167,8 @@ Symmetry rule: consume open standards **and publish over the same ones**. A decl
 | Resource | Exposed as | Consumer sees |
 |---|---|---|
 | `Agent` → A2A | org/public A2A endpoint | Agent Card at `/.well-known/agent-card.json`, OASF listing, full task interface |
-| `Workflow` → MCP | named MCP tool | `tools/call` starts the run; progress streamed — plume workflows usable from Claude Code/IDEs |
-| `Agent` → MCP | single tool | for MCP-only clients |
+| `Workflow` → MCP | named MCP tool | *Roadmap* — the intent field exists (design 03) but the projection semantics are not yet designed; HTTP/SSE is the specified path (design 23) |
+| `Agent` → MCP | single tool | *Roadmap* — same status as the Workflow→MCP projection |
 | `Workflow/Agent` → HTTP | REST + SSE | app-facing projection with the logged-in user's OIDC context |
 | `KnowledgeGraph` → MCP | read-only server | 6-tool surface with gateway-enforced subgraph scoping |
 | `App` → bundle | product surface | curated versioned offering |
@@ -209,7 +220,7 @@ Most HIPAA technical safeguards are emergent: per-action attribution (on-behalf-
 ## 07 · Harness & observability
 
 - **Sessions & receipts**: every A2A task through the gateway recorded to JetStream — request/response, tool calls, model calls, cost, identity chain. Replayable. One stream = audit log + debugging substrate + eval-data collector.
-- **Traces**: OTel **GenAI semantic conventions**, adopted now with the convention version pinned (pre-stable in mid-2026). Gateway emits spans per hop (even uninstrumented agents get traces); OpenLLMetry adds interior spans.
+- **Traces**: OTel **GenAI semantic conventions**, adopted now, pinned to a commit SHA (see below — the conventions moved to an unreleased repo, so there is no version number to pin). Gateway emits spans per hop (even uninstrumented agents get traces); OpenLLMetry adds interior spans.
 - **Backend**: **OpenObserve** (single binary: metrics+logs+traces). **Phoenix** optional in plus.
 - **Golden signals**: task success rate, tool-error rate, tokens/task, cost/task, latency/hop, loop depth, handoff count, termination reasons — alert rules shipped in the chart, each fixture-tested in CI.
 
@@ -255,6 +266,8 @@ Detectors write conditions; controllers act; humans see semantic health in `kube
 | Serving | **KServe** InferenceService fronting **Triton**/vLLM; **Kueue** for GPUs; llm-d for one giant model |
 | Training | **Kubeflow Trainer v2** TrainJob (SFT/DPO/GRPO; Unsloth landing as BuiltinTrainer) |
 | Experiments | MLflow (tracking only) |
+
+**As designed (ADR-0026, design 25)**: **KServe runs in RawDeployment mode — a stated constraint, not a default.** It is what lets KServe run without Knative or Istio, which is the only reason binding it respects the pod budget (rule 5) and the meshless core (ADR-0012); Serverless mode is forbidden and CI asserts no Knative CRDs are required. Kits are the **only serving source** (signed, digest-pinned), resolved by a chart-shipped `ClusterStorageContainer` from `kit://` URIs. The shadow InferenceService gets a **candidate-only route admitting just the eval run principal**; general Backend registration happens only on pass. The operator **writes `internal/<model>` pricing rows** at serve time so agent policy compilation can never fail on an unpriced in-cluster model. Traffic shifts at the gateway via virtual models — never a second canary system. Models gate through design 16's flow with **their own metric family** (§08).
 
 ## 11 · Developer experience — the golden path
 
@@ -351,7 +364,7 @@ Six MCP tools: `search` · `neighbors` · `get_context_bundle` · `cite` · `sch
 
 ### Operations
 
-Snapshot per change (namespace-per-version); `plume kg diff v11 v12`; re-embedding = version bump; PII redacted at normalize; per-agent subgraph scoping enforced at the gateway.
+Snapshot per change (namespace-per-version); `plume kg diff v11 v12`; re-embedding = version bump; PII redacted at normalize; per-agent subgraph scoping injected by the gateway and enforced by the provider (design 01 A1).
 
 ## 14 · Loop engineering
 
@@ -374,7 +387,7 @@ Two loops, separated: the **inner loop** (user-owned scaffold) and the **governa
 
 **Enforcement**: every feature proposal names its pattern + socket; engine changes presumed wrong until an RFC proves the five primitives can't express it.
 
-**As designed (ADR-0024, design 18)**: `pack/v1` has a **closed facet catalog** (filters, skills, templates, patterns, readers, catalog, runners, dashboards, signals) — a new facet kind is a contract revision, which is what keeps packs data. Pack CRs are cluster-scoped; trust roots in a **signer allowlist** with provenance displayed wherever pack content is offered. Because multiple sources can now contribute to one gateway concern, filters carry **priority bands** and merge deterministically — platform and compliance bands outrank pack bands by construction, and a same-field collision is a hard install error. Pack filters route **through the policy compiler**, so a pack cannot become a gateway-config backdoor.
+**As designed (ADR-0024, design 18)**: `pack/v1` has a **closed facet catalog** (filters, skills, templates, patterns, readers, catalog, runners, dashboards, signals) — a new facet kind is a contract revision, which is what keeps packs data. **Exactly one has been granted**: ADR-0026 approves a tenth, `profile`, for compliance bundles — named as an exception rather than absorbed silently. Pack CRs are cluster-scoped; trust roots in a **signer allowlist** with provenance displayed wherever pack content is offered. Because multiple sources can now contribute to one gateway concern, filters carry **priority bands** and merge deterministically — platform and compliance bands outrank pack bands by construction, and a same-field collision is a hard install error. Pack filters route **through the policy compiler**, so a pack cannot become a gateway-config backdoor.
 
 ## 16 · Competitive positioning
 
@@ -401,7 +414,7 @@ kagent answers "how do I run an agent on k8s"; plume answers "how do I run an ag
 
 agent-operator 1 (the only plume-code pod) · agentgateway 1–2 · SPIRE 2 · Zitadel 1 (on our Postgres) · NATS 1 · Postgres 1 · OpenObserve 1 ≈ **8 pods**.
 
-**Beyond core, as designed**: `plus` adds workflow-operator + workflow-runtime (+2, scaling 0→N with trigger registrations), OpenFGA with its co-located ext-authz adapter (+1), model-operator (+1), and optionally Argo and Phoenix. Enterprise adds tenant-operator (+1). Per managed knowledge graph: adapter + backend (2 workload pods). A hard-isolated tenant costs ~4–5 pods core-only (NATS, Postgres, Zitadel, OpenObserve and the gateway stay shared), +2–3 at plus.
+**Beyond core, as designed**: `plus` adds workflow-operator (a standing controller) + workflow-runtime (which scales 0→N with trigger registrations) — +2, OpenFGA with its co-located ext-authz adapter (+1), model-operator (+1), and optionally Argo and Phoenix. Enterprise adds tenant-operator (+1). Per managed knowledge graph: adapter + backend (2 workload pods). A hard-isolated tenant costs ~4–5 pods core-only (NATS, Postgres, Zitadel, OpenObserve and the gateway stay shared), +2–3 at plus.
 
 **The budget is CI-enforced, not aspirational**: a job counts rendered pods against `weight-budget.yaml` and a second job checks stateful workloads against a reasoned allowlist — a PR that adds either fails unless it edits the ledger in the same commit.
 
@@ -465,6 +478,17 @@ Every claim above is backed by an ADR and a critique-passed design. The corpus l
 | **P4** | 20 drift controllers · 21 workflow-operator · 22 loop governance · 23 App layer · 24 AuthzProvider |
 | **P5 / ent** | 25 model-operator · 26 Tenant CR · 27 compliance packs |
 
+### Open items carried into implementation
+
+The design phase is complete; it is not frictionless. Four items are deliberately carried forward rather than closed on paper:
+
+| Item | Nature |
+|---|---|
+| **Research item R1** | agentgateway same-level/same-field policy-overlap semantics are not crisply documented; a reproducing test ships with the policy compiler. The one-concern-per-policy rule holds either way |
+| **Re-critique of designs 01 and 02** | Both were critiqued in the session that authored them; the reviews carry the caveat and both are flagged for independent re-critique before implementation |
+| **Pinned third-party versions** | The agentgateway minimum (virtual models, OSS token exchange), the semconv commit SHA, and Unsloth's BuiltinTrainer status will all move; research notes carry re-verify dates |
+| **Nothing is execution-validated** | These plans survived adversarial review, not running code. First implementation tests what no review can — DBOS-in-Job resume, interpreter determinism, gateway policy behavior |
+
 ### Process note
 
-Each design ran draft → independent adversarial critique → revision → re-critique → approval. Roughly 150 findings were raised and fixed, including two blockers that would have shipped as real defects: a circular revision hash (a content hash depending on a value only knowable after the workload it identifies had run) and non-deterministic receipt IDs (which silently defeated the dedup that audit integrity rests on). Where a design amended an already-approved one, the delta is recorded as a numbered amendment in the amended design — design 02 carries eight (A1–A8).
+Each design ran draft → independent adversarial critique → revision → re-critique → approval. Roughly 150 findings were raised and fixed, including **three blockers** that would otherwise have shipped as real defects: a **circular revision hash** (a content hash depending on a value only knowable after the workload it identifies had run), **non-deterministic receipt IDs** (which silently defeated the dedup audit integrity rests on), and — the most security-relevant — **non-atomic policy apply**, which left fail-open windows where a route could serve traffic before its auth and rate-limit policies were accepted; that one produced ADR-0020's fail-closed apply ordering. Where a design amended an already-approved one, the delta is recorded as a numbered amendment in the amended design — design 02 carries eight (A1–A8).

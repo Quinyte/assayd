@@ -66,6 +66,8 @@ status:
 
 Create → fan-out (idempotent, per-layer conditions). **Suspend** → gateway partition denies + workloads scaled 0 (data untouched; the reversible commercial lever). **Delete** → refuses without `spec.confirmDelete: <name>` *and* a completed **export**: receipts/audit index/graph snapshots exported to the tenant's object location first (deleting a tenant must not silently destroy an audit trail — the compliance rule made structural); then reverse fan-out, IdP org **deactivated not deleted** (06 D3's rule holds at tenant scope).
 
+**Cross-cluster resource lifecycle (R3-a)**: in hard mode a tenant's Agent CR lives in the vCluster while its gateway routes and policies live on the host — Kubernetes ownerRefs cannot cross that boundary. The **policy compiler owns host-side cleanup**: it labels every emitted host resource with `plume.dev/tenant` + `plume.dev/source-uid`, watches the tenant API server, and garbage-collects on source deletion; a **finalizer on the tenant-side CR** blocks removal until host cleanup confirms. Orphan sweep runs each reconcile and reports `OrphanedHostResources` — a stale route must never outlive the CR that authorized it.
+
 ## 6. Failure modes
 
 | Failure | Behavior |

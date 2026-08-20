@@ -12,7 +12,7 @@ Makes ADR-0014's claim literally true — **"compliance is a profile you enable,
 ## 2. Doctrine & charter gates
 
 - **Plane**: **fast** for everything configurable (the profile is pack data — facet kinds already exist: filters, signals, dashboards, plus a new `profile` facet kind = a contract revision to `pack/v1`, honestly noted as the one closed-catalog exception this design requests). **Slow** for the two new mechanisms (§4), which land in core designs as *capabilities* — flag-gated, so the OSS core keeps them (ADR-0015: never paywall correctness; the *packaging, reporting, and support* are the enterprise product).
-- **Pods**: 0 new (chaining runs in the tap; reports are Jobs). **Stateful deps**: object storage tiering for long retention (existing pattern). ✓
+- **Pods**: 0 new (chaining is a **single-writer chainer consumer downstream of the stream** — §4.1, design 04 §11 A3 — not the tap; reports are Jobs). **Stateful deps**: object storage tiering for long retention (existing pattern). ✓
 
 ## 3. Safeguard → mechanism map (what's already true)
 
