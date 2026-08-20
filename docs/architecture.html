@@ -1,0 +1,1802 @@
+<title>graphene — Architecture v0.1</title>
+<style>
+  :root {
+    --bg: #F7F8FA;
+    --surface: #FFFFFF;
+    --surface-2: #EEF0F4;
+    --ink: #1A2029;
+    --ink-soft: #4A5261;
+    --ink-faint: #8A93A3;
+    --line: #D8DCE4;
+    --line-soft: #E6E9EF;
+    --accent: #3B52DB;
+    --accent-soft: #E3E7FB;
+    --good: #1D8A5B;
+    --warn: #B07A18;
+    --crit: #C0392B;
+    --code-bg: #1E242E;
+    --code-ink: #D5DAE4;
+    --code-comment: #7B8699;
+    --code-key: #93A7FF;
+    --code-str: #A8C79A;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161D;
+      --surface: #181D26;
+      --surface-2: #1F2530;
+      --ink: #E8EBF0;
+      --ink-soft: #AAB2C0;
+      --ink-faint: #6E7787;
+      --line: #303845;
+      --line-soft: #262D38;
+      --accent: #8B9BFF;
+      --accent-soft: #232B4A;
+      --good: #4CBF8C;
+      --warn: #D9A94A;
+      --crit: #E06A5B;
+      --code-bg: #0D1117;
+      --code-ink: #C9D1DC;
+      --code-comment: #616C7E;
+      --code-key: #93A7FF;
+      --code-str: #A8C79A;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161D; --surface: #181D26; --surface-2: #1F2530;
+    --ink: #E8EBF0; --ink-soft: #AAB2C0; --ink-faint: #6E7787;
+    --line: #303845; --line-soft: #262D38;
+    --accent: #8B9BFF; --accent-soft: #232B4A;
+    --good: #4CBF8C; --warn: #D9A94A; --crit: #E06A5B;
+    --code-bg: #0D1117; --code-ink: #C9D1DC; --code-comment: #616C7E;
+    --code-key: #93A7FF; --code-str: #A8C79A;
+  }
+  :root[data-theme="light"] {
+    --bg: #F7F8FA; --surface: #FFFFFF; --surface-2: #EEF0F4;
+    --ink: #1A2029; --ink-soft: #4A5261; --ink-faint: #8A93A3;
+    --line: #D8DCE4; --line-soft: #E6E9EF;
+    --accent: #3B52DB; --accent-soft: #E3E7FB;
+    --good: #1D8A5B; --warn: #B07A18; --crit: #C0392B;
+    --code-bg: #1E242E; --code-ink: #D5DAE4; --code-comment: #7B8699;
+    --code-key: #93A7FF; --code-str: #A8C79A;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    font-size: 17px;
+    line-height: 1.62;
+    margin: 0;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 28px 96px; }
+  .prose { max-width: 70ch; }
+
+  h1, h2, h3, h4 {
+    font-family: "Helvetica Neue", "Neue Haas Grotesk", -apple-system, "Segoe UI", system-ui, sans-serif;
+    text-wrap: balance;
+    line-height: 1.15;
+  }
+  h2 { font-size: 26px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 14px; }
+  h3 { font-size: 18px; font-weight: 650; margin: 34px 0 10px; }
+  p { margin: 0 0 16px; color: var(--ink); }
+  p.soft, li.soft { color: var(--ink-soft); }
+  strong { font-weight: 650; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover, a:focus-visible { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  code, .mono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  p code, li code, td code {
+    font-size: 0.82em;
+    background: var(--surface-2);
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    padding: 1px 5px;
+    white-space: nowrap;
+  }
+
+  /* ── masthead ─────────────────────────────── */
+  header.mast {
+    border-bottom: 1px solid var(--line);
+    position: relative;
+    overflow: hidden;
+  }
+  .mast-inner { max-width: 960px; margin: 0 auto; padding: 64px 28px 44px; position: relative; }
+  .mast svg.lattice { position: absolute; right: -40px; top: -30px; opacity: 0.55; pointer-events: none; }
+  .doc-kicker {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 18px;
+  }
+  h1.title {
+    font-size: clamp(40px, 7vw, 64px);
+    font-weight: 750;
+    letter-spacing: -0.03em;
+    margin: 0 0 10px;
+  }
+  h1.title .hex { color: var(--accent); }
+  p.subtitle {
+    font-size: 20px;
+    color: var(--ink-soft);
+    max-width: 58ch;
+    margin: 0 0 26px;
+    text-wrap: balance;
+  }
+  .meta-row {
+    display: flex; flex-wrap: wrap; gap: 10px 28px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+    color: var(--ink-faint);
+  }
+  .meta-row b { color: var(--ink-soft); font-weight: 600; }
+
+  /* ── table of contents ────────────────────── */
+  nav.toc {
+    margin: 40px 0 0;
+    padding: 20px 24px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+  nav.toc h2 {
+    font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-faint); margin: 0 0 12px; font-weight: 600;
+  }
+  nav.toc ol {
+    margin: 0; padding: 0; list-style: none;
+    columns: 2; column-gap: 40px;
+  }
+  nav.toc li { padding: 3.5px 0; break-inside: avoid; font-size: 15px; font-family: "Helvetica Neue", system-ui, sans-serif; }
+  nav.toc li .n {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--accent); font-size: 12px; margin-right: 10px;
+  }
+  @media (max-width: 640px) { nav.toc ol { columns: 1; } }
+
+  /* ── sections ─────────────────────────────── */
+  section { margin-top: 72px; scroll-margin-top: 24px; }
+  .sec-head { display: flex; align-items: baseline; gap: 16px; border-top: 2px solid var(--ink); padding-top: 16px; margin-bottom: 20px; }
+  .sec-head .n {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 14px; color: var(--accent); font-weight: 600;
+    min-width: 30px;
+  }
+  .sec-head h2 { margin: 0; }
+
+  /* ── doctrine cards ───────────────────────── */
+  .rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 12px; margin: 24px 0 8px; }
+  .rule {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+  .rule .rn {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px; color: var(--accent); letter-spacing: 0.1em;
+    display: block; margin-bottom: 8px;
+  }
+  .rule h3 { margin: 0 0 6px; font-size: 15.5px; }
+  .rule p { font-size: 14.5px; color: var(--ink-soft); margin: 0; line-height: 1.5; }
+
+  /* ── figures ──────────────────────────────── */
+  figure.diagram {
+    margin: 28px 0;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 22px 20px 14px;
+    overflow-x: auto;
+  }
+  figure.diagram svg { display: block; max-width: 100%; height: auto; min-width: 640px; margin: 0 auto; color: var(--ink-soft); }
+  figure.diagram figcaption {
+    font-family: "Helvetica Neue", system-ui, sans-serif;
+    font-size: 13.5px; color: var(--ink-faint);
+    margin-top: 14px; padding-top: 12px;
+    border-top: 1px solid var(--line-soft);
+    max-width: 78ch;
+  }
+  figure.diagram figcaption b { color: var(--ink-soft); font-weight: 600; }
+
+  /* ── code ─────────────────────────────────── */
+  pre.code {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 10px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.58;
+    margin: 20px 0;
+  }
+  pre.code .c { color: var(--code-comment); }
+  pre.code .k { color: var(--code-key); }
+  pre.code .s { color: var(--code-str); }
+
+  /* ── tables ───────────────────────────────── */
+  .tablewrap { overflow-x: auto; margin: 20px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; font-family: "Helvetica Neue", system-ui, sans-serif; }
+  th {
+    text-align: left; font-size: 11.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 600;
+    padding: 12px 16px; border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--line-soft); vertical-align: top; color: var(--ink-soft); }
+  tr:last-child td { border-bottom: none; }
+  td:first-child { color: var(--ink); font-weight: 550; white-space: nowrap; }
+  td .mono { font-size: 12.5px; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* ── pills & chips ────────────────────────── */
+  .pill {
+    display: inline-block;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px; letter-spacing: 0.04em;
+    border-radius: 999px; padding: 2px 9px;
+    border: 1px solid var(--line);
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+  .pill.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
+  .pill.good { color: var(--good); border-color: var(--good); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); }
+  .pill.crit { color: var(--crit); border-color: var(--crit); }
+
+  .podrow { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 6px; }
+  .pod {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 9px 13px;
+    color: var(--ink-soft);
+  }
+  .pod b { display: block; color: var(--ink); font-weight: 600; font-size: 12.5px; margin-bottom: 2px; }
+  .pod.own { border-color: var(--accent); }
+  .pod.own b { color: var(--accent); }
+  .pod-total {
+    font-family: "Helvetica Neue", system-ui, sans-serif;
+    font-size: 14px; color: var(--ink-soft); margin-top: 12px;
+  }
+  .pod-total b { color: var(--ink); }
+
+  /* ── build order ──────────────────────────── */
+  .phases { display: grid; gap: 12px; margin: 22px 0; }
+  .phase {
+    display: grid; grid-template-columns: 120px 1fr; gap: 18px;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px 20px;
+  }
+  .phase .when {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px; color: var(--accent); padding-top: 3px;
+  }
+  .phase h3 { margin: 0 0 6px; font-size: 16px; }
+  .phase p { margin: 0; font-size: 14.5px; color: var(--ink-soft); }
+  .phase .demo { display: block; margin-top: 8px; font-size: 13.5px; color: var(--ink); }
+  .phase .demo::before { content: "▸ demo: "; color: var(--accent); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px; letter-spacing: 0.06em; }
+  @media (max-width: 560px) { .phase { grid-template-columns: 1fr; gap: 6px; } }
+
+  ul.tight { margin: 0 0 16px; padding-left: 22px; }
+  ul.tight li { margin-bottom: 8px; color: var(--ink); }
+  ul.tight li::marker { color: var(--accent); }
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--surface);
+    border-radius: 0 10px 10px 0;
+    padding: 14px 20px;
+    margin: 22px 0;
+    font-size: 15.5px;
+  }
+  .callout p { margin: 0; color: var(--ink); }
+
+  footer.colophon {
+    margin-top: 88px; padding-top: 20px;
+    border-top: 1px solid var(--line);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px; color: var(--ink-faint);
+    display: flex; flex-wrap: wrap; gap: 8px 28px;
+  }
+</style>
+
+<header class="mast">
+  <div class="mast-inner">
+    <svg class="lattice" width="420" height="260" viewBox="0 0 420 260" aria-hidden="true">
+      <g fill="none" stroke="var(--accent)" stroke-width="1" opacity="0.35">
+        <path d="M30 40 L60 22 L90 40 L90 76 L60 94 L30 76 Z"/>
+        <path d="M90 40 L120 22 L150 40 L150 76 L120 94 L90 76"/>
+        <path d="M150 40 L180 22 L210 40 L210 76 L180 94 L150 76"/>
+        <path d="M210 40 L240 22 L270 40 L270 76 L240 94 L210 76"/>
+        <path d="M270 40 L300 22 L330 40 L330 76 L300 94 L270 76"/>
+        <path d="M330 40 L360 22 L390 40 L390 76 L360 94 L330 76"/>
+        <path d="M60 94 L60 130 L90 148 L120 130 L120 94"/>
+        <path d="M120 130 L150 148 L180 130 L180 94"/>
+        <path d="M180 130 L210 148 L240 130 L240 94"/>
+        <path d="M240 130 L270 148 L300 130 L300 94"/>
+        <path d="M300 130 L330 148 L360 130 L360 94"/>
+        <path d="M90 148 L90 184 L120 202 L150 184 L150 148"/>
+        <path d="M150 184 L180 202 L210 184 L210 148"/>
+        <path d="M210 184 L240 202 L270 184 L270 148"/>
+        <path d="M270 184 L300 202 L330 184 L330 148"/>
+      </g>
+      <g fill="var(--accent)" opacity="0.5">
+        <circle cx="60" cy="22" r="2.5"/><circle cx="120" cy="22" r="2.5"/><circle cx="180" cy="22" r="2.5"/>
+        <circle cx="240" cy="22" r="2.5"/><circle cx="300" cy="22" r="2.5"/><circle cx="360" cy="22" r="2.5"/>
+        <circle cx="90" cy="76" r="2.5"/><circle cx="150" cy="76" r="2.5"/><circle cx="210" cy="76" r="2.5"/>
+        <circle cx="270" cy="76" r="2.5"/><circle cx="330" cy="76" r="2.5"/>
+        <circle cx="120" cy="130" r="2.5"/><circle cx="180" cy="130" r="2.5"/><circle cx="240" cy="130" r="2.5"/>
+        <circle cx="300" cy="130" r="2.5"/>
+      </g>
+    </svg>
+    <p class="doc-kicker">Architecture · Draft for review</p>
+    <h1 class="title">graphene<span class="hex"> ⬡</span></h1>
+    <p class="subtitle">A radically lightweight, Kubernetes-native agent platform. The domain is a pluggable knowledge graph; everything else is an open standard with a thin binding.</p>
+    <div class="meta-row">
+      <span><b>version</b> 0.1</span>
+      <span><b>date</b> 2026-08-20</span>
+      <span><b>status</b> design draft</span>
+      <span><b>audience</b> author · future contributors</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc" aria-label="Contents">
+  <h2>Contents</h2>
+  <ol>
+    <li><span class="n">01</span><a href="#doctrine">The lightweight doctrine</a></li>
+    <li><span class="n">02</span><a href="#overview">System overview</a></li>
+    <li><span class="n">03</span><a href="#api">The API surface — six CRDs</a></li>
+    <li><span class="n">04</span><a href="#kg">The KnowledgeGraph contract</a></li>
+    <li><span class="n">05</span><a href="#comms">Communication &amp; durability</a></li>
+    <li><span class="n">06</span><a href="#security">Security plane</a></li>
+    <li><span class="n">07</span><a href="#harness">Harness &amp; observability</a></li>
+    <li><span class="n">08</span><a href="#evals">Evals — semantic admission</a></li>
+    <li><span class="n">09</span><a href="#drift">Drift &amp; self-healing</a></li>
+    <li><span class="n">10</span><a href="#modelhub">ModelHub</a></li>
+    <li><span class="n">11</span><a href="#dx">Developer experience — the golden path</a></li>
+    <li><span class="n">12</span><a href="#components">Component plan</a></li>
+    <li><span class="n">13</span><a href="#graph-eng">Graph engineering</a></li>
+    <li><span class="n">14</span><a href="#loop-eng">Loop engineering</a></li>
+    <li><span class="n">15</span><a href="#extension">Extension model — absorbing tomorrow's patterns</a></li>
+    <li><span class="n">16</span><a href="#positioning">Competitive positioning</a></li>
+    <li><span class="n">17</span><a href="#budget">Weight budget</a></li>
+    <li><span class="n">18</span><a href="#build">Build order</a></li>
+    <li><span class="n">19</span><a href="#risks">Risks held honestly</a></li>
+  </ol>
+</nav>
+
+<!-- ══════════════════════ 01 DOCTRINE ══════════════════════ -->
+<section id="doctrine">
+  <div class="sec-head"><span class="n">01</span><h2>The lightweight doctrine</h2></div>
+  <div class="prose">
+    <p>Every design decision in this document passes six rules. They are the product: competitors ship platforms; graphene ships a control plane. The recipe is <strong>bind, don't build</strong> — the platform never implements what an open standard already provides, and its own code is confined to thin operators, a data-plane policy compiler, and a CLI.</p>
+  </div>
+  <div class="rules">
+    <div class="rule"><span class="rn">RULE 1</span><h3>Bind, don't build</h3><p>CRDs + operators + a CLI. Zero proprietary protocols, zero bundled agent framework, zero bundled UI.</p></div>
+    <div class="rule"><span class="rn">RULE 2</span><h3>Two stateful deps, ever</h3><p>Postgres + NATS. Durability, eval results, audit, KV, object store, queues — all in those two. No Kafka, no Redis, no Temporal cluster.</p></div>
+    <div class="rule"><span class="rn">RULE 3</span><h3>Library over server</h3><p>If a capability can run as a library inside an existing pod (DBOS, DeepEval, OTel SDK), it never becomes a service.</p></div>
+    <div class="rule"><span class="rn">RULE 4</span><h3>The reconcile loop is the product</h3><p>Versioning = CR generations + GitOps. Self-healing = conditions + controllers. graphene adds <em>semantic</em> health to machinery Kubernetes already has.</p></div>
+    <div class="rule"><span class="rn">RULE 5</span><h3>Weight budget is a spec</h3><p>Core control plane ≤ 8 pods. One <code>helm install</code> on any conformant cluster — <strong>minikube, k3d, kind, k3s</strong> included. Local distros are a CI target, not a courtesy. Every added pod needs a written justification.</p></div>
+    <div class="rule"><span class="rn">RULE 6</span><h3>Tiered install</h3><p><code>core</code> (agents + KG + security + traces) → <code>plus</code> (evals, drift, modelhub). Each tier independently removable.</p></div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 02 OVERVIEW ══════════════════════ -->
+<section id="overview">
+  <div class="sec-head"><span class="n">02</span><h2>System overview</h2></div>
+  <div class="prose">
+    <p>Three planes. The <strong>control plane</strong> is GitOps-driven: custom resources reconciled by three small operators. The <strong>data plane</strong> is a single gateway every agent hop crosses — which is where security, budgets, and receipts are enforced, so guarantees hold for black-box agents regardless of SDK. The <strong>substrate</strong> is the two stateful dependencies.</p>
+    <p class="soft">In every diagram in this document, <strong style="color: var(--accent)">ultramarine marks what graphene builds</strong>; grey marks adopted open components. Notice how little is ultramarine — that is the thesis.</p>
+  </div>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 940 620" role="img" aria-label="graphene system overview: a GitOps control plane of CRDs reconciled by graphene operators; a data plane where sandboxed agents from any SDK talk through agentgateway to MCP tools, knowledge graphs, LLM providers, and each other; and a substrate of NATS JetStream and Postgres. SPIRE and the platform IdP (Zitadel by default) provide identity. Only the operators, policy compilation, and CLI are graphene-built.">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <!-- ── band labels ── -->
+      <g font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="10.5" letter-spacing="1.5" fill="var(--ink-faint)">
+        <text x="24" y="36">CONTROL PLANE — GITOPS</text>
+        <text x="24" y="222">DATA PLANE — EVERY HOP CROSSES THE GATEWAY</text>
+        <text x="24" y="518">SUBSTRATE — THE ONLY STATEFUL DEPENDENCIES</text>
+      </g>
+      <line x1="24" y1="200" x2="916" y2="200" stroke="var(--line)" stroke-dasharray="2 5"/>
+      <line x1="24" y1="496" x2="916" y2="496" stroke="var(--line)" stroke-dasharray="2 5"/>
+
+      <!-- ── control plane ── -->
+      <rect x="24" y="52" width="150" height="66" rx="8" fill="none" stroke="currentColor"/>
+      <text x="99" y="79" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Git repo</text>
+      <text x="99" y="97" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">CRs, ontologies</text>
+
+      <rect x="240" y="52" width="150" height="66" rx="8" fill="none" stroke="currentColor"/>
+      <text x="315" y="79" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Argo CD / Flux</text>
+      <text x="315" y="97" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">applies · drift-corrects</text>
+
+      <rect x="456" y="44" width="220" height="82" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="566" y="70" text-anchor="middle" font-size="13" font-weight="650" fill="var(--accent)" font-family="system-ui, sans-serif">graphene operators ×3</text>
+      <text x="566" y="88" text-anchor="middle" font-size="11" fill="var(--ink-soft)" font-family="system-ui, sans-serif">agent · workflow · model</text>
+      <text x="566" y="105" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">reconcile CRs → bindings</text>
+
+      <rect x="742" y="52" width="174" height="66" rx="8" fill="none" stroke="var(--accent)" stroke-dasharray="4 3"/>
+      <text x="829" y="79" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--accent)" font-family="system-ui, sans-serif">graphene CLI</text>
+      <text x="829" y="97" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">sugar over kubectl</text>
+
+      <line x1="174" y1="85" x2="232" y2="85" stroke="currentColor" marker-end="url(#arr)"/>
+      <text x="203" y="77" text-anchor="middle" font-size="10.5" fill="currentColor" font-family="ui-monospace, Menlo, monospace">push</text>
+      <line x1="390" y1="85" x2="448" y2="85" stroke="currentColor" marker-end="url(#arr)"/>
+      <text x="419" y="77" text-anchor="middle" font-size="10.5" fill="currentColor" font-family="ui-monospace, Menlo, monospace">apply</text>
+      <line x1="742" y1="85" x2="684" y2="85" stroke="var(--accent)" marker-end="url(#arrA)"/>
+      <text x="713" y="77" text-anchor="middle" font-size="10.5" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">CRs</text>
+
+      <line x1="566" y1="126" x2="566" y2="180" stroke="var(--accent)" marker-end="url(#arrA)"/>
+      <text x="576" y="158" font-size="10.5" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">wires routes · identity · gates</text>
+
+      <!-- ── data plane: agents ── -->
+      <rect x="24" y="248" width="216" height="106" rx="8" fill="none" stroke="currentColor"/>
+      <text x="132" y="272" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Agent A — any SDK</text>
+      <text x="132" y="290" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">container serving A2A</text>
+      <text x="132" y="307" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">+ Agent Card (OASF)</text>
+      <text x="132" y="327" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">sandbox: gVisor · SVID</text>
+
+      <rect x="24" y="378" width="216" height="58" rx="8" fill="none" stroke="currentColor"/>
+      <text x="132" y="402" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Agent B — other SDK</text>
+      <text x="132" y="420" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">same contract</text>
+
+      <!-- ── data plane: gateway ── -->
+      <rect x="360" y="252" width="220" height="184" rx="10" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <text x="470" y="280" text-anchor="middle" font-size="13.5" font-weight="650" fill="var(--ink)" font-family="system-ui, sans-serif">agentgateway</text>
+      <text x="470" y="298" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">one data plane:</text>
+      <text x="470" y="314" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">A2A · MCP · LLM · HTTP</text>
+      <line x1="376" y1="328" x2="564" y2="328" stroke="var(--line)"/>
+      <text x="470" y="348" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">authN: SPIFFE + OAuth</text>
+      <text x="470" y="365" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">guardrail filters · rate limits</text>
+      <rect x="388" y="382" width="164" height="38" rx="6" fill="var(--accent-soft)" stroke="var(--accent)"/>
+      <text x="470" y="398" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">policy compiled from</text>
+      <text x="470" y="412" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">Agent CR budgets/tools</text>
+
+      <!-- agent ↔ gateway arrows -->
+      <line x1="240" y1="290" x2="352" y2="290" stroke="currentColor" marker-end="url(#arr)"/>
+      <text x="296" y="281" text-anchor="middle" font-size="10.5" fill="currentColor" font-family="ui-monospace, Menlo, monospace">A2A · MCP · LLM</text>
+      <line x1="352" y1="407" x2="240" y2="407" stroke="currentColor" marker-end="url(#arr)"/>
+      <text x="296" y="398" text-anchor="middle" font-size="10.5" fill="currentColor" font-family="ui-monospace, Menlo, monospace">A2A (via gw)</text>
+
+      <!-- ── data plane: right column ── -->
+      <rect x="700" y="240" width="216" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="808" y="262" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">MCP tool servers</text>
+      <text x="808" y="279" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">domain systems, APIs</text>
+
+      <rect x="700" y="308" width="216" height="52" rx="8" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="808" y="330" text-anchor="middle" font-size="12" font-weight="600" fill="var(--accent)" font-family="system-ui, sans-serif">KnowledgeGraph provider</text>
+      <text x="808" y="347" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">graphiti · cognee · neo4j · byo</text>
+
+      <rect x="700" y="376" width="216" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="808" y="398" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">LLM providers</text>
+      <text x="808" y="415" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">hosted or KServe (§10)</text>
+
+      <line x1="580" y1="270" x2="692" y2="266" stroke="currentColor" marker-end="url(#arr)"/>
+      <text x="636" y="258" text-anchor="middle" font-size="10.5" fill="currentColor" font-family="ui-monospace, Menlo, monospace">MCP</text>
+      <line x1="580" y1="334" x2="692" y2="334" stroke="var(--accent)" marker-end="url(#arrA)"/>
+      <text x="636" y="326" text-anchor="middle" font-size="10.5" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">MCP query</text>
+      <line x1="580" y1="398" x2="692" y2="402" stroke="currentColor" marker-end="url(#arr)"/>
+      <text x="636" y="391" text-anchor="middle" font-size="10.5" fill="currentColor" font-family="ui-monospace, Menlo, monospace">LLM egress</text>
+
+      <!-- ── identity ── -->
+      <rect x="24" y="452" width="102" height="34" rx="6" fill="none" stroke="currentColor" stroke-dasharray="4 3"/>
+      <text x="75" y="473" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">SPIRE</text>
+      <rect x="142" y="452" width="102" height="34" rx="6" fill="none" stroke="currentColor" stroke-dasharray="4 3"/>
+      <text x="193" y="473" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">IdP: Zitadel</text>
+      <line x1="75" y1="452" x2="100" y2="440" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arr)"/>
+      <text x="52" y="443" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">SVIDs→pods</text>
+      <line x1="193" y1="452" x2="368" y2="428" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arr)"/>
+      <text x="268" y="453" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">token exchange</text>
+
+      <!-- ── substrate ── -->
+      <rect x="130" y="534" width="330" height="66" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <text x="295" y="558" text-anchor="middle" font-size="13" font-weight="650" fill="var(--ink)" font-family="system-ui, sans-serif">NATS JetStream</text>
+      <text x="295" y="578" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">events · KV directory · object store · session receipts</text>
+
+      <rect x="520" y="534" width="330" height="66" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <text x="685" y="558" text-anchor="middle" font-size="13" font-weight="650" fill="var(--ink)" font-family="system-ui, sans-serif">Postgres</text>
+      <text x="685" y="578" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">DBOS durable workflows · eval results · audit index</text>
+
+      <line x1="440" y1="436" x2="330" y2="526" stroke="currentColor" marker-end="url(#arr)"/>
+      <text x="345" y="481" text-anchor="middle" font-size="10.5" fill="currentColor" font-family="ui-monospace, Menlo, monospace">receipts: every hop</text>
+      <line x1="510" y1="436" x2="640" y2="526" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arr)"/>
+      <text x="614" y="481" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">workflow state</text>
+    </svg>
+    <figcaption><b>Fig 1 — System overview.</b> Ultramarine = graphene-built (three operators, gateway policy compilation, CLI, the KnowledgeGraph contract). Everything grey is an adopted open component: agentgateway, SPIRE, Zitadel, NATS, Postgres, and any A2A-speaking agent container. Guarantees are enforced at the gateway, outside the agent — which is why any SDK works.</figcaption>
+  </figure>
+
+  <div class="callout"><p><strong>BYO-SDK, precisely:</strong> an agent is any container that serves A2A and exposes an Agent Card. LangGraph, CrewAI, Google ADK, Pydantic AI, the Claude Agent SDK, or a bash script — the platform doesn't know or care. Registration = the operator reads the card, publishes it to the OASF directory (JetStream KV — not another database), issues identity, wires gateway routes.</p></div>
+</section>
+
+<!-- ══════════════════════ 03 API ══════════════════════ -->
+<section id="api">
+  <div class="sec-head"><span class="n">03</span><h2>The API surface — six CRDs</h2></div>
+  <div class="prose">
+    <p>The entire platform API is six custom resources reconciled by three operators. Nothing else is exposed; the CLI is sugar over these objects, which is why everything is also plain <code>kubectl</code> and GitOps.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>CRD</th><th>What it declares</th><th>Reconciled by</th></tr></thead>
+    <tbody>
+      <tr><td><code>Agent</code></td><td>BYO container speaking A2A, or an external A2A endpoint — identity, sandbox, KG bindings, tools, budgets, eval gates</td><td>agent-operator</td></tr>
+      <tr><td><code>KnowledgeGraph</code></td><td>The domain contract: provider, ontology, ingestion, versioning, semantic probes (§04)</td><td>agent-operator</td></tr>
+      <tr><td><code>EvalSuite</code></td><td>Semantic admission gates: runner, datasets, metrics, thresholds (§08)</td><td>agent-operator</td></tr>
+      <tr><td><code>Workflow</code></td><td>Durable orchestration binding — DBOS function or Argo DAG, triggered by JetStream events</td><td>workflow-operator</td></tr>
+      <tr><td><code>Model</code></td><td>ModelHub envelope: train → package → eval-gate → serve (§10)</td><td>model-operator</td></tr>
+      <tr><td><code>App</code></td><td>kro ResourceGraphDefinition composing all of the above — zero graphene code</td><td>kro</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>The Agent CR — the platform's whole opinion in one object</h3>
+<pre class="code"><span class="k">apiVersion</span>: graphene.dev/v1alpha1
+<span class="k">kind</span>: Agent
+<span class="k">metadata</span>: {<span class="k">name</span>: <span class="s">prior-auth-reviewer</span>}
+<span class="k">spec</span>:
+  <span class="k">runtime</span>:
+    <span class="k">image</span>: <span class="s">ghcr.io/acme/pa-agent:1.4.2</span>   <span class="c"># ANY SDK — only contract: serves A2A</span>
+    <span class="k">sandbox</span>: {<span class="k">profile</span>: <span class="s">gvisor</span>}          <span class="c"># → kubernetes-sigs/agent-sandbox</span>
+  <span class="k">card</span>: {<span class="k">path</span>: <span class="s">/.well-known/agent-card.json</span>}  <span class="c"># A2A Agent Card; OASF schema</span>
+  <span class="k">identity</span>: {}                            <span class="c"># SPIRE SVID injected; nothing to configure</span>
+  <span class="k">knowledge</span>:
+    - <span class="k">graphRef</span>: {<span class="k">name</span>: <span class="s">payer-policies</span>, <span class="k">version</span>: <span class="s">"v12"</span>}  <span class="c"># injected as MCP endpoint</span>
+  <span class="k">tools</span>:
+    - <span class="k">mcpRef</span>: <span class="s">claims-system</span>              <span class="c"># routed via agentgateway, policy applied there</span>
+  <span class="k">budget</span>: {<span class="k">tokensPerDay</span>: <span class="s">2M</span>, <span class="k">usdPerDay</span>: <span class="s">40</span>}   <span class="c"># compiled to gateway policy</span>
+  <span class="k">gates</span>:
+    - <span class="k">evalSuiteRef</span>: <span class="s">pa-regression</span>        <span class="c"># rollout blocked until suite passes (§08)</span>
+  <span class="k">expose</span>:                                 <span class="c"># optional — publish beyond the cluster (§05)</span>
+    <span class="k">a2a</span>: {<span class="k">visibility</span>: <span class="s">org</span>, <span class="k">auth</span>: <span class="s">oauth</span>}  <span class="c"># card at /.well-known; per-consumer budgets</span></pre>
+
+  <h3>The App CR — whole products, not just plumbing</h3>
+  <div class="prose">
+    <p>An App is not a bundle of agent infrastructure — it is a <strong>shippable product</strong>: a frontend, its API, and the agents, workflows, and graphs behind them, versioned and released as one unit. The anatomy exploits everything already built, which is why it stays thin:</p>
+    <ul class="tight">
+      <li><strong>The backend mostly disappears.</strong> Workflows and agents exposed over HTTP <em>are</em> the API: a workflow becomes <code>POST /api/&lt;name&gt;</code>, an agent's A2A task stream becomes the chat endpoint over SSE. A custom backend-for-frontend shrinks to nothing unless the product genuinely needs one.</li>
+      <li><strong>Human auth with zero custom code.</strong> Users log in via the platform IdP (OIDC); the gateway exchanges the user's token into on-behalf-of agent credentials — so every agent action carries the human's identity in its receipt, and budgets can be per-user. Login, roles, audit chain: configuration, not code.</li>
+      <li><strong>Released as a unit.</strong> The App pins member versions — agent v1.4.2, graph v12, frontend v2.1.0. Rolling the app forward is one change; the agents inside still pass their eval gates individually (§08). Rollback restores the whole coherent set.</li>
+      <li><strong>Scaffolded.</strong> <code>graphene init app</code> generates a frontend template plus a <em>typed client</em> derived from the exposed workflow/agent schemas (Agent Cards, MCP tool schemas → TypeScript), with auth wired.</li>
+    </ul>
+  </div>
+<pre class="code"><span class="k">kind</span>: App
+<span class="k">metadata</span>: {<span class="k">name</span>: <span class="s">prior-auth-desk</span>}
+<span class="k">spec</span>:
+  <span class="k">frontend</span>: {<span class="k">image</span>: <span class="s">ghcr.io/acme/pa-desk-ui:2.1.0</span>, <span class="k">route</span>: <span class="s">pa.acme.dev</span>}
+  <span class="k">api</span>:
+    - <span class="k">workflowRef</span>: <span class="s">prior-auth-check</span>     <span class="c"># → POST /api/prior-auth-check</span>
+    - <span class="k">agentRef</span>: <span class="s">pa-reviewer</span>             <span class="c"># → SSE /api/chat (A2A task stream projected)</span>
+  <span class="k">members</span>:                              <span class="c"># the release: pinned, coherent, roll-back-able</span>
+    <span class="k">agents</span>:  [{<span class="k">name</span>: <span class="s">pa-reviewer</span>, <span class="k">version</span>: <span class="s">"1.4.2"</span>}]
+    <span class="k">graphs</span>:  [{<span class="k">name</span>: <span class="s">payer-policies</span>, <span class="k">version</span>: <span class="s">"v12"</span>}]
+  <span class="k">auth</span>: {<span class="k">oidc</span>: <span class="s">platform-idp</span>, <span class="k">roles</span>: [<span class="s">reviewer</span>, <span class="s">admin</span>]}</pre>
+  <div class="prose">
+    <p class="soft">kro composes the resources; graphene's own additions are only the HTTP projection of workflows/agents, typed-client generation, and release pinning — the App layer adds product capability without adding platform machinery.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════ 04 KG ══════════════════════ -->
+<section id="kg">
+  <div class="sec-head"><span class="n">04</span><h2>The KnowledgeGraph contract — the differentiator</h2></div>
+  <div class="prose">
+    <p>The claim that separates graphene from kagent, Rossoctl, and Dapr Agents: <strong>the domain is data, not code.</strong> Standing the platform up in a new vertical means dropping in a new <code>KnowledgeGraph</code> CR and reusing every other part of the platform.</p>
+    <p>Every serious graph engine already exposes MCP, so graphene doesn't pick a winner — it defines the socket. A provider is anything behind an MCP query surface; the contract adds what providers don't have: a versioned ontology, semantic readiness, and derivation of the correctness machinery.</p>
+  </div>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 920 440" role="img" aria-label="The KnowledgeGraph contract: pluggable providers sit behind one MCP surface; the ontology inside the CR derives the probe set, the eval golden set, and the drift baseline; agents pin an immutable graph version, so rolling forward is a rollout and rolling back is repointing.">
+      <defs>
+        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrA2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <!-- providers -->
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <rect x="24" y="40" width="150" height="38" rx="6" fill="none" stroke="currentColor"/>
+        <text x="99" y="63" text-anchor="middle" fill="var(--ink)">Graphiti</text>
+        <rect x="24" y="90" width="150" height="38" rx="6" fill="none" stroke="currentColor"/>
+        <text x="99" y="113" text-anchor="middle" fill="var(--ink)">cognee</text>
+        <rect x="24" y="140" width="150" height="38" rx="6" fill="none" stroke="currentColor"/>
+        <text x="99" y="163" text-anchor="middle" fill="var(--ink)">TrustGraph / Neo4j</text>
+        <rect x="24" y="190" width="150" height="38" rx="6" fill="none" stroke="currentColor" stroke-dasharray="4 3"/>
+        <text x="99" y="213" text-anchor="middle" fill="var(--ink)">BYO — any MCP</text>
+      </g>
+      <text x="99" y="26" text-anchor="middle" font-size="10.5" letter-spacing="1.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">PROVIDERS</text>
+
+      <!-- MCP surface boundary -->
+      <line x1="212" y1="30" x2="212" y2="240" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="6 4"/>
+      <text x="212" y="262" text-anchor="middle" font-size="10.5" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">one MCP surface</text>
+      <line x1="174" y1="59" x2="204" y2="90" stroke="currentColor"/>
+      <line x1="174" y1="109" x2="204" y2="120" stroke="currentColor"/>
+      <line x1="174" y1="159" x2="204" y2="145" stroke="currentColor"/>
+      <line x1="174" y1="209" x2="204" y2="172" stroke="currentColor"/>
+      <line x1="212" y1="130" x2="266" y2="130" stroke="var(--accent)" marker-end="url(#arrA2)"/>
+
+      <!-- the CR -->
+      <rect x="274" y="52" width="300" height="170" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="424" y="82" text-anchor="middle" font-size="13.5" font-weight="650" fill="var(--accent)" font-family="system-ui, sans-serif">KnowledgeGraph CR</text>
+      <g font-family="ui-monospace, Menlo, monospace" font-size="11" fill="var(--ink-soft)">
+        <text x="298" y="110">ontology  vN   ← the domain contract</text>
+        <text x="298" y="132">endpoint  mcp://payer-kg</text>
+        <text x="298" y="154">ingestion workflowRef</text>
+        <text x="298" y="176">versioning: immutable snapshots</text>
+        <text x="298" y="198">health: semantic probes</text>
+      </g>
+
+      <!-- derived artifacts -->
+      <text x="778" y="26" text-anchor="middle" font-size="10.5" letter-spacing="1.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">DERIVED FROM THE ONTOLOGY</text>
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <rect x="660" y="40" width="236" height="48" rx="6" fill="none" stroke="currentColor"/>
+        <text x="778" y="60" text-anchor="middle" font-weight="600" fill="var(--ink)">Probe set</text>
+        <text x="778" y="77" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)">→ semantic readiness (§09)</text>
+        <rect x="660" y="102" width="236" height="48" rx="6" fill="none" stroke="currentColor"/>
+        <text x="778" y="122" text-anchor="middle" font-weight="600" fill="var(--ink)">Golden set</text>
+        <text x="778" y="139" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)">→ EvalSuite gates (§08)</text>
+        <rect x="660" y="164" width="236" height="48" rx="6" fill="none" stroke="currentColor"/>
+        <text x="778" y="184" text-anchor="middle" font-weight="600" fill="var(--ink)">Drift baseline</text>
+        <text x="778" y="201" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)">→ drift detectors (§09)</text>
+      </g>
+      <line x1="574" y1="90" x2="652" y2="66" stroke="var(--accent)" marker-end="url(#arrA2)"/>
+      <line x1="574" y1="130" x2="652" y2="126" stroke="var(--accent)" marker-end="url(#arrA2)"/>
+      <line x1="574" y1="172" x2="652" y2="186" stroke="var(--accent)" marker-end="url(#arrA2)"/>
+      <text x="614" y="112" text-anchor="middle" font-size="10.5" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">derives</text>
+
+      <!-- version rail -->
+      <g font-family="ui-monospace, Menlo, monospace" font-size="11">
+        <rect x="274" y="304" width="86" height="34" rx="6" fill="none" stroke="currentColor"/>
+        <text x="317" y="325" text-anchor="middle" fill="var(--ink-faint)">v10</text>
+        <rect x="380" y="304" width="86" height="34" rx="6" fill="none" stroke="currentColor"/>
+        <text x="423" y="325" text-anchor="middle" fill="var(--ink-faint)">v11</text>
+        <rect x="486" y="304" width="86" height="34" rx="6" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+        <text x="529" y="325" text-anchor="middle" fill="var(--accent)" font-weight="600">v12</text>
+      </g>
+      <line x1="360" y1="321" x2="372" y2="321" stroke="currentColor" marker-end="url(#arr2)"/>
+      <line x1="466" y1="321" x2="478" y2="321" stroke="currentColor" marker-end="url(#arr2)"/>
+      <line x1="424" y1="222" x2="424" y2="296" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arr2)"/>
+      <text x="434" y="266" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">each ontology/corpus change = new snapshot</text>
+
+      <!-- agents pinning -->
+      <rect x="668" y="292" width="228" height="58" rx="8" fill="none" stroke="currentColor"/>
+      <text x="782" y="315" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Agents</text>
+      <text x="782" y="334" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">graphRef: {version: "v12"}</text>
+      <line x1="668" y1="321" x2="580" y2="321" stroke="currentColor" marker-end="url(#arr2)"/>
+      <text x="624" y="312" text-anchor="middle" font-size="10.5" fill="currentColor" font-family="ui-monospace, Menlo, monospace">pin</text>
+
+      <text x="424" y="392" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)" font-family="system-ui, sans-serif">roll forward = a rollout &nbsp;·&nbsp; roll back = repoint the graphRef &nbsp;·&nbsp; the ontology diff is reviewable in a PR</text>
+    </svg>
+    <figcaption><b>Fig 2 — One artifact drives correctness end-to-end.</b> Providers are interchangeable behind the MCP surface. The ontology inside the CR is the domain contract, and the probe set, eval golden set, and drift baseline are all derived from it — write the domain once, get readiness, gating, and drift detection for free.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <p>Three properties nobody else has:</p>
+    <ul class="tight">
+      <li><strong>Versioned like a deployment.</strong> Agents pin <code>graphRef.version</code>. Rolling a graph forward is a rollout; rolling back is repointing. The ontology diff is code review.</li>
+      <li><strong>Semantic readiness.</strong> A graph isn't <code>Ready</code> because its pod is up — it's <code>Ready</code> because the known-answer probe set passes. Agents bound to a non-Ready graph receive no traffic. A readiness probe for <em>meaning</em>.</li>
+      <li><strong>The ontology is the eval scaffold.</strong> Golden sets, probes, and drift baselines derive from one reviewed artifact — no second source of truth to drift from the first.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══════════════════════ 05 COMMS ══════════════════════ -->
+<section id="comms">
+  <div class="sec-head"><span class="n">05</span><h2>Communication &amp; durability</h2></div>
+  <div class="prose">
+    <p>"Workflow engine" is three different jobs, and conflating them is how platforms get heavy. graphene splits them:</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Job</th><th>Binding</th><th>Why · weight</th></tr></thead>
+    <tbody>
+      <tr><td>Agent↔agent messaging, events, KV, receipts</td><td><b>NATS JetStream</b></td><td>CNCF-graduated, one binary, KV + object store built in; NATS Agent Protocol work means we ride, not invent. <span class="pill">1 pod</span></td></tr>
+      <tr><td>Durable execution inside workflows</td><td><b>DBOS</b> (library on Postgres)</td><td>Decorated functions get crash-resume, retries, idempotency. The anti-Temporal choice: genesis-de cost ~5 pods and an operational discipline; DBOS costs zero pods. <span class="pill">0 pods</span></td></tr>
+      <tr><td>Batch DAGs — ingestion, training, nightly evals</td><td><b>Argo Workflows</b> (<code>plus</code> tier)</td><td>CRD-native, GitOps-able. Never used for long-running agent loops; CronJob + DBOS covers <code>core</code>. <span class="pill">plus tier</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="exposure">Exposure — everything that runs here is also a server</h3>
+  <div class="prose">
+    <p>The symmetry rule: graphene consumes open standards <em>and publishes over the same ones</em>. Any Agent, Workflow, or KnowledgeGraph can be exposed beyond the cluster with a declarative <code>expose</code> block — no code, no separate API layer. The policy compiler turns the block into gateway listeners, so external consumers get the identical treatment internal traffic gets: OAuth clients minted in the IdP, per-consumer rate/token budgets, receipts on every call.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Resource</th><th>Exposed as</th><th>What a consumer sees</th></tr></thead>
+    <tbody>
+      <tr><td><code>Agent</code> → A2A</td><td>Public/org A2A endpoint</td><td>Agent Card at <code>/.well-known/agent-card.json</code>, OASF directory listing (optionally public), full task interface — callable from any A2A-speaking platform</td></tr>
+      <tr><td><code>Workflow</code> → MCP</td><td>MCP tool(s)</td><td>The trigger projected as a named tool: <code>tools/call</code> starts the run; long-running tasks stream progress and return the result — <b>your workflows become tools inside Claude Code, IDEs, and other agent platforms</b></td></tr>
+      <tr><td><code>Agent</code> → MCP</td><td>MCP tool</td><td>The agent's task interface as a single tool, for clients that speak MCP but not A2A</td></tr>
+      <tr><td><code>KnowledgeGraph</code> → MCP</td><td>Read-only MCP server</td><td>The 6-tool provider surface (§13) with gateway-enforced subgraph scoping</td></tr>
+      <tr><td><code>Workflow/Agent</code> → HTTP</td><td>REST + SSE endpoints</td><td>App-facing projection (§03): <code>POST /api/&lt;workflow&gt;</code>, chat as the A2A stream over SSE — generated, carrying the logged-in user's OIDC context</td></tr>
+      <tr><td><code>App</code> → bundle</td><td>Named product surface</td><td>A kro App exposes a curated set of the above as one versioned offering</td></tr>
+    </tbody>
+  </table></div>
+<pre class="code"><span class="k">kind</span>: Workflow
+<span class="k">metadata</span>: {<span class="k">name</span>: <span class="s">prior-auth-check</span>}
+<span class="k">spec</span>:
+  <span class="c"># … triggers, steps …</span>
+  <span class="k">expose</span>:
+    <span class="k">mcp</span>:
+      <span class="k">tool</span>: <span class="s">check_prior_auth</span>        <span class="c"># the tool name external MCP clients see</span>
+      <span class="k">visibility</span>: <span class="s">org</span>                <span class="c"># cluster | org | public</span>
+      <span class="k">auth</span>: <span class="s">oauth</span>                    <span class="c"># IdP OAuth client per consumer</span>
+      <span class="k">budget</span>: {<span class="k">callsPerDay</span>: <span class="s">500</span>}
+    <span class="k">a2a</span>: {}                          <span class="c"># long-running task interface, card published</span></pre>
+  <div class="prose">
+    <p class="soft"><code>graphene expose &lt;resource&gt;</code> is CLI sugar that writes the block. Strategically this is the distribution story: every graphene installation is a node that <em>offers</em> agents and tools to the wider ecosystem over the same protocols it consumes — interoperability in both directions, versus the walled platforms' one-way doors.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════ 06 SECURITY ══════════════════════ -->
+<section id="security">
+  <div class="sec-head"><span class="n">06</span><h2>Security plane — zero-trust, no mesh</h2></div>
+  <div class="prose">
+    <p>The posture in one sentence: <strong>guarantees live outside the agent.</strong> Identity, authorization, budgets, guardrails, and receipts are enforced at the data plane, so they hold for black-box agents no matter which SDK built them. Same thesis as Rossoctl's intercept — delivered in ~6 pods instead of a platform.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Concern</th><th>Binding</th><th>Weight</th></tr></thead>
+    <tbody>
+      <tr><td>Agent identity</td><td><b>SPIRE</b> — every agent pod gets an X.509 SVID, auto-rotated hourly</td><td class="num">2 pods</td></tr>
+      <tr><td>Human auth + delegation</td><td><b>IdentityProvider slot</b> — default <b>Zitadel</b> (single Go binary on our existing Postgres, organizations-native, built-in audit trail); <b>Keycloak</b> profile for enterprises already running it (CNCF incubating); Dex-style federation for BYO corporate IdPs. OAuth token exchange: user token → agent-scoped token, auditable on-behalf-of chain</td><td class="num">1 pod</td></tr>
+      <tr><td>Runtime authorization (ReBAC)</td><td><b>AuthzProvider slot</b> — default <b>OpenFGA</b> (CNCF, Zanzibar-style; reuses Postgres): who may invoke agent X, which agent may call tool Y / read subgraph Z, delegation chains checked at the gateway per hop; SpiceDB as the Zanzibar-purist alternative</td><td class="num">1 pod · plus</td></tr>
+      <tr><td>All agent traffic</td><td><b>agentgateway</b> — MCP, A2A, LLM egress, HTTP through one Gateway-API-conformant data plane; authN via SPIFFE + OAuth; per-route authz; <em>token/cost budgets from Agent CRs compiled to gateway policy</em></td><td class="num">1–2 pods</td></tr>
+      <tr><td>Isolation</td><td><b>agent-sandbox</b> CRD (gVisor/Kata) + default-deny NetworkPolicy: an agent can reach <em>only</em> the gateway</td><td class="num">0 pods</td></tr>
+      <tr><td>Supply chain</td><td><b>cosign/sigstore</b>: signed agent images, signed Agent Cards, signed ModelKits; built-in <code>ValidatingAdmissionPolicy</code> rejects unsigned — no OPA/Kyverno install</td><td class="num">0 pods</td></tr>
+      <tr><td>Prompt injection / content guardrails</td><td>Gateway filters — enforced in the data plane, not inside agents</td><td class="num">0 pods</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Authorization has three layers — don't conflate them</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Layer</th><th>Question</th><th>Mechanism</th></tr></thead>
+    <tbody>
+      <tr><td>Build-time (k8s RBAC)</td><td>Who may create/edit Agent, Workflow, KG CRs? What must a prod agent declare?</td><td>Plain Kubernetes RBAC + built-in <code>ValidatingAdmissionPolicy</code> (CEL): "prod agents must have eval gates", "images must be signed", "no <code>expose: public</code> without approval label"</td></tr>
+      <tr><td>Runtime (ReBAC)</td><td>May user U invoke agent A? May agent A call tool T, read subgraph S, delegate to agent B on U's behalf?</td><td><b>OpenFGA</b> relationship checks at the gateway per hop — the delegation chain (user→agent→agent→tool) is a first-class relation, so revocation is immediate and auditable</td></tr>
+      <tr><td>Policy-as-config</td><td>Which actions need human approval? Which environments may an agent touch? Content rules?</td><td>Agent CR (<code>requiresApproval</code>, budgets), gateway filters, environment-scoped policy packs</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Service mesh — deliberately optional, by architecture</h3>
+  <div class="prose">
+    <p>Core needs no mesh, and this is a consequence of the design, not an omission: <em>all agent traffic already crosses one gateway</em>, which provides the L7 policy, mTLS (via SPIRE), and observability a mesh would — a mesh would duplicate it for the traffic that matters. Two 2026 facts refine the position: Istio's ambient (sidecar-less) mode is GA and cheap (ztunnel, ~90% less memory than sidecars), and Istio announced experimental <b>agentgateway support</b> at KubeCon EU 2026 — the ecosystems are converging, not competing. So: an <code>ambient</code> <b>profile</b> adds ztunnel-only L4 mTLS for the residual non-agent traffic (Postgres, NATS connections) in enterprises that want encryption-everywhere attestation; waypoints stay off (agentgateway is the L7). Core stays meshless.</p>
+  </div>
+
+  <h3>Multi-tenancy — layered, and mostly inherited</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Layer</th><th>Soft tenancy (teams, one org)</th><th>Hard tenancy (external customers)</th></tr></thead>
+    <tbody>
+      <tr><td>Control plane</td><td>Namespace-per-tenant + Capsule-style tenant policy; k8s RBAC scoping</td><td><b>vCluster</b> per tenant — own API server, the 2026-dominant hard-isolation model</td></tr>
+      <tr><td>Messaging / receipts</td><td colspan="2"><b>NATS accounts</b> — true per-tenant JetStream isolation (streams, KV, budgets), built into the server we already run</td></tr>
+      <tr><td>Data</td><td colspan="2"><b>Postgres RLS</b> per tenant (a discipline this author has shipped in production) + per-tenant KG instances/namespaces with per-tenant snapshots</td></tr>
+      <tr><td>Identity</td><td colspan="2">Zitadel <b>organizations</b> map 1:1 to tenants — multi-tenancy is native in the default IdP, not bolted on</td></tr>
+      <tr><td>Traffic</td><td colspan="2">Gateway partitions per tenant: routes, budgets, rate limits, egress allowlists scoped by tenant principal</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose">
+    <p class="soft">An enterprise <code>Tenant</code> CR fans all of this out from one object — namespace/vCluster, NATS account, RLS role, IdP organization, gateway partition, quotas. Note how much tenancy is <em>inherited</em> from components already chosen: NATS accounts, RLS, Zitadel orgs — the platform's own tenancy code is mostly the fan-out controller.</p>
+  </div>
+
+  <h3>Compliance profiles — HIPAA as configuration, not a project</h3>
+  <div class="prose">
+    <p>Most of HIPAA's technical safeguards are <em>emergent from the architecture</em>: unique user identification and per-action attribution (on-behalf-of receipts), complete audit of every query/output/PHI access (the receipt stream — 2026 guidance: tamper-evident, 6-year retention), access controls (ReBAC at the gateway), encryption in transit (SPIRE mTLS / ambient profile). A <code>compliance: hipaa</code> profile — shipped as a pack — configures the rest:</p>
+    <ul class="tight">
+      <li><strong>Receipt hardening:</strong> hash-chained (tamper-evident) receipt stream, 6-year retention policy to object storage, scheduled access-review reports.</li>
+      <li><strong>Model egress allowlist:</strong> the gateway restricts PHI-touching agents to LLM endpoints under your BAA (Bedrock / Azure OpenAI / self-hosted via §10) with Zero-Data-Retention flags asserted — enforced at the chokepoint, not by trusting agent code.</li>
+      <li><strong>PHI minimization:</strong> redaction filters at the gateway and at the ingestion normalize stage (§13) — already designed; the profile turns them mandatory.</li>
+      <li><strong>Session controls:</strong> automatic logoff, break-glass emergency access role with its own audit trail, encryption-at-rest storage classes for Postgres/NATS/graph stores.</li>
+    </ul>
+    <p class="soft">Same pattern extends to SOC 2 and GDPR profiles. The pitch line is real: <em>because every hop crosses one audited gateway, compliance is a profile you enable, not an integration you build.</em></p>
+  </div>
+</section>
+
+<!-- ══════════════════════ 07 HARNESS ══════════════════════ -->
+<section id="harness">
+  <div class="sec-head"><span class="n">07</span><h2>Harness &amp; observability</h2></div>
+  <div class="prose">
+    <p>The harness is a proven pattern promoted to platform level and made SDK-agnostic — because it lives in the <em>data plane</em>, not in the agent:</p>
+    <ul class="tight">
+      <li><strong>Sessions &amp; receipts.</strong> Every A2A task through the gateway is recorded to a JetStream stream: full request/response, tool calls, model calls, cost, identity chain. Every agent action is <strong>replayable</strong>. One stream is simultaneously the audit log, the debugging substrate, and the eval-data collector (§08).</li>
+      <li><strong>Traces.</strong> OpenTelemetry <strong>GenAI semantic conventions</strong> — adopted now, <em>convention version pinned</em>, since they remain pre-stable in mid-2026 (shape settled, names may churn). The gateway emits spans for every agent/tool/LLM hop, so even uninstrumented agents get traces; instrumented agents (OpenLLMetry SDKs) add interior reasoning spans.</li>
+      <li><strong>Backend.</strong> <strong>OpenObserve</strong> — metrics, logs, and traces in a single binary on object storage. The Prometheus + Grafana + Tempo + Loki equivalent is 6+ pods; this is one. <strong>Arize Phoenix</strong> is an optional <code>plus</code> pod for LLM-native trace views and embedding-drift visuals.</li>
+      <li><strong>Golden signals for agents</strong>, exported as real metrics with alert rules shipped in the Helm chart: task success rate, tool-error rate, tokens/task, cost/task, latency per hop, loop depth, handoff count.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══════════════════════ 08 EVALS ══════════════════════ -->
+<section id="evals">
+  <div class="sec-head"><span class="n">08</span><h2>Evals — semantic admission</h2></div>
+  <div class="prose">
+    <p>Kubernetes gates rollouts on health checks; graphene gates them on <strong>semantic</strong> checks. Agents and models earn traffic. This is the headline feature — nobody in the kagent / Rossoctl / Dapr set does eval-as-admission.</p>
+  </div>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 940 360" role="img" aria-label="Eval-gated rollout: a new agent version is held with no traffic while an eval job runs against the golden set derived from the knowledge graph plus replayed production sessions from JetStream. Passing the gate shifts traffic through a canary to full rollout via gateway weights; failing rolls back with the eval report written to the CR status and the pull request.">
+      <defs>
+        <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--good)"/>
+        </marker>
+        <marker id="arrR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--crit)"/>
+        </marker>
+      </defs>
+
+      <!-- data sources on top -->
+      <rect x="284" y="24" width="180" height="48" rx="6" fill="none" stroke="currentColor"/>
+      <text x="374" y="44" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Golden set</text>
+      <text x="374" y="61" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">from KG ontology (§04)</text>
+      <rect x="488" y="24" width="200" height="48" rx="6" fill="none" stroke="currentColor"/>
+      <text x="588" y="44" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Recorded sessions</text>
+      <text x="588" y="61" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">replay from JetStream (§07)</text>
+
+      <!-- flow -->
+      <rect x="24" y="140" width="140" height="60" rx="8" fill="none" stroke="currentColor"/>
+      <text x="94" y="165" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">git tag v1.5</text>
+      <text x="94" y="184" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">Agent CR updated</text>
+
+      <rect x="212" y="140" width="130" height="60" rx="8" fill="none" stroke="var(--warn)" stroke-width="1.5"/>
+      <text x="277" y="165" text-anchor="middle" font-size="12" font-weight="600" fill="var(--warn)" font-family="system-ui, sans-serif">HELD</text>
+      <text x="277" y="184" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">no traffic yet</text>
+
+      <rect x="392" y="132" width="196" height="76" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="490" y="157" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--accent)" font-family="system-ui, sans-serif">Eval Job</text>
+      <text x="490" y="175" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">DeepEval / Inspect AI</text>
+      <text x="490" y="192" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">runs vs the NEW version</text>
+
+      <rect x="640" y="140" width="130" height="60" rx="30" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <text x="705" y="165" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">gate</text>
+      <text x="705" y="184" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">score ≥ 0.85 ?</text>
+
+      <line x1="164" y1="170" x2="204" y2="170" stroke="currentColor" marker-end="url(#arr3)"/>
+      <line x1="342" y1="170" x2="384" y2="170" stroke="currentColor" marker-end="url(#arr3)"/>
+      <line x1="588" y1="170" x2="632" y2="170" stroke="currentColor" marker-end="url(#arr3)"/>
+      <line x1="374" y1="72" x2="452" y2="126" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arr3)"/>
+      <line x1="588" y1="72" x2="524" y2="126" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arr3)"/>
+
+      <!-- pass path -->
+      <line x1="770" y1="158" x2="812" y2="120" stroke="var(--good)" stroke-width="1.5" marker-end="url(#arrG)"/>
+      <text x="806" y="132" text-anchor="end" font-size="10.5" fill="var(--good)" font-family="ui-monospace, Menlo, monospace">pass</text>
+      <rect x="792" y="60" width="132" height="52" rx="8" fill="none" stroke="var(--good)" stroke-width="1.5"/>
+      <text x="858" y="82" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--good)" font-family="system-ui, sans-serif">canary 10%</text>
+      <text x="858" y="100" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">gateway weights</text>
+      <line x1="858" y1="60" x2="858" y2="40" stroke="var(--good)" stroke-width="1.5" marker-end="url(#arrG)"/>
+      <text x="870" y="34" font-size="10.5" fill="var(--good)" font-family="ui-monospace, Menlo, monospace">→ 100%</text>
+
+      <!-- fail path -->
+      <line x1="770" y1="184" x2="812" y2="226" stroke="var(--crit)" stroke-width="1.5" marker-end="url(#arrR)"/>
+      <text x="806" y="216" text-anchor="end" font-size="10.5" fill="var(--crit)" font-family="ui-monospace, Menlo, monospace">fail</text>
+      <rect x="792" y="234" width="132" height="52" rx="8" fill="none" stroke="var(--crit)" stroke-width="1.5"/>
+      <text x="858" y="256" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--crit)" font-family="system-ui, sans-serif">rollback</text>
+      <text x="858" y="274" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">report → CR status + PR</text>
+
+      <!-- feedback loop -->
+      <path d="M 858 286 L 858 322 L 588 322" fill="none" stroke="currentColor" stroke-dasharray="4 3"/>
+      <path d="M 490 322 L 94 322 L 94 208" fill="none" stroke="currentColor" stroke-dasharray="4 3" marker-end="url(#arr3)"/>
+      <text x="476" y="315" text-anchor="start" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">production traffic keeps becoming regression data</text>
+    </svg>
+    <figcaption><b>Fig 3 — Eval-gated progressive delivery.</b> A new version is held with zero traffic until the eval Job — fed by the ontology-derived golden set <em>and</em> replayed production sessions — clears the gate. Pass shifts traffic through a gateway-weighted canary; fail rolls back with the report written where engineers already look: the CR status and the PR.</figcaption>
+  </figure>
+
+<pre class="code"><span class="k">kind</span>: EvalSuite
+<span class="k">spec</span>:
+  <span class="k">runner</span>: <span class="s">deepeval</span>            <span class="c"># or inspect-ai; runs as a Job — 0 standing pods</span>
+  <span class="k">dataset</span>:
+    <span class="k">goldenSetRef</span>: <span class="s">pa-golden-v3</span>          <span class="c"># derived from KG ontology + curated cases</span>
+    <span class="k">fromSessions</span>: {<span class="k">sample</span>: <span class="s">200</span>, <span class="k">since</span>: <span class="s">7d</span>}   <span class="c"># replay real recorded sessions</span>
+  <span class="k">metrics</span>: [<span class="s">task_completion</span>, <span class="s">tool_correctness</span>, <span class="s">faithfulness_to_kg</span>, <span class="s">cost_regression</span>]
+  <span class="k">gate</span>: {<span class="k">minScore</span>: <span class="s">0.85</span>, <span class="k">blocking</span>: <span class="s">true</span>}</pre>
+
+  <div class="prose">
+    <p class="soft">Nightly full-suite runs are CronJobs; results land as CR status and metrics, so "eval score over time" is just another OpenObserve panel. Models pass through the same gate (§10) — one promotion mechanic for the whole platform.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════ 09 DRIFT ══════════════════════ -->
+<section id="drift">
+  <div class="sec-head"><span class="n">09</span><h2>Drift &amp; self-healing</h2></div>
+  <div class="prose">
+    <p>Drift is a <strong>controller concern</strong>, mapped onto machinery Kubernetes already has: detectors write conditions, controllers act on conditions, and humans see one <code>kubectl get agents</code> with semantic health in the STATUS column.</p>
+  </div>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 900 400" role="img" aria-label="The drift self-healing loop: cheap detectors — ontology probes, hourly canary prompts, SLO burn, embedding distance — write conditions like KnowledgeStale, ModelDrifted, and Degraded onto custom resources; controllers respond by re-running ingestion, pinning the previous model, or rolling back to the last eval-passing version; the same detectors then verify recovery and clear the condition back to Ready.">
+      <defs>
+        <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrA4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <!-- 1. detectors -->
+      <rect x="40" y="40" width="250" height="118" rx="10" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <text x="165" y="66" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--ink)" font-family="system-ui, sans-serif">1 · Detectors (cheap)</text>
+      <g font-size="11" fill="currentColor" font-family="system-ui, sans-serif">
+        <text x="60" y="90">· ontology probe set (KG)</text>
+        <text x="60" y="108">· hourly canary prompts (model)</text>
+        <text x="60" y="126">· SLO burn on golden signals</text>
+        <text x="60" y="144">· embedding centroid distance</text>
+      </g>
+
+      <!-- 2. conditions -->
+      <rect x="560" y="40" width="300" height="118" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="710" y="66" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--accent)" font-family="system-ui, sans-serif">2 · Conditions on the CR</text>
+      <g font-size="11" font-family="ui-monospace, Menlo, monospace">
+        <text x="582" y="92" fill="var(--warn)">KnowledgeStale</text>
+        <text x="582" y="112" fill="var(--warn)">ModelDrifted</text>
+        <text x="582" y="132" fill="var(--crit)">Degraded</text>
+        <text x="700" y="92" fill="var(--ink-soft)">— graph lags the domain</text>
+        <text x="700" y="112" fill="var(--ink-soft)">— provider changed behavior</text>
+        <text x="700" y="132" fill="var(--ink-soft)">— success rate fell</text>
+      </g>
+
+      <!-- 3. controllers -->
+      <rect x="560" y="238" width="300" height="118" rx="10" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <text x="710" y="264" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--ink)" font-family="system-ui, sans-serif">3 · Controllers act</text>
+      <g font-size="11" fill="currentColor" font-family="system-ui, sans-serif">
+        <text x="582" y="290">· trigger ingestion Workflow (re-index)</text>
+        <text x="582" y="308">· pin previous model / route fallback</text>
+        <text x="582" y="326">· auto-rollback to last eval-passing rev</text>
+        <text x="582" y="344">· escalate: alert with the receipt trail</text>
+      </g>
+
+      <!-- 4. ready -->
+      <rect x="40" y="238" width="250" height="118" rx="10" fill="none" stroke="var(--good)" stroke-width="1.5"/>
+      <text x="165" y="264" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--good)" font-family="system-ui, sans-serif">4 · Verified → Ready</text>
+      <g font-size="11" fill="currentColor" font-family="system-ui, sans-serif">
+        <text x="60" y="290">same detectors confirm recovery,</text>
+        <text x="60" y="308">condition cleared; if not resolved,</text>
+        <text x="60" y="326">it stays visible — never silently</text>
+        <text x="60" y="344">reset</text>
+      </g>
+
+      <!-- loop arrows -->
+      <line x1="290" y1="99" x2="552" y2="99" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrA4)"/>
+      <text x="421" y="90" text-anchor="middle" font-size="10.5" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">write status conditions</text>
+      <line x1="710" y1="158" x2="710" y2="230" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr4)"/>
+      <text x="722" y="198" font-size="10.5" fill="currentColor" font-family="ui-monospace, Menlo, monospace">reconcile</text>
+      <line x1="560" y1="297" x2="298" y2="297" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr4)"/>
+      <text x="429" y="288" text-anchor="middle" font-size="10.5" fill="currentColor" font-family="ui-monospace, Menlo, monospace">remediation applied</text>
+      <line x1="165" y1="238" x2="165" y2="166" stroke="var(--good)" stroke-width="1.5" marker-end="url(#arr4)"/>
+      <text x="177" y="206" font-size="10.5" fill="var(--good)" font-family="ui-monospace, Menlo, monospace">re-probe</text>
+
+      <!-- kubectl readout -->
+      <rect x="330" y="168" width="230" height="60" rx="8" fill="var(--code-bg)"/>
+      <text x="344" y="192" font-size="10" fill="var(--code-comment)" font-family="ui-monospace, Menlo, monospace">$ kubectl get agents</text>
+      <text x="344" y="210" font-size="10" fill="var(--code-ink)" font-family="ui-monospace, Menlo, monospace">pa-reviewer  Degraded: eval</text>
+      <text x="344" y="222" font-size="10" fill="var(--code-ink)" font-family="ui-monospace, Menlo, monospace">0.91→0.74 after provider update</text>
+    </svg>
+    <figcaption><b>Fig 4 — The self-healing loop.</b> Cheap always-on detectors write semantic conditions; controllers remediate; the same detectors verify recovery. The single UX beat worth more than any dashboard: semantic health readable in plain <code>kubectl get</code>.</figcaption>
+  </figure>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Drift type</th><th>Detector (thin)</th><th>Self-healing action</th></tr></thead>
+    <tbody>
+      <tr><td>KG drift <span class="pill warn">KnowledgeStale</span></td><td>Ontology probe-set failures; ingestion-lag metric</td><td>Trigger ingestion Workflow → if unresolved, alert</td></tr>
+      <tr><td>Model drift <span class="pill warn">ModelDrifted</span></td><td>Fixed canary prompt set hourly; embedded-output distance vs baseline</td><td>Pin previous model version / route to fallback</td></tr>
+      <tr><td>Behavioral drift <span class="pill crit">Degraded</span></td><td>SLO burn on success rate, cost/task</td><td>Auto-rollback to last eval-passing version</td></tr>
+      <tr><td>Embedding drift</td><td>Centroid distance in <code>core</code>; Phoenix visuals in <code>plus</code></td><td>Re-index job on the KnowledgeGraph</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ══════════════════════ 10 MODELHUB ══════════════════════ -->
+<section id="modelhub">
+  <div class="sec-head"><span class="n">10</span><h2>ModelHub <span class="pill" style="vertical-align: 4px; margin-left: 8px;">plus tier</span></h2></div>
+  <div class="prose">
+    <p>The <code>Model</code> CR is a thin envelope over four adopted components — train → package → eval-gate → serve — and <strong>models pass through the same EvalSuite admission gate as agents</strong>: one promotion mechanic for the whole platform.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Stage</th><th>Binding</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Versioning / packaging</td><td><b>KitOps ModelKits</b> (CNCF ModelPack)</td><td>Models, datasets, prompts, configs as OCI artifacts in the registry you already run; <code>kit://</code> URIs; cosign-signed like everything else</td></tr>
+      <tr><td>Serving</td><td><b>KServe</b> <code>InferenceService</code></td><td>Fronts <b>Triton</b> / vLLM — the runtime is a one-line swap; <b>Kueue</b> for GPU queueing; llm-d only for one giant model at high throughput</td></tr>
+      <tr><td>Training</td><td><b>Kubeflow Trainer v2</b> <code>TrainJob</code></td><td>SFT / DPO / GRPO built in; <b>Unsloth</b> is landing as a BuiltinTrainer — ride it, don't wrap it</td></tr>
+      <tr><td>Experiments</td><td><b>MLflow</b></td><td>Tracking only; runs launched from the CLI</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ══════════════════════ 11 DX ══════════════════════ -->
+<section id="dx">
+  <div class="sec-head"><span class="n">11</span><h2>Developer experience — the golden path</h2></div>
+  <div class="prose">
+    <p>The platform contract is deliberately tiny — a container that serves A2A plus an Agent Card — which is why creating an agent can be this easy: <strong>your SDK, your code; the CLI generates the thin wrapper and drives all the machinery.</strong> Target: empty directory to an agent answering from a knowledge graph on a local cluster in <strong>under 15 minutes</strong>.</p>
+    <p>Three ways in, ordered by effort:</p>
+    <ul class="tight">
+      <li><strong>Scaffolded.</strong> <code>graphene init</code> runs an interview — what the agent does, which graph, which tools (listed from the directory), which SDK (recommended with reasoning, never silently chosen) — and generates a complete working agent (~100 lines) <em>that the user owns</em>. No bundled runtime; doctrine holds.</li>
+      <li><strong>BYO.</strong> An existing LangGraph / CrewAI / ADK / Pydantic AI / Claude-SDK agent gets an A2A wrapper, card, Dockerfile, and <code>agent.yaml</code> from a per-SDK template — typically a few dozen generated lines.</li>
+      <li><strong>External.</strong> An agent already running elsewhere: <code>graphene agent register --endpoint</code> — the operator reads its card and wires identity, routes, and directory entry.</li>
+    </ul>
+  </div>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 940 380" role="img" aria-label="The golden path: on the laptop, graphene init scaffolds agent code in the developer's own SDK; graphene dev hot-reloads it onto a local k3d or minikube cluster running the 8-pod core, streaming live receipts back to the terminal. graphene build produces a signed image with SBOM into a registry; graphene deploy commits CRs to an environment repo, Argo CD syncs, and the rollout streams the eval gate: held, eval, canary, full traffic.">
+      <defs>
+        <marker id="arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrA5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <!-- laptop panel -->
+      <rect x="24" y="40" width="400" height="300" rx="12" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <text x="40" y="66" font-size="10.5" letter-spacing="1.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">YOUR LAPTOP</text>
+
+      <rect x="48" y="84" width="352" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="224" y="106" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">agent code — your SDK</text>
+      <text x="224" y="124" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">~100 lines, user-owned</text>
+
+      <rect x="48" y="160" width="352" height="46" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="224" y="188" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--accent)" font-family="system-ui, sans-serif">graphene CLI</text>
+
+      <rect x="48" y="232" width="352" height="84" rx="8" fill="none" stroke="currentColor"/>
+      <text x="224" y="258" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">k3d / minikube / kind</text>
+      <text x="224" y="277" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">core installed — 8 pods</text>
+      <text x="224" y="297" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">gateway · NATS · Postgres · SPIRE …</text>
+
+      <!-- laptop internal arrows -->
+      <line x1="150" y1="160" x2="150" y2="140" stroke="var(--accent)" marker-end="url(#arrA5)"/>
+      <text x="142" y="152" text-anchor="end" font-size="10" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">init — wizard</text>
+      <line x1="224" y1="206" x2="224" y2="228" stroke="var(--accent)" marker-end="url(#arrA5)"/>
+      <text x="234" y="222" font-size="10" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">dev — hot reload</text>
+      <line x1="330" y1="232" x2="330" y2="210" stroke="currentColor" marker-end="url(#arr5)"/>
+      <text x="340" y="224" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">live receipts</text>
+
+      <!-- cluster panel -->
+      <rect x="536" y="40" width="380" height="300" rx="12" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <text x="552" y="66" font-size="10.5" letter-spacing="1.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">ANY CONFORMANT CLUSTER</text>
+
+      <rect x="560" y="84" width="332" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="726" y="106" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">OCI registry</text>
+      <text x="726" y="124" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">image + SBOM, cosign-signed</text>
+
+      <rect x="560" y="160" width="332" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="726" y="182" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">env repo → Argo CD</text>
+      <text x="726" y="200" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">CRs are the deploy artifact</text>
+
+      <rect x="560" y="236" width="332" height="80" rx="8" fill="none" stroke="var(--good)" stroke-width="1.5"/>
+      <text x="726" y="262" text-anchor="middle" font-size="12" font-weight="600" fill="var(--good)" font-family="system-ui, sans-serif">rollout gate (§08)</text>
+      <text x="726" y="284" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">HELD → eval 0.89 ✓ → canary → 100%</text>
+      <text x="726" y="302" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">streamed to the terminal</text>
+
+      <!-- cross arrows -->
+      <line x1="424" y1="110" x2="552" y2="110" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrA5)"/>
+      <text x="488" y="101" text-anchor="middle" font-size="10.5" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">build</text>
+      <line x1="424" y1="186" x2="552" y2="186" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrA5)"/>
+      <text x="488" y="177" text-anchor="middle" font-size="10.5" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">deploy</text>
+      <line x1="726" y1="212" x2="726" y2="228" stroke="currentColor" marker-end="url(#arr5)"/>
+      <text x="738" y="226" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">sync</text>
+    </svg>
+    <figcaption><b>Fig 5 — The golden path.</b> The whole lifecycle is five commands: <code>init → dev → invoke → build → deploy</code>. Deploy is a GitOps commit, not a kubectl apply — the CRs are the deploy artifact, so environments diff and roll back like code.</figcaption>
+  </figure>
+
+<pre class="code"><span class="c">$ graphene init</span>
+? What should this agent do?   <span class="s">Review prior-auth requests against payer policy</span>
+? Knowledge graph:             <span class="s">payer-policies (v12)</span>   <span class="c">— 3 others available</span>
+? Tools (from directory):      <span class="s">claims-system, fax-gateway</span>
+? SDK:                         <span class="s">pydantic-ai</span>   <span class="c">— recommended: cleanest A2A + MCP fit for Python</span>
+<span class="k">✓</span> scaffolded pa-reviewer/ — agent.py (74 lines), agent.yaml, Dockerfile, card.json
+
+<span class="c">$ graphene dev</span>
+<span class="k">✓</span> k3d cluster <span class="s">"graphene-local"</span> ready — core: 8 pods
+<span class="k">✓</span> pa-reviewer running — hot reload on save
+⠿ receipt  task 01H…  kg.query ×2 → claims.lookup ×1 · 6.2k tok · $0.011 · 3.4s
+
+<span class="c">$ graphene eval run --quick</span>          <span class="c"># 20 golden cases from the ontology</span>
+score <span class="k">0.91 ✓</span>  (gate: 0.85)
+
+<span class="c">$ graphene build &amp;&amp; graphene deploy --env staging</span>
+<span class="k">✓</span> image signed (cosign) · SBOM attached
+<span class="k">✓</span> CRs committed to env repo — Argo CD syncing
+⠿ rollout  HELD → eval <span class="k">0.89 ✓</span> → canary 10% → 100%   (4m12s)</pre>
+
+  <div class="prose">
+    <h3>Workflows — two authoring levels, one runtime</h3>
+    <ul class="tight">
+      <li><strong>Declarative</strong> for compositions: a <code>Workflow</code> CR lists triggers (JetStream event, cron, A2A task) and steps (call agent A, then agent B, human-approval step, notify). The operator compiles it to a DBOS program — no code written.</li>
+      <li><strong>Code-first</strong> for real logic: <code>graphene init workflow --code</code> scaffolds a DBOS project — plain decorated functions with crash-resume and retries, no orchestrator to learn. Local run with fake event injection: <code>graphene workflow test --event fixtures/claim.json</code>.</li>
+      <li><strong>Apps:</strong> <code>graphene init app</code> scaffolds a frontend with a typed TS client generated from the exposed workflow/agent schemas, IdP login wired — the product layer with no hand-written backend (§03).</li>
+    </ul>
+    <p class="soft">The wizard's rule everywhere: <em>the platform asks, you choose</em> — every generated choice shows its reasoning and is editable; a blank field the user can't understand is treated as a product failure.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════ 12 COMPONENTS ══════════════════════ -->
+<section id="components">
+  <div class="sec-head"><span class="n">12</span><h2>Component plan</h2></div>
+  <div class="prose">
+    <p>Every component graphene ships, what it owns, what it binds, and its build size (S &lt; 1 wk · M 1–3 wk · L 3–6 wk, solo). Phases map to the build order in §18.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Component</th><th>Owns</th><th>Binds</th><th>Size</th><th>Phase</th></tr></thead>
+    <tbody>
+      <tr><td>graphene CLI</td><td>Wizard, dev loop, build/deploy, <code>kg</code>/<code>eval</code>/<code>session</code>/<code>drift</code> verbs</td><td>cobra, buildpacks/ko, cosign</td><td class="num">L</td><td class="num">P1+</td></tr>
+      <tr><td>SDK templates</td><td>A2A wrapper + card + Dockerfile per SDK (pydantic-ai, LangGraph, CrewAI, ADK, Claude SDK, raw)</td><td>a2a-sdk</td><td class="num">M</td><td class="num">P1</td></tr>
+      <tr><td>agent-operator</td><td>Agent controller: sandbox/deploy, SPIRE entries, routes, directory registration, rollout gating</td><td>kubebuilder, agent-sandbox</td><td class="num">L</td><td class="num">P1</td></tr>
+      <tr><td>Policy compiler</td><td>Agent CR budgets/tools/guardrails <b>+ expose blocks</b> → gateway config (library inside operator)</td><td>agentgateway CRDs</td><td class="num">M</td><td class="num">P1</td></tr>
+      <tr><td>Receipt tap</td><td>Gateway taps → receipt envelopes → JetStream stream; retention policy</td><td>NATS</td><td class="num">M</td><td class="num">P1</td></tr>
+      <tr><td>Agent directory</td><td>OASF records in JetStream KV; federates the public MCP Registry for the tool catalog</td><td>OASF, MCP Registry</td><td class="num">S</td><td class="num">P1</td></tr>
+      <tr><td>Identity glue</td><td>SPIRE registrar, IdP bootstrap Job (Zitadel org / Keycloak realm), token-exchange config</td><td>SPIRE, Zitadel/Keycloak</td><td class="num">M</td><td class="num">P1</td></tr>
+      <tr><td>Umbrella chart</td><td>Tiers (core/plus), profiles (<code>local</code>/prod), e2e CI on k3d + kind</td><td>Helm</td><td class="num">M</td><td class="num">P1</td></tr>
+      <tr><td>Observability pack</td><td>OTel wiring (pinned GenAI semconv), dashboards, alert rules, golden signals</td><td>OpenObserve, OpenLLMetry</td><td class="num">M</td><td class="num">P1+</td></tr>
+      <tr><td>Connector CRD</td><td>Three facets per system-of-record: MCP server, ingestion source, event receiver (below)</td><td>MCP, CloudEvents, ESO</td><td class="num">M</td><td class="num">P2</td></tr>
+      <tr><td>Ontology spec</td><td>The KG contract schema: entities, relations, invariants, probe definitions (§13)</td><td>—</td><td class="num">M</td><td class="num">P2</td></tr>
+      <tr><td>Provider adapters</td><td>Graphiti first; cognee next; BYO passthrough — the 6-tool MCP surface (§13)</td><td>MCP</td><td class="num">M ea.</td><td class="num">P2</td></tr>
+      <tr><td>Ingestion pipeline</td><td>Acquire→extract→resolve→validate→write templates + extraction QA (§13)</td><td>DBOS / Argo</td><td class="num">L</td><td class="num">P2</td></tr>
+      <tr><td>Probe engine</td><td>Semantic-readiness runner; writes KG conditions</td><td>—</td><td class="num">M</td><td class="num">P2</td></tr>
+      <tr><td>EvalSuite controller</td><td>Eval Jobs, dataset builder (ontology golden sets + session sampler), gate orchestration</td><td>DeepEval / Inspect AI</td><td class="num">L</td><td class="num">P3</td></tr>
+      <tr><td>Session replay engine</td><td>Receipts → replayable fixtures for evals and debugging</td><td>NATS</td><td class="num">M</td><td class="num">P3</td></tr>
+      <tr><td>Drift controllers</td><td>Canary-prompt CronJobs, SLO burn watcher, embedding distance; remediation actions (§09)</td><td>OpenObserve queries</td><td class="num">L</td><td class="num">P4</td></tr>
+      <tr><td>workflow-operator</td><td>Workflow CR → DBOS program / Argo DAG; JetStream event triggers</td><td>DBOS</td><td class="num">M</td><td class="num">P4</td></tr>
+      <tr><td>Loop governance</td><td>Hop limits, A2A cycle detection, kill switch, approval interrupts (§14)</td><td>gateway + operator</td><td class="num">M</td><td class="num">P4</td></tr>
+      <tr><td>Pack format + installer</td><td>The fast-plane delivery vehicle: signed OCI bundles of filters/skills/templates/drivers/CRs; <code>graphene pack</code> verbs; socket-contract compatibility checks (§15)</td><td>OCI, cosign</td><td class="num">M</td><td class="num">P3</td></tr>
+      <tr><td>Knowledge pattern packs</td><td><code>sop-decision-tree</code>, <code>policy-rules</code>, <code>episodic-memory</code>, <code>entity-catalog</code>, <code>qa-corpus</code>: ontology templates + extractors + auto-probes + bundle recipes (§13)</td><td>packs</td><td class="num">M</td><td class="num">P2–P3</td></tr>
+      <tr><td>App layer</td><td>HTTP projection of workflows/agents (REST/SSE), typed client generation, app templates, release pinning (§03)</td><td>kro, IdP</td><td class="num">M</td><td class="num">P4</td></tr>
+      <tr><td>AuthzProvider (OpenFGA)</td><td>ReBAC model (user/agent/tool/subgraph relations, delegation chains), gateway check integration, <code>graphene authz</code> verbs (§06)</td><td>OpenFGA</td><td class="num">M</td><td class="num">P4</td></tr>
+      <tr><td>Tenant CR (enterprise)</td><td>One-object tenancy fan-out: namespace/vCluster, NATS account, RLS role, IdP org, gateway partition, quotas (§06)</td><td>vCluster, Capsule</td><td class="num">L</td><td class="num">ent</td></tr>
+      <tr><td>Compliance profile packs (enterprise)</td><td>hipaa/soc2/gdpr: receipt hash-chaining + retention, egress allowlists, mandatory redaction, break-glass, reports (§06)</td><td>packs</td><td class="num">M</td><td class="num">ent</td></tr>
+      <tr><td>model-operator</td><td>Model CR envelope: TrainJob / ModelKit / InferenceService (§10)</td><td>KServe, Trainer, KitOps</td><td class="num">L</td><td class="num">P5</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="connectors">Connectors — MCP-only? Three planes, one rule</h3>
+  <div class="prose">
+    <p>The rule: <strong>MCP is the <em>only agent-facing</em> connector surface.</strong> An agent never gets a bespoke API client; if an agent needs a system, that system is an MCP server routed through the gateway — which is what makes authz, budgets, and receipts uniform. But "connector" is three different jobs, and forcing all three through MCP would be wrong:</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Plane</th><th>Shape</th><th>Protocol</th><th>Why not MCP</th></tr></thead>
+    <tbody>
+      <tr><td>Tool plane</td><td>Agent ↔ system, synchronous request/response</td><td><b>MCP only</b></td><td>— (this is exactly MCP's job; the public MCP Registry supplies the catalog)</td></tr>
+      <tr><td>Ingestion plane</td><td>System → KnowledgeGraph, bulk/batch/stream</td><td>Workflow steps with native readers</td><td>Pulling 50k documents through tool calls is the wrong shape; results reach agents via the KG's MCP surface anyway</td></tr>
+      <tr><td>Event plane</td><td>System → platform, async triggers (webhooks, CDC)</td><td><b>CloudEvents → JetStream</b></td><td>MCP has no durable eventing model; events must outlive the connection and fan out</td></tr>
+    </tbody>
+  </table></div>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 920 320" role="img" aria-label="One Connector CR declares a system of record with three optional facets: a tool facet deploying or referencing an MCP server routed through the gateway to agents; an ingestion facet feeding bulk workflow readers into the knowledge graph; and an event facet turning webhooks and CDC into CloudEvents on JetStream that trigger workflows. Credentials are handled once at the CR.">
+      <defs>
+        <marker id="arr6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrA6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <rect x="24" y="96" width="170" height="128" rx="10" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <text x="109" y="126" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">System of record</text>
+      <text x="109" y="146" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">FHIR · Salesforce ·</text>
+      <text x="109" y="162" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">S3 · Postgres · …</text>
+
+      <rect x="24" y="248" width="170" height="48" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="109" y="268" text-anchor="middle" font-size="11.5" font-weight="650" fill="var(--accent)" font-family="system-ui, sans-serif">Connector CR</text>
+      <text x="109" y="285" text-anchor="middle" font-size="10" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">creds once · 3 facets</text>
+      <line x1="109" y1="248" x2="109" y2="228" stroke="var(--accent)" stroke-dasharray="3 3" marker-end="url(#arrA6)"/>
+
+      <!-- tool plane -->
+      <rect x="300" y="40" width="190" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="395" y="62" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">MCP server</text>
+      <text x="395" y="79" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">catalog image or BYO</text>
+      <rect x="560" y="40" width="150" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="635" y="70" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">agentgateway</text>
+      <rect x="780" y="40" width="116" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="838" y="70" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Agents</text>
+      <line x1="194" y1="120" x2="292" y2="70" stroke="currentColor" marker-end="url(#arr6)"/>
+      <line x1="490" y1="66" x2="552" y2="66" stroke="currentColor" marker-end="url(#arr6)"/>
+      <text x="521" y="58" text-anchor="middle" font-size="10" fill="currentColor" font-family="ui-monospace, Menlo, monospace">MCP</text>
+      <line x1="710" y1="66" x2="772" y2="66" stroke="currentColor" marker-end="url(#arr6)"/>
+      <text x="286" y="86" text-anchor="end" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">sync</text>
+
+      <!-- ingestion plane -->
+      <rect x="300" y="134" width="190" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="395" y="156" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Ingestion Workflow</text>
+      <text x="395" y="173" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">bulk readers, native SDKs</text>
+      <rect x="560" y="134" width="190" height="52" rx="8" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="655" y="156" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--accent)" font-family="system-ui, sans-serif">KnowledgeGraph</text>
+      <text x="655" y="173" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">agents query it via MCP ↑</text>
+      <line x1="194" y1="160" x2="292" y2="160" stroke="currentColor" marker-end="url(#arr6)"/>
+      <text x="243" y="152" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">batch/stream</text>
+      <line x1="490" y1="160" x2="552" y2="160" stroke="currentColor" marker-end="url(#arr6)"/>
+      <text x="521" y="152" text-anchor="middle" font-size="10" fill="currentColor" font-family="ui-monospace, Menlo, monospace">write</text>
+
+      <!-- event plane -->
+      <rect x="300" y="228" width="190" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="395" y="250" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Event receiver</text>
+      <text x="395" y="267" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">webhook · CDC</text>
+      <rect x="560" y="228" width="150" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="635" y="250" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">JetStream</text>
+      <text x="635" y="267" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">CloudEvents</text>
+      <rect x="780" y="228" width="116" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="838" y="250" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Workflows</text>
+      <text x="838" y="267" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">triggered</text>
+      <line x1="194" y1="204" x2="292" y2="250" stroke="currentColor" marker-end="url(#arr6)"/>
+      <text x="238" y="238" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">async</text>
+      <line x1="490" y1="254" x2="552" y2="254" stroke="currentColor" marker-end="url(#arr6)"/>
+      <line x1="710" y1="254" x2="772" y2="254" stroke="currentColor" marker-end="url(#arr6)"/>
+    </svg>
+    <figcaption><b>Fig 6 — One Connector CR, three facets.</b> Agents only ever see the tool plane (MCP through the gateway). Bulk data reaches them indirectly — ingested into the KnowledgeGraph, queried back out over MCP. Events become CloudEvents on JetStream and trigger Workflows. Credentials are declared once on the CR (Secrets / External Secrets; OAuth token exchange at the gateway for user-delegated access).</figcaption>
+  </figure>
+</section>
+
+<!-- ══════════════════════ 13 GRAPH ENGINEERING ══════════════════════ -->
+<section id="graph-eng">
+  <div class="sec-head"><span class="n">13</span><h2>Graph engineering</h2></div>
+  <div class="prose">
+    <p>The KnowledgeGraph contract (§04) says <em>what</em> a graph promises; this section is <em>how one is built and kept true</em>. Graph engineering is a pipeline discipline with the same rigor as the agent pipeline — extraction is itself eval-gated, every edge carries provenance, and no snapshot goes Ready without passing its probes.</p>
+    <h3>The ontology document</h3>
+    <p>One reviewed YAML artifact per domain — entities, relations, invariants, and probes. Everything downstream derives from it (Fig 2):</p>
+  </div>
+<pre class="code"><span class="k">ontology</span>: <span class="s">payer-policies</span>
+<span class="k">version</span>: <span class="s">v12</span>
+<span class="k">entities</span>:
+  - <span class="k">name</span>: <span class="s">Policy</span>
+    <span class="k">keys</span>: [<span class="s">policy_id</span>]
+    <span class="k">attrs</span>: {<span class="k">effective_from</span>: <span class="s">date</span>, <span class="k">state</span>: <span class="s">enum[draft,active,retired]</span>}
+  - <span class="k">name</span>: <span class="s">Procedure</span>
+    <span class="k">keys</span>: [<span class="s">cpt_code</span>]
+<span class="k">relations</span>:
+  - <span class="s">Policy COVERS Procedure</span>        <span class="c"># with conditions: prior_auth, age_range</span>
+  - <span class="s">Policy SUPERSEDES Policy</span>
+<span class="k">invariants</span>:                        <span class="c"># checked on every write — violations block the snapshot</span>
+  - <span class="s">an active Policy has ≥1 COVERS edge</span>
+  - <span class="s">SUPERSEDES has no cycles</span>
+<span class="k">probes</span>:                            <span class="c"># known-answer set — semantic readiness (§04, §09)</span>
+  - <span class="k">q</span>: <span class="s">"Does policy P-1042 cover CPT 97110 without prior auth?"</span>
+    <span class="k">expect</span>: <span class="s">{answer: no, cites: [P-1042 §4.2]}</span></pre>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 940 250" role="img" aria-label="The graph ingestion pipeline: acquire documents via the connector ingestion plane, normalize, extract entities and relations with ontology-guided structured output, resolve entities against existing nodes, then pass two gates: invariant validation and extraction QA against a labeled sample. Passing writes edges with full provenance and cuts an immutable snapshot, which goes Ready only after the probe set passes.">
+      <defs>
+        <marker id="arr7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrG7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--good)"/>
+        </marker>
+      </defs>
+      <g font-family="system-ui, sans-serif" font-size="11.5">
+        <rect x="24" y="48" width="120" height="56" rx="8" fill="none" stroke="currentColor"/>
+        <text x="84" y="72" text-anchor="middle" font-weight="600" fill="var(--ink)">acquire</text>
+        <text x="84" y="90" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">connector facet</text>
+
+        <rect x="180" y="48" width="120" height="56" rx="8" fill="none" stroke="currentColor"/>
+        <text x="240" y="72" text-anchor="middle" font-weight="600" fill="var(--ink)">normalize</text>
+        <text x="240" y="90" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">chunk · dedup · PII</text>
+
+        <rect x="336" y="48" width="140" height="56" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+        <text x="406" y="72" text-anchor="middle" font-weight="600" fill="var(--accent)">extract</text>
+        <text x="406" y="90" text-anchor="middle" font-size="10" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">ontology-guided LLM</text>
+
+        <rect x="512" y="48" width="130" height="56" rx="8" fill="none" stroke="currentColor"/>
+        <text x="577" y="72" text-anchor="middle" font-weight="600" fill="var(--ink)">resolve</text>
+        <text x="577" y="90" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">entity dedup/merge</text>
+
+        <rect x="678" y="40" width="140" height="72" rx="10" fill="none" stroke="var(--warn)" stroke-width="1.5"/>
+        <text x="748" y="64" text-anchor="middle" font-weight="600" fill="var(--warn)">two gates</text>
+        <text x="748" y="82" text-anchor="middle" font-size="10" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">invariants hold?</text>
+        <text x="748" y="97" text-anchor="middle" font-size="10" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">extraction P/R ≥ bar?</text>
+
+        <rect x="336" y="164" width="180" height="56" rx="8" fill="none" stroke="currentColor"/>
+        <text x="426" y="188" text-anchor="middle" font-weight="600" fill="var(--ink)">write + provenance</text>
+        <text x="426" y="206" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">source · ts · bitemporal</text>
+
+        <rect x="552" y="164" width="150" height="56" rx="8" fill="none" stroke="currentColor"/>
+        <text x="627" y="188" text-anchor="middle" font-weight="600" fill="var(--ink)">snapshot vN</text>
+        <text x="627" y="206" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">immutable</text>
+
+        <rect x="738" y="164" width="140" height="56" rx="8" fill="none" stroke="var(--good)" stroke-width="1.5"/>
+        <text x="808" y="188" text-anchor="middle" font-weight="600" fill="var(--good)">probes → Ready</text>
+        <text x="808" y="206" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">else stays pinned</text>
+      </g>
+      <line x1="144" y1="76" x2="172" y2="76" stroke="currentColor" marker-end="url(#arr7)"/>
+      <line x1="300" y1="76" x2="328" y2="76" stroke="currentColor" marker-end="url(#arr7)"/>
+      <line x1="476" y1="76" x2="504" y2="76" stroke="currentColor" marker-end="url(#arr7)"/>
+      <line x1="642" y1="76" x2="670" y2="76" stroke="currentColor" marker-end="url(#arr7)"/>
+      <path d="M 748 112 L 748 138 L 426 138 L 426 156" fill="none" stroke="var(--good)" stroke-width="1.5" marker-end="url(#arrG7)"/>
+      <text x="580" y="131" text-anchor="middle" font-size="10" fill="var(--good)" font-family="ui-monospace, Menlo, monospace">pass</text>
+      <line x1="516" y1="192" x2="544" y2="192" stroke="currentColor" marker-end="url(#arr7)"/>
+      <line x1="702" y1="192" x2="730" y2="192" stroke="currentColor" marker-end="url(#arr7)"/>
+      <path d="M 818 40 L 860 20 L 880 20" fill="none" stroke="var(--crit)" stroke-dasharray="4 3"/>
+      <text x="884" y="24" font-size="10" fill="var(--crit)" font-family="ui-monospace, Menlo, monospace" text-anchor="start">fail →</text>
+      <text x="884" y="38" font-size="10" fill="var(--crit)" font-family="ui-monospace, Menlo, monospace" text-anchor="start">quarantine</text>
+    </svg>
+    <figcaption><b>Fig 7 — The ingestion pipeline.</b> Extraction quality is measured, not assumed: a labeled sample per domain sets a precision/recall bar, and a batch that fails invariants or the extraction bar is quarantined — it never silently degrades a live graph. Only a probe-passing snapshot becomes Ready.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <h3>Creating a graph — three starting points, zero infrastructure</h3>
+    <p>The promise: <strong>you bring documents and review an ontology; Kubernetes runs everything else.</strong> The user never provisions a graph database, an embedder, or a pipeline worker — <code>kg init</code> makes the operator materialize the provider, the Connector ingestion facet, and the pipeline workflow from the chart, and <code>kubectl get knowledgegraphs</code> shows build progress as conditions: <code>Ingesting → Validating → ProbesPassing → Ready</code>.</p>
+    <ul class="tight">
+      <li><strong>From a knowledge pattern</strong> — <code>graphene kg init --pattern sop-decision-tree --from connector/sharepoint-sops</code>. The pattern pack supplies the ontology template, extractors, probe generators, and bundle recipes; the wizard customizes names and thresholds.</li>
+      <li><strong>From scratch, with a proposed ontology</strong> — point at 20–50 sample documents; the platform <em>proposes</em> an ontology (entities, relations, invariants, inferred with stated reasoning), the human edits and locks v1, the pipeline runs. An ontology is never silently generated — proposal → review → lock, always.</li>
+      <li><strong>Bring your own graph</strong> — an existing Neo4j/Graphiti/anything wraps in a provider adapter and gains probes and versioning; the platform manages only the query surface and lifecycle.</li>
+    </ul>
+    <h3>Knowledge patterns — different documents, different graph shapes</h3>
+    <p>A pile of SOPs and a product catalog should not produce the same kind of graph. Knowledge patterns are <strong>packs</strong> (§15, socket 4 + 1): each bundles an ontology template, extraction prompts/parsers, auto-derived probes, and the context-bundle recipes agents use. This entire capability is fast-plane content — the engine does not grow, which is the pattern charter's first load-bearing test.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Pattern pack</th><th>Source shape</th><th>Graph shape</th><th>What agents get</th></tr></thead>
+    <tbody>
+      <tr><td><code>sop-decision-tree</code></td><td>SOPs, runbooks, playbooks</td><td>Walkable procedure graph: steps, decisions, conditions, roles, exceptions</td><td><code>next_step(state)</code> — the agent <em>walks</em> the tree instead of retrieving prose; every answer cites its path</td></tr>
+      <tr><td><code>policy-rules</code></td><td>Policies, contracts, regulations</td><td>Clause / applicability / supersession rule graph</td><td>"does X apply, effective when" (the §13 payer example)</td></tr>
+      <tr><td><code>episodic-memory</code></td><td>Tickets, incidents, conversations</td><td>Bitemporal event graph</td><td>"what happened, what changed, what did we know when"</td></tr>
+      <tr><td><code>entity-catalog</code></td><td>Product, org, CRM data</td><td>Classic entity–relation</td><td>Lookups, joins, typed traversals</td></tr>
+      <tr><td><code>qa-corpus</code></td><td>FAQs, wikis, support threads</td><td>Question-intent graph</td><td>Grounded answers with citations</td></tr>
+    </tbody>
+  </table></div>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 920 360" role="img" aria-label="A paragraph of SOP text is transformed by pattern extraction into a walkable decision graph: a verify-eligibility step flows into an amount decision node with two condition-labeled branches — escalate to a senior adjuster above ten thousand dollars, auto-adjudicate otherwise — plus a dashed exception edge to a request-documents pause step. Invariants like every decision having at least two branches are auto-checked, and one probe per branch is auto-derived, such as a twelve-thousand-dollar state expecting escalation as the next step.">
+      <defs>
+        <marker id="arr10" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrA10" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <!-- source doc -->
+      <rect x="24" y="44" width="296" height="180" rx="8" fill="none" stroke="currentColor"/>
+      <text x="40" y="72" font-size="12" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">SOP §4.3 — Claim intake</text>
+      <g font-size="11" fill="var(--ink-soft)" font-family="Charter, Georgia, serif" font-style="italic">
+        <text x="40" y="98">1. Verify member eligibility.</text>
+        <text x="40" y="120">2. If the claim exceeds $10,000,</text>
+        <text x="40" y="138">&#160;&#160;&#160;&#160;escalate to a senior adjuster;</text>
+        <text x="40" y="156">&#160;&#160;&#160;&#160;otherwise auto-adjudicate.</text>
+        <text x="40" y="178">3. If documents are missing,</text>
+        <text x="40" y="196">&#160;&#160;&#160;&#160;pause and request them.</text>
+      </g>
+
+      <line x1="320" y1="134" x2="396" y2="134" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrA10)"/>
+      <text x="358" y="122" text-anchor="middle" font-size="10.5" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">pattern</text>
+      <text x="358" y="150" text-anchor="middle" font-size="10.5" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">extraction</text>
+
+      <!-- graph -->
+      <rect x="424" y="40" width="212" height="44" rx="8" fill="none" stroke="currentColor"/>
+      <text x="530" y="66" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Step · verify eligibility</text>
+
+      <polygon points="450,158 535,126 620,158 535,190" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="535" y="162" text-anchor="middle" font-size="11" font-weight="600" fill="var(--accent)" font-family="system-ui, sans-serif">amount &gt; $10k ?</text>
+
+      <line x1="530" y1="84" x2="533" y2="120" stroke="currentColor" marker-end="url(#arr10)"/>
+      <text x="544" y="106" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">NEXT</text>
+
+      <rect x="700" y="98" width="196" height="52" rx="8" fill="none" stroke="currentColor"/>
+      <text x="798" y="119" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Step · escalate</text>
+      <text x="798" y="138" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">PERFORMED_BY: senior adjuster</text>
+      <line x1="620" y1="152" x2="692" y2="128" stroke="currentColor" marker-end="url(#arr10)"/>
+      <text x="654" y="130" text-anchor="middle" font-size="10" fill="currentColor" font-family="ui-monospace, Menlo, monospace">&gt; $10k</text>
+
+      <rect x="700" y="190" width="196" height="40" rx="8" fill="none" stroke="currentColor"/>
+      <text x="798" y="214" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Step · auto-adjudicate</text>
+      <line x1="620" y1="166" x2="692" y2="204" stroke="currentColor" marker-end="url(#arr10)"/>
+      <text x="654" y="196" text-anchor="middle" font-size="10" fill="currentColor" font-family="ui-monospace, Menlo, monospace">≤ $10k</text>
+
+      <rect x="700" y="26" width="196" height="44" rx="8" fill="none" stroke="currentColor" stroke-dasharray="4 3"/>
+      <text x="798" y="45" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Step · request docs, pause</text>
+      <text x="798" y="61" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">resumes on receipt</text>
+      <line x1="636" y1="52" x2="692" y2="49" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arr10)"/>
+      <text x="662" y="40" text-anchor="middle" font-size="10" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">ON_EXCEPTION</text>
+
+      <!-- derived chips -->
+      <rect x="424" y="268" width="232" height="60" rx="8" fill="none" stroke="var(--warn)"/>
+      <text x="440" y="290" font-size="10.5" fill="var(--warn)" font-family="ui-monospace, Menlo, monospace">invariants auto-checked</text>
+      <text x="440" y="308" font-size="10.5" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">Decision ≥ 2 branches</text>
+      <text x="440" y="322" font-size="10.5" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">every path terminates</text>
+      <rect x="680" y="268" width="216" height="60" rx="8" fill="none" stroke="var(--good)"/>
+      <text x="696" y="290" font-size="10.5" fill="var(--good)" font-family="ui-monospace, Menlo, monospace">auto-probe (1 per branch)</text>
+      <text x="696" y="308" font-size="10.5" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">state{amount: $12k}</text>
+      <text x="696" y="322" font-size="10.5" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">→ next_step = escalate ✓</text>
+    </svg>
+    <figcaption><b>Fig 8 — The <code>sop-decision-tree</code> pattern.</b> Prose procedure becomes a walkable graph: an agent asked "what now?" traverses conditions from the current state instead of retrieving paragraphs, and every answer cites its path. Invariants and one probe per branch are derived automatically — write the SOP, get the correctness machinery.</figcaption>
+  </figure>
+
+<pre class="code"><span class="c"># from the sop-decision-tree pack — the ontology template a kg init starts from</span>
+<span class="k">pattern</span>: <span class="s">sop-decision-tree</span>
+<span class="k">entities</span>: [<span class="s">Procedure</span>, <span class="s">Step</span>, <span class="s">Decision</span>, <span class="s">Role</span>, <span class="s">Exception</span>]
+<span class="k">relations</span>:
+  - <span class="s">Step NEXT Step|Decision</span>
+  - <span class="s">Decision BRANCH(condition) Step</span>
+  - <span class="s">Step PERFORMED_BY Role</span>
+  - <span class="s">Step ON_EXCEPTION Step</span>
+<span class="k">invariants</span>:
+  - <span class="s">every Decision has ≥2 BRANCH edges</span>
+  - <span class="s">every path from a Procedure root terminates</span>
+<span class="k">bundles</span>:
+  - <span class="k">next_step(state)</span>: <span class="s">walk from current Step, applying conditions</span>   <span class="c"># what agents call</span>
+<span class="k">probes</span>: <span class="s">auto</span>   <span class="c"># one per Decision branch, generated at snapshot time</span></pre>
+
+  <div class="prose">
+    <h3>The provider adapter interface</h3>
+    <p>Every provider (Graphiti, cognee, Neo4j, BYO) must expose six MCP tools — this is the whole pluggability contract: <code>search</code> · <code>neighbors</code> (typed traversal) · <code>get_context_bundle</code> (a pre-composed retrieval recipe, so agents don't hand-roll traversals) · <code>cite</code> (provenance for any fact) · <code>schema</code> (the ontology, machine-readable) · <code>probe</code> (execute the readiness set). Anything beyond the six is provider-specific bonus, invisible to portable agents.</p>
+    <h3>Operations</h3>
+    <ul class="tight">
+      <li><strong>Versioning mechanics:</strong> a snapshot per ontology or corpus change (namespace-per-version on the provider); <code>graphene kg diff v11 v12</code> renders entity/edge/probe deltas for PR review.</li>
+      <li><strong>Re-embedding</strong> on embedding-model change is a version bump, never an in-place mutation — agents on the old pin are untouched.</li>
+      <li><strong>PII</strong> is redacted at the normalize stage, before anything persists; provenance keeps a pointer to the source system rather than a copy of sensitive payloads.</li>
+      <li><strong>Scoping:</strong> per-agent subgraph access is enforced at the gateway (tool-call filters on the KG's MCP surface), not trusted to the provider.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══════════════════════ 14 LOOP ENGINEERING ══════════════════════ -->
+<section id="loop-eng">
+  <div class="sec-head"><span class="n">14</span><h2>Loop engineering</h2></div>
+  <div class="prose">
+    <p>Two loops get engineered, deliberately separated. The <strong>inner loop</strong> — how an agent thinks — is scaffolded, user-owned code (doctrine: no bundled framework). The <strong>governance ring</strong> — what an agent may never exceed — is platform-enforced at the data plane, so it holds even for black-box agents. The outer improvement loops are §08 (evals) and §09 (drift).</p>
+    <h3>The reference inner loop (scaffolded, ~100 lines, yours)</h3>
+    <p><em>assemble → act → observe → stop-check.</em> Assemble builds the turn's context from the Agent Card, the KG context bundle, and <strong>skills</strong> — versioned, governed instruction assets loaded per task by a router, so context stays small and behavior is reviewable data rather than a frozen mega-prompt. (Prior A/B evidence from a production harness: skills-first routing beats static toolsets.) Every iteration emits a receipt; every termination carries a named reason: <code>goal_met · budget · max_depth · timeout · interrupted</code>.</p>
+  </div>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 900 380" role="img" aria-label="The inner agent loop — assemble context, act through the gateway, observe, stop-check, and repeat — runs inside a platform governance ring enforced outside the agent: token and cost budgets cut off at the act step, hop limits and A2A cycle detection at the stop-check, human-approval interrupts pause risky actions, a kill switch drains routes and scales to zero, and every hop emits a receipt to JetStream.">
+      <defs>
+        <marker id="arr8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrA8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <!-- governance ring -->
+      <rect x="60" y="30" width="620" height="320" rx="18" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="8 5"/>
+      <text x="80" y="56" font-size="10.5" letter-spacing="1.5" fill="var(--accent)" font-family="ui-monospace, Menlo, monospace">GOVERNANCE RING — ENFORCED OUTSIDE THE AGENT</text>
+
+      <!-- inner loop -->
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <rect x="120" y="90" width="180" height="60" rx="8" fill="none" stroke="currentColor"/>
+        <text x="210" y="115" text-anchor="middle" font-weight="600" fill="var(--ink)">assemble context</text>
+        <text x="210" y="134" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">card + KG bundle + skills</text>
+
+        <rect x="440" y="90" width="180" height="60" rx="8" fill="none" stroke="currentColor"/>
+        <text x="530" y="115" text-anchor="middle" font-weight="600" fill="var(--ink)">act — via gateway</text>
+        <text x="530" y="134" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">LLM · MCP tool · A2A handoff</text>
+
+        <rect x="440" y="230" width="180" height="60" rx="8" fill="none" stroke="currentColor"/>
+        <text x="530" y="255" text-anchor="middle" font-weight="600" fill="var(--ink)">observe</text>
+        <text x="530" y="274" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">result → working state</text>
+
+        <rect x="120" y="230" width="180" height="60" rx="8" fill="none" stroke="currentColor"/>
+        <text x="210" y="255" text-anchor="middle" font-weight="600" fill="var(--ink)">stop-check</text>
+        <text x="210" y="274" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">named termination reason</text>
+      </g>
+      <line x1="300" y1="120" x2="432" y2="120" stroke="currentColor" marker-end="url(#arr8)"/>
+      <line x1="530" y1="150" x2="530" y2="222" stroke="currentColor" marker-end="url(#arr8)"/>
+      <line x1="440" y1="260" x2="308" y2="260" stroke="currentColor" marker-end="url(#arr8)"/>
+      <line x1="210" y1="230" x2="210" y2="158" stroke="currentColor" marker-end="url(#arr8)"/>
+      <text x="198" y="198" text-anchor="end" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">iterate</text>
+
+      <!-- governance annotations -->
+      <g font-family="ui-monospace, Menlo, monospace" font-size="10.5">
+        <line x1="712" y1="100" x2="624" y2="110" stroke="var(--accent)" stroke-dasharray="3 3" marker-end="url(#arrA8)"/>
+        <text x="720" y="96" fill="var(--accent)">token / $ budget</text>
+        <text x="720" y="110" fill="var(--ink-faint)">cutoff at the gateway</text>
+
+        <line x1="712" y1="168" x2="624" y2="140" stroke="var(--accent)" stroke-dasharray="3 3" marker-end="url(#arrA8)"/>
+        <text x="720" y="164" fill="var(--accent)">approval interrupt</text>
+        <text x="720" y="178" fill="var(--ink-faint)">risky tool → workflow</text>
+        <text x="720" y="191" fill="var(--ink-faint)">pause, human resumes</text>
+
+        <line x1="712" y1="248" x2="308" y2="282" stroke="var(--accent)" stroke-dasharray="3 3" marker-end="url(#arrA8)"/>
+        <text x="720" y="244" fill="var(--accent)">hop limit · cycle detect</text>
+        <text x="720" y="258" fill="var(--ink-faint)">A→B→A chains killed</text>
+
+        <line x1="712" y1="312" x2="682" y2="312" stroke="var(--crit)" stroke-dasharray="3 3" marker-end="url(#arr8)"/>
+        <text x="720" y="308" fill="var(--crit)">kill switch</text>
+        <text x="720" y="322" fill="var(--ink-faint)">drain routes, scale 0</text>
+      </g>
+
+      <!-- receipts -->
+      <line x1="530" y1="180" x2="530" y2="180" stroke="none"/>
+      <path d="M 620 130 L 660 170" fill="none" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arr8)"/>
+      <text x="600" y="186" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">receipt / hop</text>
+      <text x="600" y="200" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">→ JetStream</text>
+    </svg>
+    <figcaption><b>Fig 9 — Inner loop inside the governance ring.</b> The loop is the user's code; the ring is the platform's. Because every act crosses the gateway, budgets, hop limits, cycle detection, approval interrupts, and the kill switch need nothing from the agent's SDK — a runaway loop is cut off mid-flight and the receipt trail shows exactly where.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <h3>Governance mechanics</h3>
+    <ul class="tight">
+      <li><strong>Budgets</strong> (tokens, $, wall-clock) compile from the Agent CR to gateway policy; exceeding one terminates the task with reason <code>budget</code> — never a silent truncation.</li>
+      <li><strong>Hop limit &amp; cycle detection:</strong> the gateway stamps each A2A handoff with a task-lineage header; depth &gt; N or a repeated agent-pair in the lineage kills the chain. Multi-agent runaway is a data-plane problem, solved once.</li>
+      <li><strong>Approval interrupts:</strong> tools marked <code>requiresApproval</code> in the Agent CR pause the task as a durable Workflow step; a human resumes or rejects from the CLI. The agent just sees a slow tool.</li>
+      <li><strong>Loop observability:</strong> loop-depth, retries-per-tool, and termination-reason are first-class metrics; "termination reason ≠ goal_met rising" is a shipped alert rule and a drift signal (§09).</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══════════════════════ 15 EXTENSION MODEL ══════════════════════ -->
+<section id="extension">
+  <div class="sec-head"><span class="n">15</span><h2>Extension model — absorbing tomorrow's patterns</h2></div>
+  <div class="prose">
+    <p>A new agent-engineering pattern arrives every few weeks; the platform must outlive all of them. Graph engineering and loop engineering are merely today's examples — tomorrow it will be something with no name yet. The systems that absorb this churn share a structure: Kubernetes did it with CRDs, CSI drivers, and admission hooks; <strong>Claude Code does it most visibly</strong> — skills, hooks, subagents, plugins, output styles arrive every few weeks because the engine is a tiny frozen loop and every "feature" is really <em>data plus convention</em>. graphene adopts that structure deliberately, as seven named design patterns and one governing split.</p>
+    <h3>The governing split: two planes, hard boundary</h3>
+    <p>The <strong>slow plane</strong> is the engine — three operators, the gateway binding, Postgres + NATS. It ships rarely and gets more boring over time. The <strong>fast plane</strong> is the <em>technique plane</em> — ontologies, skills, policies, eval suites, gateway filters, driver implementations, scaffold templates. Everything in it is a versioned data artifact, so a new technique ships as an artifact publish, never a platform release. <em>The platform's velocity lives entirely in the fast plane; its stability lives entirely in the slow one.</em></p>
+    <h3>The seven meta-patterns</h3>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Pattern</th><th>In Claude Code</th><th>In graphene</th></tr></thead>
+    <tbody>
+      <tr><td>1 · Microkernel</td><td>One tiny agentic tool-loop; nothing new lands in it</td><td>Operators + bound gateway + substrate, frozen; everything else is a plugin against a contract</td></tr>
+      <tr><td>2 · Behavior is data</td><td>Skills, commands, agents are markdown/config files</td><td>Ontologies, skills, policies, eval suites, templates are CRs and OCI artifacts — reviewed, versioned, reverted like code</td></tr>
+      <tr><td>3 · Closed primitive set</td><td>Every feature composes context-injection, tool call, subagent, hook</td><td>Five primitives: <b>Agent</b> (A2A) · <b>Tool</b> (MCP) · <b>Event</b> (CloudEvents) · <b>Resource</b> (CRD) · <b>Artifact</b> (OCI). New features must compose these; a sixth primitive requires a core RFC</td></tr>
+      <tr><td>4 · Lifecycle hooks</td><td>PreToolUse, PostToolUse, SessionStart…</td><td>Named interception points on both planes: data plane <code>pre-hop / post-hop</code> (gateway filter chain); control plane <code>pre-reconcile / post-rollout / on-condition</code> (webhooks). The platform exposes <em>where</em> to attach without predicting <em>what</em></td></tr>
+      <tr><td>5 · Convention discovery</td><td>Drop a file in <code>.claude/</code>, it exists</td><td>A labeled CR or a well-known OCI path is auto-discovered and registered — no registration ceremony, no central catalog code</td></tr>
+      <tr><td>6 · Versioned contracts</td><td>MCP protocol versioning</td><td>Every socket contract versioned N/N−1 with a conformance suite, so third parties ship providers without coordination</td></tr>
+      <tr><td>7 · Packs</td><td>Plugins bundle skills + agents + hooks</td><td>A <b>pack</b> bundles drivers, filters, skills, templates, and CRs into one signed OCI artifact: <code>graphene pack install &lt;name&gt;</code></td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose">
+    <h3>The mechanics: four sockets, one triage rule</h3>
+    <p>The seven patterns materialize as four concrete sockets in the Kubernetes machinery. Graph engineering (§13) and loop engineering (§14) are not special cases — they are the first occupants of sockets 1 and 4, the existence proof that the mechanism works.</p>
+  </div>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 940 400" role="img" aria-label="Incoming pattern waves — new memory paradigms, guardrail techniques, eval frameworks, swarm patterns, and unknown future ones — pass through a triage rule and land in one of four sockets: provider slots for agent-facing capabilities, gateway filters for cross-cutting traffic concerns, new CRDs plus controllers for lifecycle concerns, and templates plus skills for engineering practices. Only a pattern fitting no socket triggers a core RFC, which is expected to be rare.">
+      <defs>
+        <marker id="arr9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrA9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <!-- incoming patterns -->
+      <text x="98" y="34" text-anchor="middle" font-size="10.5" letter-spacing="1.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">PATTERN WAVES</text>
+      <g font-family="system-ui, sans-serif" font-size="11.5">
+        <rect x="24" y="48" width="148" height="34" rx="6" fill="none" stroke="currentColor"/>
+        <text x="98" y="69" text-anchor="middle" fill="var(--ink)">new memory paradigm</text>
+        <rect x="24" y="92" width="148" height="34" rx="6" fill="none" stroke="currentColor"/>
+        <text x="98" y="113" text-anchor="middle" fill="var(--ink)">new guardrail tech</text>
+        <rect x="24" y="136" width="148" height="34" rx="6" fill="none" stroke="currentColor"/>
+        <text x="98" y="157" text-anchor="middle" fill="var(--ink)">new eval framework</text>
+        <rect x="24" y="180" width="148" height="34" rx="6" fill="none" stroke="currentColor"/>
+        <text x="98" y="201" text-anchor="middle" fill="var(--ink)">swarm patterns</text>
+        <rect x="24" y="224" width="148" height="34" rx="6" fill="none" stroke="var(--ink-faint)" stroke-dasharray="4 3"/>
+        <text x="98" y="245" text-anchor="middle" fill="var(--ink-faint)">the next thing…</text>
+      </g>
+
+      <!-- triage -->
+      <rect x="248" y="118" width="170" height="88" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="333" y="146" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--accent)" font-family="system-ui, sans-serif">triage rule</text>
+      <text x="333" y="166" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">capability? traffic?</text>
+      <text x="333" y="182" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">lifecycle? practice?</text>
+      <line x1="172" y1="162" x2="240" y2="162" stroke="currentColor" marker-end="url(#arr9)"/>
+
+      <!-- sockets -->
+      <text x="640" y="34" text-anchor="middle" font-size="10.5" letter-spacing="1.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">FOUR SOCKETS — CORE STAYS FROZEN</text>
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <rect x="490" y="48" width="300" height="56" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="504" y="70" font-weight="600" fill="var(--ink)">1 · Provider slot</text>
+        <text x="504" y="90" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">versioned driver contract + conformance suite</text>
+
+        <rect x="490" y="120" width="300" height="56" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="504" y="142" font-weight="600" fill="var(--ink)">2 · Gateway filter</text>
+        <text x="504" y="162" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">cross-cutting; zero agent changes</text>
+
+        <rect x="490" y="192" width="300" height="56" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="504" y="214" font-weight="600" fill="var(--ink)">3 · New CRD + controller</text>
+        <text x="504" y="234" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">own lifecycle, separate binary</text>
+
+        <rect x="490" y="264" width="300" height="56" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="504" y="286" font-weight="600" fill="var(--ink)">4 · Template + skill</text>
+        <text x="504" y="306" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">practice as versioned data, CLI-updatable</text>
+      </g>
+      <line x1="418" y1="140" x2="482" y2="80" stroke="var(--accent)" marker-end="url(#arrA9)"/>
+      <line x1="418" y1="155" x2="482" y2="148" stroke="var(--accent)" marker-end="url(#arrA9)"/>
+      <line x1="418" y1="172" x2="482" y2="218" stroke="var(--accent)" marker-end="url(#arrA9)"/>
+      <line x1="418" y1="188" x2="482" y2="288" stroke="var(--accent)" marker-end="url(#arrA9)"/>
+
+      <!-- examples column -->
+      <g font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">
+        <text x="810" y="70">KG · memory · eval runner</text>
+        <text x="810" y="84">sandbox · drift detector</text>
+        <text x="810" y="142">guardrails · semantic cache</text>
+        <text x="810" y="156">context compaction</text>
+        <text x="810" y="214">Model · Workflow ·</text>
+        <text x="810" y="228">EvalSuite already are</text>
+        <text x="810" y="286">loop recipes · context eng.</text>
+        <text x="810" y="300">prompt patterns</text>
+      </g>
+
+      <!-- core RFC escape -->
+      <path d="M 333 206 L 333 356 L 470 356" fill="none" stroke="var(--crit)" stroke-dasharray="4 3" marker-end="url(#arr9)"/>
+      <text x="478" y="360" font-size="10.5" fill="var(--crit)" font-family="ui-monospace, Menlo, monospace">fits no socket → core RFC (rare — that rarity is the test of the core's minimality)</text>
+    </svg>
+    <figcaption><b>Fig 10 — Four sockets, frozen core.</b> Every emerging pattern lands in exactly one socket. A pattern that fits none forces a core RFC — and if that happens more than rarely, the core was drawn wrong. Graph engineering occupies socket 1; loop engineering occupies sockets 4 (the recipe) and 2 (the governance ring).</figcaption>
+  </figure>
+
+  <div class="prose">
+    <h3>The four sockets, precisely</h3>
+    <ul class="tight">
+      <li><strong>1 · Provider slots</strong> — the CSI/CNI move. An agent-facing <em>capability</em> gets a named, versioned driver contract with a conformance suite. Shipping first: <code>KnowledgeGraphProvider</code> (the 6-tool MCP surface, §13). Reserved next: <code>MemoryProvider</code>, <code>EvalRunner</code>, <code>DriftDetector</code>, <code>SandboxProfile</code>. When the next Graphiti or the next DeepEval appears, it's a new driver — the platform supports contract version N and N−1, and swapping drivers never touches agents.</li>
+      <li><strong>2 · Gateway filters</strong> — a <em>cross-cutting traffic</em> concern drops in at the one place every hop already crosses: new guardrail techniques, semantic caching, context compaction, PII scrubbing. Zero agent changes, zero SDK coupling; black-box agents get the new pattern the moment the filter lands.</li>
+      <li><strong>3 · New CRD + controller</strong> — a pattern with its own <em>lifecycle</em> gets its own resource and a separate operator binary. This is already how <code>Model</code>, <code>Workflow</code>, and <code>EvalSuite</code> exist; the core Agent/KG machinery never grows to accommodate them.</li>
+      <li><strong>4 · Templates + skills</strong> — an engineering <em>practice</em> (loop recipes, context engineering, prompt patterns) ships as versioned scaffold templates and skills through the CLI. Practice can update weekly without a platform release — the knowledge is data, not code.</li>
+    </ul>
+    <h3>The retro-test: would the last two years have been absorbed?</h3>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Pattern wave (2024–26)</th><th>Socket</th><th>What would have changed</th></tr></thead>
+    <tbody>
+      <tr><td>Vector RAG → GraphRAG → temporal KGs</td><td class="num">1</td><td>KG driver swap; agents untouched (they see the same 6 tools)</td></tr>
+      <tr><td>Agent memory wave (Mem0, Letta, …)</td><td class="num">1</td><td>New <code>MemoryProvider</code> contract; no core change</td></tr>
+      <tr><td>Eval framework churn (DeepEval → Inspect → next)</td><td class="num">1</td><td><code>EvalRunner</code> driver; EvalSuite CR unchanged</td></tr>
+      <tr><td>Prompt-injection defenses, guardrail models</td><td class="num">2</td><td>New gateway filter; every agent covered instantly</td></tr>
+      <tr><td>Semantic caching</td><td class="num">2</td><td>Gateway filter on LLM egress</td></tr>
+      <tr><td>Multi-agent swarm patterns</td><td class="num">2+3</td><td>Governance policy tweaks + a coordination Workflow type</td></tr>
+      <tr><td>Context engineering discipline</td><td class="num">4</td><td>Updated loop templates and skills via the CLI</td></tr>
+      <tr><td>MCP and A2A themselves arriving</td><td>edge</td><td>The one genuine core event per ~2 years: a protocol at the gateway — which is why the gateway is a bound component, not our code</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><p><strong>The governing claim:</strong> graphene's core is small enough to freeze because everything opinionated lives in a socket. The day a "graph engineering"-sized pattern emerges, the response is a driver contract, a filter, a CRD, or a template — shipped in weeks, breaking nothing, and every existing installation adopts it with a pack install.</p></div>
+
+  <div class="prose">
+    <h3>Packs — how a new technique actually ships</h3>
+    <p>The pack is the delivery vehicle for the fast plane — the equivalent of a Claude Code plugin: one signed OCI artifact bundling any mix of driver implementations, gateway filters, skills, scaffold templates, eval metrics, and CRs, with a manifest declaring which socket contracts (and versions) it targets. Installation is discovery-by-convention: push to the registry, <code>graphene pack install</code>, the operators pick it up.</p>
+  </div>
+<pre class="code"><span class="c"># pack.yaml — a hypothetical technique that doesn't exist yet</span>
+<span class="k">name</span>: <span class="s">context-compaction</span>
+<span class="k">version</span>: <span class="s">0.3.0</span>
+<span class="k">requires</span>: {<span class="k">sockets</span>: [<span class="s">gateway-filter/v1</span>, <span class="s">template/v1</span>]}
+<span class="k">provides</span>:
+  <span class="k">filters</span>:   [<span class="s">compact-context.wasm</span>]       <span class="c"># socket 2 — every agent covered on install</span>
+  <span class="k">skills</span>:    [<span class="s">when-to-summarize.md</span>]        <span class="c"># socket 4 — loaded by loop routers</span>
+  <span class="k">templates</span>: [<span class="s">loop-with-compaction/</span>]       <span class="c"># socket 4 — graphene init picks it up</span>
+  <span class="k">metrics</span>:   [<span class="s">context_efficiency</span>]          <span class="c"># EvalSuites can gate on it immediately</span>
+
+<span class="c">$ graphene pack install context-compaction</span>
+<span class="k">✓</span> signature verified · contracts compatible (gateway-filter/v1)
+<span class="k">✓</span> filter live on 12 agents · 1 new template · 1 skill indexed
+  <span class="c">no platform release · no agent redeploys · rollback: pack uninstall</span></pre>
+  <div class="prose">
+    <p class="soft">The enforcement mechanism is procedural, not aspirational: every feature proposal must name the pattern and socket it lands in. A proposal that needs an engine change is presumed wrong until an RFC proves the five primitives genuinely cannot express it — the rarity of such RFCs is the ongoing test that the core was drawn correctly.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════ 16 POSITIONING ══════════════════════ -->
+<section id="positioning">
+  <div class="sec-head"><span class="n">16</span><h2>Competitive positioning</h2></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th></th><th>kagent <span class="mono">(CNCF · Solo.io)</span></th><th>Rossoctl <span class="mono">(ex-Kagenti · IBM)</span></th><th>Dapr Agents <span class="mono">(v1.0 GA)</span></th><th style="color: var(--accent)">graphene</th></tr></thead>
+    <tbody>
+      <tr><td>Agent model</td><td>Own ADK-based engine</td><td>Framework-neutral intercept</td><td>Python framework on actors</td><td>Any container speaking A2A</td></tr>
+      <tr><td>Domain concept</td><td>None — DevOps tools</td><td>"Knowledge base" service</td><td>None</td><td><b>Versioned KG contract, ontology-first</b></td></tr>
+      <tr><td>Eval gating</td><td>—</td><td>—</td><td>—</td><td><b>Eval-as-admission + session replay</b></td></tr>
+      <tr><td>Drift / self-healing</td><td>—</td><td>Partial (failure recovery)</td><td>Retries / circuit breakers</td><td><b>Semantic conditions + controllers</b></td></tr>
+      <tr><td>Footprint</td><td>Moderate</td><td>Heavy — 16GB/4-core dev setup</td><td>Dapr runtime + framework</td><td><b>≤ 8 pods, Postgres + NATS only</b></td></tr>
+      <tr><td>UI stance</td><td>UI early</td><td>UI-led</td><td>n/a</td><td>CLI + security first, UI later</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose">
+    <p class="soft">Strategic read: the secure-runtime layer is commoditizing fast (Rossoctl + agentgateway + agent-sandbox converge within ~12 months) — compose it, don't compete with it. The un-owned layers are the domain contract and semantic admission. That is where graphene lives.</p>
+    <h3>Open source and enterprise — the split</h3>
+    <p><strong>License: Apache 2.0 for the core.</strong> It keeps the CNCF path open, avoids the AGPL-fear tax at adoption time, and sidesteps the community damage of the 2024–26 relicensing wave (HashiCorp BSL, Redis). The realistic protection against cloud strip-mining at this stage is velocity plus the enterprise layer, not a restrictive license. Enterprise features ship as separate proprietary modules — open-core split by component, never by crippling the core.</p>
+    <p>The split line is the classic one that works: <strong>a single team gets everything, free; organizational scale is paid.</strong></p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Open source (Apache 2.0)</th><th>Enterprise</th></tr></thead>
+    <tbody>
+      <tr><td>The full loop for one team: runtime, KG + knowledge patterns, evals + gating, drift, receipts, packs, CLI, exposure, Apps — single-tenant, one cluster</td><td><code>Tenant</code> CR + hard multi-tenancy fan-out (vCluster automation, NATS accounts, RLS roles, IdP orgs, gateway partitions)</td></tr>
+      <tr><td>Security fundamentals: SPIRE identity, signing, budgets, basic RBAC/admission policies</td><td>Compliance profiles (HIPAA / SOC 2 / GDPR packs), access-review + audit reporting, 6-year retention tooling</td></tr>
+      <tr><td>Community knowledge packs</td><td>SSO/SCIM &amp; directory sync, fleet management across clusters/environments, advanced governance (approval workflows, policy packs), support/SLA</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose">
+    <p class="soft">One rule held absolutely: <em>never paywall correctness or safety</em> — evals, receipts, signing, drift stay open. They are why anyone trusts the platform; trust is the funnel. What's paid is running it for a hundred teams instead of one.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════ 16 BUDGET ══════════════════════ -->
+<section id="budget">
+  <div class="sec-head"><span class="n">17</span><h2>Weight budget — core tier</h2></div>
+  <div class="podrow">
+    <div class="pod own"><b>agent-operator</b>1 pod · graphene</div>
+    <div class="pod"><b>agentgateway</b>1–2 pods</div>
+    <div class="pod"><b>SPIRE</b>2 pods (server + DS)</div>
+    <div class="pod"><b>Zitadel</b>1 pod · on our Postgres</div>
+    <div class="pod"><b>NATS JetStream</b>1 pod</div>
+    <div class="pod"><b>Postgres</b>1 pod</div>
+    <div class="pod"><b>OpenObserve</b>1 pod</div>
+  </div>
+  <p class="pod-total">Total: <b>≈ 8 pods</b> — one <code>helm install</code>. Rossoctl's dev setup asks for 16 GB / 4 cores <em>with flags</em>; graphene should demo on half that. Exactly one pod in the core tier is graphene's own code.</p>
+  <h3>Runs anywhere — local distros are a CI target</h3>
+  <div class="prose">
+    <p>The same chart must install unmodified on <strong>minikube, k3d, kind, and k3s</strong> as on any managed cluster — CI runs the full e2e suite against k3d and kind on every merge, so "works on a laptop" is enforced, not aspirational. Three design consequences:</p>
+    <ul class="tight">
+      <li><strong>No cloud assumptions in core.</strong> No LoadBalancer requirement (Gateway API via the distro's default class or NodePort), no cloud storage classes (Postgres and NATS run on <code>local-path</code>), no managed-identity dependencies — SPIRE and the platform IdP are the identity story everywhere.</li>
+      <li><strong>Sandbox degrades gracefully.</strong> gVisor/Kata aren't available on most local distros; the agent-sandbox profile falls back to a hardened runtime class + seccomp with a visible condition (<code>SandboxDowngraded</code>), never a silent skip.</li>
+      <li><strong>Single-node honest mode.</strong> On one node the chart collapses replicas and skips anti-affinity — the profile is named (<code>--profile local</code>) so the gap between demo and production posture is explicit.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══════════════════════ 17 BUILD ══════════════════════ -->
+<section id="build">
+  <div class="sec-head"><span class="n">18</span><h2>Build order</h2></div>
+  <div class="phases">
+    <div class="phase">
+      <div class="when">weeks 1–3</div>
+      <div>
+        <h3>agent-operator + CLI skeleton + substrate chart</h3>
+        <p>Agent CRD → A2A registration, SPIRE identity, gateway routes. NATS / Postgres / OpenObserve in one Helm chart.</p>
+        <span class="demo">two agents from different SDKs discover each other and collaborate, fully traced.</span>
+      </div>
+    </div>
+    <div class="phase">
+      <div class="when">weeks 4–6</div>
+      <div>
+        <h3>KnowledgeGraph CRD + Graphiti provider</h3>
+        <p>Ontology contract, semantic probes, versioned snapshots, semantic readiness wired to traffic.</p>
+        <span class="demo">swap domains by swapping one CR.</span>
+      </div>
+    </div>
+    <div class="phase">
+      <div class="when">weeks 7–9</div>
+      <div>
+        <h3>EvalSuite + eval-gated rollout + session replay</h3>
+        <p>Recorded sessions feed regression sets; gateway-weighted canary; rollback with report in CR status.</p>
+        <span class="demo">the sales demo — an agent version earns traffic.</span>
+      </div>
+    </div>
+    <div class="phase">
+      <div class="when">then</div>
+      <div>
+        <h3>Drift controllers → budgets → ModelHub → kro Apps</h3>
+        <p>Semantic conditions and self-healing; token/cost enforcement; Model CR; App composition. UI last, as planned.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ 18 RISKS ══════════════════════ -->
+<section id="risks">
+  <div class="sec-head"><span class="n">19</span><h2>Risks held honestly</h2></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Risk</th><th>Posture</th></tr></thead>
+    <tbody>
+      <tr><td>OTel GenAI semconv churn</td><td>Conventions are pre-stable (mid-2026); adopt now, pin the convention version, absorb renames at upgrade time</td></tr>
+      <tr><td>A2A maturity</td><td>Multi-turn streaming edge cases still settling; keep the gateway as the one place protocol quirks are absorbed</td></tr>
+      <tr><td>kro is young</td><td>The App layer is last in the build order; plain CRs + GitOps work without it</td></tr>
+      <tr><td>Rossoctl convergence</td><td>If its security layer stabilizes, compose it — the moat is §04 + §08 + §09, not the intercept</td></tr>
+      <tr><td>DBOS ceiling</td><td>If cross-service orchestration outgrows a Postgres library, Temporal remains the known escape hatch — a wall to hit, not to pre-build for</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="colophon">
+  <span>graphene · architecture v0.1 · 2026-08-20</span>
+  <span>standards: A2A · MCP · OASF · SPIFFE · OTel GenAI · Gateway API · OCI/ModelPack</span>
+  <span>codename is a placeholder</span>
+</footer>
+
+</div>

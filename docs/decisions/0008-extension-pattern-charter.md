@@ -1,0 +1,5 @@
+# ADR-0008: The extension pattern charter (two planes, five primitives, four sockets, packs)
+- **Status**: accepted · 2026-08-20
+- **Context**: Agent techniques churn every few weeks (graph engineering, loop engineering are just today's). Claude Code and Kubernetes absorb churn via tiny frozen engines + data/convention extensions.
+- **Decision**: Slow plane = engine (operators, gateway binding, substrate). Fast plane = technique plane (all data artifacts). Five primitives: Agent(A2A), Tool(MCP), Event(CloudEvents), Resource(CRD), Artifact(OCI). Four sockets: provider slots (versioned contracts + conformance, N/N−1), gateway filters, new CRD + separate controller, templates/skills. Packs = signed OCI bundles targeting socket contracts; `pack install` with no platform release. Every feature proposal names its pattern + socket; engine changes need an RFC proving the primitives can't express it.
+- **Consequences**: Core can freeze; velocity lives in packs; contract specs become the highest-stakes artifacts.

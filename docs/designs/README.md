@@ -1,0 +1,35 @@
+# Component design backlog
+
+Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **before** implementation. Order follows the dependency chain, not the build phases alone — contracts before consumers.
+
+| # | Component | Phase | Size | Design status |
+|---|---|---|---|---|
+| 1 | KnowledgeGraphProvider contract (6-tool MCP surface + ontology schema + probe format + conformance) | P2 | M | not started — **do first (highest-stakes interface)** |
+| 2 | Agent CRD + agent-operator | P1 | L | not started |
+| 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | not started |
+| 4 | Receipt tap + receipt envelope schema | P1 | M | not started |
+| 5 | Agent directory (OASF on JetStream KV) | P1 | S | not started |
+| 6 | Identity glue (SPIRE registrar, IdP bootstrap, token exchange) | P1 | M | not started |
+| 7 | Umbrella chart, profiles, e2e CI | P1 | M | not started |
+| 8 | CLI (init/dev/build/deploy/invoke + verb map) | P1+ | L | not started |
+| 9 | SDK templates (per-SDK A2A wrappers) | P1 | M | not started |
+| 10 | Observability pack (OTel semconv pin, dashboards, alerts) | P1+ | M | not started |
+| 11 | Connector CRD (3 facets) | P2 | M | not started |
+| 12 | Ontology spec (entities/relations/invariants/probes) | P2 | M | not started |
+| 13 | Graphiti provider adapter | P2 | M | not started |
+| 14 | Ingestion pipeline + extraction QA | P2 | L | not started |
+| 15 | Probe engine (semantic readiness) | P2 | M | not started |
+| 16 | EvalSuite CRD + controller + dataset builder | P3 | L | not started |
+| 17 | Session replay engine | P3 | M | not started |
+| 18 | Pack format + installer | P3 | M | not started |
+| 19 | Knowledge pattern packs (sop-decision-tree first) | P2–P3 | M | not started |
+| 20 | Drift controllers | P4 | L | not started |
+| 21 | workflow-operator + Workflow CRD | P4 | M | not started |
+| 22 | Loop governance (hop limits, cycle detection, approvals, kill switch) | P4 | M | not started |
+| 23 | App layer (HTTP projection, typed clients, release pinning) | P4 | M | not started |
+| 24 | AuthzProvider (OpenFGA ReBAC model + gateway checks) | P4 | M | not started |
+| 25 | model-operator + ModelHub | P5 | L | not started |
+| 26 | Tenant CR fan-out | ent | L | not started |
+| 27 | Compliance profile packs (hipaa) | ent | M | not started |
+
+Update this table when a design starts / lands. Decisions made during design → new ADR.
