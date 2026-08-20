@@ -156,3 +156,4 @@ ADR-0019 (revision/rollout model + card SoT + workload materialization).
 - **A5 (2026-08-20, design 08 r1 f2)**: condition `GatesBypassed=DevProfile` (local profile only; admission forbids in prod).
 - **A6 (2026-08-20, design 09 r1 f2/f4)**: registration additionally verifies the A2A v1.0 card signature — required for plume-built agents (Sigstore keyless, builder identity), unsigned BYO/external cards register with loud `CardUnsigned`.
 - **A7 (2026-08-20, design 09 r1 f5)**: the operator owns the injected env contract for agent workloads: `PLUME_GATEWAY_URL`, `PLUME_KG_ENDPOINTS` (per graphRef bindings), `PLUME_NATS_URL` + tenant task-store creds. Versioned with the CRD; templates consume, never define.
+- **A8 (2026-08-20, design 20 r1 f2)**: optional `runtime.llm.fallback` (provider/model) — the `ModelDrifted` remediation target; controller-set `status.llmFallbackActive` folds into PolicyIntent on recompile.

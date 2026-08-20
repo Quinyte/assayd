@@ -1,6 +1,6 @@
 # Design 20: Drift controllers (detect → condition → remediate → verify)
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 5 findings addressed; reviews/20-review.md)
 - **Phase**: P4 · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0007 (drift-as-reconciliation) · interfaces: 15 (KG detection; this design routes remediation), 10 (signals), 16 (nightly trends, last-eval-passing revisions), 04 (receipts/model ids), 02 (rollout machinery actions), 14 (rebuild trigger)
 
@@ -18,8 +18,8 @@ The self-healing layer (FR-22): detectors write conditions, controllers remediat
 | Family | Detector | Condition | Remediation (guarded, §4) |
 |---|---|---|---|
 | **KG drift** | design 15 continuous probes (owned there) + ingestion-lag metric vs the Connector schedule | `KnowledgeStale` on the KG CR | trigger a rebuild (14); if rebuild's Gate A also fails → escalate (the *domain* moved: ontology/labels need humans) |
-| **Model drift** | hourly CronJob: fixed canary prompt set per (provider, model) actually in use (from receipts' model ids); embedding-distance of outputs vs a pinned baseline snapshot (pinned embedder) | `ModelDrifted` on affected Agents | compiled fallback route to the Agent's declared fallback provider (`llm.fallback` — new optional CR field, 02 delta); no fallback declared ⇒ alert only |
-| **Behavioral drift** | SLO burn on `task_success_rate` + `termination_reason != goal_met` rising (10's signals) | `Degraded` on the Agent | **auto-rollback to the last eval-passing revision — only when a deploy correlates** (§4); otherwise alert (the world changed, not the code) |
+| **Model drift** | hourly CronJob: fixed canary prompt set per (provider, model) actually in use (from receipts' model ids); embedding-distance of outputs vs a pinned baseline snapshot (pinned embedder) | `ModelDrifted` on affected Agents | controller sets `status.llmFallbackActive` → the operator folds it into `PolicyIntent.llm` and **recompiles** (03's existing LLM Backend row under a controller-set input — noted there; r1 f3). `llm.fallback` recorded as design 02 §11 **A8** (r1 f2); no fallback declared ⇒ alert only |
+| **Behavioral drift** | SLO burn on `task_success_rate` + `termination_reason != goal_met` rising (10's signals) | `Degraded` on the Agent | **auto-rollback — only when a deploy correlates** (§4): target = last eval-passing revision; **core tier** (GatesSkipped) targets the previous retained revision with the escalation stating the weaker guarantee — "last-serving, not last-proven" (r1 f5) |
 | **Embedding drift** | nightly centroid distance over kg_query result embeddings vs the version's baseline (cheap, core); Phoenix visuals (plus) | `EmbeddingDrift` on the KG | re-index recommendation event; auto re-embed = version bump build only if `autoReembed: true` |
 
 ## 4. Remediation guardrails (what keeps self-healing from being self-harm)
@@ -35,7 +35,7 @@ Every automated action requires **all four**:
 
 ## 5. Baselines
 
-Model-canary baselines snapshot at first use of a (provider, model) and re-snapshot **only** on explicit `plume drift rebaseline` (a drifted baseline silently re-baselined would define drift away — the one-way ratchet is deliberate). Embedding baselines are per graph-version (immutable by construction). Behavioral baselines are the SLO targets (chart-shipped, CR-tunable).
+**Canary budget home (r1 f4)**: platform-level — `drift.canaryBudget` in chart values; the operator synthesizes the PolicyIntent for `principal: drift:model-canary` (the 14/15 pattern at platform scope). Model-canary baselines snapshot at first use of a (provider, model) and re-snapshot **only** on explicit `plume drift rebaseline` (a drifted baseline silently re-baselined would define drift away — the one-way ratchet is deliberate). Embedding baselines are per graph-version (immutable by construction). Behavioral baselines are the SLO targets (chart-shipped, CR-tunable).
 
 ## 6. Failure modes
 
@@ -43,7 +43,7 @@ Model-canary baselines snapshot at first use of a (provider, model) and re-snaps
 |---|---|
 | Canary CronJob fails (infra) | `DriftDetectionDegraded` (the 15 pattern: infra ≠ drift); no condition changes on stale data |
 | Fallback provider also drifted | Both named in `ModelDrifted`; no route change (no good target); page |
-| Rollback target GC'd (`revisionHistoryLimit`) | Action refused, named in the escalation — retention and remediation budgets are linked, stated |
+| Rollback target GC'd | Made rare **mechanically** (r1 f1): promotion warns when retained revisions can't cover the correlation window's deploy cadence, and the operator **pins retention of the last eval-passing revision while any `Degraded` window is open** (hold released when the condition clears). If still GC'd: refused + escalation names the gap |
 | Remediation churn (rollback → re-promote → rollback) | Rate limit (§4.2) breaks the loop at one cycle; page with the sequence |
 | Detector thresholds mistuned | Everything is data (chart values); `drift.detected` without action (alert-only mode) is the shipped default for the first 14 days of any install — **learn before you act**, stated |
 

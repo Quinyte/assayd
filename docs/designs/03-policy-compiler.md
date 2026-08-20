@@ -77,6 +77,9 @@ New failure rows in §5 cover applied-but-not-accepted and partial-apply.
 | Scoped kgp-admin grant | per-connector route to `write_batch` on one staging version (reader workers) | designs 11 f2 / 01 A2 |
 | Eval temporary grant | candidate-route admitted-set add/remove at eval Job launch/end (per-run eval SVID) | design 16 r1 f1 |
 | Replay-mock route | replay-principal backends → in-cluster mock Service, fail-closed | design 17 r1 f3/f4 |
+| Model fallback | existing LLM Backend row re-compiled under controller-set `llmFallbackActive` (design 20) | |
+| App projections | workflow-POST (idempotency forwarded), chat-SSE (A2A resubscribe), KG-read — OIDC + exchange applied | design 23 r1 f2 |
+| Approval voucher check | single-use pass voucher CEL on approval-gated routes; gateway forwards the approved retry | design 22 r1 f4 |
 | Interior telemetry | OTLP Backend + per-agent route to the tap's forward-only listener (rate-limited — telemetry is traffic) | design 10 r1 f1; agents are default-deny |
 | Receipts | OTLP tracing config (`frontendPolicies`), capture level → attribute verbosity | design 04 |
 

@@ -1,6 +1,6 @@
 # Design 22: Loop governance (hops, cycles, approvals, kill switch)
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/22-review.md)
 - **Phase**: P4 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0020 (reserved mappings now filled), 0021 (lineage in receipts) · interfaces: 03 (emits everything here), 06 (per-hop re-exchange pairs with lineage), 21 (workflows in the lineage), 08 (`plume approve`), architecture §14 (the governance ring, made mechanical)
 - **Research**: agentgateway OSS: in-proxy **CEL** over request context (compiled at config load), Envoy-compatible ext-authz for external decisions — `docs/research/authz-2026-08.md`
@@ -11,7 +11,7 @@ The governance ring's mechanics (FR-33): multi-agent runaway stopped at the data
 
 ## 2. Doctrine & charter gates
 
-- **Plane**: slow (compiled policy + one interceptor mode); approval *policies* are CR data. **Pods**: 0 — the approval interceptor is an operator-binary listener mode (control-plane concern, gateway-authenticated peer — the tap pattern's *trusted* variant, unlike design 11's internet-facing receiver). **Stateful deps**: approvals in JetStream KV. ✓
+- **Plane**: slow (compiled policy + one interceptor mode); approval *policies* are CR data. **Pods**: 0 — the approval interceptor is an operator-binary listener mode (control-plane concern, gateway-authenticated peer — the tap pattern's *trusted* variant, unlike design 11's internet-facing receiver). **Stateful deps**: approvals in a **per-tenant `APPROVALS` KV bucket in the tenant account, created by the 07 bootstrap job** (r1 f3 — the ADR-0013 words). ✓
 - **Primitives**: Resource, Event (`approval.requested/decided`), Tool (the intercepted calls). ✓
 
 ## 3. Lineage: stateless enforcement in-proxy (the trick)
@@ -19,7 +19,7 @@ The governance ring's mechanics (FR-33): multi-agent runaway stopped at the data
 The gateway stamps `X-Plume-Lineage: <task_id>;a=agentA@rev,workflow:pa-check,agentB@rev` — appended per A2A/workflow hop by a 03-emitted transform (the header is gateway-owned: inbound client values stripped, same rule as the scope header). Enforcement is **in-proxy CEL** (compiled at config load — no external call, no state):
 
 - **maxHops**: `lineage.split(',').size() > agent.maxHops` ⇒ deny `LOOP_DEPTH_EXCEEDED` (the receipt's `hop.status: denied` carries it; the caller gets a typed A2A error).
-- **Cycle**: `target in lineage.entries` ⇒ deny `LOOP_CYCLE` — with the honest nuance: **A→B→A can be legitimate** (a callback pattern). Default = deny immediate revisit within a task; an Agent CR may declare `loop: {allowReentry: true, maxVisits: 2}` (compiled into the CEL constant) — reentry is opt-in, bounded, and visible in the CR, never ambient.
+- **Cycle (r1 f1 — one semantics)**: default = **any revisit denied** (`target in lineage.entries` — the conservative rule the expression implements; A→B→C→A is caught). Opt-in reentry = **occurrence counting**: `loop: {allowReentry: true, maxVisits: 2}` compiles to `lineage.count(target) < maxVisits` — CEL-countable, stateless, bounded. Prose, expression, and knob now tell one story.
 - Workflows appear in the lineage as `workflow:<name>` entries (21 §5) — a workflow↔agent ping-pong is caught by the same rule.
 
 Why stateless matters: no cycle-detection service, no shared state, no new pod — the lineage *is* the state, carried by the request, tamper-proofed by gateway ownership of the header. Receipts already record `lineage` (ADR-0021), so every denial is auditable with its full path.
@@ -30,9 +30,9 @@ Why stateless matters: no cycle-detection service, no shared state, no new pod �
 
 1. First call → interceptor writes a durable `ApprovalRequest` (KV: requester chain, tool, args digest, TTL from policy) → emits `approval.requested` (notification surface: CLI, later App UI) → returns MCP error `APPROVAL_PENDING {approval_id, retry_after}` — **a retryable, typed pending**, not a hang (stateless-HTTP-friendly; MCP 2026-07-28's MRTR `input_required` is the recorded v2 upgrade path for clients that speak it).
 2. `plume approve <id>` (authz: the `approvers` role via 24 when present; namespace RBAC in core) records the decision + decider.
-3. The caller's retry passes the interceptor (approved ⇒ proxy the real call once, single-use consume; denied ⇒ `APPROVAL_DENIED`, terminal). Timeout ⇒ `approval_timeout` (21's branchable failure).
+3. The caller's retry: approved ⇒ the interceptor returns a **single-use pass voucher** consumed by a gateway CEL check, and **the gateway forwards the retry to the real backend** — the operator binary stays out of the tool-call data path entirely (r1 f4; the proxy alternative rejected). Denied ⇒ `APPROVAL_DENIED`, terminal. Timeout ⇒ `approval_timeout` (21's branchable failure).
 
-Honest limitation, stated: **templates' loops retry pending tools natively (09); a black-box agent that treats `APPROVAL_PENDING` as a hard failure will fail the task** — the approval still protected the action (fail-closed); the DX cost lands on non-template agents and is documented, not hidden. Workflow `approval` steps don't have this problem (the interpreter waits durably — 21).
+**Typed-pending retry joins the design-09 template contract** (r1 f2 — a 09 note + pack release; honoring `retry_after`, bounded by `taskTimeout`), so the flagship path handles approvals by construction. Honest limitation, now correctly scoped: **a true black-box agent that treats `APPROVAL_PENDING` as a hard failure will fail the task** — the approval still protected the action (fail-closed); the DX cost lands on non-template agents and is documented, not hidden. Workflow `approval` steps don't have this problem (the interpreter waits durably — 21).
 
 ## 5. Kill switch
 

@@ -1,8 +1,8 @@
 # Design 24: AuthzProvider — ReBAC via OpenFGA (`authz/v1alpha1`)
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/24-review.md)
 - **Phase**: P4 · **Size**: M · **Date**: 2026-08-20
-- **ADRs**: 0011 (three authz layers; this is layer 2) · interfaces: 03 (ext-authz wiring), 06 (`act` chains are the checked subjects), 22 (approvers roles), 02/11/16 (tuple sources), 26 (per-tenant stores)
+- **ADRs**: 0011 (three authz layers; this is layer 2) · interfaces: 03 (ext-authz wiring), 06 (`act` chains; **workflow-actor identity per 21 r2** — its budget/authz bite depends on that fix, r1 f4), 22 (approvers roles via contextual tuples), 02/11 (tuple sources), 17 (decision replay), 26 (per-tenant stores)
 - **Research**: `docs/research/authz-2026-08.md` — agentgateway OSS supports **Envoy-compatible ext-authz gRPC** (CheckRequest → OK/Denied + dynamic_metadata usable in in-proxy CEL); OPA/Cerbos precedents for gateway-governed agents; OpenFGA = CNCF Zanzibar-style ReBAC (ADR-0011 grounding).
 
 ## 1. Purpose & scope
@@ -33,13 +33,13 @@ type role            # approvers etc. (22): define assignee: [user]
 
 Deliberately **coarse**: objects are CRs (agents, tools, graphs), not rows — entity-type scope stays compiled in the gateway header (design 01 A1/03), where it already works; ReBAC answers *who may reach which object*, not *which entities inside it* (the split is stated so nobody re-litigates it per feature).
 
-**Delegation checks**: a hop with `act` chain `user:jag → agent:pa-intake → agent:pa-reviewer` calling `tool:claims-system` requires **every link**: `check(user can_invoke pa-intake)` ∧ `check(pa-intake can_invoke pa-reviewer)` ∧ `check(pa-reviewer can_call claims-system)` — the chain is checked, not just the tip; revoking the *user's* access kills the whole delegated action immediately (ADR-0011's promise, mechanical).
+**Chain semantics (r1 f2)**: delegated (`act`-bearing) traffic checks **every link** — each link is attested by the exchange chain (06); **pure machine hops check the immediate link only** (`caller can_invoke/can_call target`, subject = the verified SVID) — lineage entries are governance telemetry, never authz subjects (unattested). **Delegation checks**: a hop with `act` chain `user:jag → agent:pa-intake → agent:pa-reviewer` calling `tool:claims-system` requires **every link**: `check(user can_invoke pa-intake)` ∧ `check(pa-intake can_invoke pa-reviewer)` ∧ `check(pa-reviewer can_call claims-system)` — the chain is checked, not just the tip; revoking the *user's* access kills the whole delegated action immediately (ADR-0011's promise, mechanical).
 
 ## 4. Tuple lifecycle — CRs are the source of truth
 
 Two producers, no third:
 
-1. **Operator-reconciled tuples** (owned, rebuildable): `Agent.tools` → `can_call`; `expose` consumers → `can_invoke`; App `auth.roles` + IdP group claims → `member/admin/role` assignments; Workflow triggers → `can_trigger`. The FGA store is a **materialization** — `plume authz rebuild` reconstructs it from CRs (drift between CRs and tuples is a detectable, repairable condition, `AuthzDrift`).
+1. **Operator-reconciled tuples** (owned, rebuildable — CR-resident facts only): `Agent.tools` → `can_call`; `expose` consumers → `can_invoke`; Workflow triggers → `can_trigger`; App role *definitions*. **User↔role/member relations are NOT tuples** (r1 f1 — group claims live in tokens, not CRs, and core has no directory sync): they resolve as **contextual tuples at check time** — the ext-authz adapter passes the verified JWT's group/role claims into the FGA check request (OpenFGA-native contextual tuples; research note updated) — no sync, no staleness, revocation rides token lifetime (already the stated number). Named-user exceptions outside IdP groups remain Grant CRs. `plume authz rebuild` reconstructs exactly the CR-derived set.
 2. **Grant CRs** (ad-hoc, auditable): `kind: Grant {subject, relation, object, expiry?}` — GitOps-reviewed, receipted, expirable. **No hand-written tuples, ever** — the FGA API's write surface is operator-only (network-policied), so the audit story stays whole.
 
 ## 5. The ext-authz adapter
@@ -59,7 +59,7 @@ Envoy-compatible `Check` gRPC (agentgateway OSS capability, cited): maps (SVID /
 | FGA down | Fail closed on ReBAC routes; `AuthzUnavailable`; page |
 | Tuple drift (CR edited, reconcile lagging) | `AuthzDrift` condition + rebuild verb; checks use current tuples (bounded staleness, stated) |
 | Grant expiry | Tuple removed at expiry sweep (1m resolution); receipts show the last allowed use |
-| Model version bump | Store migrations are versioned artifacts; shadow-mode replay of recent traffic against the new model before enforce (the 16 replay machinery, reused) |
+| Model version bump | Versioned migrations; **decision replay**: recorded check inputs (the checked-chain metadata receipts already carry) re-evaluated against the new model via 17's read path — no traffic driven (r1 f3); verdict diff gates enforce |
 | Cache staleness on revoke | Bounded: TTL 2s + token lifetime; documented as *the* revocation latency number |
 | Shadow mode forgotten | `wouldDeny > 0` for 7d ⇒ ticket ("enforce or explain") |
 
@@ -75,7 +75,7 @@ Model fixtures: the delegation-chain matrix (every-link vs broken-link); revocat
 
 - **D1 — Coarse ReBAC objects (CRs), entity-scope stays compiled** — the two mechanisms don't overlap.
 - **D2 — Every link of the `act` chain is checked**, not the tip.
-- **D3 — FGA is a materialization of CRs + Grant CRs; no hand-written tuples; rebuildable.**
+- **D3 — FGA materializes CR-derived facts + Grant CRs; user-context resolves per-check via contextual tuples; no hand-written tuples; CR-set rebuildable.**
 - **D4 — No fail-open knob exists.** Shadow-first enablement is mandatory.
 - **D5 — Adapter co-located in the FGA pod** (0 extra pods, localhost latency).
 

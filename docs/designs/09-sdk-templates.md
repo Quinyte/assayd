@@ -23,8 +23,9 @@ A scaffold that, untouched, passes `plume dev` + registration:
 3. **The reference inner loop** (architecture §14), SDK-idiomatic: `assemble (card + KG bundles + skills) → act → observe → stop-check` with **named termination reasons**. The **operator-injected env contract** (`PLUME_GATEWAY_URL`, `PLUME_KG_ENDPOINTS`, `PLUME_NATS_URL`, tenant creds) is **owned by design 02** (injection is reconcile behavior — §11 A7 records the table, r1 f5); templates only consume it. Interior OTel spans via the SDK's OpenLLMetry integration are pre-wired but optional.
 4. **Skills directory** (`skills/*.md`, frontmatter + instructions) + the tiny router (load-per-task by declared relevance) — behavior as reviewable data, the genie lesson.
 5. **Task-state store**: JetStream-KV-backed A2A task store wired by default (`PLUME_NATS_URL`, tenant creds injected) so `replicas>1` works out of the box (design 02 §3.2); in-memory fallback flag for pure-local runs.
-6. **Tests**: a golden-task test (`invoke fixture → expected termination reason + tool-call shape`) runnable by `plume workflow test`-style fixture injection — the seed of the agent's own eval set.
-7. `project.toml` (buildpacks) or Dockerfile; non-root, read-only rootfs, port from env.
+6. **Typed-pending retry** (design 22 r2): loops honor `APPROVAL_PENDING {retry_after}` bounded by `taskTimeout` — contract item, shipped as a pack release.
+7. **Tests**: a golden-task test (`invoke fixture → expected termination reason + tool-call shape`) runnable by `plume workflow test`-style fixture injection — the seed of the agent's own eval set.
+8. `project.toml` (buildpacks) or Dockerfile; non-root, read-only rootfs, port from env.
 
 ## 4. The SDK matrix (initial pack content)
 

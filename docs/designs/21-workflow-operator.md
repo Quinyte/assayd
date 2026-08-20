@@ -1,6 +1,6 @@
 # Design 21: workflow-operator + Workflow CRD
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/21-review.md)
 - **Phase**: P4 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0004 (DBOS, three jobs), 0009 (events actionable from P4) · interfaces: 11 (EVENTS stream triggers), 03 (expose/principal routes), 06 (workflow principals/on-behalf-of), 22 (approval step), 23 (HTTP projection), 14 (precedent: DBOS-in-Job)
 - **Research**: `docs/research/connectors-2026-08.md` §DBOS (dynamic queues; k8s Deployment-per-version guidance; each replica an independent worker)
@@ -12,7 +12,7 @@ Makes `Workflow` real (FR-50): declarative CRs compiled to durable programs, cod
 ## 2. Doctrine & charter gates
 
 - **Plane**: slow — this is the second of the architecture's three operators. **Pods (budget change, justified)**: `workflow-operator` (Go controller) + `workflow-runtime` (Python DBOS interpreter Deployment, the standing workers event triggers require) = **+2 pods, plus tier**, entered in `weight-budget.yaml` in the same PR (design 07's mechanical gate — this is the justification). Batch-only installs (no event triggers, no standing workflows) may run runtime at 0 replicas; the operator scales it 0→N on first trigger registration (scale-to-zero honesty).
-- **Stateful deps**: Postgres (DBOS — existing), JetStream (triggers — existing). ✓ **Primitives**: Resource, Event (CloudEvents triggers), Agent (steps call agents via A2A), Tool (steps call MCP). ✓
+- **Stateful deps**: Postgres (DBOS — existing), JetStream (triggers — existing). **Tenancy seam (r1 f4)**: the shared runtime is a core-at-n=1 statement — per-tenant EVENTS accounts mean the design-26 fan-out either runs per-tenant runtime replicas or isolates per-tenant consumer credentials; named now, decided at 26 (the 04 D4 precedent). ✓ **Primitives**: Resource, Event (CloudEvents triggers), Agent (steps call agents via A2A), Tool (steps call MCP). ✓
 
 ## 3. The Workflow CRD
 
@@ -48,9 +48,16 @@ The declarative compiler produces a **step-graph document** (content-addressed),
 
 ## 5. Execution semantics
 
-- **Identity**: each run executes under a workflow principal (`workflow:<name>@<run>`; SVID via runtime pod + run-scoped attribution in receipts). Triggered-by-a-user (http with OIDC) runs carry the on-behalf-of chain (06) — a workflow calling an agent propagates the user's `act` chain exactly like agent→agent hops.
+- **Identity (r1 f1 — the 16 lesson, applied)**: the shared runtime pod's SVID is one identity, so gateway-enforced budgets/authz get a **per-workflow `workflow-actor` OAuth client** (design 06's `ensureClient` gains the kind — recorded as 06's amendment; the operator provisions at Workflow reconcile). The runtime presents the workflow's client credential per request (machine-triggered) or the exchanged on-behalf-of token (http+OIDC — the `act` chain then discriminates); the compiler keys the CR's budget and design-24 checks on that principal. Per-workflow runtime pods were considered and rejected on weight — recorded. Receipts attribute `workflow:<name>@<run>`.
 - **Steps through the gateway, always**: agent steps are A2A tasks; tool steps are MCP calls; both receipted, budgeted (the CR's own budget), governed (22's hop/lineage rules count workflow hops — a workflow is a first-class actor in the lineage).
-- **Event triggers**: durable JetStream consumers per trigger (created by the operator on the tenant's EVENTS stream); CloudEvents `id` dedup means a redelivered event starts **no** second run (DBOS workflow id = `wf-<name>-<ce-id>` — idempotent by construction, the ADR-0021 pattern once more).
+- **Run-id derivation, all trigger kinds (r1 f2)**:
+
+| Trigger | Workflow id | Retry semantics |
+|---|---|---|
+| event | `wf-<name>-<ce-id>` | redelivery ⇒ no-op (beyond-window redeliveries included) |
+| cron | `wf-<name>-<scheduled-instant>` | replayed/rescheduled tick ⇒ no-op |
+| http | `wf-<name>-<Idempotency-Key>` when the header is present (design 23's projection forwards it; the generated client sends one by default); absent ⇒ fresh run id — each POST is a new run, documented |
+| manual | `wf-<name>-<cli-generated-key>` (the CLI always sends one) |
 - **`deadLetter`**: exhausted runs park in a DLQ subject + `plume workflow dlq` verbs; never silent loss.
 
 ## 6. Code-first (`runtime: external`)
@@ -64,7 +71,7 @@ A user's own DBOS app (any language DBOS supports), deployed as *their* workload
 | Runtime pod death mid-run | DBOS resume from checkpoint (the 14 drill, same machinery) |
 | Trigger consumer lag/failure | `TriggersBound=False` + lag metric; events retained on the stream (11's retention) — nothing lost, visibly delayed |
 | Step target Degraded (agent weight-0) | Step fails per `onFailure` policy; run parks or dead-letters; workflow never bypasses agent gating |
-| Budget exhausted mid-run | Halt + park (`budget`); operator relaunch after window (the 14 §5 mechanic, shared) |
+| Budget exhausted mid-run | **In-runtime durable wait** until the 00:00 UTC window resets (DBOS durable sleep — the same primitive the `approval` step waits on; r1 f3): the runtime is standing, so 14's Job-exit mechanic doesn't apply and isn't borrowed |
 | Approval timeout | Step fails with `approval_timeout`; branch may handle it explicitly (the SOP-shaped honest path) |
 | Interpreter/graph version skew | Runs pin their graph digest; in-flight runs finish on their pinned graph; new runs use the new graph |
 | Redelivered trigger event | No-op (idempotent workflow id) — counted |

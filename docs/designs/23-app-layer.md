@@ -1,12 +1,12 @@
 # Design 23: The App layer (HTTP projection, typed clients, release pinning)
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/23-review.md)
 - **Phase**: P4 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0016 (BFF-less apps) · interfaces: 03 (projection routes), 06 (OIDC clients + exchange), 21 (workflow http triggers + input schemas), 08 (`init app` + client gen), architecture §03 (the App CR)
 
 ## 1. Purpose & scope
 
-Makes ADR-0016 mechanical: the App CR's composition, the HTTP/SSE projection shapes, typed-client generation, member pinning, and the release/rollback semantics. Out of scope: frontend content (user-owned), auth internals (06), the wizard (08).
+Makes ADR-0016 mechanical: the App CR's composition, the HTTP/SSE projection shapes, typed-client generation, member pinning, and the release/rollback semantics. Out of scope: frontend content (user-owned), auth internals (06), the wizard (08). **The projection routes are design-03 rows** (r1 f2): workflow-POST, chat-SSE, and KG-read projections added to 03 §3.4 alongside the other compiled concerns.
 
 ## 2. Doctrine & charter gates
 
@@ -17,7 +17,7 @@ Makes ADR-0016 mechanical: the App CR's composition, the HTTP/SSE projection sha
 
 | Member ref | Projected as | Shape |
 |---|---|---|
-| `workflowRef` | `POST /api/<name>` | body validated against the Workflow's `input.schema` (21) → starts a run → `202 {run_id}`; `GET /api/<name>/runs/<id>` for status/result (the run's terminal event) |
+| `workflowRef` | `POST /api/<name>` | body validated against the Workflow's `input.schema` (21) → starts a run → `202 {run_id}`; **`Idempotency-Key` forwarded to 21's run-id derivation** (generated client sends one by default — retries never double-run; r1 f3); `GET /api/<name>/runs/<id>` for status/result |
 | `agentRef` (chat) | `POST /api/chat` + **SSE** `GET /api/chat/<task_id>/events` | A2A task lifecycle projected as SSE events (`status`, `message`, `artifact`, `done`) — a thin, *documented* mapping of A2A's own stream, not a new protocol |
 | `graphRef` (optional, read-only) | `GET /api/kg/*` | the kgp query surface, scope-filtered per the App's declared entity types — for UIs that render graph context directly |
 
@@ -34,7 +34,7 @@ Per architecture §03, plus what P4 machinery makes enforceable:
 
 ## 5. Typed client generation (`plume init app` / `plume app gen`)
 
-Generated TS package from: Agent Cards (A2A skills → chat/task methods), Workflow `input.schema` (→ typed `POST /api/<name>` calls + run polling), optional kgp scope (→ typed KG read hooks). Properties: **generated code pins the source digests** (card digest, schema digest) — `plume app gen --check` in CI fails when the deployed members drift from the client the frontend was built against (the client-server skew gate, mechanical); no runtime dependency on plume (the client is plain fetch/SSE); regeneration is idempotent (golden-tested).
+**SSE transport (r1 f4)**: the generated client implements SSE over `fetch()` streams — native `EventSource` cannot send `Authorization` headers; no cookies, no tokens-in-query-strings, `Last-Event-ID` managed manually. Generated TS package from: Agent Cards (A2A skills → chat/task methods), Workflow `input.schema` (→ typed `POST /api/<name>` calls + run polling), optional kgp scope (→ typed KG read hooks). Properties: **generated code pins the source digests** (card digest, schema digest) — `plume app gen --check` in CI fails when the deployed members drift from the client the frontend was built against (the client-server skew gate, mechanical); no runtime dependency on plume (the client is plain fetch/SSE); regeneration is idempotent (golden-tested).
 
 ## 6. Failure modes
 
@@ -43,7 +43,7 @@ Generated TS package from: Agent Cards (A2A skills → chat/task methods), Workf
 | Member missing/unpinned (prod) | Admission reject / `MembersReady` false, named |
 | Member skew (agent's graph ≠ App's graph) | `MemberSkew` warning condition — deploy proceeds (it may be intentional mid-migration) but never silently |
 | Client/server drift | `app gen --check` fails CI; runtime 400s carry schema-version headers for diagnosis |
-| SSE disconnects | Standard reconnect with `Last-Event-ID` → task event replay from the A2A task state (the template task store, 09) |
+| SSE disconnects | Reconnect = the projection **re-subscribes via A2A itself** (`GetTask`/`SubscribeToTask` at the recorded task_id, through the gateway) and replays the delta as SSE; `Last-Event-ID` maps to the A2A event sequence, never a store cursor — **implementation-agnostic, the BYO promise holds** (r1 f1; the template task store stays invisible to the projection) |
 | OIDC client misprovisioned | `IdPUnavailable`-family condition via 06; routes 401 fail-closed |
 | Frontend up, members Held | `/api/*` returns typed 503 `MEMBER_NOT_READY` — the UI can render an honest state |
 
