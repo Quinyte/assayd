@@ -16,7 +16,7 @@ The reference kgp provider: a container wrapping **graphiti-core as a library** 
 
 ## 3. Mapping the contract onto graphiti
 
-### 3.1 Versions = `group_id` namespaces
+### 3.1 Versions = deterministic data copies (backend keys)
 
 **Contract property: a version fork is a deterministic data-level copy — never re-extraction** (r1 f2). Backend mapping is an adapter detail: on **FalkorDB, version = graph-key-per-version** and `begin_version(from: vN)` = `GRAPH.COPY vN vN+1` (whole-graph copy incl. nodes/edges/schema/indices — cheap, deterministic); on Neo4j, a scoped subgraph copy or dump/restore per version. `group_id` remains available for intra-version organization but is not the version boundary. The adapter's HTTP mux serves `/kgp/<graph>/<version>/mcp` by binding the request's backend key from the path.
 
@@ -28,10 +28,10 @@ The reference kgp provider: a container wrapping **graphiti-core as a library** 
 
 | kgp tool | Implementation |
 |---|---|
-| `kg.search` | graphiti hybrid search (semantic+BM25+graph) scoped to the version's group_id; results mapped to hits with episode-derived `provenance_ref` |
+| `kg.search` | graphiti hybrid search (semantic+BM25+graph) scoped to the version's backend key (§3.1); results mapped to hits with element-level `provenance_ref` |
 | `kg.neighbors` | direct backend traversal (FalkorDB/Neo4j driver) filtered by relation types; bitemporal fields passed through |
 | `kg.get_context_bundle` | adapter-side deterministic recipe engine (walk/subtree/neighborhood_summary/timeline) over typed edges — **no LLM calls in the adapter, ever** (ADR-0017); `text` is template-rendered; `require_scope` checked first |
-| `kg.cite` | episode + source metadata from the provenance stored at write (§3.4) |
+| `kg.cite` | element provenance stored at write (§3.4) |
 | `kg.schema` | the embedded ontology doc verbatim + `{contract, version, pattern?, embedder: {model, dim}}` |
 | `kg.probe` | executes the probe set via the same query paths agents use; matchers per design 12 §3.6 |
 
@@ -39,15 +39,15 @@ The reference kgp provider: a container wrapping **graphiti-core as a library** 
 
 ### 3.4 Admin tools & provenance
 
-`write_batch`/`load_artifact` perform structured upserts with **mandatory provenance per element** (source_uri, span, pipeline_run) stored as episode metadata; idempotency by `(batch_id, seq)` recorded in a small adapter-local ledger table (in FalkorDB itself — no extra store). `commit_version` runs the invariant queries compiled from the ontology (design 12 derivations) against the staging namespace: violations ⇒ quarantine (namespace kept for inspection, never promoted). `promote` flips the adapter's version routing table; `drop_version` deletes a namespace (refused for active).
+`write_batch`/`load_artifact` perform structured upserts with **mandatory provenance per element** (source_uri, span, pipeline_run) stored as element metadata; idempotency by `(batch_id, seq)` recorded in a small adapter-local ledger table (in FalkorDB itself — no extra store). `commit_version` runs the invariant queries compiled from the ontology (design 12 derivations) against the staging version: violations ⇒ quarantine (version kept for inspection, never promoted). `promote` flips the adapter's version routing table; `drop_version` deletes a version key (refused for active).
 
 ### 3.5 Embedder pinning
 
-The KG CR names the embedding model; the adapter records `{model, dim}` in version metadata at `begin_version` and **refuses mixed-embedder writes into one version** (`KG_VERSION_GONE`-adjacent error, distinct code `KG_EMBEDDER_MISMATCH` — an adapter-level extension code, documented) — re-embedding is a version bump by construction (ADR-0017).
+The KG CR names the embedding model; the adapter records `{model, dim}` in version metadata at `begin_version` and **refuses mixed-embedder writes into one version** — on the wire the **closed-set code `KG_VERSION_GONE`** with `data.detail: "embedder_mismatch"` (r1 f3: the reference adapter models the closed error set, never extends it; first-class code is a kgp/v1beta1 candidate). Re-embedding is a version bump by construction (ADR-0017).
 
 ## 4. Managed-mode packaging
 
-`provider: graphiti` in the KG CR ⇒ the operator deploys, per graph: the adapter Deployment (stateless; scales for read QPS) + FalkorDB (single instance, PVC) + NetworkPolicy (adapter ⇄ FalkorDB only; ingress from gateway only). Backend switch `graphiti.backend: falkordb | neo4j` honors ADR-0018's no-lock-in promise; the adapter uses graphiti's driver abstraction. LLM/embedding calls for **extraction** egress via the gateway's LLM route (they are receipted, budgeted hops — extraction cost is visible per pipeline run).
+`provider: graphiti` in the KG CR ⇒ the operator deploys, per graph: the adapter Deployment (stateless; scales for read QPS) + FalkorDB (single instance, PVC) + NetworkPolicy (adapter ⇄ FalkorDB only; ingress from gateway only). Backend switch `graphiti.backend: falkordb | neo4j` honors ADR-0018's no-lock-in promise; the adapter uses graphiti's driver abstraction. The adapter makes **no extraction LLM calls** (r2 §3.2); its only model egress is embedding-for-search-indexing via the gateway under the build principal — receipted and budgeted.
 
 ## 5. Failure modes
 
@@ -55,8 +55,8 @@ The KG CR names the embedding model; the adapter records `{model, dim}` in versi
 |---|---|
 | FalkorDB down | All tools return typed unavailable; KG CR `Ready=False` via probe failure; agents degrade per design 02 |
 | Pipeline write retries | Adapter idempotency by `(batch_id, seq)` makes replays safe (extraction errors are wholly design 14's — no LLM here) |
-| Copy-forward interrupted | Staging namespace incomplete; `commit_version` invariants fail ⇒ quarantine; rebuild resumes by batch idempotency |
-| Scope header missing/unsigned | Deny-all (`KG_SCOPE_DENIED`) — absence of scope is never scope-everything |
+| Fork interrupted | Staging version incomplete; `commit_version` invariants fail ⇒ quarantine; re-fork is idempotent (copy overwrites staging) |
+| Scope header missing | Deny-all (`KG_SCOPE_DENIED`) — absence of scope is never scope-everything |
 | Backend switch on existing graph | Refused in-place; new backend = new graph build (documented; no silent migration) |
 | Version routing table corruption | Rebuilt from namespace listing at startup (namespaces are the truth) |
 
