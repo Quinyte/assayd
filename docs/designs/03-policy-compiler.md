@@ -75,6 +75,8 @@ New failure rows in §5 cover applied-but-not-accepted and partial-apply.
 | Card discovery route | `/.well-known/agent-card.json` routed to the **agent container** (SoT = code, ADR-0019) | design 05 review f1 |
 | Webhook ingress (Connector events) | rate-limit + size-cap policy on the receiver route; HMAC verification stays receiver-side (gateway HMAC capability unverified — research note) | design 11 r1 f5 |
 | Scoped kgp-admin grant | per-connector route to `write_batch` on one staging version (reader workers) | designs 11 f2 / 01 A2 |
+| Eval temporary grant | candidate-route admitted-set add/remove at eval Job launch/end (per-run eval SVID) | design 16 r1 f1 |
+| Replay-mock route | replay-principal backends → in-cluster mock Service, fail-closed | design 17 r1 f3/f4 |
 | Interior telemetry | OTLP Backend + per-agent route to the tap's forward-only listener (rate-limited — telemetry is traffic) | design 10 r1 f1; agents are default-deny |
 | Receipts | OTLP tracing config (`frontendPolicies`), capture level → attribute verbosity | design 04 |
 

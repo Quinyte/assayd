@@ -40,7 +40,7 @@ charts/plume/                    # umbrella
 ## 4. Versioning & upgrade discipline
 
 - Chart version = platform version (semver). Subchart bumps are renovate PRs that must pass the full matrix.
-- **Contract compatibility gate (r1 f9)**: the chart writes a `plume-contracts` ConfigMap at install — the ledger of every shipped contract (`kgp/v1alpha1`, `idp/v1alpha1`, `receipt/v1`, `ontology/v1`, `pack/v1`, semconv SHA); the `helm upgrade` pre-hook and `plume doctor` both read it and block/flag a >1-version jump (N/N−1 made operational).
+- **Contract compatibility gate (r1 f9)**: the chart writes a `plume-contracts` ConfigMap at install — the ledger of **every** shipped socket contract (`kgp/v1alpha1`, `idp/v1alpha1`, `receipt/v1`, `ontology/v1`, `pack/v1`, `gateway-filter/v1`, `template/v1`, `knowledge-pattern/v1`, `evalrunner/v1`, `evalreport/v1`, semconv SHA — designs 16/18 note); the `helm upgrade` pre-hook and `plume doctor` both read it and block/flag a >1-version jump (N/N−1 made operational).
 - Rollback: `helm rollback` restores the engine; CRs/GitOps state re-converge. **CRDs are never rolled back** (r1 f6): the co-versioning rule is that CRD schema changes are additive within N/N−1, so operator N−1 tolerates CRD N; the operator's version guard checks both directions.
 - **The chart holds itself to the platform's supply-chain bar (r1 f7)**: published as a cosign-signed OCI chart, all images pinned by digest, SBOM attached — the same admission story agents get.
 

@@ -1,6 +1,6 @@
 # Design 18: Pack format + installer (`pack/v1`)
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 5 findings addressed; reviews/18-review.md)
 - **Phase**: P3 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0008 (packs are the fast plane's delivery vehicle) · interfaces: 07 (contracts ledger), 08 (`plume pack` verbs, wizard consumption), 09 (template packs — the recorded constraint: formalize around the existing artifact), 19 (knowledge patterns), 16 (runner images), 11 (reader/catalog types), 10 (dashboards/signals)
 - **Research**: `docs/research/oci-packs-2026-08.md` — OCI 1.1 referrers API finalized (2024; Harbor/Quay/ECR support landed 2024-25); cosign v3 defaults to referrers + the new bundle format; `oras discover` audits the attestation chain.
@@ -23,7 +23,7 @@ pack: context-compaction
 version: 0.3.0
 description: …
 requires:
-  contracts: {gateway-filter: ">=1 <2", template: ">=1"}   # checked vs plume-contracts ConfigMap (07)
+  contracts: {gateway-filter/v1: ">=1 <2", template/v1: ">=1"}   # checked vs plume-contracts (07) — the ledger carries EVERY socket contract id (gateway-filter/v1, template/v1, knowledge-pattern/v1, evalrunner/v1, …), an 07 note (r1 f4)
   tier: core                                                # or plus — refuses install below
 provides:                       # the CLOSED facet catalog (v1)
   filters:      [compact-context.yaml]        # gateway-filter configs → applied via policy compiler
@@ -37,7 +37,7 @@ provides:                       # the CLOSED facet catalog (v1)
   signals:      [context_efficiency.yaml]     # signals.yaml additions (10)
 ```
 
-Facet catalog is **closed** in pack/v1 — a new facet kind is a contract revision (the same discipline as invariant types; packs must stay data). Every image referenced by a facet must itself be cosign-signed (admission enforces at use, the installer verifies at install — two layers).
+**09/19 handover mechanics (r1 f3)**: the existing template/pattern artifacts are already OCI + signed — at design-18 rollout, `plume pack adopt <ref>` wraps each in a Pack CR *referencing the same artifact digest* (nothing moves, nothing re-signs); the degenerate direct-fetch path is then retired from the CLI. Facet catalog is **closed** in pack/v1 — a new facet kind is a contract revision (the same discipline as invariant types; packs must stay data). Every image referenced by a facet must itself be cosign-signed (admission enforces at use, the installer verifies at install — two layers).
 
 ## 4. Artifact layout & trust
 
@@ -51,12 +51,12 @@ Facet catalog is **closed** in pack/v1 — a new facet kind is a contract revisi
 
 | Facet | Applied as |
 |---|---|
-| filters | PolicyIntent additions → compiler-emitted gateway policies (03's machinery; same fail-closed apply) |
+| filters | Filter *contributions* with an explicit **`priority`** → the compiler merges multi-source contributions per concern **sorted by (priority band, source name)** — byte-deterministic; **platform/compliance bands outrank pack bands by construction** (ADR-0014 guards are never reorderable by a pack); two contributions touching the same *field* = hard install error naming both sources (r1 f1; recorded as an ADR-0020 amendment note + 03 golden-test case). Optional `selector` (namespaces/labels) scopes attachment; default all-agents (r1 f2) |
 | skills / templates / patterns | Indexed in the directory (`packs.*` KV space) — CLI/wizard read from there; content stays in the registry (the CR records the digest; no second copy) |
 | readers / catalog / runners | Type registrations (KV) consumed by designs 11/16 when a CR names them |
 | dashboards / signals | Merged into the 10-pack content (name-collision ⇒ install error, never silent override) |
 
-Properties: **install is atomic per facet-class with fail-closed ordering** (03's apply discipline reused — filters verify acceptance before anything advertises the pack as installed); the Pack CR's status lists每 facet's application state; `plume pack list` = `kubectl get packs`. **Uninstall** = delete the CR → reverse order teardown; **refused while in-use**: a filter attached to live routes drains first; registrations named by existing CRs (a Connector using a pack reader) block with the users listed. Instantiated knowledge patterns are *not* in-use links (docs are self-contained — 12 D2): uninstalling a pattern pack never touches existing graphs.
+**Scope (r1 f2)**: the Pack CR is **cluster-scoped**; install gated by RBAC + the source allowlist; hard multi-tenancy (26) partitions allowlists per tenant. Properties: **install is atomic per facet-class with fail-closed ordering** (03's apply discipline reused — filters verify acceptance before anything advertises the pack as installed); the Pack CR's status lists每 facet's application state; `plume pack list` = `kubectl get packs`. **Uninstall** = delete the CR → reverse order teardown; **refused while in-use**: a filter attached to live routes drains first; registrations named by existing CRs (a Connector using a pack reader) block with the users listed. Instantiated knowledge patterns are *not* in-use links (docs are self-contained — 12 D2): uninstalling a pattern pack never touches existing graphs.
 
 ## 6. Versioning & upgrade
 
@@ -70,7 +70,7 @@ Pack upgrades are new CR versions (`spec.ref` digest change): facets re-reconcil
 | Contract range unsatisfied | Refused with the ledger comparison shown |
 | Facet apply fails mid-install | Fail-closed ordering: nothing user-visible advertises until its dependencies applied; Pack CR status names the stuck facet; re-reconcile resumes |
 | Name collision (dashboard/signal/reader type) | Install error naming both owners — never silent override |
-| Registry unreachable post-install | Installed facets keep working (KV/CR state is local); new installs/upgrades fail loudly |
+| Registry unreachable post-install | Behavioral facets keep working (applied state is in CRs/policies); **small text facets (skills/templates/patterns/signals/dashboards) are content-addressed-cached in KV at install** — a hash-verified cache cannot drift, so D2's no-*mutable*-copy intent holds while wizard reads survive registry outages (r1 f5); image facets (readers/runners/catalog) need the registry for *new* pulls only |
 | Uninstall while in-use | Refused with the dependent CRs listed |
 
 ## 8. Security
@@ -84,7 +84,7 @@ Manifest schema + golden installs (each facet class); contract-range refusal mat
 ## 10. Decisions for async review
 
 - **D1 — Closed facet catalog in pack/v1**; new facet kinds are contract revisions.
-- **D2 — Pack content is referenced by digest, never copied** (registry is the store; KV indexes; CRs record digests).
+- **D2 — Pack content is digest-referenced; small text facets get a content-addressed KV cache** (hash-verified — cannot drift); images stay registry-only (r1 f5).
 - **D3 — Pack filters route through the policy compiler** — packs cannot bypass the gateway-config discipline.
 - **D4 — Upgrade propagation split**: behavioral facets (filters/dashboards) propagate with rollback; authored-content facets (patterns) never auto-propagate.
 - **D5 — Source allowlist is the trust root** for third-party packs; hardened profiles lock it.

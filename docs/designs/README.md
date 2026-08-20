@@ -19,9 +19,9 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 13 | Graphiti provider adapter | P2 | M | r2 — critique **PASS** (`13-…`, `reviews/13-review.md`; awaiting user approval, ADR-0023) |
 | 14 | Ingestion pipeline + extraction QA | P2 | L | r2 — critique **PASS** (`14-…`, `reviews/14-review.md`; awaiting user approval, ADR-0023) |
 | 15 | Probe engine | P2 | M | r2 — critique **PASS** (`15-…`, `reviews/15-review.md`; awaiting user approval, ADR-0023) |
-| 16 | EvalSuite + gate controller | P3 | L | draft — in review (`16-…`) |
-| 17 | Session replay engine | P3 | M | draft — in review (`17-…`) |
-| 18 | Pack format + installer | P3 | M | draft — in review (`18-…`) |
+| 16 | EvalSuite + gate controller | P3 | L | draft — critique **REVISE** (`16-…`, `reviews/16-review.md`) |
+| 17 | Session replay engine | P3 | M | draft — critique **REVISE** (`17-…`, `reviews/17-review.md`) |
+| 18 | Pack format + installer | P3 | M | draft — critique **REVISE** (`18-…`, `reviews/18-review.md`) |
 | 19 | Knowledge pattern packs | P2–P3 | M | r2 — critique **PASS** (`19-…`, `reviews/19-review.md`; awaiting user approval, ADR-0023) |
 | 20 | Drift controllers | P4 | L | not started |
 | 21 | workflow-operator + Workflow CRD | P4 | M | not started |

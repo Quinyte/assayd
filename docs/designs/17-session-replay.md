@@ -1,6 +1,6 @@
 # Design 17: Session replay engine
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/17-review.md)
 - **Phase**: P3 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0021 (receipts, fidelity consumers, capture levels) · interfaces: 04 (the stream + object store), 16 (dataset sampler), 08 (`plume session` verbs), 02 (dev-revision targets)
 
@@ -34,10 +34,10 @@ Reconstruction is a pure function of the stream (fidelity-consumer rule, ADR-002
 
 | Mode | What runs | Requires | Guarantees |
 |---|---|---|---|
-| **Re-drive** (default) | The recorded *task input* is re-sent as a fresh A2A task through the gateway at a named target (dev revision, candidate, active) | `capture ≥ headers` on the initial hop (the task input body; `metadata`-only sessions are **not replayable** — listed as such, never silently skipped) | Same entry conditions; the world may answer differently — this is the *regression* mode (16 datasets) |
-| **Mocked replay** | Re-drive, but the gateway routes the replay principal's tool/KG calls to a **replay-mock backend** that answers from the session's recorded responses (keyed by hop sequence + tool + input digest) | `capture: full` on the session's tool hops | Deterministic externals — this is the *debugging* mode: isolate the agent's reasoning from the world's drift |
+| **Re-drive** (default) | The recorded *task input* is re-sent as a fresh A2A task through the gateway at a named target | **`capture: full` on the initial hop** — the task input is a *body*, and bodies exist at `full` (ADR-0021; r1 f2). `headers`/`metadata` sessions are **not replayable** — listed as such with the reason, never silently skipped | Same entry conditions; the world may answer differently — the *regression* mode (16 datasets) |
+| **Mocked replay** | Re-drive, but the gateway routes the replay principal's **tool, KG, *and LLM*** calls to the replay-mock backend, answering from recorded responses (keyed by hop sequence + target + input digest). **LLM hops are mocked by default** (r1 f1 — live model calls are the least deterministic external; without this the determinism claim is false); `--live-llm` is the explicit variant that probes robustness to model drift, with the determinism claim dropped | `capture: full` on the session's mocked hops | **Fully frozen world** — true re-execution of the agent's code; a model/tool call the recording never saw = divergence, the mode's first-class finding |
 
-Mocked-replay mechanics: the CLI/eval Job materializes the session's tool responses into a short-lived mock server (a Job sidecar-less process started by the verb, torn down after); the compiler's replay-principal route (one row, design 03 next revision) points that principal's backends at it. **Mock misses** (the replayed agent makes a call the recording never made) are a *finding*, not an error: recorded as divergence — the replay report's first-class output (`diverged_at: hop N, wanted: X`). KG calls prefer the honest alternative: replay against the **pinned graph version** live (versions are immutable — the original answers are reproducible without mocks); tool calls have no such property, hence mocks.
+Mocked-replay mechanics (r1 f3 — the mock must be gateway-reachable, so it is **in-cluster**): the verb/eval Job creates a short-lived **mock Job + Service** seeded with the session's recorded responses (content-addressed ConfigMap/object refs), torn down after; the compiler's replay-principal route — **recorded as a design 03 §3.4 row now, alongside the eval temporary-grant row** (r1 f4) — points that principal's backends at the mock Service, fail-closed (the replay principal can reach nothing else). **Mock misses** (the replayed agent makes a call the recording never made) are a *finding*, not an error: recorded as divergence — the replay report's first-class output (`diverged_at: hop N, wanted: X`). KG calls prefer the honest alternative: replay against the **pinned graph version** live (versions are immutable — the original answers are reproducible without mocks); tool calls have no such property, hence mocks.
 
 ## 5. The sampler (16 `fromSessions`)
 
@@ -63,7 +63,7 @@ Replay principals are synthetic (`replay:<user>@<target>` in receipts — replay
 
 ## 9. Testing
 
-Reconstruction golden tests from fixture streams (incl. gap and multi-agent lineage cases); re-drive e2e (recorded task → candidate → receipts show the new run); mocked-replay determinism (same session, two replays ⇒ identical hop sequence) + divergence fixture (modified agent ⇒ `diverged_at` correct); scrub assertions on export; sampler strata correctness + exclusion counting.
+Reconstruction golden tests from fixture streams (incl. gap and multi-agent lineage cases); re-drive e2e (recorded task → candidate → receipts show the new run); mocked-replay determinism with LLM hops mocked (same session, two replays ⇒ identical hop sequence; the test that r1 f1 made passable) + divergence fixture (modified agent ⇒ `diverged_at` correct); scrub assertions on export; sampler strata correctness + exclusion counting.
 
 ## 10. Decisions for async review
 

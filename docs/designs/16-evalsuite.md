@@ -1,6 +1,6 @@
 # Design 16: EvalSuite CRD, gate controller, dataset builder
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/16-review.md)
 - **Phase**: P3 · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0006 (eval-as-admission), 0019 (revision holding), 0020 (candidate isolation), 0021 (receipts) · interfaces: 02 (rollout machine), 12 §3.8 (golden-set seeds), 15 (probe/eval distinction), 17 (session sampling), 18 (runner images via packs)
 - **Research**: `docs/research/evals-2026-08.md` — DeepEval 4.x: programmatic `evaluate()`/`evals_iterator()` APIs, built-in agentic metrics (task completion, tool correctness), pytest-style CI integration; Inspect AI as the second runner.
@@ -42,7 +42,7 @@ status:
 ## 4. The gate flow (with design 02's rollout machine)
 
 1. Candidate reaches `Held` (02 §3.3) → gate controller sees `gates:` on the Agent CR → `DatasetReady?` (build/refresh if stale, §5) → launches the **eval Job**.
-2. The Job drives **real A2A tasks through the gateway** at the candidate header-route (bound to the gate controller's SVID — 02 review f2): eval traffic exercises the identical path as prod, and every eval task produces **receipts**, which is where tool/cost metrics come from (§6).
+2. The Job drives **real A2A tasks through the gateway** at the candidate header-route. **Identity model (r1 f1)**: SVIDs are per-pod attested identities, never lent — the eval Job pod gets **its own SVID** via the existing label template (`spiffe://…/eval/<suite>/<run>`), and the compiler adds that principal to the candidate route's **admitted set at Job launch, removing it at Job end** — a narrow, temporary, compiled grant (the design 01 A2 pattern applied to routes; recorded as a design 03 row + ADR-0020 note). The gate controller never proxies eval traffic. **Runner trust bar** (runners are third-party pack images): signed image required (18), and the eval principal's compiled reachability is exactly {candidate route, pinned KG version, judge LLM egress} — fail-closed; the budget bounds the blast radius. Eval traffic exercises the identical path as prod, and every eval task produces **receipts** (§6).
 3. Runner writes the structured report (per-case results + scores) → report artifact (content-addressed) + Postgres rows + CR status; verdict per §7.
 4. **pass** → controller signals the operator: weight shift begins (canary steps). **Canary progression is judged on golden signals (SLOs), not re-evaluation** — the eval gate runs once, pre-canary; live-traffic degradation is the drift/SLO machinery's job (10/20). Stated to kill scope creep.
 5. **fail** → candidate deleted (02), report linked in status + PR annotation; `GatesPassed=False` with the failing metrics named.
@@ -62,12 +62,12 @@ Datasets are **content-addressed artifacts** — a report always names the exact
 | Metric | Source | Nature |
 |---|---|---|
 | `task_completion` | runner judgment per case (DeepEval agentic metric / matchers for ontology-derived cases) | judged (LLM for open cases, mechanical for `via`-matched) |
-| `tool_correctness` | **receipts of the eval run** — expected vs actual tool-call sequences | mechanical |
+| `tool_correctness` | **receipts of the eval run** — normative v1 variant: **target-sequence match** (works at any capture level); argument-aware matching available when the eval posture captures bodies | mechanical |
 | `faithfulness_to_kg` | every citation in the agent's answer resolved via `kg.cite` on the *pinned graph version*; uncited claims counted | mechanical |
-| `cost_regression` | eval-run receipts vs the active revision's trailing per-task cost | mechanical |
+| `cost_regression` | eval-run receipts vs the active revision's **trailing 7-day median per-task cost** (from the design-04 aggregate; window/statistic stated in the report) (r1 f4) | mechanical |
 | `custom_geval` etc. | LLM-judge with **pinned model + versioned prompt**; judge config digest in the report | judged |
 
-Judge calls go through the gateway under the eval principal (receipted, budgeted). **Flake policy**: infra-failed cases retry ×1; semantically-failed cases never retry (that's the signal). Agent stochasticity is bounded by convention (templates default eval-mode temperature) but not assumed: the verdict rule (§7) tolerates case-level noise via the threshold, not reruns-until-green — rerun-shopping is structurally impossible because the report binds (dataset digest, judge digest, candidate revision).
+**Eval-principal posture is pinned independently of the agent's** (r1 f2): capture `full` on eval-principal traffic (reports store at receipt capture rules) and KG scope mirroring the target agent's — compiled with the temporary grant, so `kg.cite` resolves and argument-aware checks are possible. Judge calls go through the gateway under the eval principal (receipted, budgeted). **Flake policy**: infra-failed cases retry ×1; semantically-failed cases never retry (that's the signal). Agent stochasticity is bounded by convention (templates default eval-mode temperature) but not assumed: the verdict rule (§7) tolerates case-level noise via the threshold, not reruns-until-green — rerun-shopping is structurally impossible because the report binds (dataset digest, judge digest, candidate revision).
 
 ## 7. Verdict rule
 
@@ -75,7 +75,7 @@ Judge calls go through the gateway under the eval principal (receipted, budgeted
 
 ## 8. The `evalrunner/v1` slot
 
-A runner is a Job image implementing: input `(dataset artifact ref, target endpoint + credentials, metric config, budget)` → output `(report JSON schema evalreport/v1: per-case {id, input_digest, outcome, per-metric scores, receipts refs}, summary scores)`. DeepEval adapter first (its `evaluate()` API maps directly); Inspect AI second; `byo` = any image honoring the contract. Conformance: a fixture dataset + mock agent where expected scores are known; parity across runners on the mechanical metrics (judged metrics are runner-specific by nature — documented, not hidden).
+A runner is a Job image implementing: input `(dataset artifact ref, target endpoint + credentials, metric config, budget)` → output `(report JSON schema evalreport/v1: per-case {id, input_digest, outcome, per-metric scores, receipts refs}, summary scores)`. DeepEval adapter first (its `evaluate()` API maps directly); Inspect AI second; `byo` = any image honoring the contract. **`evalrunner/v1` and `evalreport/v1` join the `plume-contracts` ledger** (design 07 §4 — r1 f3; the ledger carries every socket contract, and doctor/upgrade checks cover them). Conformance: a fixture dataset + mock agent where expected scores are known; parity across runners on the mechanical metrics (judged metrics are runner-specific by nature — documented, not hidden).
 
 ## 9. Failure modes
 
