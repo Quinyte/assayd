@@ -1,6 +1,6 @@
 # Design 05: Agent directory (OASF on JetStream KV, OCI exchange)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 9 findings — all addressed; reviews/05-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/05-review.md) · ADR-0022
 - **Phase**: P1 · **Size**: S · **Date**: 2026-08-20
 - **ADRs**: 0003 (OASF), 0013 (tenancy) · interfaces: 02 (writer), 08 (CLI reads), 09 (templates read tools), exposure (§05 arch)
 - **Research**: `docs/research/oasf-ads-2026-08.md` (ADS/OASF claims, cited; **OASF schema 1.1.0 verified live**) — we adopt the *format and exchange semantics* without running ADS.

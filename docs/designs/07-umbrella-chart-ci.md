@@ -1,6 +1,6 @@
 # Design 07: Umbrella chart, profiles, e2e CI
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 9 findings — all addressed; reviews/07-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0002 (rules 5/6), 0012 (ambient profile), NFR-1/3/7/8 · interfaces: every P1 design (it packages them)
 

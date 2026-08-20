@@ -1,6 +1,6 @@
 # Design 06: Identity glue (SPIRE stack + IdP bootstrap + token exchange)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 9 findings — all addressed; reviews/06-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/06-review.md) · ADR-0022
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0010 (IdP slot), 0011 (authz layers), 0013 (orgs↔tenants) · interfaces: 02 (labels/SVIDs, OAuth clients), 03 (JWT policy, exchange enforcement), 04 (principal chain), 08 (CLI login)
 - **Research**: `docs/research/identity-2026-08.md` — Zitadel RFC 8693 (v2.49+, audience-narrowing) **and the r1-f1 verdict: agentgateway token exchange is OSS** (open-sourced post-2.2; `oauthTokenExchange` on AgentgatewayPolicy with `actorToken`, `audiences`, `cache`; IdP-agnostic incl. Zitadel/Keycloak). The chart pins an agentgateway version with OSS exchange (design 07).
