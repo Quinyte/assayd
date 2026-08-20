@@ -41,3 +41,23 @@
 **REVISE.** The layer is admirably thin and honest about staying that way — the kro claim survives scrutiny, the client-gen skew gate is excellent, and the SSE mapping is protocol-respectful except in exactly one place: reconnect, where it quietly depends on a convention the platform swore not to mandate. Fix that through A2A's own verbs, add the compiler row and two one-liners, and this passes.
 
 VERDICT: REVISE — 4 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS**
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved.** Reconnect rides A2A's own verbs (`GetTask`/`SubscribeToTask` at the recorded task_id, through the gateway); `Last-Event-ID` maps to the A2A event sequence, never a store cursor; the template task store is explicitly invisible to the projection — "implementation-agnostic, the BYO promise holds" in the design's own words. Exactly the protocol-respectful fix. |
+| 2 | MINOR | **Resolved.** The "App projections" row landed in design 03 §3.4 (verified: workflow-POST with idempotency forwarding, chat-SSE with A2A resubscribe, KG-read, OIDC + exchange applied). |
+| 3 | MINOR | **Resolved.** `Idempotency-Key` forwarded to 21's run-id derivation (whose r2 table carries the http row); the generated client sends one by default — retries never double-run. |
+| 4 | MINOR | **Resolved.** The generated client implements SSE over `fetch()` streams — no `EventSource`, no cookies, no tokens-in-query-strings — stated at the top of §5 where client authors will see it. |
+
+### Verdict
+
+**PASS.** The MAJOR was fixed by moving to the protocol instead of patching the convention — reconnect is now agent-agnostic by construction, and the reconnect-against-a-BYO-agent test in §8 will keep it that way. Fold into ADR-0025.

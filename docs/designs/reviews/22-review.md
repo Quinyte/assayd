@@ -39,3 +39,23 @@
 **REVISE**, narrowly. The two hard problems — stateless in-proxy loop enforcement and stateless-HTTP-shaped approvals — are both solved with the right mechanisms and honest limitations. The four findings are a semantics disambiguation, a cross-design recording, a tenancy sentence, and a data-path discipline note. Quick r2.
 
 VERDICT: REVISE — 4 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS**
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MINOR | **Resolved.** One semantics: any-revisit denied by default (matching the expression); opt-in reentry = occurrence counting (`lineage.count(target) < maxVisits`) — prose, expression, and knob now agree. |
+| 2 | MINOR | **Resolved.** Typed-pending retry is now item 6 of design 09's template contract (verified: "loops honor `APPROVAL_PENDING {retry_after}` bounded by `taskTimeout` — contract item, shipped as a pack release"); the honest-limitation paragraph correctly re-scoped to true black boxes. |
+| 3 | MINOR | **Resolved.** Per-tenant `APPROVALS` bucket in the tenant account, 07 bootstrap job — the ADR-0013 words, verbatim. |
+| 4 | MINOR | **Resolved — with the better alternative.** The interceptor issues a single-use pass voucher consumed by a gateway CEL check and *the gateway* forwards the approved retry — the operator binary exits the tool-call data path entirely, which beats the caps-on-a-proxy option the finding offered as the floor. |
+
+### Verdict
+
+**PASS.** All four findings closed, one of them by taking the stronger of the offered fixes. The stateless-lineage mechanism and the retry-shaped approval model stand as designed. Fold into ADR-0025.

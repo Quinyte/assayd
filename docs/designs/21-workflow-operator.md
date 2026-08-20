@@ -1,6 +1,6 @@
 # Design 21: workflow-operator + Workflow CRD
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/21-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/21-review.md) · ADR-0025
 - **Phase**: P4 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0004 (DBOS, three jobs), 0009 (events actionable from P4) · interfaces: 11 (EVENTS stream triggers), 03 (expose/principal routes), 06 (workflow principals/on-behalf-of), 22 (approval step), 23 (HTTP projection), 14 (precedent: DBOS-in-Job)
 - **Research**: `docs/research/connectors-2026-08.md` §DBOS (dynamic queues; k8s Deployment-per-version guidance; each replica an independent worker)

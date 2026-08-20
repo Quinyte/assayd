@@ -43,3 +43,24 @@
 **REVISE**, but the lightest in the series: the remediation model itself survives scrutiny intact — all five findings are recording/one-sentence gaps (an amendment, a budget home, a compiler note, a tier rule, an actionable retention link). This should pass r2 trivially.
 
 VERDICT: REVISE — 5 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS**
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MINOR | **Resolved — mechanically, as asked.** Promotion warns when retained revisions can't cover the correlation window's deploy cadence, and the operator pins retention of the last eval-passing revision while any `Degraded` window is open (hold released on clear). The refusal path remains as the backstop. |
+| 2 | MINOR | **Resolved.** `runtime.llm.fallback` + `status.llmFallbackActive` recorded as design 02 §11 A8 (verified). |
+| 3 | MINOR | **Resolved.** The mechanism named: controller sets status, operator folds into `PolicyIntent.llm`, recompile rides the existing LLM Backend row — and 03 §3.4 gained the "Model fallback" row (verified). |
+| 4 | MINOR | **Resolved.** `drift.canaryBudget` in chart values, operator-synthesized intent, `principal: drift:model-canary` — the 14/15 pattern at platform scope. |
+| 5 | MINOR | **Resolved.** Core-tier rollback targets the previous retained revision with the escalation stating "last-serving, not last-proven" — the honesty formula, verbatim. |
+
+### Verdict
+
+**PASS.** All five recording gaps closed, the retention link made genuinely mechanical rather than merely restated. The guardrail model was already sound at r1; it is now also complete. Fold into ADR-0025.

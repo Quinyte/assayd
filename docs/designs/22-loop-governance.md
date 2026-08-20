@@ -1,6 +1,6 @@
 # Design 22: Loop governance (hops, cycles, approvals, kill switch)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/22-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/22-review.md) · ADR-0025
 - **Phase**: P4 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0020 (reserved mappings now filled), 0021 (lineage in receipts) · interfaces: 03 (emits everything here), 06 (per-hop re-exchange pairs with lineage), 21 (workflows in the lineage), 08 (`plume approve`), architecture §14 (the governance ring, made mechanical)
 - **Research**: agentgateway OSS: in-proxy **CEL** over request context (compiled at config load), Envoy-compatible ext-authz for external decisions — `docs/research/authz-2026-08.md`

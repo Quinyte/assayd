@@ -1,6 +1,6 @@
 # Design 23: The App layer (HTTP projection, typed clients, release pinning)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/23-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/23-review.md) · ADR-0025
 - **Phase**: P4 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0016 (BFF-less apps) · interfaces: 03 (projection routes), 06 (OIDC clients + exchange), 21 (workflow http triggers + input schemas), 08 (`init app` + client gen), architecture §03 (the App CR)
 

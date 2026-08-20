@@ -23,11 +23,11 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 17 | Session replay engine | P3 | M | r2 — critique **PASS** (`17-…`, `reviews/17-review.md`; awaiting user approval, ADR-0024) |
 | 18 | Pack format + installer | P3 | M | r2 — critique **PASS** (`18-…`, `reviews/18-review.md`; awaiting user approval, ADR-0024) |
 | 19 | Knowledge pattern packs | P2–P3 | M | r2 — critique **PASS** (`19-…`, `reviews/19-review.md`; awaiting user approval, ADR-0023) |
-| 20 | Drift controllers | P4 | L | draft — critique **REVISE** (`20-…`, `reviews/20-review.md`) |
-| 21 | workflow-operator + Workflow CRD | P4 | M | draft — critique **REVISE** (`21-…`, `reviews/21-review.md`) |
-| 22 | Loop governance | P4 | M | draft — critique **REVISE** (`22-…`, `reviews/22-review.md`) |
-| 23 | App layer | P4 | M | draft — critique **REVISE** (`23-…`, `reviews/23-review.md`) |
-| 24 | AuthzProvider (OpenFGA) | P4 | M | draft — critique **REVISE** (`24-…`, `reviews/24-review.md`) |
+| 20 | Drift controllers | P4 | L | r2 — critique **PASS** (`20-…`, `reviews/20-review.md`; awaiting user approval, ADR-0025) |
+| 21 | workflow-operator + Workflow CRD | P4 | M | r2 — critique **PASS** (`21-…`, `reviews/21-review.md`; **R2-a required pre-ADR-0025**: missing 06 `workflow-actor` record) |
+| 22 | Loop governance | P4 | M | r2 — critique **PASS** (`22-…`, `reviews/22-review.md`; awaiting user approval, ADR-0025) |
+| 23 | App layer | P4 | M | r2 — critique **PASS** (`23-…`, `reviews/23-review.md`; awaiting user approval, ADR-0025) |
+| 24 | AuthzProvider (OpenFGA) | P4 | M | r2 — critique **PASS** (`24-…`, `reviews/24-review.md`; awaiting user approval, ADR-0025; sequenced with 21 R2-a) |
 | 25 | model-operator + ModelHub | P5 | L | not started |
 | 26 | Tenant CR fan-out | ent | L | not started |
 | 27 | Compliance profile packs (hipaa) | ent | M | not started |

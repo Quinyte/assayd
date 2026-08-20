@@ -41,3 +41,23 @@
 **REVISE.** This is the most safety-mature design in the P4 set — fail-closed without a knob, shadow-first by mandate, honest revocation arithmetic. The one MAJOR is real: the human half of the model has no implementable tuple source, and the fix (contextual tuples from verified claims) is native, cheaper, and *more* correct on revocation than the sync it replaces. Three small statements complete it.
 
 VERDICT: REVISE — 4 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (inherits 21's R2-a as a sequencing dependency)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved.** §4.1 rewritten precisely: user↔role/member relations are *not* tuples — they resolve as OpenFGA **contextual tuples** passed per-check from the verified JWT (the research note gained the citation — verified: openfga.dev contextual-tuples doc); named-user exceptions stay Grant CRs; `rebuild` correctly claims only the CR-derived set; D3 updated. The human half of the model is now implementable, sync-free, and *better* on revocation than what it replaced. |
+| 2 | MINOR | **Resolved.** The boundary stated: delegated traffic checks every attested link; pure machine hops check the immediate link with the verified SVID as subject; lineage entries are governance telemetry, never authz subjects. |
+| 3 | MINOR | **Resolved.** Model-bump verification is decision replay — recorded check inputs from receipt metadata re-evaluated via 17's read path, no traffic driven; the 16 misattribution gone. |
+| 4 | MINOR | **Resolved as a dependency note.** The header now names the 21 r2 workflow-actor fix as what gives `workflow` subjects their bite — which means this design inherits **21's R2-a** (the missing design-06 `workflow-actor` recording): ADR-0025 should land both together, as the r1 finding asked. |
+
+### Verdict
+
+**PASS.** The contextual-tuples fix is the model resolution of this batch — native, cheaper, and strictly more correct on revocation. The design's safety posture (no fail-open knob, mandatory shadow-first, honest revocation arithmetic) stands unchanged. Fold into ADR-0025 alongside 21's R2-a.

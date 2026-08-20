@@ -41,3 +41,23 @@
 **REVISE.** The interpreter decision, the closed step vocabulary, and the event-trigger idempotency are all first-rate — and the pod-budget change is a model of how design 07's gate was meant to be used. The one MAJOR is the platform's own recurring lesson (16 r1 f1) in a new coat: gateway-enforced promises need gateway-visible identities, and a shared pod has exactly one. The fix mechanism already exists (06's actor-client kind).
 
 VERDICT: REVISE — 4 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (1 residual — **required before ADR-0025**: a claimed record that does not exist)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved in this design; the claimed cross-design record is missing.** §5's fix is exactly right — per-workflow `workflow-actor` OAuth clients presented per request, budgets/authz keyed on that gateway-visible principal, on-behalf-of discriminated by the `act` chain, the per-workflow-pods alternative rejected on weight *and recorded*. But §5 says design 06's `ensureClient` "gains the kind — recorded as 06's amendment", and **verification shows it was not**: 06's kind list still reads `app-login | external-agent | exposed-consumer | cli | agent-actor`, and 06 §11 carries no workflow-actor entry. The series' standard is claims-match-records (17 r1 f4 was held to exactly this). Residual **R2-a**: add `workflow-actor` to 06 §3.1's kinds and one amendment line — one word plus one sentence, but it **must land before ADR-0025 is recorded**, because right now the design cites a record that doesn't exist. |
+| 2 | MINOR | **Resolved.** The run-id table covers all four trigger kinds with retry semantics each — event (beyond-window included), cron (scheduled instant), http (`Idempotency-Key`, forwarded by 23's projection, sent by the generated client by default), manual (CLI always keys). |
+| 3 | MINOR | **Resolved.** Budget exhaustion = in-runtime durable wait (DBOS durable sleep — the same primitive the approval step waits on, now named); the 14 Job-exit borrowing explicitly disclaimed. |
+| 4 | MINOR | **Resolved.** The tenancy seam named as a core-at-n=1 statement with the design-26 decision point (per-tenant replicas vs credential isolation) — the 04 D4 precedent, correctly reused. |
+
+### Verdict
+
+**PASS**, conditioned on R2-a. The substantive design is complete and correct — identity, idempotency, park semantics, tenancy all resolved with the right mechanisms. The one open item is purely a recording gap, but it is the kind this review series exists to police: fix design 06 before ADR-0025 turns the claim into an accepted decision.

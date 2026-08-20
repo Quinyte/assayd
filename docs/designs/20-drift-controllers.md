@@ -1,6 +1,6 @@
 # Design 20: Drift controllers (detect → condition → remediate → verify)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 5 findings addressed; reviews/20-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/20-review.md) · ADR-0025
 - **Phase**: P4 · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0007 (drift-as-reconciliation) · interfaces: 15 (KG detection; this design routes remediation), 10 (signals), 16 (nightly trends, last-eval-passing revisions), 04 (receipts/model ids), 02 (rollout machinery actions), 14 (rebuild trigger)
 
