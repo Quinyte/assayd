@@ -56,3 +56,29 @@ This is also in tension with ADR-0021's delivery model: receipts are *effectivel
 **REVISE.** This design does the hardest thing in the set well: it draws a bright line between what the platform can prove and what it cannot, and ships that line as a product surface (D4, §6 — "a deliverable, not a disclaimer"). That honesty is why the overclaims in §3 stand out: they're four rows that §6 should already own. The chaining defect is real but has a clean fix that makes the auditor story *better* (chained over the stream's own sequence), and the `profile` facet needs only to declare-and-verify rather than apply. Fix these and the ADR-0014 claim — compliance as configuration — is defensible in front of an actual auditor.
 
 VERDICT: REVISE — 5 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (1 required residual + 1 nit, both small)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved with the recommended construction, recorded in the right design.** §4.1 moves chaining **downstream of the stream**: one durable per-tenant **chainer consumer** (JetStream serializes it) chaining over the stream's **own sequence numbers**, tap replicas left stateless and parallel so 04's split-mode scaling survives — and **design 04 §11 A3** records it (verified: "never in the parallel tap replicas; the reserved `chain` fields are written by that consumer"). The limits paragraph now names the ordering basis explicitly, which is exactly what made "chained over the stream sequence" a stronger auditor statement than the original. See R2-a below for the one thing the move left unsaid. |
+| 2 | MAJOR | **Resolved on all four rows.** Audit row rewritten to "every PHI **access** logged with attribution" with the access-not-content note and a §6 cross-reference; in-transit row **mandates the `ambient` profile** (with the reason — "otherwise the claim would be conditional on a setting nobody required"); at-rest row now says it mandates the StorageClass *name* and moves CSI verification to §6; and the de-identification claim is gone, replaced by "**PHI minimization** (not de-identification — a HIPAA term of art the platform does not claim)". §6 gained the two corresponding entries. This is the honesty section absorbing exactly what it was built for. |
+| 3 | MAJOR | **Resolved.** §5's new application path is declare → review → apply → verify: the `profile` facet "**never mutates chart values**" (07 owns them under signed charts, pre-hooks, golden snapshots, rollback); preflight emits the values delta for a **GitOps commit**; the posture document then verifies them in effect, with drift ⇒ `ComplianceViolation`. The platform's GitOps-first posture preserved and 07's ownership intact. |
+| 4 | MINOR | **Resolved.** The filter facet declares `priority band: compliance` — "outranks pack bands, unreorderable by any pack" — closing 18's merge-rule gap for the one pack that ships ADR-0014's guards. |
+| 5 | MINOR | **Resolved.** D2 now states it checkably: an OSS user can enable chaining and run `plume compliance verify` standalone — "tamper-evident receipts require no license" — with enterprise adding the bundle, enforcement, reports, and support. ADR-0015 demonstrated rather than asserted. |
+
+### Residuals
+
+- **R2-a — required before ADR-0026: §2 still says chaining runs in the tap, and the chainer's runtime home is unstated.** `27-compliance-packs.md:15` reads "**Pods**: 0 new (**chaining runs in the tap**; reports are Jobs)" — stale against §4.1's corrected construction, and it leaves the doctrine claim unsupported: nothing says *where* the chainer consumer runs. This matters mechanically, because design 07's budget-ledger CI counts rendered workloads and would either catch an unlisted Deployment or silently pass a claim nobody checked. The platform's established answer is almost certainly the right one — a consumer mode in the operator/enterprise-module binary, the same pattern as the tap listener (04), the approval interceptor (22), and the audit-index projector (04 §3.4) — in which case "0 new pods" stays true and should say why. One sentence, but it is a doctrine-gate claim, so it lands before the ADR.
+- **R2-b — nit: §9's test plan wasn't extended.** The r1 review asked for the concurrency regression; under the corrected design the relevant test has changed shape but not disappeared — *parallel tap replicas under load + one chainer ⇒ an unbroken chain over stream sequence* is precisely the property the fix bought, and it belongs beside the existing injected-break fixture.
+
+### Verdict
+
+**PASS.** Every finding resolved, and three of them improved the design beyond the ask: the chaining fix produced a stronger auditor claim than the original construction, §3's corrections made the safeguard map defensible in front of a real auditor, and the values-delta path turned a layering violation into a workflow that fits the platform's GitOps discipline. Fold into ADR-0026 with R2-a's sentence landed first.

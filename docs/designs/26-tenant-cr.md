@@ -1,6 +1,6 @@
 # Design 26: Tenant CR — the multi-tenancy fan-out (enterprise)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 5 findings addressed; reviews/26-review.md)
+- **Status**: revised r3 — awaiting re-critique (r1 5 findings + r2 residuals R2-1/R2-2 addressed; reviews/26-review.md)
 - **Phase**: enterprise · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0013 (layered tenancy, mostly inherited), 0015 (enterprise module) · interfaces: the seams every prior design named — 04 D4 (per-tenant RECEIPTS streams), 11 (EVENTS), 22 (APPROVALS), 05 (DIRECTORY), 06 (IdP orgs), 21 r2 f4 (runtime tenancy), 24 (per-tenant FGA stores), 18 (per-tenant pack allowlists), 03 (gateway partitions)
 - **Research**: `docs/research/landscape-2026-08.md` §tenancy (vCluster dominant for hard isolation; Capsule for soft)
@@ -34,7 +34,7 @@ status:
 
 | Layer | Fan-out (all pre-existing mechanisms) |
 |---|---|
-| Control plane | soft: namespace + Capsule-style tenant policy + RBAC; hard: vCluster instance (agents/CRs live in the vCluster; the platform operators run **inside** it — see §4) |
+| Control plane | soft: namespace + Capsule-style tenant policy + RBAC; hard: vCluster instance — agents/CRs live in the vCluster, **workload-managing operators run inside it, the policy compiler stays host-side** (§4's split table) |
 | Messaging | NATS **account** + per-tenant streams (`RECEIPTS`, `EVENTS`) and buckets (`DIRECTORY`, `APPROVALS`, cursors) — created by the same bootstrap job design 07 runs at n=1 |
 | Data | Postgres: per-tenant **roles + RLS** on the audit index and eval results. **DBOS state is NOT RLS-isolated in soft mode (r1 f3)** — one shared runtime process holds one DBOS runtime role, and RLS discriminates by connection role; soft-mode DBOS isolation is process-level only. Hard mode resolves it (per-tenant runtime + role). Per-tenant databases for IdP/FGA |
 | Identity | Zitadel **organization** (06 `ensureTenant`) — the interface already exists for exactly this |
@@ -51,13 +51,14 @@ status:
 | Component | Hard mode |
 |---|---|
 | API server, CRs, agent workloads | **per-tenant** (in the vCluster) |
-| plume operators + policy compiler | **host-side** — operators write gateway CRs on the host cluster; running them inside the vCluster would require host credentials that defeat the isolation (r1 f2). They watch the tenant's API server read-only via the vCluster's kubeconfig |
+| **workload-managing operators** (Agent/KG/Workflow/Model controllers) | **per-tenant, inside the vCluster** (R2-1): they *create* Deployments/Sandboxes, apply SVID-attestation labels, and write directory entries — all against the tenant's own API server. They hold **no host credentials**, and their cost is counted per-tenant below |
+| **policy compiler** (gateway config) | **host-side** — it writes gateway CRs on the host cluster (which is why the write-direction problem is solved) and *reads* tenant CRs through the vCluster kubeconfig. It holds no tenant-workload write access |
 | agentgateway | shared, partitioned (per-tenant listener set) |
 | **SPIRE** | **per-tenant server inside the vCluster, federated to the host trust domain** (r1 f2 — vCluster syncs workloads into one host namespace, so a shared host SPIRE would collapse every tenant's agents into one identity segment). SPIFFE federation is **the second new mechanism** this design adds; recorded as a design 06 amendment |
 | NATS, Postgres, Zitadel, OpenObserve | shared, isolated by account / role+RLS / organization / stream |
 | workflow-runtime, OpenFGA (if plus) | **per-tenant** |
 
-**Cost, by tier (r1 f4)**: a core-only hard tenant ≈ vCluster control plane + SPIRE + agent workloads (~3–4 pods + workloads), *not* the full ≈8 (NATS/Postgres/Zitadel/OpenObserve are shared); a plus tenant adds workflow-runtime (+1–2) and OpenFGA+adapter (+1). The CR makes hard isolation a single decision rather than a bespoke project — that remains the point.
+**Cost, by tier (r1 f4, R2-1-corrected)**: a core-only hard tenant ≈ vCluster control plane + per-tenant workload operators + SPIRE + agent workloads (~4–5 pods + workloads), *not* the full ≈8 (NATS/Postgres/Zitadel/OpenObserve/gateway/compiler are shared); a plus tenant adds workflow-runtime (+1–2) and OpenFGA+adapter (+1). The CR makes hard isolation a single decision rather than a bespoke project — that remains the point.
 
 **Version skew (r1 f5)**: two `plume-contracts` ledgers exist (host + tenant). The **tenant-operator compares both at reconcile**; a gap >1 blocks **tenant upgrades** (never tenant traffic — a lagging tenant keeps serving), surfaced as `TenantVersionSkew` with both ledger versions named. N/N−1 (07) governs between installs, not just across upgrades.
 
@@ -78,7 +79,7 @@ Create → fan-out (idempotent, per-layer conditions). **Suspend** → gateway p
 
 ## 7. Security
 
-Per-tenant credentials never co-mount (except the soft-mode runtime limitation, stated in §3 and mitigated by hard mode); the tenant-operator holds the only cross-tenant privilege in the system and is auditable (receipted under `principal: tenant-op`); export-before-delete keeps audit trails intact; admins are IdP groups (contextual tuples, 24) — no separate tenant admin store.
+Per-tenant credentials never co-mount (except the soft-mode runtime limitation, stated in §3 and mitigated by hard mode); the tenant-operator holds the only **provisioning** cross-tenant privilege and is auditable (receipted under `principal: tenant-op`); the host-side policy compiler holds cross-tenant *read* on tenant CRs plus host gateway write — never tenant-workload write (R2-1), so a compromised compiler cannot create workloads in any tenant; export-before-delete keeps audit trails intact; admins are IdP groups (contextual tuples, 24) — no separate tenant admin store.
 
 ## 8. Testing
 
@@ -87,7 +88,7 @@ Fan-out idempotency (create ×3 ⇒ same state); isolation battery per layer (ac
 ## 9. Decisions for async review
 
 - **D1 — The Tenant CR adds exactly two new mechanisms** (tenant-scoped quota intents; per-tenant SPIRE + federation) **and inherits every other layer** — the ADR-0013 thesis, tested and corrected rather than asserted (r1 f1/f2).
-- **D2 — Hard mode = vCluster with its own operator set**; cost stated plainly (core pod set per tenant).
+- **D2 — Hard mode splits the control plane**: workload-managing operators per-tenant inside the vCluster; the policy compiler host-side (R2-1/R2-2). Cost is the §4 table's range (~4–5 pods core-only; +2–3 for a plus tenant), not the full core set — NATS/Postgres/Zitadel/OpenObserve/gateway are shared.
 - **D3 — Soft mode's shared runtime holds three credential classes** (consumer creds, workflow-actor clients, one DBOS role) and its **DBOS state is not RLS-isolated** — the complete gap; hard mode is the answer for untrusted tenants.
 - **D4 — Delete requires export-first + explicit confirmation**; IdP orgs deactivate, never delete.
 

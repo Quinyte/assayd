@@ -68,3 +68,31 @@ The dataset sources are equally agent-shaped: `fromSessions` samples recorded **
 **REVISE.** The envelope-over-adopted-components shape is right, the bindings are real (better documented than the design claims), and D1/D2/D3 are the correct disciplines. But three MAJORs sit on the seams this design exists to create: the gate it reuses is agent-shaped in its metrics and datasets, the shadow candidate repeats an isolation hole the platform closed twice already, and the pricing seam would make self-hosted models undeployable under a usd budget. All three have contained fixes that mostly land as recorded extensions to designs 16, 03, and 04.
 
 VERDICT: REVISE — 6 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (3 residual nits, none blocking)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved, and recorded where it belongs.** §4's gate bullet now splits flow-vs-catalog explicitly ("the design-16 **flow**, not its metric catalog"), and design 16 gained **§14 A1** (verified): the model metric family — `golden_quality`, `latency_p95`/`throughput` under a declared load profile, `refusal_safety_rate`, `cost_regression_per_1k_tokens` (never per-task) — with metrics scoped by target kind and the dataset rule ("curated + extracted prompts; raw A2A session cases are agent-only"). D1 restated as "One promotion mechanic, two metric families", which is the true version of the claim it wanted to make. |
+| 2 | MAJOR | **Resolved.** New §4 candidate-isolation bullet: the shadow gets a candidate-only LLM route admitted to exactly the run's eval principal, compiled at Job launch and revoked at end; general Backend registration only on pass. The compiled half landed as 03's "Model serving" row (verified). The 02-f2 / 16-r2 lesson is now applied on its third occasion. |
+| 3 | MAJOR | **Resolved — the right way round.** The operator **upserts the `internal/<model>` pricing row** at serve time, so ADR-0020's unmatched-model compile error can never fire on an in-cluster model; the receipt enum stays `resolved \| unresolved` with ADR-0021 untouched; new **D2b** records it. Both approved contracts held rather than amended — the better outcome. |
+| 4 | MINOR | **Resolved.** `docs/research/modelhub-2026-08.md` landed with all five claims cited, including the honest version note; §4 now names the **chart-shipped `ClusterStorageContainer`** resolving `kit://` (a design-07 object, "not per-Model operator output"), and the virtual-models version requirement is explicitly folded into the **06-review R2-a** minimum-version fix so both dependents cite one pin. |
+| 5 | MINOR | **Resolved.** 03 §3.4 "Model serving" row covers Backend registration, virtual-model weighted shifting, and the shadow admitted-set (verified). |
+| 6 | MINOR | **Resolved — beyond the ask.** §2 makes RawDeployment "a stated constraint, not a default", explains it as what keeps the ≤8-pod budget and ADR-0012's meshless core intact, forbids Serverless, and adds a **CI assertion that no Knative CRDs are required**. |
+
+### Residual nits (non-blocking — fold into ADR-0026)
+
+- **R2-a — the header still cites only the bootstrap-era research.** The Research line points at `landscape-2026-08.md` §Modelhub; the new dated note isn't referenced there, unlike every other design in the series. One line.
+- **R2-b — design 07 doesn't carry the `ClusterStorageContainer` it now owns.** §4 correctly assigns the object to the chart, but 07's chart tree (§3) has no entry for it (nor for the KServe/Kueue/Trainer plus-tier subcharts this design assumes). Land it when 07's plus-tier set is written — a cross-design record gap of the same class as 21's R2-a, smaller because the resource is additive and plus-tier.
+- **R2-c — §8's test plan wasn't extended to the r2 fixes.** No shadow-reachability negative test (a non-eval principal must not reach the shadow — finding 2's regression), no usd-budget-compiles-against-an-in-cluster-model test (finding 3's), and no model-metric fixture suite (finding 1's). The series' standard is tests-match-claims; these three are the claims this revision added.
+
+### Verdict
+
+**PASS.** All six findings addressed, with the two hardest resolved structurally and recorded across designs 16 and 03 rather than asserted locally — and the pricing fix notably preserved both approved contracts instead of amending either. The residuals are citation and coverage hygiene.

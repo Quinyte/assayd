@@ -76,3 +76,44 @@ Relatedly, D3's honest gap is narrower than the reality: the shared runtime hold
 **REVISE.** The thesis is *mostly* earned, and the seven clean seams are the accumulated payoff of a design series that kept choosing tenant-shaped primitives — that result is worth stating loudly. But a thesis this strong has to be exact: two seams need mechanisms this design would rather not admit inventing (tenant-scoped traffic quotas, hard-mode workload identity), and one claims an isolation guarantee that the shared runtime cannot deliver. Bound D1 honestly, specify hard mode's shared/per-tenant table, and this becomes the strongest enterprise argument in the set.
 
 VERDICT: REVISE — 5 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **REVISE** — all five r1 findings resolved, but the fix to finding 2 introduced a new inconsistency on the isolation boundary itself
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved — thoroughly, and honestly.** The Traffic row now says outright that this is "**a new compiler concern, honestly**": a `TenantPolicyIntent` tenant-scoped target kind (landed as 03 §3.4's "Tenant quotas" row — verified), quota enforcement explicitly inheriting ADR-0020's **approximation tier**, and the exact tier as a per-tenant rollup recorded in **design 04 §11 A2** (verified). It even separates the two axes I flagged as conflated ("Budget *nesting* is a separate axis from approximate-vs-exact"). §1 and D1 are restated around the corrected thesis. |
+| 2 | MAJOR | **Resolved in §4 — see the new residual below.** The shared/per-tenant table exists and answers the cost and substrate questions; **design 06 §12 A1** records per-vCluster SPIRE federated to the host trust domain (verified) — and does better than the finding asked by naming the upstream mechanism, `ClusterFederatedTrustDomain` from spire-controller-manager, which means federation is *configuration of an existing CRD*, not a net-new build. That materially strengthens D1: the second "new mechanism" is thinner than feared. |
+| 3 | MAJOR | **Resolved — exemplary honesty.** The Data row now states plainly that **DBOS state is not RLS-isolated in soft mode** (one shared runtime, one role; RLS discriminates by connection role) with hard mode as the resolution, and D3 enumerates all three exposed credential classes (consumer creds, `workflow-actor` clients, the shared DBOS role). This is the design admitting a limitation it could have left buried. |
+| 4 | MINOR | **Resolved.** §4 prices hard mode by tier: core-only ≈ vCluster control plane + SPIRE + workloads (~3–4 pods), plus tenants add workflow-runtime and OpenFGA+adapter. |
+| 5 | MINOR | **Resolved.** Two ledgers, tenant-operator compares both at reconcile, a >1 gap blocks **tenant upgrades but never tenant traffic**, both versions named on the condition. |
+
+### New findings (introduced by the r2 revision)
+
+#### R2-1. MAJOR — hard mode now says three different things about where the plume operators run and who holds cross-tenant privilege
+
+`26-tenant-cr.md:37,54,81`. The fix to r1 f2 moved operators host-side, but the surrounding text didn't move with it, and the new placement doesn't survive contact with what operators actually do:
+
+- **§3 (Control plane row)**: "the platform operators run **inside** it — see §4".
+- **§4 (the new table)**: "plume operators + policy compiler | **host-side** … They watch the tenant's API server **read-only** via the vCluster's kubeconfig".
+- **§7**: "the tenant-operator holds the **only** cross-tenant privilege in the system".
+
+The three cannot all hold. Worse, §4's own resolution is inadequate as stated: design 02's operator does not merely *watch* — it **creates** Deployments/Sandboxes, applies pod labels for SVID attestation, and writes directory entries. In hard mode those objects must be created in the **tenant's** API server, so the operator needs write access, not read-only. And if a shared host-side operator holds write kubeconfigs for every tenant vCluster, then it is cross-tenant privileged too — falsifying §7 and weakening hard mode's blast-radius story exactly where it is sold (a compromised shared agent-operator would reach every tenant's API server).
+
+**Fix**: state the split the mechanics imply — **workload-managing operators run inside the vCluster** (they create Deployments/Sandboxes/labels against the tenant's own API server, hold no host credentials, and are part of the per-tenant cost); **the policy compiler stays host-side** (it writes gateway CRs on the host, which is why r1 f2's write-direction problem is solved) and reads tenant CRs through the vCluster kubeconfig. Then correct §3's row to match, and correct §7 to say what remains true: the tenant-operator holds the only *provisioning* cross-tenant privilege. If instead the intent is host-side operators with per-tenant write kubeconfigs, that is defensible — but §7 must then be rewritten and the blast radius stated plainly.
+
+#### R2-2. MINOR — D2's wording is now contradicted twice by §4
+
+`26-tenant-cr.md:90`. "Hard mode = vCluster with **its own operator set**; cost stated plainly (**core pod set per tenant**)" — but §4's corrected table makes operators host-side (or split, per R2-1) and prices a core-only hard tenant at ~3–4 pods precisely because NATS/Postgres/Zitadel/OpenObserve are *shared*. Both halves of the decision line are stale relative to the fix. **Fix**: restate D2 from §4's table once R2-1 settles the placement.
+
+### Verdict
+
+**REVISE.** Every r1 finding is genuinely resolved — the thesis correction is exact, the SPIRE answer is better-grounded than expected, and the DBOS admission is the kind of honesty this series exists to produce. But the r2 fix left the design's central subject — what is isolated from what, and who holds the keys — described three incompatible ways, and the "read-only" qualifier cannot support what the operators must do. This is a small, well-bounded fix (name the split, correct two sentences), and it must land before ADR-0026: an enterprise isolation boundary is not a thing to record ambiguously.
+
+VERDICT: REVISE — 2 findings

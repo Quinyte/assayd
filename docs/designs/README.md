@@ -28,8 +28,8 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 22 | Loop governance | P4 | M | r2 — critique **PASS** (`22-…`, `reviews/22-review.md`; awaiting user approval, ADR-0025) |
 | 23 | App layer | P4 | M | r2 — critique **PASS** (`23-…`, `reviews/23-review.md`; awaiting user approval, ADR-0025) |
 | 24 | AuthzProvider (OpenFGA) | P4 | M | r2 — critique **PASS** (`24-…`, `reviews/24-review.md`; awaiting user approval, ADR-0025; sequenced with 21 R2-a) |
-| 25 | model-operator + ModelHub | P5 | L | draft — critique **REVISE** (`25-…`, `reviews/25-review.md`) |
-| 26 | Tenant CR fan-out | ent | L | draft — critique **REVISE** (`26-…`, `reviews/26-review.md`) |
-| 27 | Compliance profile packs | ent | M | draft — critique **REVISE** (`27-…`, `reviews/27-review.md`) |
+| 25 | model-operator + ModelHub | P5 | L | r2 — critique **PASS** (`25-…`, `reviews/25-review.md`; awaiting user approval, ADR-0026) |
+| 26 | Tenant CR fan-out | ent | L | r2 — critique **REVISE** (`26-…`, `reviews/26-review.md`; hard-mode operator placement inconsistent — r3 needed) |
+| 27 | Compliance profile packs | ent | M | r2 — critique **PASS** (`27-…`, `reviews/27-review.md`; **R2-a required pre-ADR-0026**: chainer runtime home) |
 
 Update this table when a design starts / lands. Decisions made during design → new ADR.
