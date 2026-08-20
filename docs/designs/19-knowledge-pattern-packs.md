@@ -1,6 +1,6 @@
 # Design 19: Knowledge pattern packs (`sop-decision-tree` first)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 6 findings addressed; reviews/19-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/19-review.md) · ADR-0023
 - **Phase**: P2–P3 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0008 (packs/sockets), 0005 · interfaces: 12 (patterns instantiate ontology/v1), 08 (`kg init --pattern` wizard), 14 (starter labels, resolve defaults), 15 (auto-probes), 09-precedent (OCI-artifact delivery pre-design-18)
 

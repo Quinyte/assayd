@@ -22,7 +22,7 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 16 | EvalSuite CRD + controller + dataset builder | P3 | L | not started |
 | 17 | Session replay engine | P3 | M | not started |
 | 18 | Pack format + installer | P3 | M | not started |
-| 19 | Knowledge pattern packs | P2–P3 | M | draft — critique **REVISE** (`19-…`, `reviews/19-review.md`) |
+| 19 | Knowledge pattern packs | P2–P3 | M | r2 — critique **PASS** (`19-…`, `reviews/19-review.md`; awaiting user approval, ADR-0023) |
 | 20 | Drift controllers | P4 | L | not started |
 | 21 | workflow-operator + Workflow CRD | P4 | M | not started |
 | 22 | Loop governance (hop limits, cycle detection, approvals, kill switch) | P4 | M | not started |

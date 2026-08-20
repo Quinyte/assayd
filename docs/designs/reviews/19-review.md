@@ -49,3 +49,29 @@
 **REVISE.** The pack contract and the publish-gate discipline are exactly right, and the design correctly treats itself as data all the way down. The one MAJOR is the valuable kind: the first honest attempt to *use* ontology/v1's recipes revealed that `walk` — the recipe the flagship pattern exists to showcase — is under-parameterized for its own headline use case. Fix lands mostly as a design 12 amendment plus a conformance case; the five minors are alignment and wording against the freshly amended grammar and gate statistics.
 
 VERDICT: REVISE — 6 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (1 residual nit)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved across all three documents, exactly as recommended.** Design 12 §11 A2(a) defines walk's real schema (`entry`/`sequence`/`branch`/`condition_attr`/`state?`) with the traversal semantics spelled out; the pack's `next_step` params now use it; design 01 §11 A3 adds the conformance full-walk case (from entry *and* from mid-machine state, asserting branch node, rendered conditions in `structure`, citations) — so no provider can claim kgp support without executing the flagship traversal. The under-specification is closed at the contract, the consumer, and the enforcement point. |
+| 2 | MINOR | **Resolved.** Relation-level `2..*` dropped; the min-2 constraint lives solely in the cardinality invariant, with the reason noted inline. |
+| 3 | MINOR | **Resolved.** A2(b): `per_branch` expands same-version at probe-set derivation, explicitly labeled a *mechanical-readiness* check with truth carried by hand-written probes and Gate A — the tautology is now a documented property, not a hidden one. |
+| 4 | MINOR | **Resolved.** The generator's contract emits `via: {bundle, params: {state: <decision-node key>}}` (A2b), and the wizard elicits each hand-written probe's execution (default `next_step`, search fallback) — collected probes satisfy the via-required rule by construction. |
+| 5 | MINOR | **Resolved.** Starter labels restated in 14 r2's vocabulary — smoke set, advisory under `LabelsSparse`, authority via the growth engine — in both §4 and the README handoff. |
+| 6 | MINOR | **Resolved — beyond the ask.** Security section added with the prompt-injection edge named and its pre-existing containments listed, plus a new one (hardened profiles may allowlist pack sources). |
+
+### Residual nit (non-blocking)
+
+A2(a)'s entry-mode semantics say "follow `entry` from the machine root when `state` is absent" — but a graph holds many machine instances (many Procedures), and the schema has no instance selector. Add `root?: <node-key>` with "exactly one of `state`/`root` required" to the walk schema (one line in 12 A2) so entry-mode calls are unambiguous; the conformance case (01 A3) should pass `root` explicitly.
+
+### Verdict
+
+**PASS.** All six findings resolved, the MAJOR at contract + consumer + conformance simultaneously — the right way to fix a gap that a first consumer exposed. Fold into ADR-0023 with the `root?` one-liner.
