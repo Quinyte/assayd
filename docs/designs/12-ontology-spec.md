@@ -1,6 +1,6 @@
 # Design 12: The ontology/v1 specification
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 8 findings addressed; reviews/12-review.md)
 - **Phase**: P2 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0005, 0017 (kgp contract carries the document) · interfaces: 01 (served by `kg.schema`), 13 (drives Graphiti extraction), 14 (drives pipeline gates), 15 (probes), 16 (golden-set derivation), 19 (patterns instantiate it)
 - **Research**: `docs/research/connectors-2026-08.md` §graphiti — custom entity/edge types in graphiti-core are **Pydantic models** passed to `add_episode`; the ontology→extraction mapping is therefore mechanical.
@@ -35,11 +35,10 @@ entities:
       effective_from: date
       state: "enum[draft,active,retired]"
       amount_limit: "float?"      # ? = optional
-      successor: "ref(Policy)?"   # typed reference (validated to an existing entity type)
     description: "A payer's coverage policy document"   # REQUIRED — it is the extraction prompt seed
 ```
 
-Attr types (closed set v1): `str · int · float · bool · date · datetime · enum[…] · ref(EntityName)` + `?` optionality. No nesting, no arrays in v1 (an array-shaped fact is a relation — by design; recorded as the modeling rule).
+Attr types (closed set v1): `str · int · float · bool · date · datetime · enum[…]` + `?` optionality. **No `ref()` attrs** (r1 f1): a reference to another entity *is* an edge — model it as a relation (one modeling path; keeps extraction unambiguous and graph invariants sound). No nesting, no arrays (array-shaped facts are relations). Revisit only with ontology/v2 evidence.
 
 ### 3.3 Relations
 
@@ -54,15 +53,17 @@ relations:
 
 Both forms normalize to the long form. Subject/Object must name declared entities (or `*` for pattern-generic relations inside pattern packs only).
 
+**Canonical relation reference (r1 f2)**: everywhere a relation is referenced (`rel:`, `via:`, cardinality invariants), the canonical form is the **full triple string** `"Policy SUPERSEDES Policy"`; bare VERB is accepted *only when globally unique* across the document (validation error otherwise, JSONPath-located).
+
 ### 3.4 Invariants (closed set + escape)
 
 ```yaml
 invariants:
   - {type: required_edge, subject: "Policy[state=active]", rel: COVERS, min: 1}
-  - {type: acyclic, rel: SUPERSEDES}
-  - {type: path_terminates, from: Procedure, via: NEXT|BRANCH}
+  - {type: acyclic, rel: "Policy SUPERSEDES Policy"}
+  - {type: path_terminates, from: Procedure, via: ["Step NEXT Step", "Decision BRANCH Step"]}   # via = list of canonical refs; "A|B" sugar normalizes to the list (r1 f5)
   - {type: unique_key, entity: Policy}
-  - {type: cardinality, rel: "Decision BRANCH Step", min: 2}
+  - {type: cardinality, rel: "Decision BRANCH Step", min: 2}   # the §3.3 relation-level `cardinality:` field is sugar that LOWERS to this invariant — one enforcement path (r1 f4)
   - {type: custom, provider_query: "…", portable: false}     # escape (ADR-0017)
 ```
 
@@ -90,7 +91,7 @@ probes:
     expect:
       answer: {contains: "no"}    # matchers: exact | contains | regex | numeric: {value, tol}
       cites: ["P-1042#4.2"]       # required unless `cites: none` is explicit — uncited probes are a smell
-  - generate: per_branch          # pattern-driven auto-probes (sop-decision-tree): one per BRANCH edge
+  - generate: per_branch          # generators are a CLOSED built-in set (r1 f6): per_branch · per_entity_sample — packs may USE them, never define them; unknown ⇒ validation error; new generators = contract revision
 ```
 
 ### 3.7 Pattern lineage
@@ -108,17 +109,36 @@ probes:
 | Golden-set seeds | probes + bundles | EvalSuite derivation (16) |
 | Scope metadata | entities + `require_scope` | policy compiler KG-scope (03) |
 
-### 3.9 Evolution rules
+### 3.9 The Pydantic derivation, normatively (r1 f3)
+
+| Ontology construct | Pydantic mapping |
+|---|---|
+| entity `Name` | `class Name(BaseModel)`; **docstring = the entity description verbatim** (it seeds the extraction prompt) |
+| attr `str/int/float/bool` | `str/int/float/bool` |
+| attr `date` / `datetime` | `datetime.date` / `datetime.datetime` |
+| attr `enum[a,b,c]` | `Literal["a","b","c"]` (values verbatim; no Enum classes — keeps prompts readable) |
+| attr `T?` | `Optional[T] = None` |
+| keys | listed in the model's docstring line `Keys: …` (extraction hint) + carried in model config for resolve (14) |
+| relation `(S, VERB, O)` | `class SVerbO(BaseModel)` — name = `S + Verb.title().replace("_","") + O`; docstring = relation description; typed attrs as above |
+| docstring composition | entity/relation description, then one line per attr: `attr_name (type): from enum values where applicable` — this composition **is** part of extraction quality (D4) and is golden-tested as a regression of these rules, not their definition |
+
+One-line contracts for the other derivations: **invariants** → one executable check per invariant *instance*, evaluated against the staging version at `commit_version`, violations reported with the invariant's index+selector; **golden-set seeds** → one seed item per probe carrying `via` and matchers through unchanged (16 consumes verbatim).
+
+### 3.10 Evolution rules
 
 - **Additive** (new entity/relation/attr`?`/bundle/probe): same major, new graph version — normal snapshot flow.
-- **Breaking** (remove/rename/retype anything, tighten cardinality): requires an explicit `migrates: {renames: {...}}` map in the new doc *and* produces a new graph version; `kg diff` renders the break loudly. No in-place mutation, ever (design 01 versioning).
+- **Breaking** (remove/rename/retype, tighten cardinality): requires explicit acknowledgment in the new doc (r1 f7) — `migrates.renames` for renames: `{entities: {Old: New}, attrs: {"Policy.old": "Policy.new"}, relations: {"S OLD O": "S NEW O"}, enums: {"Policy.state": {old_val: new_val}}}`; non-rename breaks require a `migrates.removed:` list naming every removed/retyped element. Anything that disappears without appearing in `renames` or `removed` is a validation error — loud intent is the rule. Produces a new graph version; `kg diff` renders the break; no in-place mutation ever.
 - `ontology/v2` (the contract itself) follows platform N/N−1 with the converter living in the operator.
 
 ## 4. Validation pipeline
 
 Two layers, both at `kg push` *and* admission: (1) **structural** — JSON Schema; (2) **semantic** — referential closure (refs/relations name declared entities), selector validity, recipe-param schemas, probe matcher sanity, `require_scope ⊆ entities`, key attrs exist and are non-optional. Errors carry JSONPath locations. A doc that validates is *compilable*; whether the graph satisfies it is the pipeline's job (14).
 
-## 5. Failure modes
+## 5. Security (r1 f8)
+
+Who may push: ontology docs travel as ConfigMaps/OCI artifacts under the existing RBAC + signed-artifact admission (designs 01/07); tampering is a signature/ownership event, not a schema question. The sharp edge is **`custom` invariants — an arbitrary query string executed by the provider at commit**: containment rules are (a) providers execute custom queries **read-only against the staging version under the commit's scope**, never against active versions; (b) `portable: false` marks conformance, not safety — so (c) hardened/compliance profiles may **deny `custom` outright** (one values flag, admission-enforced). Probe queries are engine-mediated and matcher-judged (design 15) — no injection surface.
+
+## 6. Failure modes
 
 | Failure | Behavior |
 |---|---|
@@ -127,17 +147,17 @@ Two layers, both at `kg push` *and* admission: (1) **structural** — JSON Schem
 | `custom` invariant on a provider that can't run it | Commit-time error naming the invariant; conformance's portability warning already flagged it |
 | Doc drifts from deployed snapshot | Impossible: snapshots embed their doc verbatim (`kg.schema` serves it); the CR references *inputs*, versions freeze them |
 
-## 6. Testing
+## 7. Testing
 
 The spec ships executable: `ontology-v1.schema.json` + a semantic-validation test corpus (valid + each violation class), golden Pydantic derivations, golden probe expansions (`generate: per_branch` on a fixture SOP graph), and round-trip (doc → kg.schema → doc, byte-stable). The kgp conformance suite (design 01) consumes the same fixture ontology.
 
-## 7. Decisions for async review
+## 8. Decisions for async review
 
-- **D1 — No nested/array attrs in v1**: array-shaped facts are relations; keeps extraction, invariants, and diffs simple. Revisit only with ontology/v2 evidence.
+- **D1 — No nested/array attrs and no `ref()` attrs in v1**: all entity-to-entity facts are relations — one modeling path (r1 f1). Revisit only with ontology/v2 evidence.
 - **D2 — Instantiated pattern docs are self-contained** (copied, not referenced) — no runtime coupling to packs; upgrades are reviewed diffs.
 - **D3 — Probe citations required by default** (`cites: none` must be explicit).
 - **D4 — Descriptions are mandatory on entities/relations** — they are the extraction prompt substrate, not documentation garnish.
 
-## 8. Resulting ADRs
+## 9. Resulting ADRs
 
 Folded into ADR-0023 (P2 knowledge layer) after critique PASS.

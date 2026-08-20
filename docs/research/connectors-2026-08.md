@@ -1,7 +1,7 @@
 # Connector + graphiti + DBOS facts for designs 11–14 (2026-08)
 
 ## CloudEvents over NATS/JetStream (design 11 events facet)
-- Official CloudEvents **NATS protocol binding** in the spec repo (v1.0.x line); content modes structured/binary/batch; maintained Go SDK protocol `nats_jetstream/v2`. https://github.com/cloudevents/spec/blob/main/cloudevents/bindings/nats-protocol-binding.md · https://pkg.go.dev/github.com/cloudevents/sdk-go/protocol/nats_jetstream/v2
+- Official CloudEvents **NATS protocol binding**: the released revisions (≤ v1.0.2) state NATS supports **structured content mode only** ("NATS … does not currently support custom message headers, which are necessary for binary mode" — written pre-NATS-headers). plume therefore uses **structured mode** (spec-clean at any revision; envelope cost negligible at webhook rates), implemented via sdk-go `nats_jetstream/v2`. Re-check whether a later spec revision blesses header-based binary mode before changing the wire format — design 21's consumers parse this. https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/bindings/nats-protocol-binding.md · https://pkg.go.dev/github.com/cloudevents/sdk-go/protocol/nats_jetstream/v2
 
 ## graphiti-core (designs 12/13)
 - **Custom entity & edge types are Pydantic models** passed to `add_episode`; Graphiti classifies extracted entities against them and populates typed attrs — ontology→Pydantic derivation is the extraction mapping. https://help.getzep.com/graphiti/core-concepts/custom-entity-and-edge-types

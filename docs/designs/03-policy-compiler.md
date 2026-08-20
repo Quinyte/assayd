@@ -73,6 +73,8 @@ New failure rows in §5 cover applied-but-not-accepted and partial-apply.
 | On-behalf-of exchange | `-exchange` policy: `oauthTokenExchange` (subject = user JWT, actorToken = agent-actor client, `audiences` = compiled backend set, cache ≤ token TTL) — **OSS-verified** | design 06 §3.3 (r1 f1) |
 | Credential scrub | `-transform` policy stripping the mandatory header denylist **before export** | design 04 §6 (R2-b) |
 | Card discovery route | `/.well-known/agent-card.json` routed to the **agent container** (SoT = code, ADR-0019) | design 05 review f1 |
+| Webhook ingress (Connector events) | rate-limit + size-cap policy on the receiver route; HMAC verification stays receiver-side (gateway HMAC capability unverified — research note) | design 11 r1 f5 |
+| Scoped kgp-admin grant | per-connector route to `write_batch` on one staging version (reader workers) | designs 11 f2 / 01 A2 |
 | Interior telemetry | OTLP Backend + per-agent route to the tap's forward-only listener (rate-limited — telemetry is traffic) | design 10 r1 f1; agents are default-deny |
 | Receipts | OTLP tracing config (`frontendPolicies`), capture level → attribute verbosity | design 04 |
 
