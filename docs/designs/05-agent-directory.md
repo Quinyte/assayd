@@ -59,7 +59,7 @@ Conversion A2A card → OASF record is deterministic (golden-tested); the card i
 
 ## 4. Behavior
 
-Writes only from the agent-operator (registration, design 02 §3.4) — single writer, last-write-wins per key, KV history for audit. Reads are eventually consistent (KV replication) — acceptable: the directory is discovery metadata, not an authz source (authz is gateway policy; a stale directory entry cannot grant access).
+Writes only from the agent-operator (registration, design 02 §3.4) — single writer, last-write-wins per key; audit = the `dir.changed` CloudEvents (§2), history is convenience only. Reads are eventually consistent (KV replication) — acceptable: the directory is discovery metadata, not an authz source (authz is gateway policy; a stale directory entry cannot grant access).
 
 ## 5. Failure modes
 
