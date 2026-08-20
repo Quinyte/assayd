@@ -1,6 +1,6 @@
 # Design 02: Agent CRD + agent-operator
 
-- **Status**: approved (recommendations accepted per standing instruction, 2026-08-20; veto async)
+- **Status**: **approved** — critique PASS (reviews/02-review.md) · ADR-0019 · amendments A1–A8
 - **Phase**: P1 · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0002, 0003, 0006 (gating), 0016 (expose/apps) · produces ADR-0019
 
