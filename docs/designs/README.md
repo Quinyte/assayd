@@ -16,9 +16,9 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 10 | Observability pack | P1+ | M | r2 — critique **PASS** (`10-…`, `reviews/10-review.md`; awaiting user approval, ADR-0022) |
 | 11 | Connector CRD | P2 | M | draft — in review (`11-…`) |
 | 12 | Ontology spec | P2 | M | draft — in review (`12-…`) |
-| 13 | Graphiti provider adapter | P2 | M | not started |
-| 14 | Ingestion pipeline + extraction QA | P2 | L | not started |
-| 15 | Probe engine (semantic readiness) | P2 | M | not started |
+| 13 | Graphiti provider adapter | P2 | M | draft — in review (`13-…`) |
+| 14 | Ingestion pipeline + extraction QA | P2 | L | draft — in review (`14-…`) |
+| 15 | Probe engine | P2 | M | draft — in review (`15-…`) |
 | 16 | EvalSuite CRD + controller + dataset builder | P3 | L | not started |
 | 17 | Session replay engine | P3 | M | not started |
 | 18 | Pack format + installer | P3 | M | not started |
