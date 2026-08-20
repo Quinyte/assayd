@@ -102,3 +102,5 @@ ADR-0021 after re-critique PASS (receipt/v1 identity + dedup horizon, tenancy st
 ## 11. Amendments
 
 - **A1 (2026-08-20, design 10 r1 f1)**: the tap runs two listeners — the **gateway-SVID-authenticated export listener** (sole receipt source) and a **forward-only listener** for agent interior OTLP (never mints receipts, regardless of span shape). Receipt discrimination is transport-derived; conformance test: gateway-lookalike agent spans ⇒ zero receipts.
+- **A2 (2026-08-20, from design 26 r1 f1)**: the audit-index projector also maintains a **per-tenant daily spend rollup** (rows already carry `tenant`) — the exact tier for tenant-scoped quotas, mirroring the per-agent aggregate.
+- **A3 (2026-08-20, from design 27 r1 f1)**: hash-chaining is performed by a **single-writer chainer consumer** downstream of the stream (per-tenant durable consumer, chaining over JetStream sequence numbers), never in the parallel tap replicas; the reserved `chain` fields are written by that consumer.

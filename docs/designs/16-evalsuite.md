@@ -106,3 +106,7 @@ Fixture agent (scripted A2A responder) + fixture suite: pass/fail/floor-breach/e
 ## 13. Resulting ADRs
 
 ADR-0024 (P3) after critique PASS.
+
+## 14. Amendments
+
+- **A1 (2026-08-20, from design 25 r1 f1)**: the **model metric family** joins the catalog (metrics are target-kind-scoped): `golden_quality` (mechanical on `via`-shaped sets, judged otherwise), `latency_p95` / `throughput` under a declared load profile, `refusal_safety_rate`, `cost_regression_per_1k_tokens` (never per-task). Model datasets = curated sets + optionally prompts *extracted* from agent sessions; raw A2A session cases are agent-only. The flow, fail-closed rules, and contracts are shared unchanged.

@@ -80,6 +80,8 @@ New failure rows in §5 cover applied-but-not-accepted and partial-apply.
 | Model fallback | existing LLM Backend row re-compiled under controller-set `llmFallbackActive` (design 20) | |
 | App projections | workflow-POST (idempotency forwarded), chat-SSE (A2A resubscribe), KG-read — OIDC + exchange applied | design 23 r1 f2 |
 | Approval voucher check | single-use pass voucher CEL on approval-gated routes; gateway forwards the approved retry | design 22 r1 f4 |
+| Model serving | LLM Backend registration for `expose.llmBackend` + **virtual-model weighted shifting**; shadow candidate route admitted-set = the eval run principal only (launch→end) | design 25 r1 f2/f5 |
+| Tenant quotas | `TenantPolicyIntent` (tenant-scoped target): partition listener set + quota policies; approximation tier per ADR-0020, exact tier = 04 A2 rollup | design 26 r1 f1 |
 | Interior telemetry | OTLP Backend + per-agent route to the tap's forward-only listener (rate-limited — telemetry is traffic) | design 10 r1 f1; agents are default-deny |
 | Receipts | OTLP tracing config (`frontendPolicies`), capture level → attribute verbosity | design 04 |
 

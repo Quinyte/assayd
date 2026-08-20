@@ -1,13 +1,13 @@
 # Design 26: Tenant CR — the multi-tenancy fan-out (enterprise)
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 5 findings addressed; reviews/26-review.md)
 - **Phase**: enterprise · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0013 (layered tenancy, mostly inherited), 0015 (enterprise module) · interfaces: the seams every prior design named — 04 D4 (per-tenant RECEIPTS streams), 11 (EVENTS), 22 (APPROVALS), 05 (DIRECTORY), 06 (IdP orgs), 21 r2 f4 (runtime tenancy), 24 (per-tenant FGA stores), 18 (per-tenant pack allowlists), 03 (gateway partitions)
 - **Research**: `docs/research/landscape-2026-08.md` §tenancy (vCluster dominant for hard isolation; Capsule for soft)
 
 ## 1. Purpose & scope
 
-One object that fans out across every layer that already has a tenancy seam. **This design creates almost no new mechanism** — that is its thesis and the payoff of ADR-0013's "mostly inherited": each prior design chose tenant-shaped primitives (NATS accounts, RLS, IdP orgs, gateway partitions), so the Tenant CR is a fan-out controller plus the isolation-mode choice. In scope: the CR, the fan-out matrix, the two isolation modes, lifecycle (create/suspend/delete), the seams' resolution. Out of scope: the primitives themselves (owned by their designs), compliance profiles (27).
+One object that fans out across every layer that already has a tenancy seam. **This design creates two new mechanisms and inherits everything else** (r1 f1/f2 — the thesis, tested and corrected): tenant-scoped traffic quotas extend the budget compiler, and hard mode adds per-tenant SPIRE with federation. Everything else is genuinely inherited — the payoff of ADR-0013's "mostly inherited": each prior design chose tenant-shaped primitives (NATS accounts, RLS, IdP orgs, gateway partitions), so the Tenant CR is a fan-out controller plus the isolation-mode choice. In scope: the CR, the fan-out matrix, the two isolation modes, lifecycle (create/suspend/delete), the seams' resolution. Out of scope: the primitives themselves (owned by their designs), compliance profiles (27).
 
 ## 2. Doctrine & charter gates
 
@@ -36,19 +36,30 @@ status:
 |---|---|
 | Control plane | soft: namespace + Capsule-style tenant policy + RBAC; hard: vCluster instance (agents/CRs live in the vCluster; the platform operators run **inside** it — see §4) |
 | Messaging | NATS **account** + per-tenant streams (`RECEIPTS`, `EVENTS`) and buckets (`DIRECTORY`, `APPROVALS`, cursors) — created by the same bootstrap job design 07 runs at n=1 |
-| Data | Postgres: per-tenant **roles + RLS** policies on shared platform tables (DBOS state, audit index, eval results); per-tenant databases for IdP/FGA where those components require it |
+| Data | Postgres: per-tenant **roles + RLS** on the audit index and eval results. **DBOS state is NOT RLS-isolated in soft mode (r1 f3)** — one shared runtime process holds one DBOS runtime role, and RLS discriminates by connection role; soft-mode DBOS isolation is process-level only. Hard mode resolves it (per-tenant runtime + role). Per-tenant databases for IdP/FGA |
 | Identity | Zitadel **organization** (06 `ensureTenant`) — the interface already exists for exactly this |
 | Authz | per-tenant FGA **store** (24) — stores are OpenFGA's native isolation unit |
-| Traffic | gateway **partition**: listener set + routes + quota policies scoped to the tenant principal set (03 compiles from the Tenant's quotas the same way it compiles Agent budgets) |
+| Traffic | gateway **partition** — **a new compiler concern, honestly (r1 f1)**: a `TenantPolicyIntent` (tenant-scoped target kind) recorded as a design 03 amendment with its own row; quota enforcement inherits ADR-0020's **approximation tier** (rate ÷ replicas — tenant quotas are *not* exactly enforced at the gateway, same arithmetic as agent budgets), and the **exact tier is a per-tenant rollup in design 04's audit index** (rows already carry `tenant` — cheap, recorded as a 04 amendment). Budget *nesting* (per-agent within per-tenant) is a separate axis from approximate-vs-exact |
 | Packs | per-tenant source allowlist (18) — a tenant cannot install from another's sources |
-| Workflows | the 21 r2 f4 seam **resolved here**: hard mode runs a per-tenant `workflow-runtime` (inside the vCluster; no cross-account credentials ever); soft mode keeps the shared runtime with per-tenant consumer credentials scoped to that tenant's account — stated limitation: soft mode's runtime holds N tenants' consumer creds, which is why **hard mode is the recommendation for untrusted tenants** (ADR-0013's own words, now mechanical) |
+| Workflows | the 21 r2 f4 seam **resolved here**: hard mode runs a per-tenant `workflow-runtime` inside the vCluster; soft mode keeps the shared runtime — whose honest exposure is **three credential classes** (r1 f3): N tenants' JetStream consumer creds, N tenants' `workflow-actor` client credentials (the identities the gateway keys budgets/ReBAC on), and one shared DBOS role. **Hard mode is the answer for untrusted tenants** |
 
 ## 4. The two modes, honestly
 
 - **Soft** (teams in one org): one cluster, namespace-per-tenant, shared platform operators and runtime. Isolation is policy-grade: RBAC + NetworkPolicy + NATS accounts + RLS + gateway partitions. Good for dozens of internal teams; **not** for tenants who get cluster API access.
-- **Hard** (external customers): vCluster per tenant — its own API server, its own plume operator set, its own runtime. The tenant-operator provisions the vCluster, installs the plume chart inside it (pinned to the host's platform version), and wires the shared substrate by *account/role/store*, not by shared processes. Cost is honest: ~the core pod set per tenant (the chart's own budget, per tenant) — that is what hard isolation costs, and the CR makes it a single decision rather than a bespoke project.
+- **Hard** (external customers): vCluster per tenant. **What is per-tenant vs shared (r1 f2 — the table the thesis needed)**:
 
-**Version skew**: host and tenant vClusters are upgraded by the tenant-operator in waves; N/N−1 contract discipline (07) governs, and a tenant may lag one platform version — surfaced as `TenantVersionSkew`.
+| Component | Hard mode |
+|---|---|
+| API server, CRs, agent workloads | **per-tenant** (in the vCluster) |
+| plume operators + policy compiler | **host-side** — operators write gateway CRs on the host cluster; running them inside the vCluster would require host credentials that defeat the isolation (r1 f2). They watch the tenant's API server read-only via the vCluster's kubeconfig |
+| agentgateway | shared, partitioned (per-tenant listener set) |
+| **SPIRE** | **per-tenant server inside the vCluster, federated to the host trust domain** (r1 f2 — vCluster syncs workloads into one host namespace, so a shared host SPIRE would collapse every tenant's agents into one identity segment). SPIFFE federation is **the second new mechanism** this design adds; recorded as a design 06 amendment |
+| NATS, Postgres, Zitadel, OpenObserve | shared, isolated by account / role+RLS / organization / stream |
+| workflow-runtime, OpenFGA (if plus) | **per-tenant** |
+
+**Cost, by tier (r1 f4)**: a core-only hard tenant ≈ vCluster control plane + SPIRE + agent workloads (~3–4 pods + workloads), *not* the full ≈8 (NATS/Postgres/Zitadel/OpenObserve are shared); a plus tenant adds workflow-runtime (+1–2) and OpenFGA+adapter (+1). The CR makes hard isolation a single decision rather than a bespoke project — that remains the point.
+
+**Version skew (r1 f5)**: two `plume-contracts` ledgers exist (host + tenant). The **tenant-operator compares both at reconcile**; a gap >1 blocks **tenant upgrades** (never tenant traffic — a lagging tenant keeps serving), surfaced as `TenantVersionSkew` with both ledger versions named. N/N−1 (07) governs between installs, not just across upgrades.
 
 ## 5. Lifecycle
 
@@ -75,9 +86,9 @@ Fan-out idempotency (create ×3 ⇒ same state); isolation battery per layer (ac
 
 ## 9. Decisions for async review
 
-- **D1 — The Tenant CR adds no new isolation primitives** — it fans out choices already made; if a layer needed something new here, that layer's design was wrong (this is the ADR-0013 thesis, tested).
+- **D1 — The Tenant CR adds exactly two new mechanisms** (tenant-scoped quota intents; per-tenant SPIRE + federation) **and inherits every other layer** — the ADR-0013 thesis, tested and corrected rather than asserted (r1 f1/f2).
 - **D2 — Hard mode = vCluster with its own operator set**; cost stated plainly (core pod set per tenant).
-- **D3 — Soft mode's shared workflow runtime holds N tenants' consumer credentials** — the one honest gap; hard mode is the answer for untrusted tenants.
+- **D3 — Soft mode's shared runtime holds three credential classes** (consumer creds, workflow-actor clients, one DBOS role) and its **DBOS state is not RLS-isolated** — the complete gap; hard mode is the answer for untrusted tenants.
 - **D4 — Delete requires export-first + explicit confirmation**; IdP orgs deactivate, never delete.
 
 ## 10. Resulting ADRs

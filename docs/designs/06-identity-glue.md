@@ -98,3 +98,7 @@ Folded into ADR-0022 (P1 infrastructure) after critique PASS.
 ## 11. Amendment notes recorded elsewhere (r1 f6/f9)
 
 Design 02 §11 A3 records: `agent-actor` client provisioning at reconcile + new conditions `IdPUnavailable`, `OnBehalfOfUnavailable`, `IdentityBootstrapIncomplete`. Architecture §15's reserved-slot list gains `IdentityProvider`/`AuthzProvider` (erratum fixed in architecture.md/html).
+
+## 12. Amendments
+
+- **A1 (2026-08-20, from design 26 r1 f2)**: hard-mode tenancy runs a **SPIRE server per vCluster, federated to the host trust domain** (`ClusterFederatedTrustDomain` — spire-controller-manager's existing CRD); the host gateway validates federated SVIDs. vCluster's host-namespace workload syncing makes a single shared SPIRE unable to express per-tenant identity segments.
