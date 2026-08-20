@@ -8,9 +8,9 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 2 | Agent CRD + agent-operator | P1 | L | **approved** (`02-…`, ADR-0019, review PASS) |
 | 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | r2 — critique **PASS** (`03-…`, `reviews/03-review.md`; awaiting user approval + ADR-0020) |
 | 4 | Receipt tap + receipt envelope schema | P1 | M | r2 — critique **PASS** (`04-…`, `reviews/04-review.md`; awaiting user approval + ADR-0021) |
-| 5 | Agent directory (OASF on JetStream KV) | P1 | S | draft — critique **REVISE** (`05-…`, `reviews/05-review.md`) |
-| 6 | Identity glue | P1 | M | draft — in review (`06-…`) |
-| 7 | Umbrella chart, profiles, e2e CI | P1 | M | draft — in review (`07-…`) |
+| 5 | Agent directory (OASF on JetStream KV) | P1 | S | r2 — critique **PASS** (`05-…`, `reviews/05-review.md`; awaiting user approval, ADR-0022) |
+| 6 | Identity glue | P1 | M | draft — critique **REVISE** (`06-…`, `reviews/06-review.md`) |
+| 7 | Umbrella chart, profiles, e2e CI | P1 | M | draft — critique **REVISE** (`07-…`, `reviews/07-review.md`) |
 | 8 | CLI | P1+ | L | draft — in review (`08-…`) |
 | 9 | SDK templates | P1 | M | draft — in review (`09-…`) |
 | 10 | Observability pack | P1+ | M | draft — in review (`10-…`) |

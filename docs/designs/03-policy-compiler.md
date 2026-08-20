@@ -70,6 +70,7 @@ New failure rows in §5 cover applied-but-not-accepted and partial-apply.
 | Guards / egress | prompt-guard policies; LLM egress allowlist as Backend restriction | ADR-0014; guards consume budget after rate-limit (native order) — documented |
 | Expose visibility | listener class cluster / org / public (+ OAuth clients, consumer budgets) | |
 | Candidate isolation | header route matched only with gate-controller SVID | design 02 review f2; protected by §3.3 ordering |
+| On-behalf-of exchange | `-exchange` policy: `oauthTokenExchange` (subject = user JWT, actorToken = agent-actor client, `audiences` = compiled backend set, cache ≤ token TTL) — **OSS-verified** | design 06 §3.3 (r1 f1) |
 | Credential scrub | `-transform` policy stripping the mandatory header denylist **before export** | design 04 §6 (R2-b) |
 | Card discovery route | `/.well-known/agent-card.json` routed to the **agent container** (SoT = code, ADR-0019) | design 05 review f1 |
 | Receipts | OTLP tracing config (`frontendPolicies`), capture level → attribute verbosity | design 04 |

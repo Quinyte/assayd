@@ -69,3 +69,32 @@
 **REVISE.** The core decisions are right and well-bounded: D1 (adopt ADS formats without running ADS) buys portability for zero pods, D2's discovery-not-authz boundary is exactly the statement that makes eventual consistency safe, and D3 defers search on a measured trigger. But finding 1 leaves the discovery URL's serving mechanism resting on a route another design doesn't emit and a SoT rule it contradicts, finding 2 leaves the only third-party content path unverified, and finding 3 continues the silent-amendment habit against the very design this one is the storage half of. All three have small, concrete fixes — this should pass quickly on r2.
 
 VERDICT: REVISE — 9 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (1 residual MINOR, non-blocking)
+- **Independence note**: same independent session as r1; did not author the draft or the revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved for the main path.** Gateway *routes* the well-known path to the agent container — SoT preserved per ADR-0019; design 03 §3.4 gained the "Card discovery route" row; the directory's embedded card is explicitly never the wire answer. Residual **R2-a** below on the external-agent exception. |
+| 2 | MAJOR | **Resolved.** Federation is an explicit curated verb (`dir import-tools --namespace <allowlisted>`), never background sync; schema-validated, provenance displayed at pick time per the wizard rule; imported records are not bindable — binding still requires the Connector/MCPServer CR path + admission. Failure row added. The "directory suggests, CRs grant" formulation is exactly right. |
+| 3 | MAJOR | **Resolved.** Design 02 §11 A2 records the canonical dot-token layout (including `.active` and `tools.*`, with the `@`-charset caveat and the prefix-watch rationale); design 05 now cites the amendment instead of contradicting the approved text. |
+| 4 | MINOR | **Resolved.** Bucket history pinned at 10 with the 64-cap/default-1 facts stated; audit reassigned to the `dir.changed` CloudEvents + receipts; history correctly demoted to convenience. |
+| 5 | MINOR | **Resolved.** Operator re-writes the record on phase transitions (single writer, per-key — the cheap option recommended); test added. |
+| 6 | MINOR | **Resolved — upgraded, even.** Real `dir.changed` CloudEvents emitted on registration writes, making the Event primitive claim true *and* serving as the finding-4 audit fix; KV watch demoted to implementation detail. |
+| 7 | MINOR | **Resolved.** Dangling operator-HTTP read path deleted; read paths are KV-direct and gateway only. |
+| 8 | MINOR | **Resolved.** `docs/research/oasf-ads-2026-08.md` landed (ADS sources + the JetStream KV mechanics); OASF pinned at 1.1.0 with a live verification note. |
+| 9 | MINOR | **Resolved.** External publication is explicit-only (`dir export` + push); `expose.visibility: public` exposes an endpoint, never publishes a record. |
+
+### Residual (new in r2, MINOR, non-blocking)
+
+- **R2-a — the external/scaled-to-zero card exception still assumes an unverified gateway mechanism.** §3.3 has the gateway "serve" the CR-inline card override — a direct-response-with-payload capability no research note covers, and design 03's new row only says "routed to the agent container". Fix in place: for external agents whose endpoint serves a card, *route* to that endpoint (no new capability needed); only the inline-override case needs direct-response — verify that capability (add to the agentgateway research note) or serve the exception path differently, and extend the 03 row to say which.
+
+### Verdict
+
+**PASS.** All 9 findings genuinely addressed; several fixes (CloudEvents-as-audit, "directory suggests, CRs grant") improved the design beyond what the findings demanded. Fold into ADR-0022 with R2-a resolved at 03's next touch.
