@@ -23,7 +23,7 @@ charts/plume/                    # umbrella
   values-local.yaml              # --profile local
   charts/                        # vendored/pinned subcharts
     agent-operator (ours)        # + CRDs, admission policies, receipt-tap mode config
-    agentgateway                 # 2.2.x pinned
+    agentgateway                 # pinned ≥ the OSS token-exchange release (design 06/research)
     spire (server+agent+csi+controller-manager)
     zitadel                      # on platform Postgres (own database); keycloak/ alt-profile
     nats                         # JetStream, accounts template

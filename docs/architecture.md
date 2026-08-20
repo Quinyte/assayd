@@ -327,7 +327,7 @@ Two loops, separated: the **inner loop** (user-owned scaffold) and the **governa
 
 **Seven meta-patterns** (Claude Code is the model): microkernel · behavior-is-data · closed primitive set (**five primitives**: Agent/A2A, Tool/MCP, Event/CloudEvents, Resource/CRD, Artifact/OCI — a sixth needs a core RFC) · lifecycle hooks (pre-hop/post-hop; pre-reconcile/post-rollout/on-condition) · convention discovery (labeled CRs, well-known OCI paths) · versioned contracts N/N−1 + conformance · **packs**.
 
-**Four sockets + triage**: capability → provider slot (KnowledgeGraphProvider first; reserved: MemoryProvider, EvalRunner, DriftDetector, SandboxProfile) · traffic → gateway filter · lifecycle → new CRD + separate controller · practice → template/skill. Fits none → core RFC (must stay rare).
+**Four sockets + triage**: capability → provider slot (shipped: KnowledgeGraphProvider, IdentityProvider, AuthzProvider; reserved: MemoryProvider, EvalRunner, DriftDetector, SandboxProfile) · traffic → gateway filter · lifecycle → new CRD + separate controller · practice → template/skill. Fits none → core RFC (must stay rare).
 
 **Packs**: one signed OCI artifact bundling filters/skills/templates/drivers/CRs with a manifest declaring socket contracts. `plume pack install context-compaction` → filter live on all agents, template + skill indexed, no redeploys, rollback = uninstall.
 
