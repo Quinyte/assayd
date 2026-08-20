@@ -13,7 +13,9 @@ plume ("graphene" in early drafts) is a lightweight, Kubernetes-native agent pla
 
 ## Process: designing a component
 
-Use the `design-component` skill (`.claude/skills/design-component/`). Every design doc follows `docs/designs/TEMPLATE.md` and must pass the doctrine + charter gates above. Update the status table in `docs/designs/README.md` when a design starts/completes.
+Use the `design-component` skill (`.claude/skills/design-component/`). Every design doc follows `docs/designs/TEMPLATE.md` and must pass the doctrine + charter gates above.
+
+**Design lifecycle (no skipping): draft → `critique-design` PASS (report in `docs/designs/reviews/`) → user approval (standing preference: proceed on recommendations, veto async) → approved + ADRs.** Self-authored critiques must carry an independence caveat; prefer a fresh session or subagent for the critique pass. Run `audit-docs` before multi-doc commits. Update the status table in `docs/designs/README.md` when a design starts/completes.
 
 Decisions made while designing → record with the `adr` skill (`docs/decisions/`, next sequential number).
 

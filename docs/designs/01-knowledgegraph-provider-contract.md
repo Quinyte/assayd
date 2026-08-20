@@ -54,13 +54,15 @@ Anything beyond these six is provider-specific bonus, invisible to portable agen
 | `kg.neighbors` | `node_id:str` → `relations:[str], direction:in\|out\|both, depth:int≤2, limit:int=50` | `edges: [{from, rel, to, attrs, valid_from?, valid_to?, provenance_ref}]` |
 | `kg.get_context_bundle` | `bundle:str, params:{…}` → `token_budget:int=2000` | `{text:str, citations:[provenance_ref], structure?:json}` |
 | `kg.cite` | `provenance_ref:str` | `{source_uri, source_span?, ingested_at, valid_from?, valid_to?, pipeline_run}` |
-| `kg.schema` | — | the ontology document (§3.5), verbatim, plus `{contract: "kgp/v1alpha1", version, pattern?}` |
+| `kg.schema` | — | the ontology document (§3.5), verbatim, plus `{contract: "kgp/v1alpha1", version, pattern?, embedder: {model, dim}}` — the embedder is version metadata so re-embedding is a version bump by construction |
 | `kg.probe` | `set:str="all"` | `{results:[{id, pass, expected, actual, latency_ms}], pass_rate:float}` |
 
 Notes:
 - `kg.get_context_bundle` is the workhorse: agents call **named recipes**, not raw traversals. `structure` carries machine-readable payloads (e.g. the decision node for `next_step`), `text` carries the LLM-ready rendering within `token_budget`.
 - `kg.probe` is in the query surface so readiness, `plume kg probe`, and conformance share one path — but gateway policy scopes it to platform identities (agents never call it).
 - Every fact-bearing output carries a `provenance_ref`; `kg.cite` resolves it. No uncited facts can leave the provider.
+- **Errors are a closed set** (MCP error `data.code`): `KG_NOT_FOUND · KG_SCOPE_DENIED · KG_VERSION_GONE · KG_BUNDLE_UNKNOWN · KG_BUDGET_EXCEEDED` — portable handling, no provider-specific error parsing.
+- **Pagination**: v1alpha1 is `limit`-only by design; cursor pagination is a tracked v1beta1 item (review 01, finding 4).
 
 ### 3.4 Admin surface — five tools (platform-only)
 
@@ -110,7 +112,7 @@ probes:
     expect: {answer: "no", cites: ["P-1042#4.2"]}
 ```
 
-**Built-in invariant types (v1)**: `required_edge`, `acyclic`, `path_terminates`, `unique_key`, `cardinality`. **Built-in bundle recipes (v1)**: `walk`, `subtree`, `neighborhood_summary`, `timeline`. Both sets are extended only by contract revision — `custom`/`raw` escape hatches exist but are marked `portable: false` and fail conformance's portability check (allowed, visible, discouraged).
+**Built-in invariant types (v1)**: `required_edge`, `acyclic`, `path_terminates`, `unique_key`, `cardinality`. **Built-in bundle recipes (v1)**: `walk`, `subtree`, `neighborhood_summary`, `timeline` — all **deterministic graph operations**: `text` is template-rendered from graph data, never LLM-generated provider-side (determinism is a conformance requirement; LLM rendering is the agent's job). Both sets are extended only by contract revision — `custom`/`raw` escape hatches exist but are marked `portable: false` and fail conformance's portability check (allowed, visible, discouraged).
 
 ## 4. Behavior
 

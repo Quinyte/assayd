@@ -43,7 +43,7 @@ spec:
   tools:
     - mcpRef: {name: claims-system}                  # Connector tool facet or MCPServer
       requiresApproval: false
-  budget: {tokensPerDay: 2M, usdPerDay: 40, taskTimeout: 10m, maxHops: 8}
+  budget: {tokensPerDay: 2M, usdPerDay: 40, taskTimeout: 10m, maxHops: 8}   # per-day windows reset 00:00 UTC; remaining budget in status
   gates:
     - evalSuiteRef: pa-regression                    # ≥1 required in prod (admission)
   expose:
@@ -70,9 +70,9 @@ status:
 
 k8s rolling update would mix old/new traffic and defeat eval gating — so the operator owns revisions:
 
-1. Spec change → operator computes `revisionHash(spec.runtime, card digest)` → creates **parallel workload** `<name>-<hash>` alongside the active one.
+1. Spec change → operator computes `revisionHash(spec)` — **spec only**; the card digest is status, and card drift triggers re-registration, never a new revision (review 02, finding 1) — → creates **parallel workload** `<name>-<hash>` alongside the active one.
 2. Candidate registers, gets identity, passes readiness — but its gateway route weight is **0** (`phase: Held`).
-3. The gate controller (design 16) runs the EvalSuite against the candidate **through the gateway with a candidate-only route header**, so eval traffic uses the identical path as prod traffic.
+3. The gate controller (design 16) runs the EvalSuite against the candidate **through the gateway with a candidate-only route header** — that header route is **bound to the gate controller's platform SVID** in gateway policy, so no agent or external principal can reach an ungated revision (review 02, finding 2). Eval traffic otherwise uses the identical path as prod traffic.
 4. Pass → weight shifts (configurable canary steps, default `10 → 100`); `activeRevision` flips; old revision GC'd after `revisionHistoryLimit: 2`.
 5. Fail → candidate deleted, report in status + PR annotation; active untouched.
 
@@ -80,7 +80,7 @@ Rollback = re-point to a retained previous revision (instant, no rebuild).
 
 ### 3.4 Registration & card handling (decision)
 
-**The card is served by the container — source of truth is the agent's code**, not YAML. Operator fetches it after the candidate is Ready (in-cluster GET, 3 retries), validates minimal invariants (parseable, name matches CR, A2A version supported), stores digest in status, wraps it in an OASF record, and writes it to the **directory** (JetStream KV, key `agents/<ns>/<name>@<revision>`). Card unreachable/invalid → `Registered=False`, rollout blocked. Card drift at runtime (digest change without spec change) → re-fetch + directory update + event. External agents: card fetched from the external endpoint; CR may inline a card override when the endpoint can't serve one.
+**The card is served by the container — source of truth is the agent's code**, not YAML. Operator fetches it after the candidate is Ready (in-cluster GET, 3 retries), validates minimal invariants (parseable, name matches CR, A2A version supported), stores digest in status, wraps it in an OASF record, and writes it to the **directory** (JetStream KV, key `agents/<ns>/<name>@<revision>`; entries GC'd with their revisions per `revisionHistoryLimit`). Card unreachable/invalid → `Registered=False`, rollout blocked. Card drift at runtime (digest change without spec change) → re-fetch + directory update + event. External agents: card fetched from the external endpoint; CR may inline a card override when the endpoint can't serve one.
 
 ### 3.5 Identity wiring
 
