@@ -11,9 +11,9 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 5 | Agent directory (OASF on JetStream KV) | P1 | S | draft — critique **REVISE** (`05-…`, `reviews/05-review.md`) |
 | 6 | Identity glue | P1 | M | draft — in review (`06-…`) |
 | 7 | Umbrella chart, profiles, e2e CI | P1 | M | draft — in review (`07-…`) |
-| 8 | CLI (init/dev/build/deploy/invoke + verb map) | P1+ | L | not started |
-| 9 | SDK templates (per-SDK A2A wrappers) | P1 | M | not started |
-| 10 | Observability pack (OTel semconv pin, dashboards, alerts) | P1+ | M | not started |
+| 8 | CLI | P1+ | L | draft — in review (`08-…`) |
+| 9 | SDK templates | P1 | M | draft — in review (`09-…`) |
+| 10 | Observability pack | P1+ | M | draft — in review (`10-…`) |
 | 11 | Connector CRD (3 facets) | P2 | M | not started |
 | 12 | Ontology spec (entities/relations/invariants/probes) | P2 | M | not started |
 | 13 | Graphiti provider adapter | P2 | M | not started |
