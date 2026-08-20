@@ -35,3 +35,35 @@ Gold beat: the exchange arrow pair.
 ## Validation checklist applied to each
 label accuracy and spelling · exactly one gold beat · flat colors, no gradient/shadow/3D ·
 grid alignment · legibility at 100% · structure matches the design docs it depicts.
+
+## 04 — KG ingestion (16:9)
+acquire → normalize → extract → resolve → **gold `Gate A` diamond** → write → ink `Gate B` diamond →
+Ready; both gates drop `fail` arrows into a single `quarantine` box. Annotations beneath boxes:
+chunk/dedupe/redact · ontology-typed · extraction quality · ontology invariants · probes pass.
+Gold beat: Gate A (the before-any-write gate).
+
+## 05 — Governance ring (1:1)
+Large **gold dashed rounded-square boundary** labelled ENFORCED AT THE GATEWAY; inside, a four-box
+clockwise cycle assemble → act → observe → stop-check with centre italic caption "the agent loop /
+your code"; outside each edge, one label: token + cost budget · hop limit / cycle detect ·
+approval interrupt · kill switch. Gold beat: the boundary.
+
+## 06 — API surface (1:1)
+Hub and spoke. Centre **gold `Agent` box** ("any A2A container"); App top-left, KnowledgeGraph
+top-right, Workflow bottom-left, EvalSuite bottom-right, Model bottom-centre. Exactly five arrows with
+explicit destinations: App→Agent `members` · Agent→KnowledgeGraph `graphRef` · Agent→EvalSuite `gates` ·
+Workflow→Agent `steps` · Model→EvalSuite `gates`. Gold beat: Agent.
+*Lesson: state arrowhead destinations explicitly — v1 reversed one and mis-targeted another.*
+
+## 07 — What actually runs (16:9)
+Three chip-tray bands. CORE (gold-tint wash, "8 pods"): **gold `agent-operator` chip** captioned
+"the only plume code", then agentgateway · SPIRE · Zitadel · NATS · Postgres · OpenObserve.
+PLUS: workflow-operator · workflow-runtime · OpenFGA · model-operator · Argo.
+ENTERPRISE: tenant-operator · compliance packs. Footer: "two stateful dependencies: Postgres and NATS".
+Gold beat: agent-operator.
+
+## 08 — Agent rollout lifecycle (16:9)
+Rounded state boxes: Pending → **gold `Held`** → Canary → Ready along the top; Degraded and Killed below.
+Exactly six arrows: registered · gates pass · weights 100% · SLO burn · rollback · kill switch.
+Caption under Held: "no traffic until evals pass". Gold beat: Held.
+*Lesson: constrain with "each label appears exactly once" — v1 duplicated and misspelled a transition label.*
