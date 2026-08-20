@@ -14,8 +14,8 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 8 | CLI | P1+ | L | r2 — critique **PASS** (`08-…`, `reviews/08-review.md`; awaiting user approval, ADR-0022) |
 | 9 | SDK templates | P1 | M | r2 — critique **PASS** (`09-…`, `reviews/09-review.md`; awaiting user approval, ADR-0022) |
 | 10 | Observability pack | P1+ | M | r2 — critique **PASS** (`10-…`, `reviews/10-review.md`; awaiting user approval, ADR-0022) |
-| 11 | Connector CRD (3 facets) | P2 | M | not started |
-| 12 | Ontology spec (entities/relations/invariants/probes) | P2 | M | not started |
+| 11 | Connector CRD | P2 | M | draft — in review (`11-…`) |
+| 12 | Ontology spec | P2 | M | draft — in review (`12-…`) |
 | 13 | Graphiti provider adapter | P2 | M | not started |
 | 14 | Ingestion pipeline + extraction QA | P2 | L | not started |
 | 15 | Probe engine (semantic readiness) | P2 | M | not started |
