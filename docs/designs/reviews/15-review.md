@@ -43,3 +43,27 @@
 **REVISE.** The design's failure-mode thinking (infra ≠ staleness, explicit-unprobed, doc-pinned runs) is the best in the P2 batch, and the continuous-mode drift feed is well-shaped. But the two MAJORs sit at the model's root: probes aren't executable as specified (the `q`-only default has no defined semantics for LLM-free providers), and the trust-but-verify compromise samples away exactly the verification the one-shot promotion gate needs. Both fixes simplify the design rather than complicate it — `via`-required makes probes mechanical, and stakes-split verification deletes the promotion-time trust problem instead of statistically managing it.
 
 VERDICT: REVISE — 4 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (1 wording nit)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved.** `via` required, recorded where it belongs (design 12 §11 A1a) with both execution forms and shape-specific matchers; `q` demoted to display label; the `q`-only-fails-validation test added. Probes are now mechanical by construction. |
+| 2 | MAJOR | **Resolved.** Stakes-split verification exactly as recommended: promotion = 100% engine-side via the public query surface (provider grades nothing at admission; "immune by construction" in the failure table); continuous = self-report + 20% re-verify + the standing conformance parity assertion; `kg.probe` and ADR-0017 untouched. D2 rewritten. |
+| 3 | MINOR | **Resolved.** `health: {pass_threshold}` lives in the ontology doc (12 §11 A1b), versioned with its probes; KG CR may tighten, never loosen. |
+| 4 | MINOR | **Resolved.** `probes.budget` on the KG CR mirroring 14's `build.budget`; `principal: probe:<graph>@<version>` attribution. |
+
+### Nit (non-blocking)
+
+§2's summary line still describes both Job kinds as "calling `kg.probe` through the gateway" — true for continuous mode only; promotion-time runs now execute via the public query surface (§3.1). One clause at ADR-0023 time.
+
+### Verdict
+
+**PASS.** Both MAJORs closed by the simplifying moves — mechanical probes and stakes-split trust — leaving a design whose failure-mode discipline was already the batch's best. Fold into ADR-0023 with the §2 clause.

@@ -51,3 +51,25 @@
 **REVISE.** The pipeline's spine — content-addressed stages, quarantine-not-degrade, gates derived from the ontology, never-guess resolution — is the strongest expression yet of the platform's "measured, loud, resumable" philosophy. The three MAJORs are all places where a true mechanism meets an unstated boundary condition: the extraction seam (shared with 13), the pause-vs-pod lifecycle, and a gate whose bars outrun its sample size. All have concrete fixes; none threaten the shape.
 
 VERDICT: REVISE — 6 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS**
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved.** The extract stage is marked "THE extraction owner" with typed-elements-plus-provenance output; the write stage is "STRUCTURED writes only" with the 13 r2 cross-reference. The seam is pinned identically from both sides. |
+| 2 | MAJOR | **Resolved.** Park/resume lifecycle fully specified: durable DBOS waiting state, Job exits cleanly (0 pods true even mid-review), operator watches the queue and relaunches on resolution via the deterministic workflow id; the same mechanic reused for the budget halt (the §6 row updated to match); park/relaunch drill added to §8. |
+| 3 | MAJOR | **Resolved — thoroughly.** Wilson lower-bound gating with stated tolerance; per-type reporting floored at ≥30 instances and never individually gating below it; the sample-growth engine named (review-queue resolutions + failed-probe investigations); advisory mode with loud `LabelsSparse` until n ≥ 200; trend as the standing early-warning. The replay-memory invalidation on ontology majors (a lens note, not even a numbered finding) was adopted too. |
+| 4 | MINOR | **Resolved.** Golden byte-identity scoped to deterministic stages with pinned/recorded LLM fixtures; live runs assert outcomes and ranges. |
+| 5 | MINOR | **Resolved.** Trigger list corrected (`kg push`, Connector schedule, connector source-change events via 21, staleness remediation); `dir.changed` gone. |
+| 6 | MINOR | **Resolved.** `build: {budget}` on the KG CR, operator-synthesized PolicyIntent, `principal: build:<graph>@vN+1` attribution, mirrored by design 15. (Editorial nit: the paragraph landed under §8 "Testing" — move it to §3 or §7 when convenient; content is right.) |
+
+### Verdict
+
+**PASS.** All six findings addressed; the Gate A rework in particular is the model answer — the gate now claims only what its sample can support, and grows the sample instead of pretending. Fold into ADR-0023 with the placement nit.

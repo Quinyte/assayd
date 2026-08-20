@@ -1,6 +1,6 @@
 # Design 15: Probe engine (semantic readiness)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/15-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/15-review.md) · ADR-0023
 - **Phase**: P2 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0005 (semantic readiness), 0017 (`kg.probe`), 0007 (drift seam) · interfaces: 01/13 (executes via `kg.probe`), 12 (probe content), 14 (promotion gate), 20 (continuous mode feeds drift)
 

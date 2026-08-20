@@ -16,13 +16,13 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 10 | Observability pack | P1+ | M | r2 — critique **PASS** (`10-…`, `reviews/10-review.md`; awaiting user approval, ADR-0022) |
 | 11 | Connector CRD | P2 | M | r2 — critique **PASS** (`11-…`, `reviews/11-review.md`; awaiting user approval, ADR-0023) |
 | 12 | Ontology spec | P2 | M | r2 — critique **PASS** (`12-…`, `reviews/12-review.md`; awaiting user approval, ADR-0023) |
-| 13 | Graphiti provider adapter | P2 | M | draft — critique **REVISE** (`13-…`, `reviews/13-review.md`) |
-| 14 | Ingestion pipeline + extraction QA | P2 | L | draft — critique **REVISE** (`14-…`, `reviews/14-review.md`) |
-| 15 | Probe engine | P2 | M | draft — critique **REVISE** (`15-…`, `reviews/15-review.md`) |
+| 13 | Graphiti provider adapter | P2 | M | r2 — critique **PASS** (`13-…`, `reviews/13-review.md`; awaiting user approval, ADR-0023) |
+| 14 | Ingestion pipeline + extraction QA | P2 | L | r2 — critique **PASS** (`14-…`, `reviews/14-review.md`; awaiting user approval, ADR-0023) |
+| 15 | Probe engine | P2 | M | r2 — critique **PASS** (`15-…`, `reviews/15-review.md`; awaiting user approval, ADR-0023) |
 | 16 | EvalSuite CRD + controller + dataset builder | P3 | L | not started |
 | 17 | Session replay engine | P3 | M | not started |
 | 18 | Pack format + installer | P3 | M | not started |
-| 19 | Knowledge pattern packs | P2–P3 | M | draft — in review (`19-…`) |
+| 19 | Knowledge pattern packs | P2–P3 | M | draft — critique **REVISE** (`19-…`, `reviews/19-review.md`) |
 | 20 | Drift controllers | P4 | L | not started |
 | 21 | workflow-operator + Workflow CRD | P4 | M | not started |
 | 22 | Loop governance (hop limits, cycle detection, approvals, kill switch) | P4 | M | not started |

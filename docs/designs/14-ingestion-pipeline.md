@@ -1,6 +1,6 @@
 # Design 14: Ingestion pipeline + extraction QA
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 6 findings addressed; reviews/14-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/14-review.md) · ADR-0023
 - **Phase**: P2 · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0004 (DBOS), 0017 (admin surface), 0009 (ingestion plane) · interfaces: 11 (readers), 12 (gates derive from ontology), 13 (admin caller), 15 (probes gate promotion), 20 (staleness seam)
 - **Research**: `docs/research/connectors-2026-08.md` §DBOS (Jobs-with-DBOS execution model; dynamic queues; migrate/runtime role split)

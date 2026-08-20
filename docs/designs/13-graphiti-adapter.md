@@ -1,6 +1,6 @@
 # Design 13: Graphiti provider adapter (first kgp/v1alpha1 implementation)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 4 findings addressed; reviews/13-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/13-review.md) · ADR-0023
 - **Phase**: P2 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0017 (contract), 0018 (FalkorDB default, license caveat) · interfaces: 01 (implements it), 12 (consumes Pydantic derivations), 14 (admin surface caller), 15 (probe execution)
 - **Research**: `docs/research/connectors-2026-08.md` §graphiti (Pydantic custom types; `add_episode_bulk` empty-graph constraint; `group_id` namespacing)

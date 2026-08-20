@@ -43,3 +43,28 @@
 **REVISE.** The contract mapping is mostly faithful and the operational thinking (quarantine, deny-by-default scope, stateless routing recovery) is sound. But the two MAJORs sit at the adapter's core: the write path contradicts the approved contract and double-books extraction with design 14, and the version-fork mechanism silently converts "copy" into "re-extract". Both resolve together — extraction pipeline-side, writes structured, forks as data copies — and that resolution should be recorded in 13, 14, and a line in 01's amendment log.
 
 VERDICT: REVISE — 4 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (2 residual MINORs, non-blocking)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved.** §3.2 pins the seam exactly as recommended: extraction is pipeline-side; `write_batch`/`load_artifact` are structured upserts per design 01 §3.4; `add_episode` is not the write path; the adapter is LLM-free (D2) with the three consequences stated (Gate A before-write true, budget attribution automatic, zero adapter LLM deps). Design 14 r2 mirrors it. The network-egress test assertion ("structured-write path never invokes an LLM") is a nice enforcement touch. |
+| 2 | MAJOR | **Resolved.** §3.1 states the contract property first ("fork = deterministic data-level copy — never re-extraction") with backend mappings behind it: FalkorDB key-per-version + `GRAPH.COPY`, Neo4j scoped copy; `group_id` demoted to intra-version organization. Fork-determinism test added. D1 records it. |
+| 3 | MINOR | **Resolved in D3** (closed-set `KG_VERSION_GONE` + `data.detail`; first-class code deferred to v1beta1) — **but §3.5's body still carries the old sentence** ("distinct code `KG_EMBEDDER_MISMATCH` — an adapter-level extension code"), contradicting D3. Residual R2-a below. |
+| 4 | MINOR | **Resolved.** Trust = the mTLS connection's verified gateway SVID; no separate signature; design 03's row wording aligned (verified). |
+
+### Residuals (MINOR, non-blocking — fix at ADR-0023 time)
+
+- **R2-a — stale wording from the pre-seam draft.** Three "episode" references survive the f1 fix (§3.3 `kg.search` "episode-derived provenance_ref", §3.3 `kg.cite` "episode + source metadata", §3.4 "stored as episode metadata"), plus §3.5's contradicted extension-code sentence, plus §3.3's `kg.search` "scoped to the version's group_id" (now key-per-version). More than cosmetic in one spot: with the episode write path gone, state *where provenance actually lives* — either synthetic episode records used purely as provenance containers (legitimate, if said), or provenance as element properties. One paragraph.
+- **R2-b — query-time embedding principal.** Hybrid search embeds the query string per `kg.search` call — an embedding API call at *query* time, which D2's "under the build/probe principals" doesn't cover. One sentence: whose principal and budget carries it (recommended: the graph's serving identity, receipted per hop; visible as a per-query cost like any other).
+
+### Verdict
+
+**PASS.** Both MAJORs closed structurally — the seam pinned in the right direction and the fork made a real copy. The residuals are wording debt from the surgery plus one missing attribution sentence; fold into ADR-0023.
