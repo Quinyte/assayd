@@ -1,8 +1,9 @@
 # Design 10: Observability pack (OTel wiring, dashboards, golden signals, alerts)
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 5 findings addressed; reviews/10-review.md)
 - **Phase**: P1+ · **Size**: M · **Date**: 2026-08-20
-- **ADRs**: 0002, 0003 (semconv SHA pin — ADR-0021), 0021 (single telemetry path) · interfaces: 04 (the tap fans out to OpenObserve), 07 (chart ships this), 20-drift (consumes these metrics)
+- **ADRs**: 0002, 0003 (semconv SHA pin — ADR-0021), 0021 (single telemetry path) · interfaces: 03 (interior-OTLP route row), 04 (tap fan-out + receipt criterion delta), 07 (chart ships this), 20-drift (consumes)
+- **Research**: `docs/research/observability-2026-08.md` (OpenObserve OTLP ingestion, single-binary claims — landed per r1 f5)
 
 ## 1. Purpose & scope
 
@@ -11,7 +12,8 @@ Everything a operator sees: the OpenObserve deployment, the telemetry routing, t
 ## 2. Doctrine & charter gates
 
 - **Plane**: mixed, split cleanly: the *pipeline topology* is slow (engine wiring); **dashboards, alert rules, and signal definitions are fast-plane data** shipped as chart values / a builtin pack — new signals or panels never need a platform release.
-- **Pods**: OpenObserve 1 (budgeted §17). Phoenix optional (`plus`). **Stateful deps**: OpenObserve uses object storage/local disk — it is the observability *sink*, explicitly not a platform-of-record (receipts are; ADR-0021). Losing it loses graphs, never audit. ✓
+- **Pods**: OpenObserve 1 (budgeted §17; on the design-07 stateful allowlist as *sink, not substrate*). Phoenix optional (`plus`). Losing it loses graphs, never audit (receipts are the record; ADR-0021). **Primitives** (r1 f4): Resource (shipped dashboards/alerts as config data), Event (alert notifications). ✓
+- **Access control (r1 f2)**: no default credentials — admin secret generated at install (chart), root user disabled after bootstrap, OIDC/SSO against the platform IdP where the OpenObserve build supports it (documented manual step otherwise); NetworkPolicy restricts ingress to the tap + authenticated UI route via the gateway.
 
 ## 3. Topology — one path, three signals
 
@@ -20,10 +22,11 @@ agents (optional interior OTel: OpenLLMetry, pinned semconv SHA)
    └─OTLP──► gateway ──OTLP (traces+metrics)──► tap (design 04)
                                                  ├─► JetStream receipts (enforced hops only)
                                                  └─► OpenObserve (traces + metrics + logs)
-operators/CLI logs ──OTLP/file──────────────────────► OpenObserve
+in-cluster component logs (operators, tap) ──OTLP──────► OpenObserve   # CLI ships nothing, ever (design 08 D4) (r1 f3)
 ```
 
-- Everything OTLP; nothing scrapes agents. The tap is the single fan-out (ADR-0021 D1) — observability and audit cannot drift.
+- Everything OTLP; nothing scrapes agents. **Interior spans travel a compiled route** (r1 f1): design 03 §3.4 gains an interior-telemetry row — an OTLP Backend + per-agent route (rate-limited: telemetry is also traffic) — since agents run default-deny and can only reach the gateway. The tap is the single fan-out (ADR-0021 D1).
+- **Receipt-vs-forward discrimination is transport-derived, never content-derived** (r1 f1): the gateway's own export arrives on a dedicated tap listener authenticated by the gateway's SVID — only *that* transport mints receipts; agent-forwarded OTLP arrives on the forward-only listener and can never become a receipt, however its spans are shaped. Conformance test: an agent emitting gateway-lookalike spans produces zero receipts. Recorded as a design 04 delta (§ amendments).
 - Interior agent spans (reasoning steps) land in OpenObserve joined by `trace_id` to gateway hop spans; they are never receipts.
 - Semconv: the same pinned SHA as design 04 everywhere; dashboards reference attributes through a **name-map layer** (one values file) so a semconv rename is a one-file change, not forty panel edits.
 

@@ -9,11 +9,11 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | r2 — critique **PASS** (`03-…`, `reviews/03-review.md`; awaiting user approval + ADR-0020) |
 | 4 | Receipt tap + receipt envelope schema | P1 | M | r2 — critique **PASS** (`04-…`, `reviews/04-review.md`; awaiting user approval + ADR-0021) |
 | 5 | Agent directory (OASF on JetStream KV) | P1 | S | r2 — critique **PASS** (`05-…`, `reviews/05-review.md`; awaiting user approval, ADR-0022) |
-| 6 | Identity glue | P1 | M | draft — critique **REVISE** (`06-…`, `reviews/06-review.md`) |
-| 7 | Umbrella chart, profiles, e2e CI | P1 | M | draft — critique **REVISE** (`07-…`, `reviews/07-review.md`) |
-| 8 | CLI | P1+ | L | draft — in review (`08-…`) |
-| 9 | SDK templates | P1 | M | draft — in review (`09-…`) |
-| 10 | Observability pack | P1+ | M | draft — in review (`10-…`) |
+| 6 | Identity glue | P1 | M | r2 — critique **PASS** (`06-…`, `reviews/06-review.md`; awaiting user approval, ADR-0022) |
+| 7 | Umbrella chart, profiles, e2e CI | P1 | M | r2 — critique **PASS** (`07-…`, `reviews/07-review.md`; awaiting user approval, ADR-0022) |
+| 8 | CLI | P1+ | L | draft — critique **REVISE** (`08-…`, `reviews/08-review.md`) |
+| 9 | SDK templates | P1 | M | draft — critique **REVISE** (`09-…`, `reviews/09-review.md`) |
+| 10 | Observability pack | P1+ | M | draft — critique **REVISE** (`10-…`, `reviews/10-review.md`) |
 | 11 | Connector CRD (3 facets) | P2 | M | not started |
 | 12 | Ontology spec (entities/relations/invariants/probes) | P2 | M | not started |
 | 13 | Graphiti provider adapter | P2 | M | not started |

@@ -1,6 +1,6 @@
 # Design 08: The plume CLI
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 6 findings addressed; reviews/08-review.md)
 - **Phase**: P1+ (grows with each phase) · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0001 (binary name finalized at rename), 0002, 0019 · interfaces: every design (it is the human surface); 05 (directory reads), 06 (login), 07 (install checks)
 
@@ -11,7 +11,7 @@ The platform's primary interface until the UI exists (architecture §11): guided
 ## 2. Doctrine & charter gates
 
 - **Plane**: slow (engine surface) — but every *behavioral* asset it scaffolds (templates, skills) is fast-plane data from packs (design 18/9). The CLI contains **no template content** — it renders what packs provide. That's the Claude-Code lesson applied to ourselves: new technique ⇒ new pack, CLI unchanged.
-- **Pods**: 0. Single static Go binary (cobra), no daemon. **Stateful deps**: none (kubeconfig + OS keychain + XDG config only). ✓
+- **Pods**: 0. Single static Go binary (cobra), no daemon. **Stateful deps**: none (kubeconfig + OS keychain + XDG config only). **Primitives** (r1 f5): Resource (CRs it writes), Artifact (images/charts/template artifacts it builds/fetches), Agent (A2A client in `invoke`). ✓
 
 ## 3. Command architecture
 
@@ -50,20 +50,20 @@ A reusable interview engine, not per-command prompt spaghetti:
 ## 5. `plume dev` — the local loop
 
 1. **Cluster**: use current kubeconfig context if it has plume core (checked via `doctor` probes); else offer to create `plume-local` (k3d preferred, kind fallback, minikube honored if present) and `helm install --profile local` (design 07). Never silently switch contexts — print and confirm the target once per invocation.
-2. **Run mode — cluster-build hot reload**: on save, rebuild via buildpacks into the local registry (k3d's built-in registry; kind: `ctr` image import) and roll the dev revision. Dev revisions **bypass eval gates by explicit profile flag** (`local` profile only; the bypass is a labeled condition `GatesBypassed=DevProfile`, impossible in prod by admission).
-3. **Feedback**: streams the agent's receipts live to the terminal (design 04 fidelity consumer, tenant-scoped creds) — the receipt IS the dev feedback loop; `--verbose` adds gateway route/policy events.
+2. **Run mode — cluster-build hot reload**: on save, rebuild via buildpacks into the local registry (k3d's built-in registry; kind: `ctr` image import) and roll the dev revision. Dev revisions **bypass eval gates by explicit profile flag** (`local` profile only; labeled condition `GatesBypassed=DevProfile` — recorded as design 02 §11 A5, r1 f2; impossible in prod by admission).
+3. **Feedback**: streams the agent's receipts live to the terminal — via a **read-only NATS credential** scoped to `receipts.>` in the user's tenant account, minted by the identity bootstrap per tenant and fetched at `plume login` into the keychain (r1 f6); the CLI never holds stream *write* credentials. `--verbose` adds gateway route/policy events.
 4. `plume invoke` sends a real A2A task through the gateway (never direct to the pod) so dev traffic exercises the same path as prod.
 
 *Rejected alternative*: local-process mode with a tunnel into the mesh (Telepresence-style) — powerful but a large, distro-fragile machinery; deferred until demanded (recorded, not forgotten).
 
 ## 6. build / deploy
 
-- `build`: Cloud Native Buildpacks default (SDK templates carry `project.toml`), `ko` for Go agents; cosign sign + SBOM attach (design 02 admission requires it). Registry from config; local dev pushes to the cluster registry.
+- `build`: Cloud Native Buildpacks default (SDK templates carry `project.toml`), `ko` for Go agents; cosign sign + SBOM attach (design 02 admission requires it) **+ Agent Card signing per design 09 §3.2** (Sigstore keyless, same builder identity — r1 f3). Registry from config; local dev pushes to the cluster registry.
 - `deploy`: **GitOps-first** — writes CR changes to the env repo path and commits (push + PR optional flags); `--direct` applies to the cluster for dev only (refused when the target namespace is labeled `plume.dev/gitops: enforced`). Then **streams the rollout**: watches Agent status and renders `HELD → eval 0.89 ✓ → canary 10% → 100%` from conditions (design 02/16) — the flagship UX moment; `--no-wait` for CI.
 
 ## 7. `plume doctor`
 
-Contract-aware health: chart/CRD versions vs binary's supported contract set (kgp, idp, receipt, pack — N/N−1 check mirroring design 07's upgrade pre-hook), core pod health, gateway route sanity, SPIRE SVID presence, IdP discovery reachability, receipt-stream liveness (publish a probe receipt, read it back). Output: table with fix-it hints; `--output json` for CI.
+Contract-aware health: **reads the `plume-contracts` ConfigMap ledger** (design 07 §4 — never a hard-coded subset, r1 f4) and N/N−1-checks it against the binary; core pod health; gateway route sanity; SPIRE SVID presence; IdP discovery reachability; **receipt-pipeline liveness read-only** (JetStream stream-info last-sequence age + tap health metrics — the CLI never writes to the audit stream, r1 f1); optional `plume invoke --probe` drives a *genuine* no-op task through the gateway when an end-to-end proof is wanted (its receipt is a real receipt of a real hop). Output: table with fix-it hints; `--output json` for CI.
 
 ## 8. UX & distribution rules
 

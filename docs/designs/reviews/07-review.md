@@ -63,3 +63,32 @@
 **REVISE.** The design's central idea — the chart as the doctrine's enforcement point, with the weight budget and stateful-dep rules as CI gates — is exactly right, which is why the two MAJORs matter: as specified, one gate fails its own baseline (OpenObserve's PVC) and the tier model breaks approved admission semantics (gates with no gate runner). Both have clean fixes (a reasoned allowlist file; a stated core-tier gating contract recorded as a 02 delta). The rest is completion work.
 
 VERDICT: REVISE — 9 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (1 residual MINOR)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved.** `stateful-allowlist.yaml` — explicit, versioned, with reasons (`postgres`/`nats` substrate, `openobserve` sink) — replaces the bare grep; adding an entry means touching the file in the same PR, preserving the justify-in-PR property while passing the chart's own baseline. Bonus: SPIRE server's datastore moved to platform Postgres (one less PVC, doctrine-purer) — the suggested note, taken. |
+| 2 | MAJOR | **Resolved.** The core-tier gating contract is exactly the recommended shape: gates-required admission iff the EvalSuite CRD is installed; `GatesSkipped=True` loud on core-only rollouts; prod-profile installs warn; tier downgrade refused while any Agent is Held/Canary; recorded as design 02 §11 A4. |
+| 3 | MINOR | **Resolved.** CNPG chosen with the reason cited (bitnami free images discontinued). |
+| 4 | MINOR | **Resolved — beyond the ask.** k3s added as a real weekly cell rather than argued away via k3d. |
+| 5 | MINOR | **Resolved.** Counting rule fully mechanical: Σ `spec.replicas` over Deployments/StatefulSets at prod/core, DaemonSets = 1 logical, Jobs excluded, compared against `weight-budget.yaml` (the §17 table as data). |
+| 6 | MINOR | **Resolved.** CRDs never rolled back; schema changes additive within N/N−1; the version guard checks both directions. |
+| 7 | MINOR | **Resolved.** Cosign-signed OCI chart, digest-pinned images, SBOM — "the same admission story agents get". |
+| 8 | MINOR | **Resolved.** Charter line added (plane/primitives; ships sockets, defines none). |
+| 9 | MINOR | **Mostly resolved** — `plume-contracts` ConfigMap named, `ontology/v1` added. Residual **R2-a**: the OASF 1.1.0 pin (design 05) is still absent from the ledger, and `pack/v1` is forward-declared before design 18 exists (fine, but mark it reserved). Cosmetic: D1 still says "stateful-dep grep" — update the word to match §2's allowlist. |
+
+### Residual (MINOR, non-blocking)
+
+- **R2-a** — add the OASF pin to the `plume-contracts` ledger; mark `pack/v1` as reserved-until-design-18; fix D1's stale "grep" wording.
+
+### Verdict
+
+**PASS.** Both MAJORs closed structurally — the allowlist makes the doctrine gate self-consistent, and the tier/gating contract turns the collision into defined, loud behavior recorded where it belongs (02 §11 A4). Fold into ADR-0022 with R2-a.

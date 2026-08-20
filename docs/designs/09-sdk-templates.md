@@ -1,13 +1,13 @@
 # Design 09: SDK templates (the BYO-SDK on-ramp)
 
-- **Status**: draft — awaiting critique
+- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 5 findings addressed; reviews/09-review.md)
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0003, 0019 · interfaces: 02 (card/registration contract), 05 (tool discovery), 08 (wizard renders these), 14-loop-eng (architecture §14: the reference inner loop lives here)
-- **Research**: A2A v1.0 (Apr 2026): stable spec, **signed Agent Cards** (publisher-domain signature), JSON-RPC + SSE, official SDKs in Python/JS/Java/C#/Go/Rust; python `a2a-sdk` uses AgentSkill/AgentCard/AgentExecutor. https://atlan.com/know/mcp/a2a-protocol-implementation-guide/
+- **Research**: `docs/research/a2a-2026-08.md` (primary sources landed, r1 f3): A2A v1.0 (Apr 2026) — stable spec, signed Agent Cards (publisher-domain trust model), JSON-RPC + SSE, official SDKs ×6.
 
 ## 1. Purpose & scope
 
-The ~100 lines a user owns: per-SDK templates that turn "my agent logic" into a plume-conformant container — A2A server, card, Dockerfile/`project.toml`, and the reference inner loop with skills. In scope: template contract, the per-SDK matrix, the reference loop's shape, card signing, task-state convention. Out of scope: the wizard (08), pack packaging mechanics (18 — templates ship *in* packs from day one, installed as the `sdk-templates` builtin pack).
+The ~100 lines a user owns: per-SDK templates that turn "my agent logic" into a plume-conformant container — A2A server, card, Dockerfile/`project.toml`, and the reference inner loop with skills. In scope: template contract, the per-SDK matrix, the reference loop's shape, card signing, task-state convention. Out of scope: the wizard (08), pack manifest mechanics (18). **P1 delivery (r1 f1)**: templates ship as a **versioned, cosign-signed OCI artifact** at a well-known ref — machinery that fully exists in P1; the CLI fetches + verifies it directly. This is deliberately a *degenerate pack* (template facet only): design 18 later formalizes the manifest around the same artifact without moving it — a recorded constraint on design 18.
 
 ## 2. Doctrine & charter gates
 
@@ -19,8 +19,8 @@ The ~100 lines a user owns: per-SDK templates that turn "my agent logic" into a 
 A scaffold that, untouched, passes `plume dev` + registration:
 
 1. **A2A v1.0 server** on `runtime.port` using the SDK's official A2A lib where one exists (python `a2a-sdk`, js, go); the template pins the lib version.
-2. **Agent Card** served at `/.well-known/agent-card.json`, generated from one `card.yaml` the user edits (name/skills/description) — **signed at build time**: `plume build` adds the A2A v1.0 card signature (key from the platform's signing identity) alongside cosign image signing; design 02's registration verifies both (card signature + digest).
-3. **The reference inner loop** (architecture §14), SDK-idiomatic: `assemble (card + KG bundles + skills) → act (via gateway env: `PLUME_GATEWAY_URL`, `PLUME_KG_ENDPOINTS`, injected by the operator) → observe → stop-check` with **named termination reasons** and a receipt-friendly structure (interior OTel spans via the SDK's OpenLLMetry integration, pre-wired but optional).
+2. **Agent Card** served at `/.well-known/agent-card.json`, generated from one `card.yaml` the user edits (name/skills/description) — **signed at build time** (r1 f2): `plume build` signs the card via **Sigstore keyless with the same OIDC builder identity as image signing** — one trust root, no key custody; **publisher-domain signing** (A2A v1.0's cross-org trust model) is offered additionally at `expose: public` time, where it actually applies. **Verification policy**: required for plume-built agents; BYO/external agents with unsigned cards register with a loud `CardUnsigned` condition (the BYO promise holds; the gap is visible) — recorded with the registration-gate change as design 02 §11 A6.
+3. **The reference inner loop** (architecture §14), SDK-idiomatic: `assemble (card + KG bundles + skills) → act → observe → stop-check` with **named termination reasons**. The **operator-injected env contract** (`PLUME_GATEWAY_URL`, `PLUME_KG_ENDPOINTS`, `PLUME_NATS_URL`, tenant creds) is **owned by design 02** (injection is reconcile behavior — §11 A7 records the table, r1 f5); templates only consume it and a receipt-friendly structure (interior OTel spans via the SDK's OpenLLMetry integration, pre-wired but optional).
 4. **Skills directory** (`skills/*.md`, frontmatter + instructions) + the tiny router (load-per-task by declared relevance) — behavior as reviewable data, the genie lesson.
 5. **Task-state store**: JetStream-KV-backed A2A task store wired by default (`PLUME_NATS_URL`, tenant creds injected) so `replicas>1` works out of the box (design 02 §3.2); in-memory fallback flag for pure-local runs.
 6. **Tests**: a golden-task test (`invoke fixture → expected termination reason + tool-call shape`) runnable by `plume workflow test`-style fixture injection — the seed of the agent's own eval set.

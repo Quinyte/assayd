@@ -66,3 +66,32 @@
 **REVISE.** The security architecture is genuinely good — exchange-at-the-gateway, fail-closed capability flags, machine/human path separation, and identity-objects-never-deleted are all the right calls. But the two MAJORs sit at the flow's foundation: the mechanism may be enterprise-tiered (which 03's approved D1 forbids depending on), and the actor credential for the primary case doesn't exist in any design. Both must be settled with sources and recorded deltas before this can pass.
 
 VERDICT: REVISE — 9 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (1 residual MINOR)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved.** The research note lands the verdict with specifics: token exchange was open-sourced post-2.2 (data-plane + controller PRs cited), `oauthTokenExchange` on AgentgatewayPolicy with `actorToken`/`audiences`/`cache`, IdP-agnostic; the Solo Enterprise docs are correctly re-classified as adjacent conveniences. Design 03 §3.4 gained the `-exchange` row; design 07 pins the chart ≥ the OSS-exchange release. Residual **R2-a** below on version wording. |
+| 2 | MAJOR | **Resolved.** New `agent-actor` client kind in `ensureClient`, provisioned per agent at reconcile, recorded as design 02 §11 A3; per-hop re-exchange uses each hop's own actor client, so the `act` chain names real agents — exactly what design 04's `principal_chain` needs. |
+| 3 | MINOR | **Resolved.** Keycloak testcontainer runs with the token-exchange feature flag enabled and pinned; the profile enables it. |
+| 4 | MINOR | **Resolved.** Exchange cache with TTL ≤ exchanged-token lifetime; outage semantics stated (cached tokens serve until expiry, then fail closed). |
+| 5 | MINOR | **Resolved.** `docs/research/identity-2026-08.md` landed. |
+| 6 | MINOR | **Resolved.** Conditions recorded in 02 §11 A3. |
+| 7 | MINOR | **Resolved.** `capabilities.provisioning=false` with verify-exists mode for byo — the static-profile mode asked for. |
+| 8 | MINOR | **Resolved** (a: IdP chart's init machine-key Secret named as the first-boot credential; b: receipt-tap dropped from the roster — it authenticates by SVID). Sub-point (c), noting gate-controller pre-provisioning as deliberately P3-forward, was skipped — harmless, not worth a round. |
+| 9 | MINOR | **Resolved.** Architecture §15 now ships `IdentityProvider`/`AuthzProvider` in the slot list; §11 records where the errata landed. |
+
+### Residual (new in r2, MINOR, non-blocking)
+
+- **R2-a — "agentgateway 2.2 only" wording is now stale.** ADR-0019(5) and design 03's title/framing say the compiler targets the 2.2 CRD surface *only*, while the exchange capability requires pinning ≥ the post-2.2 OSS-exchange release (07 §3 already does). Reconcile the wording once (e.g. "2.2+ CRD surface; minimum pinned version owned by the chart") when recording ADR-0022 — otherwise the docs contradict the chart pin they mandate.
+
+### Verdict
+
+**PASS.** Both MAJORs resolved the hard way — the tiering question was answered with evidence rather than hedged, and the actor-credential model was built rather than papered over. Fold into ADR-0022 with R2-a's wording fix.

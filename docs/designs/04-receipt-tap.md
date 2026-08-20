@@ -98,3 +98,7 @@ Golden fixtures per pinned snapshot (+ dual-fixture upgrade test). **New (r1 f12
 ## 10. Resulting ADRs
 
 ADR-0021 after re-critique PASS (receipt/v1 identity + dedup horizon, tenancy streams, semconv pin mechanism, credential scrub, tiered delivery).
+
+## 11. Amendments
+
+- **A1 (2026-08-20, design 10 r1 f1)**: the tap runs two listeners — the **gateway-SVID-authenticated export listener** (sole receipt source) and a **forward-only listener** for agent interior OTLP (never mints receipts, regardless of span shape). Receipt discrimination is transport-derived; conformance test: gateway-lookalike agent spans ⇒ zero receipts.
