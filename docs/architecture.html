@@ -384,23 +384,36 @@
 
 <!-- ══════════════════════ 00 WHAT V1 CORRECTED ══════════════════════ -->
 <section id="v1">
-  <div class="sec-head"><span class="n">00</span><h2>What v1.0 corrected</h2></div>
+  <div class="sec-head"><span class="n">00</span><h2>What v1.0 incorporates</h2></div>
   <div class="prose">
-    <p>v0.1 was the strategy document, written before any component was designed. v1.0 folds in what the design phase settled — and it is worth reading the corrections first, because a document that only records what survived would be misleading. Each was forced by adversarial critique and recorded in an ADR.</p>
+    <p>v0.1 was the strategy document, written before any component was designed. v1.0 folds in what the design phase settled. Two distinct things happened, and conflating them would flatter the process — so they are listed separately.</p>
+    <h3>Corrections to v0.1 itself</h3>
   </div>
   <div class="tablewrap"><table>
-    <thead><tr><th>v0.1 said</th><th>The design phase established</th><th>Where</th></tr></thead>
+    <thead><tr><th>v0.1 said</th><th>v1.0 says</th><th>Where</th></tr></thead>
     <tbody>
-      <tr><td>The KG adapter extracts entities at write time</td><td><b>Extraction lives in the ingestion pipeline; the adapter is LLM-free.</b> Otherwise the extraction-quality gate would run <em>after</em> the write it exists to prevent</td><td>ADR-0023</td></tr>
-      <tr><td>Version forks copy source episodes forward</td><td><b>A fork is a deterministic data copy</b> (<code>GRAPH.COPY</code>, key-per-version) — re-extraction would make vN+1 differ from vN and break <code>kg diff</code> at the root</td><td>ADR-0023</td></tr>
-      <tr><td>Receipts carry generated IDs</td><td><b><code>receipt_id</code> is derived from the span</b> (UUIDv5 over trace+span) — a minted ID defeats the very dedup that audit integrity rests on under retry</td><td>ADR-0021</td></tr>
-      <tr><td>Hash-chaining runs in the tap</td><td><b>A single-writer chainer downstream of the stream</b> — parallel tap replicas cannot share one chain</td><td>ADR-0026</td></tr>
-      <tr><td>Eval jobs use the gate controller's identity</td><td><b>Per-run eval SVIDs with temporary route grants</b> — SPIFFE identities are pod-attested and never lent</td><td>ADR-0024</td></tr>
-      <tr><td>Tenancy "adds no new isolation primitives"</td><td><b>It adds exactly two</b> — tenant-scoped quota intents, and per-tenant SPIRE federated to the host trust domain</td><td>ADR-0026</td></tr>
+      <tr><td>Subgraph scoping is <b>enforced at the gateway</b></td><td><b>Gateway-injected, provider-enforced</b> — the gateway never parses MCP bodies, so providers carry scope and the conformance suite gains a scope battery</td><td>design 01 A1 · ADR-0020</td></tr>
+      <tr><td>An approval-gated tool pauses and "the agent just sees a slow tool"</td><td>A typed, retryable <code>APPROVAL_PENDING</code> the caller must handle — protection is fail-closed either way, but black-box agents treating it as fatal will fail the task, documented rather than hidden</td><td>ADR-0025</td></tr>
+      <tr><td>Budgets are enforced at the gateway</td><td><b>Two tiers, stated</b>: the gateway is a conservative <em>local approximation</em> (rate ÷ replicas, priced at the max model); the <b>receipt backstop is exact</b> and trails by one reconcile interval</td><td>ADR-0020</td></tr>
       <tr><td>Six CRDs</td><td>Six <em>core</em> CRDs plus <code>Connector</code>, <code>Pack</code>, <code>Grant</code>, <code>Tenant</code></td><td>§03</td></tr>
     </tbody>
   </table></div>
-  <div class="callout"><p>Everything else in v0.1 survived critique unchanged. Roughly 150 findings were raised across the 27 designs; two were blockers that would otherwise have shipped as real defects.</p></div>
+  <div class="prose">
+    <h3>Draft errors that critique caught before implementation</h3>
+    <p>None of these reached code — they were caught in review, and each produced a decision that is now load-bearing. They are recorded because the <em>reasoning</em> is reusable, not because the strategy was wrong.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>The design draft proposed</th><th>Why it failed review</th><th>Now</th></tr></thead>
+    <tbody>
+      <tr><td>The KG adapter extracts at write time</td><td>The extraction-quality gate would run <em>after</em> the write it exists to prevent</td><td>Extraction is the pipeline's; <b>the adapter is LLM-free</b> (ADR-0023)</td></tr>
+      <tr><td>Version forks copy source episodes forward</td><td>Re-extraction is non-deterministic, so vN+1 would differ from vN and <code>kg diff</code> breaks at the root</td><td>A fork is a <b>deterministic data copy</b> (ADR-0023)</td></tr>
+      <tr><td>Receipt IDs minted at transform time</td><td>A fresh ID per retry defeats the dedup that audit integrity depends on</td><td><b><code>receipt_id</code> derived from the span</b> (ADR-0021)</td></tr>
+      <tr><td>Hash-chaining inside the tap</td><td>Parallel tap replicas cannot share one chain</td><td><b>Single-writer chainer downstream of the stream</b> (ADR-0026)</td></tr>
+      <tr><td>Eval jobs borrow the gate controller's identity</td><td>SPIFFE identities are pod-attested and cannot be lent</td><td><b>Per-run eval SVIDs</b> with temporary route grants (ADR-0024)</td></tr>
+      <tr><td>Tenancy "adds no new isolation primitives"</td><td>It adds two — the thesis was asserted, not tested</td><td>Two named mechanisms, priced and recorded (ADR-0026)</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><p>Everything else in v0.1 survived critique. Roughly 150 findings were raised across the 27 designs; three were blockers that would otherwise have shipped as real defects. Open items carried into implementation are listed in §20.</p></div>
 </section>
 
 <!-- ══════════════════════ 01 DOCTRINE ══════════════════════ -->
@@ -423,7 +436,7 @@
 <section id="overview">
   <div class="sec-head"><span class="n">02</span><h2>System overview</h2></div>
   <div class="prose">
-    <p>Three planes. The <strong>control plane</strong> is GitOps-driven: custom resources reconciled by three small operators. The <strong>data plane</strong> is a single gateway every agent hop crosses — which is where security, budgets, and receipts are enforced, so guarantees hold for black-box agents regardless of SDK. The <strong>substrate</strong> is the two stateful dependencies.</p>
+    <p>Three planes. The <strong>control plane</strong> is GitOps-driven: custom resources reconciled by three small core operators (plus the enterprise tenant-operator). The <strong>data plane</strong> is a single gateway every agent hop crosses — which is where security, budgets, and receipts are enforced, so guarantees hold for black-box agents regardless of SDK. The <strong>substrate</strong> is the two stateful dependencies.</p>
     <p class="soft">In every diagram in this document, <strong style="color: var(--accent)">ultramarine marks what graphene builds</strong>; grey marks adopted open components. Notice how little is ultramarine — that is the thesis.</p>
   </div>
 
@@ -457,7 +470,7 @@
       <text x="315" y="97" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">applies · drift-corrects</text>
 
       <rect x="456" y="44" width="220" height="82" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
-      <text x="566" y="70" text-anchor="middle" font-size="13" font-weight="650" fill="var(--accent)" font-family="system-ui, sans-serif">graphene operators ×3</text>
+      <text x="566" y="70" text-anchor="middle" font-size="13" font-weight="650" fill="var(--accent)" font-family="system-ui, sans-serif">plume operators ×3</text>
       <text x="566" y="88" text-anchor="middle" font-size="11" fill="var(--ink-soft)" font-family="system-ui, sans-serif">agent · workflow · model</text>
       <text x="566" y="105" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">reconcile CRs → bindings</text>
 
@@ -548,7 +561,7 @@
       <line x1="510" y1="436" x2="640" y2="526" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arr)"/>
       <text x="614" y="481" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">workflow state</text>
     </svg>
-    <figcaption><b>Fig 1 — System overview.</b> Ultramarine = graphene-built (three operators, gateway policy compilation, CLI, the KnowledgeGraph contract). Everything grey is an adopted open component: agentgateway, SPIRE, Zitadel, NATS, Postgres, and any A2A-speaking agent container. Guarantees are enforced at the gateway, outside the agent — which is why any SDK works.</figcaption>
+    <figcaption><b>Fig 1 — System overview.</b> Ultramarine = plume-built (three operators, gateway policy compilation, CLI, the KnowledgeGraph contract). Everything grey is an adopted open component: agentgateway, SPIRE, Zitadel, NATS, Postgres, and any A2A-speaking agent container. Guarantees are enforced at the gateway, outside the agent — which is why any SDK works.</figcaption>
   </figure>
 
   <div class="callout"><p><strong>BYO-SDK, precisely:</strong> an agent is any container that serves A2A and exposes an Agent Card. LangGraph, CrewAI, Google ADK, Pydantic AI, the Claude Agent SDK, or a bash script — the platform doesn't know or care. Registration = the operator reads the card, publishes it to the OASF directory (JetStream KV — not another database), issues identity, wires gateway routes.</p></div>
@@ -558,7 +571,7 @@
 <section id="api">
   <div class="sec-head"><span class="n">03</span><h2>The API surface — six CRDs</h2></div>
   <div class="prose">
-    <p>The entire platform API is six custom resources reconciled by three operators. Nothing else is exposed; the CLI is sugar over these objects, which is why everything is also plain <code>kubectl</code> and GitOps.</p>
+    <p>The core API is six custom resources reconciled by three operators — plus <code>Connector</code>, <code>Pack</code>, <code>Grant</code> and <code>Tenant</code>, which the design phase made concrete (§20). Nothing else is exposed; the CLI is sugar over these objects, which is why everything is also plain <code>kubectl</code> and GitOps.</p>
   </div>
   <div class="tablewrap"><table>
     <thead><tr><th>CRD</th><th>What it declares</th><th>Reconciled by</th></tr></thead>
@@ -734,7 +747,7 @@
     <thead><tr><th>Job</th><th>Binding</th><th>Why · weight</th></tr></thead>
     <tbody>
       <tr><td>Agent↔agent messaging, events, KV, receipts</td><td><b>NATS JetStream</b></td><td>CNCF-graduated, one binary, KV + object store built in; NATS Agent Protocol work means we ride, not invent. <span class="pill">1 pod</span></td></tr>
-      <tr><td>Durable execution inside workflows</td><td><b>DBOS</b> (library on Postgres)</td><td>Decorated functions get crash-resume, retries, idempotency. The anti-Temporal choice: genesis-de cost ~5 pods and an operational discipline; DBOS costs zero pods. <span class="pill">0 pods</span></td></tr>
+      <tr><td>Durable execution inside workflows</td><td><b>DBOS</b> (library on Postgres)</td><td>Decorated functions get crash-resume, retries, idempotency. The anti-Temporal choice: genesis-de cost ~5 pods and an operational discipline; DBOS-the-library costs zero pods — though the Workflow CRD's event triggers need standing workers, so design 21 adds +2 at plus tier (§17). <span class="pill">0 core pods</span></td></tr>
       <tr><td>Batch DAGs — ingestion, training, nightly evals</td><td><b>Argo Workflows</b> (<code>plus</code> tier)</td><td>CRD-native, GitOps-able. Never used for long-running agent loops; CronJob + DBOS covers <code>core</code>. <span class="pill">plus tier</span></td></tr>
     </tbody>
   </table></div>
@@ -747,9 +760,9 @@
     <thead><tr><th>Resource</th><th>Exposed as</th><th>What a consumer sees</th></tr></thead>
     <tbody>
       <tr><td><code>Agent</code> → A2A</td><td>Public/org A2A endpoint</td><td>Agent Card at <code>/.well-known/agent-card.json</code>, OASF directory listing (optionally public), full task interface — callable from any A2A-speaking platform</td></tr>
-      <tr><td><code>Workflow</code> → MCP</td><td>MCP tool(s)</td><td>The trigger projected as a named tool: <code>tools/call</code> starts the run; long-running tasks stream progress and return the result — <b>your workflows become tools inside Claude Code, IDEs, and other agent platforms</b></td></tr>
-      <tr><td><code>Agent</code> → MCP</td><td>MCP tool</td><td>The agent's task interface as a single tool, for clients that speak MCP but not A2A</td></tr>
-      <tr><td><code>KnowledgeGraph</code> → MCP</td><td>Read-only MCP server</td><td>The 6-tool provider surface (§13) with gateway-enforced subgraph scoping</td></tr>
+      <tr><td><code>Workflow</code> → MCP</td><td>MCP tool(s)</td><td><em>Roadmap</em> — the intent field exists (design 03) but the projection semantics are not yet designed; HTTP/SSE is the specified path (design 23)</td></tr>
+  <tr><td><code>Agent</code> → MCP</td><td>single tool</td><td><em>Roadmap</em> — same status as the Workflow→MCP projection</td></tr>
+      <tr><td><code>KnowledgeGraph</code> → MCP</td><td>Read-only MCP server</td><td>The 6-tool provider surface (§13) with gateway-<b>injected</b>, provider-<b>enforced</b> subgraph scoping (design 01 A1)</td></tr>
       <tr><td><code>Workflow/Agent</code> → HTTP</td><td>REST + SSE endpoints</td><td>App-facing projection (§03): <code>POST /api/&lt;workflow&gt;</code>, chat as the A2A stream over SSE — generated, carrying the logged-in user's OIDC context</td></tr>
       <tr><td><code>App</code> → bundle</td><td>Named product surface</td><td>A kro App exposes a curated set of the above as one versioned offering</td></tr>
     </tbody>
@@ -839,7 +852,7 @@
     <p>The harness is a proven pattern promoted to platform level and made SDK-agnostic — because it lives in the <em>data plane</em>, not in the agent:</p>
     <ul class="tight">
       <li><strong>Sessions &amp; receipts.</strong> Every A2A task through the gateway is recorded to a JetStream stream: full request/response, tool calls, model calls, cost, identity chain. Every agent action is <strong>replayable</strong>. One stream is simultaneously the audit log, the debugging substrate, and the eval-data collector (§08).</li>
-      <li><strong>Traces.</strong> OpenTelemetry <strong>GenAI semantic conventions</strong> — adopted now, <em>convention version pinned</em>, since they remain pre-stable in mid-2026 (shape settled, names may churn). The gateway emits spans for every agent/tool/LLM hop, so even uninstrumented agents get traces; instrumented agents (OpenLLMetry SDKs) add interior reasoning spans.</li>
+      <li><strong>Traces.</strong> OpenTelemetry <strong>GenAI semantic conventions</strong> — adopted now, <em>pinned to a commit SHA</em> — the conventions moved to an unreleased repo, so there is no version number to pin — since they remain pre-stable in mid-2026 (shape settled, names may churn). The gateway emits spans for every agent/tool/LLM hop, so even uninstrumented agents get traces; instrumented agents (OpenLLMetry SDKs) add interior reasoning spans.</li>
       <li><strong>Backend.</strong> <strong>OpenObserve</strong> — metrics, logs, and traces in a single binary on object storage. The Prometheus + Grafana + Tempo + Loki equivalent is 6+ pods; this is one. <strong>Arize Phoenix</strong> is an optional <code>plus</code> pod for LLM-native trace views and embedding-drift visuals.</li>
       <li><strong>Golden signals for agents</strong>, exported as real metrics with alert rules shipped in the Helm chart: task success rate, tool-error rate, tokens/task, cost/task, latency per hop, loop depth, handoff count.</li>
     </ul>
@@ -1882,8 +1895,19 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
   </table></div>
 
   <div class="prose">
-    <h3>How these were produced</h3>
-    <p>Each design ran draft → <strong>independent adversarial critique</strong> → revision → re-critique → approval; nothing reached approved status on a single pass. Roughly 150 findings were raised and fixed. Two were blockers that would otherwise have shipped as real defects: a <em>circular revision hash</em> (a content hash depending on a value only knowable after the workload it identifies had already run) and <em>non-deterministic receipt IDs</em> (which silently defeated the deduplication that audit integrity rests on). Where one design amended an already-approved one, the delta is recorded as a numbered amendment in the amended design — design 02 carries eight.</p>
+    <h3>Open items carried into implementation</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Item</th><th>Nature</th></tr></thead>
+    <tbody>
+      <tr><td>Research item R1</td><td>agentgateway same-level policy-overlap semantics undocumented; a reproducing test ships with the compiler. The one-concern rule holds either way</td></tr>
+      <tr><td>Re-critique of designs 01 and 02</td><td>Both were critiqued in the session that authored them; flagged for independent re-critique before implementation</td></tr>
+      <tr><td>Pinned third-party versions</td><td>agentgateway minimum, semconv commit SHA, Unsloth BuiltinTrainer status — all will move; research notes carry re-verify dates</td></tr>
+      <tr><td>Nothing is execution-validated</td><td>Plans survived adversarial review, not running code — DBOS-in-Job resume, interpreter determinism, gateway policy behaviour remain to be proven</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>How these were produced</h3>
+    <p>Each design ran draft → <strong>independent adversarial critique</strong> → revision → re-critique → approval; nothing reached approved status on a single pass. Roughly 150 findings were raised and fixed. Three were blockers that would otherwise have shipped as real defects: <em>non-atomic policy apply</em> (fail-open windows where a route could serve before its auth policy was accepted — the origin of ADR-0020's fail-closed ordering), a <em>circular revision hash</em> (a content hash depending on a value only knowable after the workload it identifies had already run) and <em>non-deterministic receipt IDs</em> (which silently defeated the deduplication that audit integrity rests on). Where one design amended an already-approved one, the delta is recorded as a numbered amendment in the amended design — design 02 carries eight.</p>
   </div>
 </section>
 
