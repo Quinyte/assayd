@@ -23,11 +23,11 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 17 | Session replay engine | P3 | M | r2 — critique **PASS** (`17-…`, `reviews/17-review.md`; awaiting user approval, ADR-0024) |
 | 18 | Pack format + installer | P3 | M | r2 — critique **PASS** (`18-…`, `reviews/18-review.md`; awaiting user approval, ADR-0024) |
 | 19 | Knowledge pattern packs | P2–P3 | M | r2 — critique **PASS** (`19-…`, `reviews/19-review.md`; awaiting user approval, ADR-0023) |
-| 20 | Drift controllers | P4 | L | not started |
-| 21 | workflow-operator + Workflow CRD | P4 | M | not started |
-| 22 | Loop governance (hop limits, cycle detection, approvals, kill switch) | P4 | M | not started |
-| 23 | App layer (HTTP projection, typed clients, release pinning) | P4 | M | not started |
-| 24 | AuthzProvider (OpenFGA ReBAC model + gateway checks) | P4 | M | not started |
+| 20 | Drift controllers | P4 | L | draft — in review (`20-…`) |
+| 21 | workflow-operator + Workflow CRD | P4 | M | draft — in review (`21-…`) |
+| 22 | Loop governance | P4 | M | draft — in review (`22-…`) |
+| 23 | App layer | P4 | M | draft — in review (`23-…`) |
+| 24 | AuthzProvider (OpenFGA) | P4 | M | draft — in review (`24-…`) |
 | 25 | model-operator + ModelHub | P5 | L | not started |
 | 26 | Tenant CR fan-out | ent | L | not started |
 | 27 | Compliance profile packs (hipaa) | ent | M | not started |

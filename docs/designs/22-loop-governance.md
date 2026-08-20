@@ -1,0 +1,69 @@
+# Design 22: Loop governance (hops, cycles, approvals, kill switch)
+
+- **Status**: draft — awaiting critique
+- **Phase**: P4 · **Size**: M · **Date**: 2026-08-20
+- **ADRs**: 0020 (reserved mappings now filled), 0021 (lineage in receipts) · interfaces: 03 (emits everything here), 06 (per-hop re-exchange pairs with lineage), 21 (workflows in the lineage), 08 (`plume approve`), architecture §14 (the governance ring, made mechanical)
+- **Research**: agentgateway OSS: in-proxy **CEL** over request context (compiled at config load), Envoy-compatible ext-authz for external decisions — `docs/research/authz-2026-08.md`
+
+## 1. Purpose & scope
+
+The governance ring's mechanics (FR-33): multi-agent runaway stopped at the data plane, approvals as durable pauses, the kill switch. Everything here is **emitted by design 03** and enforced by the gateway — agents need nothing, which is the point. Out of scope: budgets (ADR-0020, shipped), ReBAC (24).
+
+## 2. Doctrine & charter gates
+
+- **Plane**: slow (compiled policy + one interceptor mode); approval *policies* are CR data. **Pods**: 0 — the approval interceptor is an operator-binary listener mode (control-plane concern, gateway-authenticated peer — the tap pattern's *trusted* variant, unlike design 11's internet-facing receiver). **Stateful deps**: approvals in JetStream KV. ✓
+- **Primitives**: Resource, Event (`approval.requested/decided`), Tool (the intercepted calls). ✓
+
+## 3. Lineage: stateless enforcement in-proxy (the trick)
+
+The gateway stamps `X-Plume-Lineage: <task_id>;a=agentA@rev,workflow:pa-check,agentB@rev` — appended per A2A/workflow hop by a 03-emitted transform (the header is gateway-owned: inbound client values stripped, same rule as the scope header). Enforcement is **in-proxy CEL** (compiled at config load — no external call, no state):
+
+- **maxHops**: `lineage.split(',').size() > agent.maxHops` ⇒ deny `LOOP_DEPTH_EXCEEDED` (the receipt's `hop.status: denied` carries it; the caller gets a typed A2A error).
+- **Cycle**: `target in lineage.entries` ⇒ deny `LOOP_CYCLE` — with the honest nuance: **A→B→A can be legitimate** (a callback pattern). Default = deny immediate revisit within a task; an Agent CR may declare `loop: {allowReentry: true, maxVisits: 2}` (compiled into the CEL constant) — reentry is opt-in, bounded, and visible in the CR, never ambient.
+- Workflows appear in the lineage as `workflow:<name>` entries (21 §5) — a workflow↔agent ping-pong is caught by the same rule.
+
+Why stateless matters: no cycle-detection service, no shared state, no new pod — the lineage *is* the state, carried by the request, tamper-proofed by gateway ownership of the header. Receipts already record `lineage` (ADR-0021), so every denial is auditable with its full path.
+
+## 4. Approvals: durable pause, retry-shaped
+
+`requiresApproval: true` tools (Agent CR / workflow `approval` steps) route — via a 03-emitted route — to the **approval interceptor** (operator listener mode):
+
+1. First call → interceptor writes a durable `ApprovalRequest` (KV: requester chain, tool, args digest, TTL from policy) → emits `approval.requested` (notification surface: CLI, later App UI) → returns MCP error `APPROVAL_PENDING {approval_id, retry_after}` — **a retryable, typed pending**, not a hang (stateless-HTTP-friendly; MCP 2026-07-28's MRTR `input_required` is the recorded v2 upgrade path for clients that speak it).
+2. `plume approve <id>` (authz: the `approvers` role via 24 when present; namespace RBAC in core) records the decision + decider.
+3. The caller's retry passes the interceptor (approved ⇒ proxy the real call once, single-use consume; denied ⇒ `APPROVAL_DENIED`, terminal). Timeout ⇒ `approval_timeout` (21's branchable failure).
+
+Honest limitation, stated: **templates' loops retry pending tools natively (09); a black-box agent that treats `APPROVAL_PENDING` as a hard failure will fail the task** — the approval still protected the action (fail-closed); the DX cost lands on non-template agents and is documented, not hidden. Workflow `approval` steps don't have this problem (the interpreter waits durably — 21).
+
+## 5. Kill switch
+
+`plume agent kill <name>` (and drift-controller escalations): weight-0 all revisions + candidate-route revoked + optional `--scale-zero`; in-flight tasks get `taskTimeout` to drain, then 503. Kill is a **guard state** in the rollout machine (02 A1's family): `Killed=True` condition, exit only by explicit `plume agent revive` — never by reconcile drift. Receipted under the invoking principal.
+
+## 6. Failure modes
+
+| Failure | Behavior |
+|---|---|
+| Lineage header absent (first hop) | Gateway initializes it — absence past the first hop is a policy violation ⇒ deny (tamper evidence) |
+| Interceptor down | `requiresApproval` calls fail closed (`APPROVAL_UNAVAILABLE`); unguarded tools unaffected; condition on affected Agents |
+| Approval KV entry lost | Retry recreates the request (args digest keys it — idempotent); a *decided* entry lost before consume ⇒ re-approval required (fail-closed, logged) |
+| Approver never acts | TTL ⇒ `approval_timeout`; requests age visible in `plume approve --list` |
+| CEL/limits misconfigured (all traffic denied) | `PolicyApplyIncomplete`-family surfacing via 03's acceptance checks; `plume doctor` runs a lineage self-test through the gateway |
+| Kill during canary | Kill wins over every rollout state; gate controller observes and abandons cleanly |
+
+## 7. Observability
+
+Denial counters by code (`LOOP_DEPTH_EXCEEDED`, `LOOP_CYCLE`) — a *rising* cycle-denial rate is itself a design smell surfaced as a ticket alert; approval latency/age histograms; kill/revive events. `loop_depth` p95 (10's signal) pairs with the limit for tuning.
+
+## 8. Testing
+
+CEL fixtures: depth/cycle/reentry-opt-in matrices; header-tamper test (client-supplied lineage stripped); approval lifecycle e2e (pending → approve → single-use pass → replay denied), timeout, deny, interceptor-down fail-closed; kill/drain/revive drill incl. mid-canary; doctor lineage self-test.
+
+## 9. Decisions for async review
+
+- **D1 — Lineage enforcement is stateless in-proxy CEL** over a gateway-owned header; no cycle service exists.
+- **D2 — Reentry is opt-in and bounded** (`allowReentry`/`maxVisits` on the CR), never default.
+- **D3 — Approvals are retry-shaped typed pendings** (MRTR as the recorded v2); black-box-agent limitation documented, protection fail-closed regardless.
+- **D4 — Kill is a sticky guard state** exited only by explicit revive.
+
+## 10. Resulting ADRs
+
+ADR-0025 (P4) after critique PASS.
