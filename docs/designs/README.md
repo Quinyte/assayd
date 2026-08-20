@@ -5,7 +5,7 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | # | Component | Phase | Size | Design status |
 |---|---|---|---|---|
 | 1 | KnowledgeGraphProvider contract (6-tool MCP surface + ontology schema + probe format + conformance) | P2 | M | **approved** (`01-…`, ADR-0017/0018) |
-| 2 | Agent CRD + agent-operator | P1 | L | not started |
+| 2 | Agent CRD + agent-operator | P1 | L | **approved** (`02-…`, ADR-0019) |
 | 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | not started |
 | 4 | Receipt tap + receipt envelope schema | P1 | M | not started |
 | 5 | Agent directory (OASF on JetStream KV) | P1 | S | not started |
