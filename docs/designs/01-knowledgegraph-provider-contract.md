@@ -185,3 +185,7 @@ The adapter wraps **graphiti-core as a library** in the provider pod (Graphiti's
 | `kg.schema` | stored ontology artifact (adapter-held, not derived from Graphiti) |
 | `kg.probe` | adapter executes probe queries via the same paths agents use |
 | admin surface | version = backend namespace/`group_id` per version; `write_batch` → Graphiti bulk add with entity resolution; invariants run as adapter queries at commit |
+
+## 11. Amendments
+
+- **A1 (2026-08-20, from design 03 r1 finding 6)**: KG scope enforcement mechanism made precise: the gateway **injects** a signed `X-Plume-KG-Scope` header (it does not parse MCP bodies — consistent with §3.1); **providers enforce scope across all four fact-bearing tools** (`search`, `neighbors`, `get_context_bundle`, `cite`) answering `KG_SCOPE_DENIED` for out-of-scope access. Consequence: providers are scope-enforcing, and the **conformance suite gains a scope-enforcement battery** (out-of-scope search/traversal/bundle/cite must deny). §6's "enforced at the gateway" reads as "gateway-injected, provider-enforced".

@@ -12,7 +12,7 @@
 - **agentgateway** (LF, Rust, Gateway-API-conformant; MCP/A2A/LLM native; k8s CRDs). Istio announced experimental agentgateway support at KubeCon EU 2026. https://agentgateway.dev/
 - **agent-sandbox** (kubernetes-sigs, SIG Apps): Sandbox CRD, gVisor/Kata backends. https://github.com/kubernetes-sigs/agent-sandbox
 - **SPIFFE/SPIRE**: assumed 2026 standard for agent workload identity. https://stacklok.com/blog/agentic-identity-explained-how-to-apply-spiffe-and-relationship-based-authorization-to-ai-agents-in-2026/
-- **OTel GenAI semconv**: still pre-stable mid-2026 (all gen_ai.* marked Development) — adopt + pin version. https://dev.to/azena-ai/opentelemetrys-genai-semantic-conventions-are-not-stable-yet-heres-what-actually-shipped-in-2026-3mke
+- **OTel GenAI semconv**: pre-stable; June 2026 moved to unreleased `semantic-conventions-genai` repo — pin = commit SHA, v1.41 fallback (see otel-genai-semconv-2026-08.md). https://dev.to/azena-ai/opentelemetrys-genai-semantic-conventions-are-not-stable-yet-heres-what-actually-shipped-in-2026-3mke
 
 ## Durability / messaging
 - DBOS = library on Postgres, 0 infra; Temporal mature but heavy; Restate middle. 2026 consensus: DBOS first, Temporal when you hit the wall. https://devstarsj.github.io/2026/04/03/durable-execution-temporal-restate-dbos-distributed-workflows-2026/

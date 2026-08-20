@@ -146,3 +146,7 @@ envtest for reconcile logic (revision math, condition transitions); e2e on k3d+k
 ## 10. Resulting ADRs
 
 ADR-0019 (revision/rollout model + card SoT + workload materialization).
+
+## 11. Amendments
+
+- **A1 (2026-08-20, from design 03 r1 findings 3/5)**: budget backstop wiring recorded: (a) new Agent conditions **`BudgetExhausted`**, `BudgetEnforcementDegraded`, `PricingStale` (usd budgets), and **`ReceiptsDegraded`** (design 04: receipt-pipeline gaps affecting this agent); (b) the operator gains one additional reconcile input — the **per-agent daily spend aggregate owned by design 04** (read-only; stream remains source of truth; "no state outside CR status + directory KV" holds — spend state lives in design 04's audit index, not the operator); (c) on exhaustion the rollout machinery applies **weight-0 to serving revisions** until the 00:00 UTC window resets (a guard state, distinct from Held/Canary); (d) gateway-side budget enforcement is a conservative local approximation — the exact tier is the receipt backstop (design 03 D3).
