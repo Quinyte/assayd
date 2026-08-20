@@ -49,3 +49,29 @@
 **REVISE.** One real problem (the probe receipt — an audit-integrity mistake in an otherwise security-conscious design) and five one-line-to-one-paragraph completions. The wizard framework, flag-set replay, GitOps-first deploy with streamed rollouts, and the no-template-content rule are all exactly what architecture §11 promised. Fix and this passes quickly.
 
 VERDICT: REVISE — 6 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS**
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved — both halves.** `doctor` checks receipt-pipeline liveness read-only (JetStream stream-info last-sequence age + tap health metrics; "the CLI never writes to the audit stream" now stated as a rule), and the end-to-end proof became `plume invoke --probe` — a *genuine* task through the gateway whose receipt is a real receipt of a real hop. Exactly the recommended shape; audit integrity and credential posture both restored. |
+| 2 | MINOR | **Resolved.** `GatesBypassed=DevProfile` recorded as design 02 §11 A5. |
+| 3 | MINOR | **Resolved.** `build` now includes card signing per design 09 §3.2 (Sigstore keyless, same builder identity). |
+| 4 | MINOR | **Resolved.** `doctor` reads the `plume-contracts` ConfigMap ledger — "never a hard-coded subset" — so the two N/N−1 enforcement points can't diverge. |
+| 5 | MINOR | **Resolved.** Primitives line added (Resource/Artifact/Agent). |
+| 6 | MINOR | **Resolved.** Read-only NATS credential scoped to `receipts.>` in the tenant account, minted by the identity bootstrap, fetched at `plume login` into the keychain; write credentials never held. Composes with design 04's per-tenant streams. |
+
+### Observation (not a finding)
+
+The receipt-read credential is per-*tenant*, so "which human read the stream" is coarse in the audit trail. Fine for core (single team); per-user credential minting is a natural design-26 (Tenant CR) item — worth one line there when it's written.
+
+### Verdict
+
+**PASS.** All six findings addressed; the MAJOR was fixed structurally on both fronts (read-only checks, genuine probe). Fold into ADR-0022.

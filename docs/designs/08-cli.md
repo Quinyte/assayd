@@ -1,6 +1,6 @@
 # Design 08: The plume CLI
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 6 findings addressed; reviews/08-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/08-review.md) · ADR-0022
 - **Phase**: P1+ (grows with each phase) · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0001 (binary name finalized at rename), 0002, 0019 · interfaces: every design (it is the human surface); 05 (directory reads), 06 (login), 07 (install checks)
 

@@ -48,3 +48,28 @@
 **REVISE.** The fast-plane treatment of dashboards/signals/alerts, the name-map layer, and tested alerts make this a strong draft; the signal catalog's cross-design consistency is the best in the series. But finding 1 is real: the topology's left edge (interior spans) has no compiled path and, worse, no unforgeable receipt boundary once agent-authored spans share the tap's pipe — an audit-integrity issue, not a wiring detail. Fix with the 03 row + transport-derived criterion + 04 delta, land the research note, and this passes.
 
 VERDICT: REVISE — 5 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS** (1 residual nit, non-blocking)
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved — and the mechanism is better than the finding asked for.** The route exists: design 03 §3.4's "Interior telemetry" row (OTLP Backend + per-agent route, rate-limited). The discrimination is transport-derived via **two tap listeners** (design 04 §11 A1): the gateway-SVID export listener is the *sole* receipt source, and the compiled interior route targets the forward-only listener — so even though proxied agent traffic reaches the tap wearing the gateway's SVID, listener separation (plus the compiler emitting no agent route to the export listener) makes receipt-minting unreachable from agent-authored spans by construction. The conformance test (gateway-lookalike spans ⇒ zero receipts) pins it. |
+| 2 | MINOR | **Resolved.** No default credentials: generated admin secret at install, root disabled after bootstrap, OIDC where the build supports it (with an honest verify-at-implementation note in the research file), NetworkPolicy-restricted ingress. |
+| 3 | MINOR | **Resolved.** Topology line scoped to in-cluster components; "CLI ships nothing, ever" stated with the 08 D4 cross-reference. |
+| 4 | MINOR | **Resolved** (with a nit): primitives line added. Nit below on the Event claim. |
+| 5 | MINOR | **Resolved.** `docs/research/observability-2026-08.md` landed (OTLP ingestion, storage model, the access-control caveat) and cited. |
+
+### Residual nit (non-blocking)
+
+- The new primitives line claims **Event (alert notifications)** — but OpenObserve alert webhooks aren't CloudEvents any more than KV watches were (cf. 05 r1 f6). Either emit shipped alerts as real CloudEvents onto JetStream (which would usefully let Workflows react to alerts — a nice v2 hook) or drop the Event claim; Resource alone is honest. One line at ADR-0022 time.
+
+### Verdict
+
+**PASS.** The MAJOR was closed with a structurally sound, testable mechanism spanning the right documents (03 row + 04 amendment), and the remaining findings all landed. Fold into ADR-0022 with the Event-claim nit.

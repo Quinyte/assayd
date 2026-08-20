@@ -1,6 +1,6 @@
 # Design 09: SDK templates (the BYO-SDK on-ramp)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 5 findings addressed; reviews/09-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/09-review.md) · ADR-0022
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0003, 0019 · interfaces: 02 (card/registration contract), 05 (tool discovery), 08 (wizard renders these), 14-loop-eng (architecture §14: the reference inner loop lives here)
 - **Research**: `docs/research/a2a-2026-08.md` (primary sources landed, r1 f3): A2A v1.0 (Apr 2026) — stable spec, signed Agent Cards (publisher-domain trust model), JSON-RPC + SSE, official SDKs ×6.

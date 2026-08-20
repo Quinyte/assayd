@@ -47,3 +47,24 @@
 **REVISE.** The template contract and SDK matrix are well-shaped and the fast-plane packaging is the right instinct — one phase too early. The two MAJORs are both "the mechanism this rides on isn't there yet": no delivery vehicle in P1, no signing identity or recorded verification policy. Both have contained fixes that mostly constrain later designs (18, and the 02 amendment log).
 
 VERDICT: REVISE — 5 findings
+
+---
+
+## Re-review r2 (2026-08-20)
+
+- **Verdict**: **PASS**
+- **Independence note**: same independent session as r1; did not author the draft or revision.
+
+### Per-finding disposition
+
+| r1 | Severity | Disposition |
+|---|---|---|
+| 1 | MAJOR | **Resolved.** P1 delivery specified as the recommended degenerate pack: versioned, cosign-signed OCI artifact at a well-known ref, fetched + verified by the CLI with P1-existing machinery; explicitly recorded as a constraint on design 18 (formalize the manifest *around* the same artifact, don't move it). The phasing hole is closed and the forward promise is written down. |
+| 2 | MAJOR | **Resolved.** Signing identity: Sigstore keyless with the image-signing builder identity — one trust root, no key custody; publisher-domain signatures deferred to `expose: public` where A2A v1.0's cross-org model actually applies (the distinction the r1 finding drew, adopted). Verification policy: required for plume-built, unsigned BYO/external registers with loud `CardUnsigned`. Registration-gate change recorded as design 02 §11 A6. |
+| 3 | MINOR | **Resolved.** `docs/research/a2a-2026-08.md` landed with primary sources (a2a-protocol.org announcement, SDK org) and the plume signing model stated alongside the facts it rests on. |
+| 4 | MINOR | **Resolved** (via §3.2 + A6): the origin matrix collapses to plume-built (required) vs everything unsigned (`CardUnsigned`, loud) — simpler than the three-way split the finding sketched, and the BYO promise explicitly holds. Acceptable. |
+| 5 | MINOR | **Resolved.** The injected env contract is owned by design 02 (§11 A7: variables, sources, versioned with the CRD); templates consume, never define. Ownership landed on the right side of the seam (injection is reconcile behavior). |
+
+### Verdict
+
+**PASS.** Both MAJORs closed with the recommended structures, and the fixes correctly landed most of their weight as recorded constraints on other designs (18's manifest, 02's amendment log) rather than local caveats. Fold into ADR-0022.

@@ -1,6 +1,6 @@
 # Design 10: Observability pack (OTel wiring, dashboards, golden signals, alerts)
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 5 findings addressed; reviews/10-review.md)
+- **Status**: **approved** — critique PASS at r2 (reviews/10-review.md) · ADR-0022
 - **Phase**: P1+ · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0002, 0003 (semconv SHA pin — ADR-0021), 0021 (single telemetry path) · interfaces: 03 (interior-OTLP route row), 04 (tap fan-out + receipt criterion delta), 07 (chart ships this), 20-drift (consumes)
 - **Research**: `docs/research/observability-2026-08.md` (OpenObserve OTLP ingestion, single-binary claims — landed per r1 f5)
