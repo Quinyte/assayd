@@ -1,6 +1,6 @@
 # Design 01: KnowledgeGraphProvider contract (`kgp/v1alpha1`)
 
-- **Status**: draft — in review
+- **Status**: **approved** (2026-08-20, Q1–Q3 resolved below)
 - **Phase**: P2 · **Size**: M · **Author**: design session 2026-08-20 · **Date**: 2026-08-20
 - **ADRs**: 0005 (KG domain contract), 0003 (open standards), 0008 (provider slots)
 
@@ -72,6 +72,7 @@ Called by the ingestion pipeline (design 14) and the operator. Same MCP transpor
 | `kg.admin.write_batch` | upsert nodes/edges with mandatory `provenance` per element; idempotent by `(batch_id, seq)` |
 | `kg.admin.commit_version` | run ontology invariants; **fail → version quarantined**, never promoted; returns violation list |
 | `kg.admin.promote` | mark `vN+1` active (readiness still requires probes — operator's call, not the provider's) |
+| `kg.admin.load_artifact` | bulk load from a signed OCI artifact ref (nodes/edges/provenance in a columnar layout) — the high-throughput ingestion path; same invariant gate at commit |
 | `kg.admin.drop_version` | delete a non-active version (retention policy enforced by operator) |
 
 *Rejected alternative*: gRPC admin API — a second protocol for no capability gain; MCP keeps ingestion steps tool-callable and receipts uniform.
@@ -158,20 +159,16 @@ Per-tool metrics at the gateway (count, latency, tokens-of-context served, trunc
 
 A provider "supports kgp/v1alpha1" iff the suite passes. The suite ships with the contract, versioned together.
 
-## 9. Open questions & alternatives (need a call)
+## 9. Resolved questions (decided 2026-08-20)
 
-**Q1 — Managed default backend for the Graphiti adapter.** Graphiti currently supports Neo4j 5.26, FalkorDB 1.1.2, Neptune; **Kuzu is deprecated** (embedded option dead). Options:
-- **(a) FalkorDB — recommended.** Single lightweight container; the +1 stateful pod is per-managed-graph workload state (plus tier), with doctrine rule 2 read as governing the platform substrate, not workload backends. BYO mode adds nothing.
-- (b) Neo4j: heavier, enterprise-familiar; fine as a supported option, wrong default.
-- (c) Build first adapter on **Apache AGE** (Postgres extension): zero new stateful deps, purest doctrine — but forfeits Graphiti (temporal model, extraction) and means writing graph machinery ourselves. Keep as a future zero-dep provider, not the first.
+**Q1 — Managed default backend: FalkorDB, eyes open on license.** FalkorDB is **SSPLv1 — source-available, not OSI open source** (its own docs are explicit). Why it still works as the default: (a) self-hosted/internal use — the overwhelming plume case — carries no SSPL obligations; (b) plume never modifies or redistributes it, so our Apache-2.0 core is untouched; (c) the SSPL service clause targets offering *the database itself* as a service, not apps using it internally — though conservative legal teams ban SSPL wholesale, which is why (d) the Neo4j CE (GPLv3) profile is one value flip away, and the caveat is documented, not buried. **No restriction/lock-in, at three levels**: backend swaps per graph within the Graphiti adapter (`falkordb | neo4j | neptune`); the provider swaps within kgp (`graphiti | cognee | byo`); and the contract itself is versioned with a conformance suite so third parties add providers. A future Apache AGE provider (graph inside our Postgres, zero new deps, no SSPL) stays on the roadmap as the doctrine-pure option.
 
-**Q2 — Admin surface protocol.** Recommended MCP-throughout (uniform receipts, tool-callable from workflows) vs gRPC (typed streams for bulk writes; a second protocol). If `write_batch` throughput on MCP proves inadequate for large corpora, revisit with an OCI-artifact bulk-load path (`admin.load_artifact`) rather than gRPC.
+**Q2 — Admin protocol: MCP only; no dual protocol.** Considered supporting both MCP and gRPC — rejected: two protocols mean two authz paths, two receipt paths, two conformance suites, which is precisely the weight failure doctrine rules 1/3 exist to stop. The throughput case gRPC would serve is served instead by **`kg.admin.load_artifact`** (bulk load from a signed OCI artifact — and it uses the Artifact primitive we already have). **Revisit trigger, measured not vibed**: if a real corpus load via `write_batch`/`load_artifact` cannot sustain ingestion at the scale of ~100k documents in a nightly window, a gRPC bulk lane becomes a v1beta1 proposal.
 
-**Q3 — Invariant/bundle escape hatches.** Recommended: allow `custom`/`raw` marked `portable: false` (pragmatism, visible cost) vs forbid entirely (pure portability, blocks real domains until the built-in set matures).
-
+**Q3 — Escape hatches: allowed, marked `portable: false`**, conformance warns. As recommended.
 ## 10. Resulting ADRs
 
-On approval: ADR-0017 (kgp/v1alpha1 contract: 6+5 tools, version-scoped endpoints, ontology/v1) · ADR-0018 (Q1 decision) · note in ADR-0003 that MCP target is spec 2026-07-28.
+Recorded: ADR-0017 (kgp/v1alpha1 contract: 6+5 tools, version-scoped endpoints, ontology/v1) · ADR-0018 (Q1 decision) · note in ADR-0003 that MCP target is spec 2026-07-28.
 
 ## Appendix: Graphiti reference mapping
 

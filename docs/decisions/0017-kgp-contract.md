@@ -1,0 +1,5 @@
+# ADR-0017: kgp/v1alpha1 — the KnowledgeGraphProvider contract
+- **Status**: accepted · 2026-08-20
+- **Context**: Design 01. The platform's highest-stakes interface; must survive provider churn. MCP shipped the 2026-07-28 stateless spec (Mcp-Method/Mcp-Name headers, cacheable tool lists).
+- **Decision**: Six-tool query surface (`search, neighbors, get_context_bundle, cite, schema, probe`) + six-tool admin surface (`begin_version, write_batch, load_artifact, commit_version, promote, drop_version`), all MCP 2026-07-28 — **no dual protocol**; bulk throughput via `load_artifact` (OCI), gRPC only as a measured v1beta1 revisit. **Version-scoped endpoints** (`/kgp/<graph>/<version>/mcp`) — agents structurally cannot cross versions; rollback is routing. `ontology/v1` with closed built-in invariant/recipe sets + escape hatches marked `portable: false`. Conformance suite defines contract support; N/N−1.
+- **Consequences**: Agents and packs write to this surface only; provider-specific tools are invisible to portable agents; the conformance container ships with the contract.
