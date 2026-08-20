@@ -1,6 +1,6 @@
 # Design 27: Compliance profile packs (HIPAA first) — enterprise
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 5 findings addressed; reviews/27-review.md)
+- **Status**: **approved** — critique PASS (reviews/27-review.md) · ADR-0026
 - **Phase**: enterprise · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0014 (compliance as configuration), 0015 (enterprise; never paywall correctness), 0018/0021/0024 (the mechanisms being configured) · interfaces: 18 (pack facets — this is a pack), 04 (receipt hardening), 03 (egress allowlists, redaction), 06 (session controls, break-glass), 26 (per-tenant profiles), 10 (retention posture)
 - **Research**: `docs/research/landscape-2026-08.md` §HIPAA (BAA + ZDR, encryption, tamper-evident audit ≥6y, PHI minimization, per-action attribution, access review)

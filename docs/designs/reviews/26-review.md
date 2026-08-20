@@ -117,3 +117,37 @@ The three cannot all hold. Worse, §4's own resolution is inadequate as stated: 
 **REVISE.** Every r1 finding is genuinely resolved — the thesis correction is exact, the SPIRE answer is better-grounded than expected, and the DBOS admission is the kind of honesty this series exists to produce. But the r2 fix left the design's central subject — what is isolated from what, and who holds the keys — described three incompatible ways, and the "read-only" qualifier cannot support what the operators must do. This is a small, well-bounded fix (name the split, correct two sentences), and it must land before ADR-0026: an enterprise isolation boundary is not a thing to record ambiguously.
 
 VERDICT: REVISE — 2 findings
+
+---
+
+## Re-review r3 (2026-08-20)
+
+- **Verdict**: **PASS** (1 required residual + 2 smaller ones)
+- **Independence note**: same independent session as r1/r2; did not author the draft or any revision.
+
+### Per-residual disposition
+
+| r2 | Severity | Disposition |
+|---|---|---|
+| R2-1 | MAJOR | **Resolved cleanly, and consistently across all four places.** §4's table gains two rows that state the split precisely: **workload-managing operators (Agent/KG/Workflow/Model controllers) run per-tenant inside the vCluster** — creating Deployments/Sandboxes, applying SVID-attestation labels, writing directory entries against the tenant's own API server, holding **no host credentials** — while the **policy compiler stays host-side**, writing host gateway CRs (which is what solved the write-direction problem) and *reading* tenant CRs through the vCluster kubeconfig. §3's Control plane row now matches rather than contradicts, and §7 is rewritten to the honest claim: the tenant-operator holds the only **provisioning** cross-tenant privilege, the compiler holds cross-tenant read plus host gateway write and never tenant-workload write, "so a compromised compiler cannot create workloads in any tenant". The three-way inconsistency is gone and the blast-radius statement is now derivable from the table. |
+| R2-2 | MINOR | **Resolved.** D2 restated as "Hard mode **splits the control plane**", with the cost corrected to the §4 range (~4–5 pods core-only, +2–3 for a plus tenant) and the shared set enumerated (NATS/Postgres/Zitadel/OpenObserve/gateway). The cost figure also moved 3–4 → 4–5 to absorb the now-per-tenant operators — an internally consistent revision rather than a patched sentence. |
+
+### New findings (surfaced by the r3 split — none is a regression of R2-1/R2-2)
+
+#### R3-a. MAJOR *(required before ADR-0026)* — ownerRef-based lifecycle cannot cross the vCluster boundary, so deleted agents can leave live gateway config
+
+`26-tenant-cr.md:54-55` vs design 02 §3.6 and design 03 §3.2. Both approved designs tie emitted gateway resources to their source CR by **ownerRef** — 02: "the operator owns their lifecycle (ownerRefs)"; 03: "Deterministic resource set via SSA **with ownerRefs**". Kubernetes owner references are namespace/cluster-local: a `HTTPRoute`/`AgentgatewayPolicy` on the **host** cluster cannot be owned by an Agent CR living in the **tenant's** API server. So in hard mode, when a tenant deletes an Agent, garbage collection never fires and its routes, policies, and Backends persist on the host — stale capability outliving the object that authorized it, which is precisely the property design 03 §6 exists to guarantee ("emitted policies are the only path by which agent capability changes").
+
+**Fix**: state that in hard mode the host-side compiler reconciles deletions **explicitly** — a finalizer on the tenant-side CR (or a reconcile-time diff of live host resources against the tenant's CR set) drives teardown in 03's reverse order (routes detach before policies/backends, per §3.3), with an orphan-sweep as the backstop. One paragraph in §4, plus a note against 02 §3.6 / 03 §3.2 that ownerRef GC is the *soft-mode / single-cluster* mechanism and hard mode substitutes explicit reconciliation. This is unambiguous engineering — it just has to be written down before the ADR records a lifecycle that doesn't work in the mode this design adds.
+
+#### R3-b. MINOR — the compiler's privilege sentence needs "status write", and the split is an unrecorded structural change to designs 02/03
+
+`26-tenant-cr.md:55,82`. Two precision gaps in the otherwise-good §7 sentence: (a) the host-side compiler doesn't only *read* tenant CRs — it writes **conditions** onto them (`PolicyApplyIncomplete` per 03 §3.3, plus `BudgetExhausted` / `BudgetEnforcementDegraded` / `PricingStale` per 02 §11 A1), so its privilege is "cross-tenant read + **status write**, never spec/workload write" — still a strong claim, just an accurate one. (b) The split cuts design 02 §4's single reconcile loop (workload → identity → card → **compile+apply** → rollout → conditions) across two clusters and relocates design 03's "library compiled into agent-operator, no pod" to a host-side process while the operator runs per-tenant. That resolves cleanly on the platform's own precedent — a `--mode` flag on the existing host agent-operator (as with `--mode receipt-tap` and `--mode event-receiver`), so "Pods added: 0" survives — but it should be said, and the loop-split recorded as a 02/03 amendment. **Fix**: one clause in §7, one note in §4.
+
+#### R3-c. Nit — §8 doesn't test the split's security properties
+
+`26-tenant-cr.md:86`. The r3 revision added two checkable claims — in-vCluster operators hold no host credentials; the host compiler cannot create workloads in any tenant — and the isolation battery tests neither. Both are cheap negative tests and belong beside the existing per-layer battery (along with R3-a's orphan check: delete an Agent in a vCluster, assert zero surviving host gateway resources).
+
+### Verdict
+
+**PASS.** R2-1 and R2-2 are resolved completely and coherently — the split is the one the mechanics implied, it is stated identically in all four places, and §7's privilege claim is now derivable rather than asserted. R3-a is a genuine mechanical consequence that this split surfaces rather than causes (ownerRefs were always cluster-local; hard mode is the first context where that matters), and it has an unambiguous fix. Land R3-a's paragraph and R3-b's clause, then record ADR-0026.

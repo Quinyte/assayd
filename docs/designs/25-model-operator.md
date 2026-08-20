@@ -1,6 +1,6 @@
 # Design 25: model-operator + ModelHub
 
-- **Status**: revised r2 — awaiting re-critique (r1 REVISE, 6 findings addressed; reviews/25-review.md)
+- **Status**: **approved** — critique PASS (reviews/25-review.md) · ADR-0026
 - **Phase**: P5 · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: ADR-0003 (KServe/Trainer/KitOps bindings), 0006 (same gate mechanic), 0024 (EvalSuite reuse) · interfaces: 16 (Model gating), 03 (LLM Backend targets), 07 (plus-tier charts)
 - **Research**: `docs/research/modelhub-2026-08.md` (dated note: KServe RawDeployment + chart-shipped `ClusterStorageContainer` for `kit://`, Trainer v2 BuiltinTrainers, Kueue, agentgateway **virtual models** minimum version)
