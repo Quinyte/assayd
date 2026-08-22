@@ -1,6 +1,6 @@
 # Design 02: Agent CRD + agent-operator
 
-- **Status**: **approved** — critique PASS (reviews/02-review.md) · ADR-0019 · amendments A1–A8
+- **Status**: **revised r2** — independent re-critique (reviews/02-recritique.md): 10 findings, all addressed · ADR-0019 · amendments A1–A10
 - **Phase**: P1 · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0002, 0003, 0006 (gating), 0016 (expose/apps) · produces ADR-0019
 
@@ -43,18 +43,25 @@ spec:
   tools:
     - mcpRef: {name: claims-system}                  # Connector tool facet or MCPServer
       requiresApproval: false
+  llm:                                     # r2 f1 — designs 03/20/25 all write against this
+    providers: [openai/gpt-x, internal/pa-classifier]
+    egressAllowlist: [...]                 # compliance profiles may pin this (ADR-0014)
+    fallback: {provider: internal, model: pa-classifier}   # A8's ModelDrifted target
   budget: {tokensPerDay: 2M, usdPerDay: 40, taskTimeout: 10m, maxHops: 8}   # per-day windows reset 00:00 UTC; remaining budget in status
   gates:
     - evalSuiteRef: pa-regression                    # ≥1 required in prod (admission)
   expose:
     a2a: {visibility: org, auth: oauth}
 status:
-  phase: Pending|Held|Canary|Ready|Degraded
+  phase: Pending|Held|Canary|Ready|Degraded|BudgetHeld|Killed        # r2 f7 — guard states are renderable
   activeRevision: pa-reviewer-7f3a2            # serving traffic
   candidateRevision: pa-reviewer-9c1d4         # held/canary (if rollout in progress)
   card: {name, version, fetchedAt, digest}
+  candidateRevision: pa-reviewer-9c1d4
+  supersededCandidates: [pa-reviewer-4b8e1]    # r2 f2 — abandoned in-flight candidates, auditable
   conditions: [Registered, IdentityIssued, KnowledgeBound, GatesPassed,
-               SandboxDowngraded, Ready, Degraded]
+               SandboxDowngraded, TaskStateUnverified, BudgetExhausted, Killed,
+               Ready, Degraded]
 ```
 
 `kubectl get agents` printer columns: `PHASE · ACTIVE · EVAL(last score) · COST/DAY · AGE`.
@@ -157,3 +164,12 @@ ADR-0019 (revision/rollout model + card SoT + workload materialization).
 - **A6 (2026-08-20, design 09 r1 f2/f4)**: registration additionally verifies the A2A v1.0 card signature — required for plume-built agents (Sigstore keyless, builder identity), unsigned BYO/external cards register with loud `CardUnsigned`.
 - **A7 (2026-08-20, design 09 r1 f5)**: the operator owns the injected env contract for agent workloads: `PLUME_GATEWAY_URL`, `PLUME_KG_ENDPOINTS` (per graphRef bindings), `PLUME_NATS_URL` + tenant task-store creds. Versioned with the CRD; templates consume, never define.
 - **A8 (2026-08-20, design 20 r1 f2)**: optional `runtime.llm.fallback` (provider/model) — the `ModelDrifted` remediation target; controller-set `status.llmFallbackActive` folds into PolicyIntent on recompile.
+- **A9 (2026-08-22, from the independent re-critique — reviews/02-recritique.md)**: seven behaviours the design declared but never specified.
+  1. **f1 — `spec.llm`** (`providers`, `egressAllowlist?`, `fallback?`) is a real CRD block; A8's `runtime.llm.fallback` path is restated to `spec.llm.fallback`. Designs 03, 20 and 25 all compile against it, and P1 needs it on day one.
+  2. **f2 — spec change during canary**: a new generation **supersedes** the in-flight candidate. `C1` drains to weight 0 respecting `taskTimeout` (the same drain design 22's kill switch uses), `GatesPassed` resets, and the abandoned revision is recorded in an event and `status.supersededCandidates` — the transition is auditable, never silent.
+  3. **f3 — `revisionHistoryLimit: 2` means two retained revisions *in addition to* active and any in-flight candidate.** Under the natural reading it would GC the rollback target mid-rollout, destroying the "instant rollback" property ADR-0019 exists for. Design 20's retention hold (pin the last eval-passing revision while `Degraded`) is this operator's behaviour and is honoured here.
+  4. **f4 — Sandbox scratchpad is revision-independent**: the volume is reattached to the promoted revision, and a candidate under eval attaches it **read-only** so a cold candidate cannot corrupt live state. The eval consequence is stated: design 16 gates a cold candidate against a warm active, and suites should not assume warm local state.
+  5. **f5 — `replicas>1` is detected, not assumed**: the A2A card is the declaration point for shared task state; absent that assertion with `replicas>1` the operator sets **`TaskStateUnverified=True`** with the consequence named, and the CLI warns at deploy. Silent degradation would have contradicted NFR-8 in the platform's own front door.
+  6. **f6 — finalization**, previously in scope and unspecified: ordered teardown on delete — drain traffic → revoke routes and policies in design 03's reverse order → **deactivate** (never delete) the `agent-actor` OAuth client per design 06 D3 → GC directory entries and SPIRE labels → release the finalizer. Design 26's hard-mode variant runs the workload half in-cluster and the route half host-side.
+  7. **f7 — phase enum and conditions extended** for the guard states the amendments and design 22 introduced (`BudgetHeld`, `Killed`, `TaskStateUnverified`, `BudgetExhausted`), since `kubectl get agents` is the stated operator UX.
+- **A10 (2026-08-22, f8–f10)**: body passages stale against their own amendments are superseded by the amendments in every case of conflict — specifically the revision-hash inputs (A-series), the `runtime.llm` path (A9.1), the card-signature gate (A6) and the injected-env contract (A7). The failure table gains rows for superseded-candidate drain, finalization stall, scratchpad reattach failure, and `TaskStateUnverified`.
