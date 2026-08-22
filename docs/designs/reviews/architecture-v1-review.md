@@ -114,3 +114,79 @@ ADR-0026 even names an open review residual as its own tracking mechanism ("mini
 None of these require design work. F1, F2, F7, F11 and F12 are wording; F3 and F6 are content to add; F8 and F9 are deletions/replacements; F4, F5 and F13 are the corpus catching up with what the ADRs already record.
 
 ARCH v1.0: REVISE — 13 findings
+
+---
+
+## Second-pass audit (2026-08-22)
+
+- **Verdict**: **REVISE** — 9 outstanding (1 material, 8 minor); **12 of 13 original findings fully fixed**, 1 half-fixed
+- **Scope**: verification of the fixes, accuracy audit of the new llm-d content, and a check for inconsistencies the fixes introduced. Not a re-derivation.
+- **Corpus verified this pass**: design 06 §12 A2, design 27 §2, design 26 §4 (R3-a), design 01 §11 A4, design 25 §11 A1, design 03 §3.4 (generative row), `docs/research/llm-d-2026-08.md`.
+
+### 1 · Disposition of F1–F13
+
+| # | Status | Evidence |
+|---|---|---|
+| **F1** attribution | **Fixed** | §00 is now two tables with an explicit framing line ("conflating them would flatter the process"). Checked row by row: the four in *Corrections to v0.1 itself* are genuine v0.1 text (scope, "agent just sees a slow tool", budgets, six CRDs); the six in *Draft errors that critique caught* are correctly reattributed, and the added "why it failed review" column is accurate in each case. |
+| **F2** omissions | **Fixed** | All three omitted v0.1 corrections — scope enforcement, approval UX, two-tier budgets — are now rows 1–3 of the first table. |
+| **F3** §10 block | **Fixed** (see N1) | §10 gained an As-designed block carrying every ADR-0026 element: RawDeployment as a *stated constraint* with the Knative/Istio reasoning and the CI assertion, kits-only serving, chart-shipped `ClusterStorageContainer`, candidate-only shadow route, `internal/<model>` pricing rows, virtual-model weighting, model metric family. |
+| **F4** `workflow-actor` | **Fixed in corpus** | Design 06 §12 **A2** landed, with the right rationale ("gateway-enforced promises need gateway-visible identities, and pod-attested SVIDs are never lent"). §06's assertion is now backed. |
+| **F5** open items + residuals | **Fixed, both halves** | §20 gained an *Open items carried into implementation* table (R1, re-critique of 01/02, moving pins, nothing execution-validated). All three corpus residuals landed: design 27 §2 now reads "single-writer chainer consumer downstream of the stream — §4.1, design 04 §11 A3 — not the tap"; design 26 §4 gained a **cross-cluster lifecycle** paragraph (label + `source-uid` marking, finalizer blocking removal until host cleanup confirms, orphan sweep reporting `OrphanedHostResources`) — more thorough than the finding asked; design 01 §11 **A4** supersedes the Graphiti appendix on both points. |
+| **F6** three imprecisions | **Fixed** | §17 "workflow-operator (a standing controller) + workflow-runtime (which scales 0→N)"; §15 "**Exactly one has been granted**: ADR-0026 approves a tenth, `profile`"; §07 "pinned to a commit SHA … there is no version number to pin". |
+| **F7** blocker count | **Fixed** | Process note names all three, describes the fail-open apply accurately, and marks it "the most security-relevant". |
+| **F8** scope phrasing ×2 | **HALF-FIXED — outstanding** | §13 Operations fixed (`:368`, "injected by the gateway and enforced by the provider (design 01 A1)"). **§05's exposure table still reads "6-tool surface with gateway-enforced subgraph scoping" (`:173`)** — which now contradicts §00's own correction table, row 1, in the same document. |
+| **F9** §04 example | **Fixed** | Probes/threshold moved to the ontology with an explanatory line, `ingestion.connectorRef` + schedule, `build.budget`/`probes.budget` added, endpoint "derived, not declared". Better than the finding asked. (Creates N5.) |
+| **F10** MCP projections | **Fixed** | Both rows marked *Roadmap* with honest status — "the intent field exists (design 03) but the projection semantics are not yet designed; HTTP/SSE is the specified path". |
+| **F11** DBOS "0 pods" | **Fixed** | §05 row now separates library cost from the `Workflow` CRD's standing workers, pointing at §17. |
+| **F12** operator count | **Fixed in substance** (see N6) | §02 now names the enterprise tenant-operator. |
+| **F13** design 01 appendix | **Fixed in corpus** | A4 landed, superseding both points and marking the appendix "retained only as the original sketch". |
+
+### 2 · Accuracy of the new llm-d content
+
+Checked §10's table rows and block against `llm-d-2026-08.md` and design 25 §11 A1. **Substantially accurate, and notably restrained** — the research note's headline performance figures (~3× output tok/s, ~2× lower TTFT) are *not* quoted, which is the number a less disciplined document would have led with.
+
+Verified accurate: `LLMInferenceService` promoted at **KServe v0.17** and built on llm-d ✓; the capability list (KV-cache-aware routing, disaggregated prefill/decode, scale-to-zero) ✓; **GAIE `InferencePool`** as the gateway seam and **OSS in agentgateway** ✓ (ADR-0020 D1 holds — the note confirms it is not a Solo Enterprise feature); Sandbox-stage maturity with the "pin the two contracts, never llm-d internals" posture ✓ (the note's own caveat, faithfully carried). The design-03 row design 25 A1 claims **does exist** (`:83`, "Generative model serving | `InferencePool` (GAIE) emitted for LLM pools + HTTPRoute to it").
+
+**Is "binds llm-d transitively" correct?** Yes — it is the research note's own framing ("binding KServe for LLM serving binds llm-d transitively whether the design says so or not"). See N4 for the one scoping imprecision.
+
+#### N1. MATERIAL — §10's "Serving (classic)" row still carries the exact phrasing its own block declares stale
+
+`architecture.md:267` reads "… **Kueue** for GPUs; **llm-d for one giant model**", four lines above a block that says "plume binds llm-d *transitively* through KServe, **not 'only for one giant model' as v0.1 had it**". A reader cannot tell which sentence is current, and the stale clause is doubly wrong now: llm-d belongs to the *generative* row (which the fix added directly above), not the classic `InferenceService` path, which does not involve it at all. **Fix**: delete the clause from the classic row — the generative row and the block already carry llm-d correctly.
+
+#### N2. MINOR — §17's beyond-core accounting omits the two weights design 25 A1 explicitly ledger-entered
+
+Design 25 A1 states the chart installs KServe's **`llmisvc` component** at plus tier when generative serving is enabled, and adds **+1 endpoint-picker (EPP) per inference pool** as workload state, "the design-13 FalkorDB category, entered in the ledger". §17 itemizes that very category for the KG analogue ("Per managed knowledge graph: adapter + backend (2 workload pods)") but has no line for generative serving, and never mentions `llmisvc` or EPP. **Fix**: one clause in the beyond-core paragraph, mirroring the KG line.
+
+#### N3. MINOR — both "moving pins" enumerations omit the fastest-moving pin in the corpus
+
+§19's risk row and §20's new open-items row both list "agentgateway minimum, semconv SHA, Unsloth BuiltinTrainer status" — neither mentions the **`LLMInferenceService` / `InferencePool` contracts**, which the research note singles out as the one that "*will* move again before implementation" (llm-d went v0.5→v0.6 in two months, and P5 is the last phase). Since the note was landed specifically to correct a stale llm-d claim, it belongs in the list of pins expected to go stale.
+
+#### N4. MINOR — "binds llm-d transitively" is unscoped where design 25 A1 scopes it
+
+§10's block says "plume binds llm-d transitively through KServe" without qualification; A1 says "binding KServe **for LLM serving** binds llm-d transitively". With the classic row present, the unscoped sentence implies all KServe use pulls in llm-d, which is not true of the predictive path. One prepositional phrase fixes it.
+
+### 3 · New inconsistencies introduced by the fixes
+
+#### N5. MINOR — §04's new "Jobs, not Workflow CRs" line is contradicted twice elsewhere
+
+The F9 fix added "builds run as Jobs (design 14), **not Workflow CRs**" (`:139`). Two pre-existing passages now contradict it in the same document: §09's drift table — "trigger ingestion **Workflow** → alert" (`:252`) — and §12's connector-planes table — "Ingestion | system → KG, bulk | **Workflow steps** with native readers" (`:327`). Both are v0.1 terminology that designs 11/14 superseded; the fix made them visible rather than creating them.
+
+#### N6. MINOR — the F12 fix broke §02's sentence
+
+`architecture.md:51`: "**three core plume operators** (agent, workflow, model) — plus the enterprise tenant-operator that reconcile CRs into bindings — routes, identity, gates." The inserted clause severs subject from verb, so "that reconcile" now appears to attach to the tenant-operator alone. Substance is right; the sentence needs recasting.
+
+#### N7. MINOR — §19's semconv posture still says "pin version" after §07 was corrected
+
+`architecture.md:439` reads "pre-stable; **pin version**, absorb renames", while the F6(c) fix made §07 explicit that "the conventions moved to an unreleased repo, so there is **no version number to pin**". Same document, two postures — the fix sharpened one and left its sibling.
+
+#### N8. MINOR *(corpus, not architecture.md)* — design 25's CRD body is stale against its own A1
+
+`designs/25-model-operator.md:35` still shows `serve.runtime: vllm | triton | none`, while A1 states "`serve.runtime` **splits by model kind**: generative ⇒ `LLMInferenceService`; classic/predictive ⇒ `InferenceService`". §10's table asserts the split, so the architecture is currently ahead of the design body. Same body-vs-amendment pattern the corpus residuals just closed elsewhere.
+
+### Verdict
+
+The revision is substantially successful: **12 of 13 findings are fully fixed**, several beyond what was asked (design 26's cross-cluster lifecycle paragraph, §04's rewritten example, §00's two-table split with its added "why it failed review" column), all four corpus residuals landed, and the new llm-d content is accurate, sourced, and commendably free of the performance-number overreach the research note invited.
+
+What keeps this at REVISE is a *pattern*, not a hard problem: **three of the nine outstanding items are the document contradicting itself** (N1 in §10, F8's remainder in §05, N5 across §04/§09/§12), and they are the same class as findings F8 and F9 from the first pass — a corrected passage whose siblings elsewhere were not swept. Every outstanding item is a one-line deletion or recast; none requires design work or reopens a decision. The recommendation is therefore a **systematic sweep rather than nine more instance fixes**: grep the document for each superseded phrasing (`gateway-enforced`, `one giant model`, ingestion-as-`Workflow`, "pin version") and confirm each hit against the corpus, so a third pass doesn't find the fourth sibling.
+
+ARCH v1.0 r2: REVISE — 9 outstanding

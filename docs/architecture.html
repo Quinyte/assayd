@@ -436,7 +436,7 @@
 <section id="overview">
   <div class="sec-head"><span class="n">02</span><h2>System overview</h2></div>
   <div class="prose">
-    <p>Three planes. The <strong>control plane</strong> is GitOps-driven: custom resources reconciled by three small core operators (plus the enterprise tenant-operator). The <strong>data plane</strong> is a single gateway every agent hop crosses — which is where security, budgets, and receipts are enforced, so guarantees hold for black-box agents regardless of SDK. The <strong>substrate</strong> is the two stateful dependencies.</p>
+    <p>Three planes. The <strong>control plane</strong> is GitOps-driven: custom resources reconciled by three small core operators, plus the enterprise tenant-operator. The <strong>data plane</strong> is a single gateway every agent hop crosses — which is where security, budgets, and receipts are enforced, so guarantees hold for black-box agents regardless of SDK. The <strong>substrate</strong> is the two stateful dependencies.</p>
     <p class="soft">In every diagram in this document, <strong style="color: var(--accent)">ultramarine marks what graphene builds</strong>; grey marks adopted open components. Notice how little is ultramarine — that is the thesis.</p>
   </div>
 
@@ -1058,7 +1058,7 @@
     </tbody>
   </table></div>
   <div class="prose">
-    <p><b>As designed (ADR-0026 + design 25 A1)</b>: KServe <b>split its API at v0.17</b>, and the generative path — <code>LLMInferenceService</code> — <b>is built on llm-d</b>. The honest statement is therefore that plume binds llm-d <em>transitively</em> through KServe, not "only for one giant model" as v0.1 had it. Generative pools bind at the gateway as a <b>GAIE <code>InferencePool</code></b> (verified OSS in agentgateway), so KV-cache-aware routing and prefill/decode disaggregation arrive by binding a contract rather than building anything — while budgets, receipts, authz and egress allowlists stay exactly where they always are. Because llm-d is Sandbox-stage and moving fast, plume pins the two <b>contracts</b> and never llm-d internals.</p>
+    <p><b>As designed (ADR-0026 + design 25 A1)</b>: KServe <b>split its API at v0.17</b>, and the generative path — <code>LLMInferenceService</code> — <b>is built on llm-d</b>. The honest statement is therefore that plume binds llm-d <em>transitively</em> through KServe <b>for generative serving</b> (the classic <code>InferenceService</code> path does not involve it), not "only for one giant model" as v0.1 had it. Generative pools bind at the gateway as a <b>GAIE <code>InferencePool</code></b> (verified OSS in agentgateway), so KV-cache-aware routing and prefill/decode disaggregation arrive by binding a contract rather than building anything — while budgets, receipts, authz and egress allowlists stay exactly where they always are. Because llm-d is Sandbox-stage and moving fast, plume pins the two <b>contracts</b> and never llm-d internals.</p>
     <p><b>KServe runs in RawDeployment mode — a stated constraint, not a default.</b> It is what lets KServe run without Knative or Istio, which is the only reason binding it respects the pod budget (rule 5) and the meshless core (ADR-0012); Serverless mode is forbidden and CI asserts no Knative CRDs are required. Kits are the <b>only serving source</b> (signed, digest-pinned), resolved by a chart-shipped <code>ClusterStorageContainer</code>. The shadow InferenceService gets a <b>candidate-only route admitting just the eval run principal</b>; general registration happens only on pass. The operator <b>writes <code>internal/&lt;model&gt;</code> pricing rows</b> so agent policy compilation can never fail on an unpriced in-cluster model. Models gate through design 16's flow with <b>their own metric family</b> (§08).</p>
   </div>
 </section>
@@ -1216,7 +1216,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
     <thead><tr><th>Plane</th><th>Shape</th><th>Protocol</th><th>Why not MCP</th></tr></thead>
     <tbody>
       <tr><td>Tool plane</td><td>Agent ↔ system, synchronous request/response</td><td><b>MCP only</b></td><td>— (this is exactly MCP's job; the public MCP Registry supplies the catalog)</td></tr>
-      <tr><td>Ingestion plane</td><td>System → KnowledgeGraph, bulk/batch/stream</td><td>Workflow steps with native readers</td><td>Pulling 50k documents through tool calls is the wrong shape; results reach agents via the KG's MCP surface anyway</td></tr>
+      <tr><td>Ingestion plane</td><td>System → KnowledgeGraph, bulk/batch/stream</td><td><b>Build Jobs</b> running native readers (design 14), declared by a Connector's ingestion facet</td><td>Pulling 50k documents through tool calls is the wrong shape; results reach agents via the KG's MCP surface anyway</td></tr>
       <tr><td>Event plane</td><td>System → platform, async triggers (webhooks, CDC)</td><td><b>CloudEvents → JetStream</b></td><td>MCP has no durable eventing model; events must outlive the connection and fan out</td></tr>
     </tbody>
   </table></div>
@@ -1906,7 +1906,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
     <tbody>
       <tr><td>Research item R1</td><td>agentgateway same-level policy-overlap semantics undocumented; a reproducing test ships with the compiler. The one-concern rule holds either way</td></tr>
       <tr><td>Re-critique of designs 01 and 02</td><td>Both were critiqued in the session that authored them; flagged for independent re-critique before implementation</td></tr>
-      <tr><td>Pinned third-party versions</td><td>agentgateway minimum, semconv commit SHA, Unsloth BuiltinTrainer status — all will move; research notes carry re-verify dates</td></tr>
+      <tr><td>Pinned third-party versions</td><td>agentgateway minimum, semconv commit SHA, Unsloth BuiltinTrainer status, and the <code>LLMInferenceService</code>/<code>InferencePool</code> contracts (the fastest mover) — all will move; research notes carry re-verify dates</td></tr>
       <tr><td>Nothing is execution-validated</td><td>Plans survived adversarial review, not running code — DBOS-in-Job resume, interpreter determinism, gateway policy behaviour remain to be proven</td></tr>
     </tbody>
   </table></div>

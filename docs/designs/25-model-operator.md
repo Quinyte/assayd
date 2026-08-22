@@ -32,7 +32,9 @@ spec:
   gates:
     - evalSuiteRef: pa-classifier-suite   # design 16, target: {modelRef} — the SAME machinery
   serve:
-    runtime: vllm | triton | none          # none = registry-only (a kit others reference)
+    runtime: llm | classic | none          # A1: llm ⇒ LLMInferenceService (llm-d-backed);
+                                           # classic ⇒ InferenceService (vLLM/Triton);
+                                           # none ⇒ registry-only (a kit others reference)
     inferenceService: {minReplicas: 0, gpu: {…}}       # KServe RawDeployment values passthrough
   expose: {llmBackend: true}               # registers as a gateway LLM Backend target (§5)
 status:

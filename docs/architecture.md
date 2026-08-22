@@ -48,7 +48,7 @@ Every design decision passes six rules. This is the product: competitors ship pl
 
 Three planes:
 
-- **Control plane** (GitOps): Git repo of CRs → Argo CD/Flux → **three core plume operators** (agent, workflow, model) — plus the enterprise tenant-operator that reconcile CRs into bindings — routes, identity, gates. The CLI is sugar over CRs.
+- **Control plane** (GitOps): Git repo of CRs → Argo CD/Flux → **three core plume operators** (agent, workflow, model) — plus the enterprise tenant-operator — which reconcile CRs into bindings — routes, identity, gates. The CLI is sugar over CRs.
 - **Data plane**: **agentgateway** — one data plane for A2A · MCP · LLM · HTTP traffic. AuthN via SPIFFE + OAuth; guardrail filters; rate limits; **policy compiled from Agent CR budgets/tools/expose blocks**. Every hop crosses it — which is where guarantees live, so they hold for black-box agents regardless of SDK.
 - **Substrate**: **NATS JetStream** (events · KV directory · object store · session receipts) + **Postgres** (DBOS durable workflows · eval results · audit index).
 
@@ -170,7 +170,7 @@ Symmetry rule: consume open standards **and publish over the same ones**. A decl
 | `Workflow` → MCP | named MCP tool | *Roadmap* — the intent field exists (design 03) but the projection semantics are not yet designed; HTTP/SSE is the specified path (design 23) |
 | `Agent` → MCP | single tool | *Roadmap* — same status as the Workflow→MCP projection |
 | `Workflow/Agent` → HTTP | REST + SSE | app-facing projection with the logged-in user's OIDC context |
-| `KnowledgeGraph` → MCP | read-only server | 6-tool surface with gateway-enforced subgraph scoping |
+| `KnowledgeGraph` → MCP | read-only server | 6-tool surface with gateway-injected, provider-enforced subgraph scoping (design 01 A1) |
 | `App` → bundle | product surface | curated versioned offering |
 
 ## 06 · Security plane — zero-trust, no mesh
@@ -249,7 +249,7 @@ Detectors write conditions; controllers act; humans see semantic health in `kube
 
 | Drift | Detector | Action |
 |---|---|---|
-| KG drift (`KnowledgeStale`) | ontology probe failures; ingestion lag | trigger ingestion Workflow → alert |
+| KG drift (`KnowledgeStale`) | ontology probe failures; ingestion lag | trigger an ingestion **build Job** (design 14) → alert |
 | Model drift (`ModelDrifted`) | hourly canary prompts; embedded-output distance | pin previous model / fallback route |
 | Behavioral (`Degraded`) | SLO burn on success rate, cost/task | auto-rollback to last eval-passing version |
 | Embedding | centroid distance (core); Phoenix (plus) | re-index the KG |
@@ -264,11 +264,11 @@ Detectors write conditions; controllers act; humans see semantic health in `kube
 |---|---|
 | Versioning/packaging | **KitOps ModelKits** (CNCF ModelPack) — OCI artifacts, `kit://` URIs, cosign-signed |
 | Serving (generative) | **KServe `LLMInferenceService`** — built on **llm-d**: KV-cache-aware routing, disaggregated prefill/decode, scale-to-zero |
-| Serving (classic) | **KServe** InferenceService fronting **Triton**/vLLM; **Kueue** for GPUs; llm-d for one giant model |
+| Serving (classic) | **KServe** InferenceService fronting **Triton**/vLLM; **Kueue** for GPU queueing |
 | Training | **Kubeflow Trainer v2** TrainJob (SFT/DPO/GRPO; Unsloth landing as BuiltinTrainer) |
 | Experiments | MLflow (tracking only) |
 
-**As designed (ADR-0026 + design 25 A1)**: KServe **split its API at v0.17**, and the generative path — `LLMInferenceService` — **is built on llm-d**. So the honest statement is that plume binds llm-d *transitively* through KServe, not "only for one giant model" as v0.1 had it. Generative pools bind at the gateway as a **GAIE `InferencePool`** (OSS in agentgateway), which means KV-cache-aware routing and prefill/decode disaggregation arrive by binding a contract rather than building anything — while budgets, receipts, authz and egress allowlists stay exactly where they always are. Because llm-d is Sandbox-stage and moving fast, plume pins the two **contracts** (`LLMInferenceService`, `InferencePool`) and never llm-d internals. **KServe runs in RawDeployment mode — a stated constraint, not a default.** It is what lets KServe run without Knative or Istio, which is the only reason binding it respects the pod budget (rule 5) and the meshless core (ADR-0012); Serverless mode is forbidden and CI asserts no Knative CRDs are required. Kits are the **only serving source** (signed, digest-pinned), resolved by a chart-shipped `ClusterStorageContainer` from `kit://` URIs. The shadow InferenceService gets a **candidate-only route admitting just the eval run principal**; general Backend registration happens only on pass. The operator **writes `internal/<model>` pricing rows** at serve time so agent policy compilation can never fail on an unpriced in-cluster model. Traffic shifts at the gateway via virtual models — never a second canary system. Models gate through design 16's flow with **their own metric family** (§08).
+**As designed (ADR-0026 + design 25 A1)**: KServe **split its API at v0.17**, and the generative path — `LLMInferenceService` — **is built on llm-d**. So the honest statement is that plume binds llm-d *transitively* through KServe **for generative serving** (the classic `InferenceService` path does not involve it), not "only for one giant model" as v0.1 had it. Generative pools bind at the gateway as a **GAIE `InferencePool`** (OSS in agentgateway), which means KV-cache-aware routing and prefill/decode disaggregation arrive by binding a contract rather than building anything — while budgets, receipts, authz and egress allowlists stay exactly where they always are. Because llm-d is Sandbox-stage and moving fast, plume pins the two **contracts** (`LLMInferenceService`, `InferencePool`) and never llm-d internals. **KServe runs in RawDeployment mode — a stated constraint, not a default.** It is what lets KServe run without Knative or Istio, which is the only reason binding it respects the pod budget (rule 5) and the meshless core (ADR-0012); Serverless mode is forbidden and CI asserts no Knative CRDs are required. Kits are the **only serving source** (signed, digest-pinned), resolved by a chart-shipped `ClusterStorageContainer` from `kit://` URIs. The shadow InferenceService gets a **candidate-only route admitting just the eval run principal**; general Backend registration happens only on pass. The operator **writes `internal/<model>` pricing rows** at serve time so agent policy compilation can never fail on an unpriced in-cluster model. Traffic shifts at the gateway via virtual models — never a second canary system. Models gate through design 16's flow with **their own metric family** (§08).
 
 ## 11 · Developer experience — the golden path
 
@@ -324,7 +324,7 @@ Sizes: S <1wk · M 1–3wk · L 3–6wk (solo). Phases → §18.
 | Plane | Shape | Protocol |
 |---|---|---|
 | Tool | agent ↔ system, sync | **MCP only** (public MCP Registry = catalog) |
-| Ingestion | system → KG, bulk | Workflow steps with native readers (results reach agents via the KG's MCP surface) |
+| Ingestion | system → KG, bulk | **Build Jobs** running native readers (design 14); declared by a Connector's ingestion facet (results reach agents via the KG's MCP surface) |
 | Event | system → platform, async | **CloudEvents → JetStream** → Workflows |
 
 One `Connector` CR declares a system-of-record with three optional facets; credentials once (Secrets/ESO; OAuth token exchange for user-delegated).
@@ -415,7 +415,7 @@ kagent answers "how do I run an agent on k8s"; plume answers "how do I run an ag
 
 agent-operator 1 (the only plume-code pod) · agentgateway 1–2 · SPIRE 2 · Zitadel 1 (on our Postgres) · NATS 1 · Postgres 1 · OpenObserve 1 ≈ **8 pods**.
 
-**Beyond core, as designed**: `plus` adds workflow-operator (a standing controller) + workflow-runtime (which scales 0→N with trigger registrations) — +2, OpenFGA with its co-located ext-authz adapter (+1), model-operator (+1), and optionally Argo and Phoenix. Enterprise adds tenant-operator (+1). Per managed knowledge graph: adapter + backend (2 workload pods). A hard-isolated tenant costs ~4–5 pods core-only (NATS, Postgres, Zitadel, OpenObserve and the gateway stay shared), +2–3 at plus.
+**Beyond core, as designed**: `plus` adds workflow-operator (a standing controller) + workflow-runtime (which scales 0→N with trigger registrations) — +2, OpenFGA with its co-located ext-authz adapter (+1), model-operator (+1), and optionally Argo and Phoenix. Enterprise adds tenant-operator (+1). Per managed knowledge graph: adapter + backend (2 workload pods). Generative serving adds KServe's `llmisvc` controller at plus tier and **+1 endpoint-picker (EPP) per inference pool** alongside the vLLM serving pods — the same workload category (design 25 A1). A hard-isolated tenant costs ~4–5 pods core-only (NATS, Postgres, Zitadel, OpenObserve and the gateway stay shared), +2–3 at plus.
 
 **The budget is CI-enforced, not aspirational**: a job counts rendered pods against `weight-budget.yaml` and a second job checks stateful workloads against a reasoned allowlist — a PR that adds either fails unless it edits the ledger in the same commit.
 
@@ -436,7 +436,7 @@ Discipline: the differentiation only exists once P2/P3 ship — never polish the
 
 | Risk | Posture |
 |---|---|
-| OTel GenAI semconv churn | pre-stable; pin version, absorb renames |
+| OTel GenAI semconv churn | pre-stable and now in an unreleased repo; pin a **commit SHA** (§07), absorb renames in the transform |
 | A2A maturity | gateway absorbs protocol quirks in one place |
 | kro young | App layer last; plain CRs work without it |
 | Rossoctl convergence on security layer | compose it if it stabilizes; moat is §04+§08+§09 |
@@ -487,7 +487,7 @@ The design phase is complete; it is not frictionless. Four items are deliberatel
 |---|---|
 | **Research item R1** | agentgateway same-level/same-field policy-overlap semantics are not crisply documented; a reproducing test ships with the policy compiler. The one-concern-per-policy rule holds either way |
 | **Re-critique of designs 01 and 02** | Both were critiqued in the session that authored them; the reviews carry the caveat and both are flagged for independent re-critique before implementation |
-| **Pinned third-party versions** | The agentgateway minimum (virtual models, OSS token exchange), the semconv commit SHA, and Unsloth's BuiltinTrainer status will all move; research notes carry re-verify dates |
+| **Pinned third-party versions** | The agentgateway minimum (virtual models, OSS token exchange), the semconv commit SHA, Unsloth's BuiltinTrainer status, and the **`LLMInferenceService` / `InferencePool` contracts** (the fastest mover — llm-d went v0.5→v0.6 in two months) will all move; research notes carry re-verify dates |
 | **Nothing is execution-validated** | These plans survived adversarial review, not running code. First implementation tests what no review can — DBOS-in-Job resume, interpreter determinism, gateway policy behavior |
 
 ### Process note
