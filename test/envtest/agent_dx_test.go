@@ -143,6 +143,17 @@ spec:
 			expect: "stateful singleton",
 		},
 		{
+			name: "name too long for a derived workload name",
+			doc: `
+apiVersion: plume.dev/v1alpha1
+kind: Agent
+metadata: {name: this-agent-name-is-deliberately-far-too-long-to-fit-a-label}
+spec:
+  runtime: {image: ghcr.io/acme/a:1}
+`,
+			expect: "at most 52 characters",
+		},
+		{
 			name: "plaintext external endpoint",
 			doc: `
 apiVersion: plume.dev/v1alpha1

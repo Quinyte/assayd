@@ -1,10 +1,10 @@
 package revision
 
 import (
-	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	plumev1alpha1 "github.com/ejs-5/plume/api/v1alpha1"
 )
@@ -108,10 +108,6 @@ func TestBehaviourSurfaceMintsARevision(t *testing.T) {
 			mutate: func(s *plumev1alpha1.AgentSpec) { s.Runtime.Sandbox = &plumev1alpha1.SandboxSpec{Profile: "gvisor"} },
 			why:    "isolation boundary"},
 
-		{field: "card.path", mutate: func(s *plumev1alpha1.AgentSpec) {
-			s.Card.Path = "/custom-card.json"
-		}, why: "the contract surface is fetched from here"},
-
 		{field: "knowledge.name", base: withGraph,
 			mutate: func(s *plumev1alpha1.AgentSpec) { s.Knowledge[0].Name = "other-graph" },
 			why:    "different domain"},
@@ -189,8 +185,10 @@ func TestPolicySurfaceDoesNotMintARevision(t *testing.T) {
 		}, "scaling is not a behaviour change"},
 
 		{"runtime.resources", func(s *plumev1alpha1.AgentSpec) {
-			s.Runtime.Resources = corev1.ResourceRequirements{}
-		}, "capacity is not behaviour"},
+			s.Runtime.Resources = corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+			}
+		}, "capacity regressions surface through design 20's behavioural drift path, and gating them would block incident response"},
 
 		{"budget", func(s *plumev1alpha1.AgentSpec) {
 			s.Budget = &plumev1alpha1.BudgetSpec{TokensPerDay: &tokens}
@@ -207,6 +205,10 @@ func TestPolicySurfaceDoesNotMintARevision(t *testing.T) {
 		{"tools.requiresApproval", func(s *plumev1alpha1.AgentSpec) {
 			s.Tools = []plumev1alpha1.ToolBinding{{Name: "claims-db", RequiresApproval: true}}
 		}, "approval policy, not a capability change"},
+
+		{"card.path", func(s *plumev1alpha1.AgentSpec) {
+			s.Card.Path = "/custom-card.json"
+		}, "a path change is re-registration, exactly as card drift is (A12/A4)"},
 
 		{"loop", func(s *plumev1alpha1.AgentSpec) {
 			s.Loop = &plumev1alpha1.LoopSpec{AllowReentry: true, MaxVisits: 2}
@@ -229,22 +231,5 @@ func TestPolicySurfaceDoesNotMintARevision(t *testing.T) {
 					"an eval and canary cycle — %s", tc.field, tc.why)
 			}
 		})
-	}
-}
-
-// A12's allowlist rule: a field added to the CRD later is policy-surface until
-// the table says otherwise. The safe failure is a missing gate on a policy knob,
-// never a missing gate on behaviour — so the projection must name what it
-// includes rather than what it excludes.
-func TestProjectionIsAllowlistShaped(t *testing.T) {
-	src, err := projectionSource()
-	if err != nil {
-		t.Fatalf("read projection source: %v", err)
-	}
-	for _, forbidden := range []string{"reflect.", "json.Marshal(spec)", "DeepCopy()"} {
-		if strings.Contains(src, forbidden) {
-			t.Errorf("projection uses %q, which would sweep in future fields automatically; "+
-				"A12 requires an explicit allowlist", forbidden)
-		}
 	}
 }

@@ -718,6 +718,11 @@ spec:
                 type: array
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: 'an Agent name must be at most 52 characters: the operator appends
+            a 10-character revision suffix to derive workload names, which must fit
+            the 63-character Kubernetes label limit'
+          rule: size(self.metadata.name) <= 52
     served: true
     storage: true
     subresources:

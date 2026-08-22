@@ -339,6 +339,11 @@ type BudgetStatus struct {
 	WindowResetsAt *metav1.Time `json:"windowResetsAt,omitempty"`
 }
 
+// Agent names are capped so that `<name>-<revision>` — the workload name the
+// operator derives — stays inside the 63-character DNS-1123 label limit. 52 + 1
+// + 10 = 63 exactly. Without this an agent could be created and then fail at
+// reconcile with an error about a name the user never wrote.
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 52",message="an Agent name must be at most 52 characters: the operator appends a 10-character revision suffix to derive workload names, which must fit the 63-character Kubernetes label limit"
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=ag

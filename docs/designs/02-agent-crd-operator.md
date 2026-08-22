@@ -92,23 +92,39 @@ k8s rolling update mixes old/new traffic and would defeat eval gating, so the op
 
 1. Spec change → `revisionHash(spec)` — **spec only**; the card digest is status, and card drift triggers re-registration, never a new revision → creates a parallel workload `<name>-<hash>`.
 
-   **The hash covers a projection of spec, not all of it (A12).** Two surfaces share one CR: a **behaviour surface**, where a change can alter what the agent does and must therefore pass a gate, and a **policy surface**, which §3.6 compiles to gateway resources and applies in place. Hashing the whole spec would make `replicas: 2 → 3` or a budget edit trigger a full eval-and-canary cycle; hashing too little would let an operator swap the model or the knowledge-graph version under a running agent with **no gate at all**, which would hollow out ADR-0006 and ADR-0005 together. The split is therefore normative, not an implementation detail:
+   **The hash covers a projection of spec, not all of it (A12, r2).** Two surfaces share one CR:
+
+   - **Behaviour surface** — a change to **what the agent can do, produce, or reach**. It must pass a gate, so it mints a revision.
+   - **Policy surface** — a change to **how much, how fast, or who may call**, without changing capability. It is applied in place.
+
+   The discriminator is *capability*, **not** the compile path: `knowledge[].scope`, `tools[].name` and `llm.providers` all compile to gateway resources via §3.6 and are all behaviour-surface, because narrowing what an agent may retrieve changes what it answers exactly as removing a tool does. An earlier wording defined the policy surface as "whatever §3.6 compiles", which would have classified those three as policy and reintroduced the very under-gating this amendment exists to prevent.
+
+   Hashing the whole spec would make `replicas: 2 → 3` pay for an eval-and-canary cycle; hashing too little would let an operator swap the model or the knowledge-graph version under a running agent **with no gate**, hollowing out ADR-0006 and ADR-0005 together.
 
    | Behaviour surface — **mints a revision** | Policy surface — **applied in place** |
    |---|---|
-   | `runtime.image` | `runtime.replicas` (a scale operation) |
-   | `runtime.env`, `runtime.envFrom` | `runtime.resources` (capacity, not behaviour) |
-   | `runtime.sandbox.profile` | `budget` (§3.6 policy; backstop is live) |
-   | `card.path` | `gates` (a gate that re-gated itself on edit could not converge) |
-   | `knowledge[].name`, `knowledge[].version` | `expose` (gateway visibility) |
-   | `knowledge[].scope` (narrowing changes what the agent can see) | `tools[].requiresApproval` (approval policy, gateway-enforced) |
-   | `tools[].name` (a capability grant) | `loop` (lineage governance, gateway-enforced) |
-   | `llm.providers`, `llm.fallback` | `external.oauthClientRef` (credential rotation) |
-   | `external.endpoint` | |
+   | `runtime.image` | `runtime.replicas` — a scale operation |
+   | `runtime.env`, `runtime.envFrom` (by **referent**, not contents) | `runtime.port` — wiring; the operator dials it |
+   | `runtime.sandbox.profile` | `runtime.resources` — see the note below |
+   | `knowledge[].name`, `.version`, `.scope` | `card.path` — a path change is re-registration, exactly as card drift is |
+   | `tools[].name` — a capability grant | `tools[].requiresApproval` — approval policy |
+   | `llm.providers`, `llm.fallback` | `budget`, `gates`, `expose`, `loop` |
+   | `external.endpoint` | `external.inlineCard` — a description, not a grant |
+   | `external.oauthClientRef` — **identity**, see below | |
 
-   Two consequences worth stating because they are easy to get wrong. `tools[].name` mints a revision while its sibling `tools[].requiresApproval` does not, so the hash is computed over a **projected copy** of spec rather than its serialization. And the projection is **allowlist-shaped**: a field added to the CRD in future is policy-surface by default and only becomes revision-minting when this table says so — the safe direction is a missing gate on a policy knob, never a missing gate on behaviour.
+   Four rules that are easy to get wrong:
 
-   Hashing is over the projection's canonical JSON (map keys sorted; list order preserved, since a reordered `tools` list is a different grant sequence and cheap to re-gate).
+   1. **`external.oauthClientRef` is behaviour, not "credential rotation".** It selects *which client* an external agent authenticates as — the principal design 24 §3 keys `can_invoke`, `can_call` and the act-chain check on. Repointing it reaches a different set of tools. (Rotating the credential *behind* a client is a Secret update the hash never sees, which is correct and is what the earlier wording confused it with.)
+   2. **Env sources are hashed by referent.** Repointing at a different Secret is a behaviour change; rotating the value inside one is not. Any union arm the implementation does not name explicitly must hash **injectively** (over-gate), never collapse to a constant — a constant let `fileKeyRef` repoints through ungated.
+   3. **List order is not semantic.** Nothing in the corpus treats tool or provider order as meaningful — design 03 compiles tools to a set-semantics filter and providers to a commutative max-price — while kustomize, helm and `kubectl apply` round-trips all re-serialize lists. The projection therefore **sorts** `tools`, `llm.providers` and `knowledge`, so a re-serialized manifest does not re-gate. `env` keeps its order, which is semantic for interpolation.
+   4. **`runtime.resources` is policy for a specific reason.** "Capacity, not behaviour" is too glib — an OOM-killed agent fails tasks and CPU throttling changes `taskTimeout` terminations, both observable in `task_completion`. The real argument is that resource regressions are caught by **design 20's behavioural drift path** (SLO burn on success rate → `Degraded`), and gating capacity changes would block incident response — the same reasoning that exempts fallback activation below.
+
+   **Classification is compulsory, not defaulted.** Every `AgentSpec` field is named in exactly one column, and `TestEveryFieldIsClassified` reflects over the struct to prove the table is exhaustive: adding a CRD field fails the build until someone classifies it and amends this table. An earlier version of A12 said new fields *default* to policy-surface and called that the safe direction — it is not. A behaviour field added without classification reaches production ungated, silently, which is precisely the ADR-0006 hole; the critic demonstrated it by adding a `SystemPrompt` field and watching the whole suite stay green.
+
+   **Exception, stated because A12's headline claim is otherwise false.** Design 20's `ModelDrifted` remediation activates `llm.fallback` by setting **status**, not spec, so it mints no revision and no eval fires — deliberately, since an eval cycle mid-incident is the last thing wanted. The consequence is that **the model actually answering requests can change without a gate**, as incident response, with design 20's four guardrails (correlation, rate limit, receipt, override) as the compensating control. That is the right design; a reader who concluded from A12 that the serving model can *never* change ungated would be wrong.
+
+   Hashing is over the projection's canonical JSON. The projection struct's field order, JSON tags and `omitempty` are part of the revision contract — `encoding/json` emits in declaration order, so a cosmetic reorder would re-mint every revision in every cluster. `TestGoldenDigest` pins the encoding; a change there is a **migration, not a test edit**.
+
 2. Candidate registers, gets identity, passes readiness — gateway route weight **0** (`phase: Held`).
 3. The gate controller (16) runs the EvalSuite against the candidate through the gateway on a **candidate-only route** whose admitted set is exactly the eval run's own SVID, granted at Job launch and revoked at Job end. Eval traffic otherwise uses the identical path as prod.
 4. Pass → weights shift (canary steps, default `10 → 100`); `activeRevision` flips; superseded revisions GC'd per `revisionHistoryLimit`.
@@ -227,4 +243,6 @@ A11 (2026-08-22, **ADR-0027**) — the ergonomics pass, run at the start of impl
 
 A11 was revised after independent critique (REVISE: 1 blocker, 4 major). The first pass also added `tools[].namespace`, which design 24 §4.1 would have turned into a self-authorizing cross-namespace grant — deleted, and kept deleted by `TestToolBindingCannotReachAnotherNamespace`. The flattening's stated premise ("a binding points at one kind") was false for tools, which resolve against a Connector facet *or* an `MCPServer`; the corrected premise and the namespace-unique resolution rule are now in §3.1. `status.eval` and `status.budget.usdSpentToday` were added so this design's own printer columns have fields to read.
 
-A12 (2026-08-22) — **which spec fields mint a revision.** §3.3 said `revisionHash(spec)` and §3.6 sent `tools`, `budgets`, `llm`, `expose` and KG scopes into the live policy path; nothing reconciled the two, so an implementer had to guess. The dangerous guess was not the expensive one — hashing everything merely makes a replica bump pay for an eval cycle — but the cheap one, where `llm.providers` or `knowledge[].version` compile straight to gateway config and an operator swaps the model or the domain data under a running agent with no gate. §3.3 now carries the normative split, the rule that the projection is allowlist-shaped so new fields default to policy-surface, and the canonicalization. Raised while implementing the reconciler, before any code was written.
+A12 (2026-08-22, **r2 after independent critique returned REVISE**) — **which spec fields mint a revision.** §3.3 said `revisionHash(spec)` and §3.6 sent `tools`, `budgets`, `llm`, `expose` and KG scopes into the live policy path; nothing reconciled the two, so an implementer had to guess. The dangerous guess was not the expensive one — hashing everything merely makes a replica bump pay for an eval cycle — but the cheap one, where `llm.providers` or `knowledge[].version` compile straight to gateway config and an operator swaps the model or the domain data under a running agent with no gate. §3.3 now carries the normative split, the rule that the projection is allowlist-shaped so new fields default to policy-surface, and the canonicalization. Raised while implementing the reconciler, before any code was written.
+
+A12 r2 corrections (2026-08-22). The independent critique found the r1 table wrong in the dangerous direction on one row and incoherent on three more. **`external.oauthClientRef` was on the policy surface labelled "credential rotation"** — it is the identity selector design 24 keys authorization on, so repointing it was an ungated capability change, exactly the hole A12 was written to close. **The stated criterion was a mechanism test** ("whatever §3.6 compiles") while the table was built on a semantic one, so an implementer following the prose would have classified `knowledge[].scope`, `tools[].name` and `llm.providers` as policy. **`card.path` was behaviour** while §3.3 says card *content* may change with no gate at all — the same outcome given opposite treatment; it moves to policy. **The allowlist default was backwards**: classification is now compulsory and enforced by reflection over `AgentSpec`. Added: list-order insensitivity with its justification, the `runtime.resources` reasoning, the `external.inlineCard` row that r1 adjudicated nowhere, and the design-20 fallback exception without which A12's safety claim is simply false.

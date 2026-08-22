@@ -66,3 +66,7 @@ Per-family fixture drills: inject drift (swap canary baseline / poison success-r
 ## 10. Resulting ADRs
 
 ADR-0025 (P4) after critique PASS.
+
+## Amendments
+
+A1 (2026-08-22) — **fallback activation is an ungated change to the answering model, and that is deliberate.** Remediation sets `status.llmFallbackActive`, so design 02's revision hash (A12, computed over a *spec* projection) does not see it: no revision is minted and no eval fires. That avoids an eval cycle mid-incident, which is correct. But it means the model actually answering requests changes with **no gate**, which design 02 A12 otherwise presents as the thing it prevents. The compensating controls are this design's existing four — correlation, rate limit, receipt, operator override — and they are load-bearing precisely because the gate is absent here. Recorded so that neither design can be read as promising a guarantee the pair does not provide.

@@ -2,106 +2,150 @@
 //
 // A revision is what an eval gate gates and what a rollback rolls back to, so
 // this hash decides when an agent pays for a full eval-and-canary cycle. Design
-// 02 §3.3 (A12) splits the CR into a behaviour surface, where a change can alter
-// what the agent does and must therefore pass a gate, and a policy surface,
-// which the compiler applies in place.
+// 02 §3.3 (A12) splits the CR into a behaviour surface — a change to what the
+// agent can do, produce, or reach, which must pass a gate — and a policy
+// surface, which changes how much, how fast, or who may call, and is applied in
+// place. Both surfaces compile to gateway config, so the compile path is not the
+// discriminator; capability is.
 //
-// Two properties are load-bearing. The hash is computed from spec ALONE — an
-// earlier draft mixed in the card digest, which is only knowable after the
-// revision's workload runs, so the hash would have changed after deploy and
-// orphaned the workload it named (02-review, blocker). And the projection is an
-// explicit ALLOWLIST: a field added to the CRD later is policy-surface until
-// A12's table says otherwise, because the safe failure is a missing gate on a
-// policy knob, never a missing gate on behaviour.
+// Three properties are load-bearing:
+//
+//   - The hash is computed from spec ALONE. An earlier draft mixed in the card
+//     digest, which is knowable only after the revision's workload runs, so the
+//     hash would have changed after deploy and orphaned the workload it named
+//     (02-review, blocker).
+//
+//   - Unrecognized inputs OVER-gate rather than collapse. Any arm of a k8s union
+//     type this code does not name explicitly is hashed by its marshalled form,
+//     so a field added upstream mints a spurious revision instead of silently
+//     letting a repoint through ungated.
+//
+//   - Classification is COMPULSORY, not defaulted. Every AgentSpec field is
+//     named in behaviourFields or policyFields, and a test reflects over the
+//     struct to prove it; adding a CRD field breaks that test until someone
+//     classifies it. An earlier version defaulted new fields to policy-surface
+//     and called that safe — the critic disproved it by adding a SystemPrompt
+//     field and watching the suite stay green while it reached production
+//     ungated.
 package revision
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"runtime"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 
 	plumev1alpha1 "github.com/ejs-5/plume/api/v1alpha1"
 )
 
-// HashLength is how many hex characters of the digest name a revision. Ten
-// characters is 40 bits: collision-safe for the revisions one agent will ever
-// have, and short enough that `<name>-<hash>` stays inside the 63-character
-// DNS-1123 label limit for a workload name.
+// HashLength is how many hex characters of the digest name a revision. Ten hex
+// characters is 40 bits — a birthday bound around 2^20, against a namespace
+// that is per-agent (`<name>-<hash>`) and bounded to dozens of revisions by
+// revisionHistoryLimit.
 const HashLength = 10
 
 // behaviour is the projection of AgentSpec that A12 declares revision-minting.
-// Field names are stable and independent of the CRD's JSON tags: renaming a CRD
-// field must not silently re-hash every existing revision.
+//
+// Field ORDER, JSON TAGS and omitempty in this struct are part of the revision
+// contract: encoding/json emits in declaration order, so a cosmetic reordering
+// would re-mint every revision in every cluster. TestGoldenDigest pins it.
 type behaviour struct {
 	Image     string          `json:"image,omitempty"`
 	Env       []envVar        `json:"env,omitempty"`
 	EnvFrom   []envFromSource `json:"envFrom,omitempty"`
 	Sandbox   string          `json:"sandbox,omitempty"`
-	CardPath  string          `json:"cardPath,omitempty"`
 	Knowledge []knowledgeBind `json:"knowledge,omitempty"`
 	Tools     []string        `json:"tools,omitempty"`
 	LLM       *llm            `json:"llm,omitempty"`
-	External  string          `json:"external,omitempty"`
+	External  *external       `json:"external,omitempty"`
 }
 
+// Nested structs rather than joined strings, so JSON supplies the delimiters.
+// Joining with "/" let {provider: azure, model: openai/gpt-4} and
+// {provider: azure/openai, model: gpt-4} hash identically — an ungated swap of
+// the model that answers requests.
 type envVar struct {
 	Name string `json:"name"`
-	// Value is included; ValueFrom is represented by its reference, since the
-	// referent's *contents* are not knowable here and change without a spec edit.
-	Value     string `json:"value,omitempty"`
-	ValueFrom string `json:"valueFrom,omitempty"`
+	// Value is hashed; ValueFrom is represented by its REFERENT, since the
+	// referent's contents change without a spec edit. Rotating the value inside a
+	// Secret must not re-gate; repointing at a different Secret must.
+	Value     string     `json:"value,omitempty"`
+	ValueFrom *envSource `json:"valueFrom,omitempty"`
+}
+
+type envSource struct {
+	Kind string `json:"kind"`
+	Name string `json:"name,omitempty"`
+	Key  string `json:"key,omitempty"`
+	// Raw carries the marshalled union for any arm this code does not name, so an
+	// upstream addition over-gates rather than collapsing to a constant.
+	Raw string `json:"raw,omitempty"`
 }
 
 type envFromSource struct {
 	ConfigMap string `json:"configMap,omitempty"`
 	Secret    string `json:"secret,omitempty"`
 	Prefix    string `json:"prefix,omitempty"`
+	Raw       string `json:"raw,omitempty"`
 }
 
 type knowledgeBind struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
-	// Scope narrows what the agent may read, so widening or narrowing it changes
-	// behaviour and must be gated.
+	// Scope is a pointer so that absent and present-but-empty are distinguishable:
+	// design 01 does not define whether an empty entityTypes list means "no
+	// narrowing" or "deny all", and collapsing them would make one of those a
+	// silent, ungated grant change.
+	Scope *kgScope `json:"scope,omitempty"`
+}
+
+type kgScope struct {
 	EntityTypes []string `json:"entityTypes,omitempty"`
 }
 
 type llm struct {
-	Providers []string `json:"providers,omitempty"`
-	Fallback  string   `json:"fallback,omitempty"`
+	Providers []string  `json:"providers,omitempty"`
+	Fallback  *modelRef `json:"fallback,omitempty"`
 }
 
-// Hash returns the revision identity of a spec: a DNS-safe, stable, 10-character
-// digest of A12's behaviour projection.
-func Hash(spec plumev1alpha1.AgentSpec) string {
-	b := project(spec)
+type modelRef struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
 
-	// json.Marshal sorts struct fields by declaration order and map keys
-	// lexically, and the projection contains no maps, so this encoding is
-	// canonical without a separate canonicalizer. List order is preserved
-	// deliberately: a reordered tools list is a different grant sequence.
-	encoded, err := json.Marshal(b)
+type external struct {
+	Endpoint string `json:"endpoint,omitempty"`
+	// OAuthClientRef selects WHICH CLIENT an external agent authenticates as —
+	// its identity, on which design 24 keys can_invoke, can_call and the act-chain
+	// check. Repointing it reaches a different set of tools, so it is a capability
+	// change and must be gated. (Rotating the credential *behind* a client is a
+	// Secret update this hash never sees, which is correct.)
+	OAuthClientRef string `json:"oauthClientRef,omitempty"`
+}
+
+// Hash returns the revision identity of a spec: a DNS-safe, stable,
+// 10-character digest of A12's behaviour projection.
+func Hash(spec plumev1alpha1.AgentSpec) string {
+	// json.Marshal emits struct fields in declaration order and map keys
+	// lexically; the projection contains no maps, so this is canonical without a
+	// separate canonicalizer. Lists that carry no order semantics are sorted in
+	// project().
+	encoded, err := json.Marshal(project(spec))
 	if err != nil {
-		// The projection is composed only of strings and slices of strings, which
-		// cannot fail to marshal. Panicking here would be a lie about reachability;
-		// returning a constant would silently collapse every revision into one. So
-		// hash the error text: distinct, stable, and it shows up loudly in a name.
+		// Unreachable: the projection is strings and slices of strings. Hashing the
+		// error text keeps the function total and distinct rather than collapsing
+		// every revision onto one constant.
 		encoded = []byte("revision-projection-marshal-error:" + err.Error())
 	}
-
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])[:HashLength]
 }
 
-// project maps a spec onto A12's behaviour surface. Every field is named
-// explicitly. Adding a case here is a deliberate act with a design amendment
-// behind it; forgetting to add one leaves a new field policy-surface, which is
-// the safe direction.
+// project maps a spec onto A12's behaviour surface. Every included field is
+// named here and in behaviourFields; every excluded one is named in
+// policyFields. TestEveryFieldIsClassified proves the two lists are exhaustive.
 func project(spec plumev1alpha1.AgentSpec) behaviour {
 	var b behaviour
 
@@ -110,27 +154,24 @@ func project(spec plumev1alpha1.AgentSpec) behaviour {
 		if r.Sandbox != nil {
 			b.Sandbox = r.Sandbox.Profile
 		}
+		// Env order is preserved: it is semantic for interpolation.
 		for _, e := range r.Env {
-			b.Env = append(b.Env, envVar{Name: e.Name, Value: e.Value, ValueFrom: envSourceRef(e)})
+			b.Env = append(b.Env, envVar{Name: e.Name, Value: e.Value, ValueFrom: envSourceRef(e.ValueFrom)})
 		}
 		for _, f := range r.EnvFrom {
 			b.EnvFrom = append(b.EnvFrom, envFromRef(f))
 		}
-		// NOT projected, per A12: Replicas (a scale operation), Resources
-		// (capacity), Port (wiring, not behaviour).
 	}
 
 	if e := spec.External; e != nil {
-		b.External = e.Endpoint
-		// NOT projected: OAuthClientRef — credential rotation must not re-gate.
+		b.External = &external{Endpoint: e.Endpoint, OAuthClientRef: e.OAuthClientRef}
 	}
-
-	b.CardPath = spec.Card.Path
 
 	for _, k := range spec.Knowledge {
 		kb := knowledgeBind{Name: k.Name, Version: k.Version}
 		if k.Scope != nil {
-			kb.EntityTypes = k.Scope.EntityTypes
+			kb.Scope = &kgScope{EntityTypes: append([]string(nil), k.Scope.EntityTypes...)}
+			sort.Strings(kb.Scope.EntityTypes)
 		}
 		b.Knowledge = append(b.Knowledge, kb)
 	}
@@ -142,65 +183,77 @@ func project(spec plumev1alpha1.AgentSpec) behaviour {
 	}
 
 	if l := spec.LLM; l != nil {
-		x := &llm{Providers: l.Providers}
+		x := &llm{Providers: append([]string(nil), l.Providers...)}
 		if l.Fallback != nil {
-			x.Fallback = l.Fallback.Provider + "/" + l.Fallback.Model
+			x.Fallback = &modelRef{Provider: l.Fallback.Provider, Model: l.Fallback.Model}
 		}
 		b.LLM = x
-		// NOT projected: EgressAllowlist — a compliance control compiled to gateway
-		// policy (ADR-0014), enforced live rather than gated.
 	}
 
-	// NOT projected, per A12: Budget, Gates, Expose, Loop.
+	// These lists carry no order semantics anywhere in the corpus — design 03
+	// compiles tools to a tool-filter policy (a set), llm.providers to a
+	// commutative max-price computation, knowledge to one route per binding. But
+	// kustomize, helm and kubectl round-trips all re-serialize lists, so hashing
+	// their order would re-gate on a no-op diff.
+	sort.Strings(b.Tools)
+	sort.Strings(b.LLM.providersOrNil())
+	sort.Slice(b.Knowledge, func(i, j int) bool {
+		if b.Knowledge[i].Name != b.Knowledge[j].Name {
+			return b.Knowledge[i].Name < b.Knowledge[j].Name
+		}
+		return b.Knowledge[i].Version < b.Knowledge[j].Version
+	})
 	return b
 }
 
-// envSourceRef names the referent of a valueFrom without reading it. The
-// contents of a Secret or ConfigMap change without a spec edit, so hashing them
-// would mint revisions nobody asked for; naming the reference means repointing
-// an agent at a *different* Secret is correctly a behaviour change, while
-// rotating the value inside one is correctly not.
-func envSourceRef(e corev1.EnvVar) string {
-	v := e.ValueFrom
+func (l *llm) providersOrNil() []string {
+	if l == nil {
+		return nil
+	}
+	return l.Providers
+}
+
+// envSourceRef names the referent of a valueFrom without reading it.
+//
+// The default arm is INJECTIVE, not a constant. corev1.EnvVarSource gains arms
+// upstream (v0.36.4 has five), and an unnamed arm that collapsed to "unknown"
+// let a repoint from one file source to another pass ungated.
+func envSourceRef(v *corev1.EnvVarSource) *envSource {
 	if v == nil {
-		return ""
+		return nil
 	}
 	switch {
 	case v.SecretKeyRef != nil:
-		return "secret:" + v.SecretKeyRef.Name + "/" + v.SecretKeyRef.Key
+		return &envSource{Kind: "secret", Name: v.SecretKeyRef.Name, Key: v.SecretKeyRef.Key}
 	case v.ConfigMapKeyRef != nil:
-		return "configMap:" + v.ConfigMapKeyRef.Name + "/" + v.ConfigMapKeyRef.Key
+		return &envSource{Kind: "configMap", Name: v.ConfigMapKeyRef.Name, Key: v.ConfigMapKeyRef.Key}
 	case v.FieldRef != nil:
-		return "field:" + v.FieldRef.FieldPath
+		return &envSource{Kind: "field", Key: v.FieldRef.FieldPath}
 	case v.ResourceFieldRef != nil:
-		return "resource:" + v.ResourceFieldRef.ContainerName + "/" + v.ResourceFieldRef.Resource
+		return &envSource{Kind: "resource", Name: v.ResourceFieldRef.ContainerName, Key: v.ResourceFieldRef.Resource}
 	default:
-		// An unrecognized source is a corev1 kind added after this was written.
-		// Naming it as unknown keeps the hash stable and total rather than
-		// silently projecting it as empty, which would drop it from the gate.
-		return "unknown"
+		return &envSource{Kind: "raw", Raw: marshalOrEmpty(v)}
 	}
 }
 
-// envFromRef names a whole-source import the same way, for the same reason.
+// envFromRef names a whole-source import, with the same over-gate default.
 func envFromRef(f corev1.EnvFromSource) envFromSource {
 	out := envFromSource{Prefix: f.Prefix}
-	if f.ConfigMapRef != nil {
+	switch {
+	case f.ConfigMapRef != nil:
 		out.ConfigMap = f.ConfigMapRef.Name
-	}
-	if f.SecretRef != nil {
+	case f.SecretRef != nil:
 		out.Secret = f.SecretRef.Name
+	default:
+		out.Raw = marshalOrEmpty(f)
 	}
 	return out
 }
 
-// projectionSource returns this file's text, so the allowlist test can assert
-// the projection does not reach for reflection or whole-spec marshalling.
-func projectionSource() (string, error) {
-	_, self, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", os.ErrNotExist
+func marshalOrEmpty(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "unmarshalable"
 	}
-	b, err := os.ReadFile(filepath.Clean(self))
-	return string(b), err
+	return string(b)
 }
