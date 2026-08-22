@@ -1051,11 +1051,16 @@
     <thead><tr><th>Stage</th><th>Binding</th><th>Notes</th></tr></thead>
     <tbody>
       <tr><td>Versioning / packaging</td><td><b>KitOps ModelKits</b> (CNCF ModelPack)</td><td>Models, datasets, prompts, configs as OCI artifacts in the registry you already run; <code>kit://</code> URIs; cosign-signed like everything else</td></tr>
-      <tr><td>Serving</td><td><b>KServe</b> <code>InferenceService</code></td><td>Fronts <b>Triton</b> / vLLM — the runtime is a one-line swap; <b>Kueue</b> for GPU queueing; llm-d only for one giant model at high throughput</td></tr>
+      <tr><td>Serving (classic / predictive)</td><td><b>KServe</b> <code>InferenceService</code> fronting <b>Triton</b>/vLLM; <b>Kueue</b> for GPU queueing</td></tr>
+      <tr><td>Serving (generative)</td><td><b>KServe <code>LLMInferenceService</code></b> — built on <b>llm-d</b> (CNCF Sandbox): KV-cache-aware routing, disaggregated prefill/decode, tiered KV offload, scale-to-zero</td></tr>
       <tr><td>Training</td><td><b>Kubeflow Trainer v2</b> <code>TrainJob</code></td><td>SFT / DPO / GRPO built in; <b>Unsloth</b> is landing as a BuiltinTrainer — ride it, don't wrap it</td></tr>
       <tr><td>Experiments</td><td><b>MLflow</b></td><td>Tracking only; runs launched from the CLI</td></tr>
     </tbody>
   </table></div>
+  <div class="prose">
+    <p><b>As designed (ADR-0026 + design 25 A1)</b>: KServe <b>split its API at v0.17</b>, and the generative path — <code>LLMInferenceService</code> — <b>is built on llm-d</b>. The honest statement is therefore that plume binds llm-d <em>transitively</em> through KServe, not "only for one giant model" as v0.1 had it. Generative pools bind at the gateway as a <b>GAIE <code>InferencePool</code></b> (verified OSS in agentgateway), so KV-cache-aware routing and prefill/decode disaggregation arrive by binding a contract rather than building anything — while budgets, receipts, authz and egress allowlists stay exactly where they always are. Because llm-d is Sandbox-stage and moving fast, plume pins the two <b>contracts</b> and never llm-d internals.</p>
+    <p><b>KServe runs in RawDeployment mode — a stated constraint, not a default.</b> It is what lets KServe run without Knative or Istio, which is the only reason binding it respects the pod budget (rule 5) and the meshless core (ADR-0012); Serverless mode is forbidden and CI asserts no Knative CRDs are required. Kits are the <b>only serving source</b> (signed, digest-pinned), resolved by a chart-shipped <code>ClusterStorageContainer</code>. The shadow InferenceService gets a <b>candidate-only route admitting just the eval run principal</b>; general registration happens only on pass. The operator <b>writes <code>internal/&lt;model&gt;</code> pricing rows</b> so agent policy compilation can never fail on an unpriced in-cluster model. Models gate through design 16's flow with <b>their own metric family</b> (§08).</p>
+  </div>
 </section>
 
 <!-- ══════════════════════ 11 DX ══════════════════════ -->

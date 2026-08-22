@@ -82,3 +82,12 @@ CRD matrix (kit-only, train+serve, registry-only); gate reuse e2e: model candida
 ## 10. Resulting ADRs
 
 ADR-0026 (P5+ent) after critique PASS.
+
+## 11. Amendments
+
+- **A1 (2026-08-22, landscape correction)**: the v1 framing "llm-d only for one giant model at high throughput" is **stale and was a hidden dependency**. KServe v0.17 split its API and its generative path — **`LLMInferenceService` — is built on llm-d**, so binding KServe for LLM serving binds llm-d transitively regardless. Corrected design:
+  - **`serve.runtime` splits by model kind**: generative ⇒ **`LLMInferenceService`** (llm-d-backed: KV-cache-aware routing, disaggregated prefill/decode, tiered KV offload, scale-to-zero); classic/predictive ⇒ **`InferenceService`** (the Triton/vLLM path already designed). The chart installs KServe's `llmisvc` component only at `plus` tier with generative serving enabled.
+  - **Gateway binding is GAIE, not a plain Backend**: the compiler emits an **`InferencePool`** (Gateway API Inference Extension) for generative pools and routes to it from the HTTPRoute — **verified OSS in agentgateway** (ADR-0020 D1 holds). plume keeps exactly what it always keeps at the gateway (budgets, receipts, authz, egress allowlists); llm-d does scheduling *below* that seam. Recorded as a design 03 §3.4 row.
+  - **Weight**: +1 endpoint-picker (EPP) per inference pool, plus the vLLM serving pods — **workload** state per served model, the design-13 FalkorDB category, entered in the ledger. Nothing added to core.
+  - **Bind contracts, not internals**: llm-d is CNCF *Sandbox* and moved v0.5→v0.6 in two months; P5 is the last phase, so plume pins `LLMInferenceService` + `InferencePool` and treats llm-d as the implementation behind them — the provider-slot rule applied to serving.
+  - Research: `docs/research/llm-d-2026-08.md`.
