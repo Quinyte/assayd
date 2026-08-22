@@ -9,6 +9,8 @@ package envtest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -85,6 +87,10 @@ func newNamespace(t *testing.T) string {
 }
 
 // nsName turns a Go test name into a DNS-1123 label.
+//
+// A hash suffix, not plain truncation: subtest names share long prefixes, and
+// two that differ only past the cut produced the same namespace — which showed
+// up as "already exists" from an unrelated test rather than as a collision.
 func nsName(testName string) string {
 	s := strings.ToLower(testName)
 	s = strings.Map(func(r rune) rune {
@@ -96,8 +102,10 @@ func nsName(testName string) string {
 		}
 	}, s)
 	s = strings.Trim(s, "-")
-	if len(s) > 55 {
-		s = strings.Trim(s[:55], "-")
+	sum := sha256.Sum256([]byte(testName))
+	suffix := hex.EncodeToString(sum[:])[:6]
+	if len(s) > 48 {
+		s = strings.Trim(s[:48], "-")
 	}
-	return "t-" + s
+	return "t-" + s + "-" + suffix
 }

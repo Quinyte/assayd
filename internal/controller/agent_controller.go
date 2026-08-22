@@ -239,6 +239,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 		status.ActiveRevision = desired
 		status.CandidateRevision = ""
+		// Rolling A -> B -> A leaves A in the superseded list, where a revision
+		// that is currently serving reads as one that was abandoned.
+		status.SupersededCandidates = removeString(status.SupersededCandidates, desired)
 		status.Phase = plumev1alpha1.PhaseReady
 		conds.set(plumev1alpha1.CondProgressing, metav1.ConditionFalse, "RolloutComplete",
 			fmt.Sprintf("revision %s is the active revision", desired))
@@ -352,39 +355,33 @@ func templateEquivalent(existing, desired *appsv1.Deployment) bool {
 }
 
 // containersEquivalent reports whether the running containers match what this
-// operator rendered.
+// operator rendered. The comparison is EXACT, with no exemptions.
 //
-// The comparison is EXACT over the whole container, with the API server's own
-// defaults normalized away first. A hand-listed set of fields was the weaker
-// design: it left every field nobody thought to list invisible, while the fields
-// that WERE listed were already covered by the derivative check in the caller —
-// so the list added no coverage while looking as though it did. Exact-with-
-// normalization inverts that: a field nobody listed is still compared, and only
-// the named defaults are exempt.
+// It took three attempts to get here, and the last one deleted code. A
+// hand-listed set of fields added no coverage: everything it named was already
+// caught by the caller's derivative comparison, and the one class it could
+// uniquely catch — fields plume leaves unset — it did not check. Normalizing
+// four server-defaulted fields away fixed that but left those four as
+// unreverted drift, one of which (imagePullPolicy: Never, pinning whatever
+// local image carries the tag) defeated the image revert entirely. deploymentFor
+// now SETS all four, so defaulting has nothing to fill, read-back matches, and
+// every field is compared.
+//
+// The general rule, worth keeping: apimachinery's derivative comparison skips
+// zero values only for Slice, String, Map and Ptr kinds — scalars fall through
+// to full equality. So the gap a derivative comparison leaves is exactly the
+// UNSET slice, string, map and pointer fields, which is where drift hides:
+// Command, Args, VolumeMounts, WorkingDir, capability lists.
 func containersEquivalent(existing, desired []corev1.Container) bool {
 	if len(existing) != len(desired) {
 		return false
 	}
 	for i := range desired {
-		if !equality.Semantic.DeepEqual(normalizeContainer(existing[i]), normalizeContainer(desired[i])) {
+		if !equality.Semantic.DeepEqual(existing[i], desired[i]) {
 			return false
 		}
 	}
 	return true
-}
-
-// normalizeContainer clears the fields the API server fills in on write. plume
-// never sets these, so comparing them would make the operator rewrite the
-// Deployment on every reconcile and never converge.
-func normalizeContainer(c corev1.Container) corev1.Container {
-	out := *c.DeepCopy()
-	out.TerminationMessagePath = ""
-	out.TerminationMessagePolicy = ""
-	out.ImagePullPolicy = ""
-	for i := range out.Ports {
-		out.Ports[i].Protocol = ""
-	}
-	return out
 }
 
 // deploymentFor renders one revision's workload. Design 02 §6: non-root,
@@ -429,7 +426,24 @@ func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, rev string) 
 						Resources: rt.Resources,
 						Env:       rt.Env,
 						EnvFrom:   rt.EnvFrom,
-						Ports:     []corev1.ContainerPort{{Name: "a2a", ContainerPort: port(rt)}},
+						Ports: []corev1.ContainerPort{{
+							Name:          "a2a",
+							ContainerPort: port(rt),
+							// Set explicitly rather than left to defaulting, so drift is visible.
+							Protocol: corev1.ProtocolTCP,
+						}},
+						// These three were previously left unset and therefore exempted from
+						// comparison, which made them unreverted drift rather than defaults.
+						// The sharp one is the pull policy: `Never` tells the kubelet to use
+						// whatever local image already carries this tag, so reverting the tag
+						// corrects nothing, and nothing pulls so nothing is signature-checked
+						// (ADR-0019). Always is deliberate — plume permits tags, and a tag
+						// does not identify content.
+						ImagePullPolicy: corev1.PullAlways,
+						// The kubelet reads up to 4KB from this path into pod status, which
+						// anyone with pod-get can read.
+						TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+						TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: no,
 							ReadOnlyRootFilesystem:   yes,

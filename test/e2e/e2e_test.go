@@ -27,7 +27,10 @@ import (
 	plumev1alpha1 "github.com/ejs-5/plume/api/v1alpha1"
 )
 
-var k8s client.Client
+var (
+	k8s    client.Client
+	notRun bool
+)
 
 func TestMain(m *testing.M) {
 	// Opt-in, deliberately. This suite CREATES objects in whatever cluster the
@@ -35,9 +38,12 @@ func TestMain(m *testing.M) {
 	// a test, it is a write. `make e2e` sets this after creating a k3d cluster;
 	// a bare `go test ./...` skips rather than writing somewhere real.
 	if os.Getenv("PLUME_E2E") != "1" {
-		println("e2e: skipping — set PLUME_E2E=1, or run `make e2e`, which creates a " +
-			"disposable k3d cluster first. This suite writes to the current context.")
-		os.Exit(0)
+		// Exit 0 would print "ok" for a suite that ran nothing, which is one env
+		// var away from silently green. Registering a failing placeholder instead
+		// keeps `go test ./...` honest about what did not run, while still not
+		// writing to whatever cluster the current context happens to name.
+		notRun = true
+		os.Exit(m.Run())
 	}
 
 	// Past the opt-in, a skipped e2e is an untested feature: fail loudly.
@@ -84,6 +90,7 @@ func TestMain(m *testing.M) {
 // smallest possible real-cluster assertion: it proves the manifests apply to a
 // distribution plume actually targets, which nothing else in the suite does.
 func TestCRDInstallsAndAcceptsTheMinimalAgent(t *testing.T) {
+	requireCluster(t)
 	ctx := context.Background()
 	ensureNamespace(t, ctx, "plume-e2e")
 
@@ -115,6 +122,7 @@ func TestCRDInstallsAndAcceptsTheMinimalAgent(t *testing.T) {
 // whose pods actually reach Ready. Written as a skip with a stated reason rather
 // than omitted, so the gap is visible in the run output.
 func TestWorkloadActuallyRuns(t *testing.T) {
+	requireCluster(t)
 	t.Skip("pending: needs the operator deployed to the cluster (cmd/operator + chart, design 07). " +
 		"Until then no suite proves a plume-created pod reaches Ready — envtest cannot, " +
 		"because it has no kubelet.")
@@ -137,5 +145,26 @@ func ensureNamespace(t *testing.T, ctx context.Context, name string) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	if err := k8s.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
 		t.Fatalf("create namespace %s: %v", name, err)
+	}
+}
+
+// TestE2EWasNotRun fails loudly when the suite was skipped, so a green `go test
+// ./...` cannot be mistaken for e2e coverage. `make e2e` sets PLUME_E2E=1 and
+// this never runs.
+func TestE2EWasNotRun(t *testing.T) {
+	if !notRun {
+		t.Skip("the suite ran")
+	}
+	t.Fatal("e2e did not run: set PLUME_E2E=1, or use `make e2e`, which creates a " +
+		"disposable k3d cluster first. This suite writes to the current kube context, " +
+		"so it does not opt itself in.")
+}
+
+// requireCluster skips a test that needs a live cluster when the suite was not
+// opted in. TestE2EWasNotRun is what makes that visible rather than silent.
+func requireCluster(t *testing.T) {
+	t.Helper()
+	if notRun {
+		t.Skip("no cluster: see TestE2EWasNotRun")
 	}
 }
