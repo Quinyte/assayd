@@ -148,8 +148,8 @@ func TestPrinterColumnsMatchTheDesign(t *testing.T) {
 // enforce it. This test is the enforcement.
 func TestConditionVocabularyIsClosed(t *testing.T) {
 	want := designConditions() // declared in agent_types.go beside the constants
-	if len(want) != 20 {
-		t.Fatalf("design 02 §3.1 declares 20 conditions; the constant list has %d", len(want))
+	if len(want) != 21 {
+		t.Fatalf("design 02 §3.1 declares 21 conditions (20 + Progressing per A13); the constant list has %d", len(want))
 	}
 	seen := map[string]bool{}
 	for _, c := range want {

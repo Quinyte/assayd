@@ -263,6 +263,12 @@ const (
 	CondKilled                      = "Killed"
 	CondReady                       = "Ready"
 	CondDegraded                    = "Degraded"
+	// CondProgressing reports a rollout in flight. Added by A13: without it, a
+	// spec edit on a serving agent had to be reported either as Canary — whose
+	// meaning §3.3 fixes as "weights are shifting", which is false before design
+	// 03 exists — or as Ready=False on an agent that is serving normally, which
+	// trips every alert keyed on the canonical condition.
+	CondProgressing = "Progressing"
 )
 
 type AgentStatus struct {
@@ -289,6 +295,10 @@ type AgentStatus struct {
 	// reading conditions.
 	// +optional
 	Eval *EvalStatus `json:"eval,omitempty"`
+	// Conditions is a map-list keyed by type: the API server then rejects
+	// duplicates outright, for every writer rather than only this operator.
+	// +listType=map
+	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// +optional
@@ -363,7 +373,7 @@ type Agent struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   AgentSpec   `json:"spec,omitempty"`
+	Spec   AgentSpec   `json:"spec"`
 	Status AgentStatus `json:"status,omitempty"`
 }
 
@@ -404,5 +414,6 @@ func designConditions() []string {
 		CondKilled,
 		CondReady,
 		CondDegraded,
+		CondProgressing,
 	}
 }

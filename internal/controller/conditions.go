@@ -43,10 +43,27 @@ func (c *conditionSet) set(condType string, status metav1.ConditionStatus, reaso
 // untouched — clearing another controller's condition would be a write race.
 var ownedTypes = map[string]bool{
 	plumev1alpha1.CondReady:               true,
+	plumev1alpha1.CondProgressing:         true,
 	plumev1alpha1.CondGatesSkipped:        true,
 	plumev1alpha1.CondGatesPassed:         true,
 	plumev1alpha1.CondSandboxDowngraded:   true,
 	plumev1alpha1.CondTaskStateUnverified: true,
+	plumev1alpha1.CondDegraded:            true,
+}
+
+// stickyTypes are owned conditions that must stay in the list once set, flipped
+// to False rather than removed.
+//
+// Dropping an abnormal-true condition (SandboxDowngraded, TaskStateUnverified)
+// when it stops applying is idiomatic — its absence means "not degraded". But
+// Ready, Progressing and GatesPassed are normal-true conditions whose absence is
+// indistinguishable from "never evaluated". Dropping GatesPassed when an
+// EvalSuite CRD is uninstalled would silently erase the record that a revision
+// ever passed a gate.
+var stickyTypes = map[string]bool{
+	plumev1alpha1.CondReady:       true,
+	plumev1alpha1.CondProgressing: true,
+	plumev1alpha1.CondGatesPassed: true,
 }
 
 // merge folds this pass's assertions into the existing conditions.
@@ -56,10 +73,15 @@ func (c *conditionSet) merge(existing []metav1.Condition) []metav1.Condition {
 	for _, prev := range existing {
 		next, asserted := c.asserted[prev.Type]
 		if !asserted {
-			if ownedTypes[prev.Type] {
-				continue // owned, observed to be false this pass: drop it
+			switch {
+			case stickyTypes[prev.Type]:
+				// Keep the record; a later pass that has an opinion will overwrite it.
+				out = append(out, prev)
+			case ownedTypes[prev.Type]:
+				// Abnormal-true and no longer observed: its absence is the signal.
+			default:
+				out = append(out, prev) // another controller's; leave it alone
 			}
-			out = append(out, prev) // another controller's; leave it alone
 			continue
 		}
 		// LastTransitionTime marks when the STATUS changed, not when it was last

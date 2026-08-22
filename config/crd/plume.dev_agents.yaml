@@ -617,6 +617,9 @@ spec:
                   type: object
                 type: array
               conditions:
+                description: |-
+                  Conditions is a map-list keyed by type: the API server then rejects
+                  duplicates outright, for every writer rather than only this operator.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -672,6 +675,9 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               eval:
                 description: |-
                   Eval carries the last gate result. It is a printer column because it answers
@@ -717,6 +723,8 @@ spec:
                   type: string
                 type: array
             type: object
+        required:
+        - spec
         type: object
         x-kubernetes-validations:
         - message: 'an Agent name must be at most 52 characters: the operator appends

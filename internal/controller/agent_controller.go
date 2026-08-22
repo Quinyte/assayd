@@ -17,6 +17,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -55,14 +56,36 @@ type AgentReconciler struct {
 	// §3.3 makes gating conditional on it: on a core-only install rollouts
 	// proceed with a loud GatesSkipped rather than blocking forever on a
 	// controller that was never installed.
+	//
+	// UNSET MEANS "ASSUME INSTALLED", which holds. The previous default returned
+	// false, so an unwired reconciler promoted everything through declared gates
+	// while asserting a CRD check it never performed. A default on a safety hook
+	// must fail in the recoverable direction: holding is recoverable, ungated
+	// promotion is not. Prefer NewAgentReconciler, which refuses to construct one
+	// without the hook.
 	EvalSuiteInstalled func() bool
 }
 
-// +kubebuilder:rbac:groups=plume.dev,resources=agents,verbs=get;list;watch;create;update;patch;delete
+// NewAgentReconciler builds a reconciler with its dependencies stated, so that
+// wiring a manager cannot silently decide ADR-0006's fate by omission.
+func NewAgentReconciler(c client.Client, scheme *runtime.Scheme, evalSuiteInstalled func() bool) (*AgentReconciler, error) {
+	switch {
+	case c == nil:
+		return nil, fmt.Errorf("agent reconciler: client is required")
+	case scheme == nil:
+		return nil, fmt.Errorf("agent reconciler: scheme is required")
+	case evalSuiteInstalled == nil:
+		return nil, fmt.Errorf("agent reconciler: evalSuiteInstalled is required — " +
+			"whether the EvalSuite CRD is present decides whether rollouts are eval-gated " +
+			"(ADR-0006), and it must be an explicit decision rather than a zero value")
+	}
+	return &AgentReconciler{Client: c, Scheme: scheme, EvalSuiteInstalled: evalSuiteInstalled}, nil
+}
+
+// +kubebuilder:rbac:groups=plume.dev,resources=agents,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=plume.dev,resources=agents/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=plume.dev,resources=agents/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -82,8 +105,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if err := r.Update(ctx, &agent); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add finalizer to %s: %w", req.NamespacedName, err)
 		}
-		// The update re-triggers reconcile with the finalizer present.
-		return ctrl.Result{}, nil
+		// Requeue explicitly rather than relying on our own write producing a watch
+		// event: finalizers are metadata and do not bump metadata.generation, so
+		// adding a GenerationChangedPredicate later would strand every new Agent here.
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// An external agent runs elsewhere: there is no workload to materialize. The
@@ -91,6 +116,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// components that do not exist yet, so it is held rather than pretended Ready.
 	if agent.Spec.External != nil {
 		return r.reconcileExternal(ctx, &agent)
+	}
+
+	if agent.Spec.Runtime == nil {
+		// Admission requires exactly one of runtime/external, and spec is now
+		// required — but an operator must not panic on an object it was handed,
+		// whatever admission did or did not run when it was created.
+		return ctrl.Result{}, r.reportUnreconcilable(ctx, &agent)
 	}
 
 	desired := revision.Hash(agent.Spec)
@@ -131,18 +163,25 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	switch {
 	case !ready:
-		// The workload exists but has not reported availability. Until the gate
-		// controller exists this is the only holding state the operator can enter
-		// on its own.
-		if status.ActiveRevision == "" {
-			status.Phase = plumev1alpha1.PhasePending
-		} else {
-			// An active revision still serves while its successor comes up.
-			status.Phase = plumev1alpha1.PhaseCanary
-		}
 		status.CandidateRevision = desired
-		conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadNotAvailable",
-			fmt.Sprintf("revision %s has no available replicas yet", desired))
+		if status.ActiveRevision == "" {
+			// Nothing serves yet.
+			status.Phase = plumev1alpha1.PhasePending
+			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadNotAvailable",
+				fmt.Sprintf("revision %s has no available replicas yet", desired))
+			break
+		}
+		// An active revision still holds all traffic and is healthy. Reporting
+		// Ready=False here would trip every alert keyed on the canonical condition
+		// on any routine spec edit; reporting Canary would claim a weighted shift
+		// that §3.3 defines and that no gateway is performing yet. The rollout is
+		// carried by CandidateRevision and Progressing instead (A13).
+		status.Phase = plumev1alpha1.PhaseReady
+		conds.set(plumev1alpha1.CondReady, metav1.ConditionTrue, "Available",
+			fmt.Sprintf("revision %s is serving", status.ActiveRevision))
+		conds.set(plumev1alpha1.CondProgressing, metav1.ConditionTrue, "CandidateNotAvailable",
+			fmt.Sprintf("revision %s is rolling out; %s continues to serve",
+				desired, status.ActiveRevision))
 
 	case !r.gatesSatisfied(&agent):
 		// Gates are required and have not passed: hold at zero traffic (§3.3).
@@ -160,17 +199,36 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		status.ActiveRevision = desired
 		status.CandidateRevision = ""
 		status.Phase = plumev1alpha1.PhaseReady
+		conds.set(plumev1alpha1.CondProgressing, metav1.ConditionFalse, "RolloutComplete",
+			fmt.Sprintf("revision %s is the active revision", desired))
 		conds.set(plumev1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", desired))
 	}
 
-	if err := r.collectGarbage(ctx, &agent, owned, status); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation
-	return ctrl.Result{}, r.writeStatus(ctx, &agent, status)
+	if err := r.writeStatus(ctx, &agent, status); err != nil {
+		return ctrl.Result{}, err
+	}
+	// Collect AFTER the status that authorizes it is durable: a destructive act
+	// ordered ahead of its own record is backwards, even when it converges.
+	return ctrl.Result{}, r.collectGarbage(ctx, &agent, owned, status)
+}
+
+// reportUnreconcilable records why an Agent cannot be acted on, rather than
+// error-looping with an empty status that says nothing.
+func (r *AgentReconciler) reportUnreconcilable(ctx context.Context, agent *plumev1alpha1.Agent) error {
+	status := agent.Status.DeepCopy()
+	status.Phase = plumev1alpha1.PhaseDegraded
+	conds := newConditionSet(agent.Generation)
+	conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "NoWorkloadSpecified",
+		"neither spec.runtime nor spec.external is set, so there is nothing to reconcile; "+
+			"set exactly one of them")
+	conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "NoWorkloadSpecified",
+		"the agent specifies no workload")
+	status.Conditions = conds.merge(agent.Status.Conditions)
+	status.ObservedGeneration = agent.Generation
+	return r.writeStatus(ctx, agent, status)
 }
 
 // reconcileExternal handles an agent that runs outside this cluster.
@@ -205,17 +263,39 @@ func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alph
 		return fmt.Errorf("get workload %s: %w", desired.Name, err)
 	}
 
-	// The revision hash covers everything that changes the pod template, so a
-	// workload for a given revision never needs its template rewritten. Only the
-	// policy-surface fields (§3.3 A12) can change under a fixed revision, and of
-	// those only replicas reaches the Deployment.
-	if existing.Spec.Replicas == nil || *existing.Spec.Replicas != *desired.Spec.Replicas {
+	// Reconcile the WHOLE template, not just replicas. Two reasons, and the
+	// second is the important one:
+	//
+	//  1. A12's policy-surface fields (resources, port) are "applied in place",
+	//     and they reach the pod template — syncing only replicas made raising
+	//     memory to stop OOM kills a silent no-op on a green agent.
+	//  2. Out-of-band drift must be corrected. Without this, anyone with
+	//     deployments/update could rewrite the image of a gated revision: the gate
+	//     passed on X, the pods run Y, and the CR asserts X. That bypasses
+	//     ADR-0006 entirely and makes the hardening below a create-time decoration
+	//     rather than an invariant.
+	if !templateEquivalent(&existing, desired) {
 		existing.Spec.Replicas = desired.Spec.Replicas
+		existing.Spec.Template = desired.Spec.Template
 		if err := r.Update(ctx, &existing); err != nil {
-			return fmt.Errorf("scale workload %s: %w", existing.Name, err)
+			return fmt.Errorf("converge workload %s: %w", existing.Name, err)
 		}
 	}
 	return nil
+}
+
+// templateEquivalent reports whether a workload already matches what this
+// revision and its current policy fields ask for. Comparing the rendered
+// template rather than tracking individual fields means a field added to
+// deploymentFor later is converged automatically instead of being forgotten.
+func templateEquivalent(existing, desired *appsv1.Deployment) bool {
+	if existing.Spec.Replicas == nil || desired.Spec.Replicas == nil ||
+		*existing.Spec.Replicas != *desired.Spec.Replicas {
+		return false
+	}
+	// The API server defaults many PodSpec fields on write, so a naive DeepEqual
+	// would never converge. Compare the fields this operator actually sets.
+	return equality.Semantic.DeepDerivative(desired.Spec.Template, existing.Spec.Template)
 }
 
 // deploymentFor renders one revision's workload. Design 02 §6: non-root,
@@ -294,6 +374,14 @@ func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *plumev1a
 // CRD installed the gate requirement does not apply (§3.3 core tier); with it
 // installed, the gate controller does not exist yet, so nothing can pass and the
 // agent holds — which is the fail-closed direction.
+// gatesSatisfied reports whether this agent may take traffic.
+//
+// There is deliberately no separate branch for the unwired case: evalSuiteInstalled
+// reports true when the hook is unset, which lands here as "assume the CRD is
+// present", and an agent with declared gates then holds. A second nil-check
+// would read as load-bearing while never changing an outcome — and defensive
+// code no test can pin is worse than none, because it invites the next reader to
+// trust it.
 func (r *AgentReconciler) gatesSatisfied(agent *plumev1alpha1.Agent) bool {
 	if !r.evalSuiteInstalled() {
 		return true
@@ -301,15 +389,22 @@ func (r *AgentReconciler) gatesSatisfied(agent *plumev1alpha1.Agent) bool {
 	return len(agent.Spec.Gates) == 0
 }
 
+// evalSuiteInstalled defaults to TRUE when unset, so an unwired reconciler holds
+// rather than promoting ungated. See the field comment.
 func (r *AgentReconciler) evalSuiteInstalled() bool {
 	if r.EvalSuiteInstalled == nil {
-		return false
+		return true
 	}
 	return r.EvalSuiteInstalled()
 }
 
 func (r *AgentReconciler) assessGates(agent *plumev1alpha1.Agent, c *conditionSet) {
 	switch {
+	case r.EvalSuiteInstalled == nil:
+		// Unwired: we do not know, so we hold and say exactly that.
+		c.set(plumev1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateDetectionUnwired",
+			"the operator was built without EvalSuite detection, so it cannot tell whether "+
+				"this rollout should be eval-gated; holding rather than promoting ungated")
 	case !r.evalSuiteInstalled():
 		c.set(plumev1alpha1.CondGatesSkipped, metav1.ConditionTrue, "EvalSuiteCRDAbsent",
 			"the EvalSuite CRD is not installed, so this rollout is NOT eval-gated (design 02 §3.3, core tier)")
@@ -372,7 +467,13 @@ func (r *AgentReconciler) collectGarbage(
 	}
 	// Newest first, so the oldest fall outside the window.
 	sort.Slice(retainable, func(i, j int) bool {
-		return retainable[j].CreationTimestamp.Before(&retainable[i].CreationTimestamp)
+		// Newest first. Kubernetes timestamps have one-second granularity, so
+		// revisions created in the same second need a deterministic tie-break —
+		// otherwise which revision survives GC depends on list order.
+		if !retainable[i].CreationTimestamp.Equal(&retainable[j].CreationTimestamp) {
+			return retainable[j].CreationTimestamp.Before(&retainable[i].CreationTimestamp)
+		}
+		return retainable[i].Name > retainable[j].Name
 	})
 
 	limit := DefaultRevisionHistoryLimit
@@ -385,6 +486,13 @@ func (r *AgentReconciler) collectGarbage(
 	return nil
 }
 
+// ownedWorkloads returns the Deployments this Agent actually controls.
+//
+// Selecting on the label alone was a defect with teeth: a stray plume.dev/agent
+// label — copied from an example, applied by a Kustomize commonLabels, or set by
+// anyone with deployment-create in the namespace — made this operator a deleter
+// of other people's workloads. Ownership is decided by the controller reference
+// and its UID, which nobody can forge by labelling.
 func (r *AgentReconciler) ownedWorkloads(ctx context.Context, agent *plumev1alpha1.Agent) ([]appsv1.Deployment, error) {
 	var list appsv1.DeploymentList
 	if err := r.List(ctx, &list,
@@ -393,7 +501,21 @@ func (r *AgentReconciler) ownedWorkloads(ctx context.Context, agent *plumev1alph
 	); err != nil {
 		return nil, fmt.Errorf("list workloads for %s/%s: %w", agent.Namespace, agent.Name, err)
 	}
-	return list.Items, nil
+
+	owned := make([]appsv1.Deployment, 0, len(list.Items))
+	for _, d := range list.Items {
+		ref := metav1.GetControllerOf(&d)
+		if ref == nil || ref.UID != agent.UID {
+			continue
+		}
+		// A workload with no revision label cannot be placed in the retention
+		// window, so it must never be a GC candidate.
+		if d.Labels[LabelRevision] == "" {
+			continue
+		}
+		owned = append(owned, d)
+	}
+	return owned, nil
 }
 
 // finalize runs §3.7's ordered teardown. Only the steps whose components exist
