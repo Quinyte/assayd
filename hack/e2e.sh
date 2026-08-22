@@ -12,4 +12,4 @@ echo "==> applying CRDs"
 kubectl apply -f config/crd
 
 echo "==> running e2e suite"
-go test ./test/e2e/... -count=1 -timeout 20m -v
+PLUME_E2E=1 go test ./test/e2e/... -count=1 -timeout 20m -v

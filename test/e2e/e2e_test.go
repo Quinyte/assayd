@@ -15,6 +15,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,15 +30,28 @@ import (
 var k8s client.Client
 
 func TestMain(m *testing.M) {
-	// A skipped e2e is an untested feature, so this fails rather than skips when
-	// no cluster is reachable — the same rule hack/e2e.sh states.
+	// Opt-in, deliberately. This suite CREATES objects in whatever cluster the
+	// current context names — on a laptop pointed at a shared cluster that is not
+	// a test, it is a write. `make e2e` sets this after creating a k3d cluster;
+	// a bare `go test ./...` skips rather than writing somewhere real.
+	if os.Getenv("PLUME_E2E") != "1" {
+		println("e2e: skipping — set PLUME_E2E=1, or run `make e2e`, which creates a " +
+			"disposable k3d cluster first. This suite writes to the current context.")
+		os.Exit(0)
+	}
+
+	// Past the opt-in, a skipped e2e is an untested feature: fail loudly.
 	cfg, err := config.GetConfig()
 	if err != nil {
-		println("e2e: no kubeconfig — run `make e2e`, which creates a k3d cluster:", err.Error())
+		println("e2e: no kubeconfig:", err.Error())
 		os.Exit(1)
 	}
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		println("e2e: scheme:", err.Error())
+		os.Exit(1)
+	}
+	if err := apiextensionsv1.AddToScheme(scheme); err != nil {
 		println("e2e: scheme:", err.Error())
 		os.Exit(1)
 	}
@@ -50,6 +64,19 @@ func TestMain(m *testing.M) {
 		println("e2e: client:", err.Error())
 		os.Exit(1)
 	}
+
+	// Verify plume is installed BEFORE creating anything. Without this, a cluster
+	// that simply lacks the CRD reports "the CRD did not accept a minimal Agent"
+	// — an environment problem misattributed as a product defect.
+	var crd apiextensionsv1.CustomResourceDefinition
+	if err := k8s.Get(context.Background(),
+		types.NamespacedName{Name: "agents.plume.dev"}, &crd); err != nil {
+		println("e2e: the agents.plume.dev CRD is not installed on the current context — " +
+			"run `make install-crds` or `make e2e`. Refusing to create objects in a " +
+			"cluster that is not a plume cluster.")
+		os.Exit(1)
+	}
+
 	os.Exit(m.Run())
 }
 

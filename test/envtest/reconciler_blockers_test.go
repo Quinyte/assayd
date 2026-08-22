@@ -2,6 +2,7 @@ package envtest
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -631,5 +632,224 @@ func TestProgressingIsClearedOnEveryExitFromARollout(t *testing.T) {
 				}
 				return c.Status
 			}())
+	}
+}
+
+// X1 — cell {active == desired, ready, gates unsatisfied}.
+//
+// `gates` is policy-surface (A12), so adding one does not mint a revision. The
+// gate branch then held the revision that was already serving 100% of traffic,
+// listing it as its own candidate. A12 put gates on the policy surface with the
+// stated reason that "a gate that re-gated itself on edit could not converge" —
+// which is exactly what that branch did.
+func TestAddingGatesToARunningAgentDoesNotHoldIt(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "addgates", nil)
+	rev := revision.Hash(a.Spec)
+
+	// Promote ungated.
+	ungated := newReconciler(false)
+	settle(t, ungated, a)
+	markAvailable(t, ns, controller.WorkloadName("addgates", rev), 1)
+	got := settle(t, ungated, a)
+	if got.Status.ActiveRevision != rev {
+		t.Fatalf("fixture: not promoted")
+	}
+
+	// Add gates and nothing else. The revision must not change.
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	a.Spec.Gates = []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
+	if err := k8s.Update(context.Background(), a); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if revision.Hash(a.Spec) != rev {
+		t.Fatal("fixture: adding gates minted a revision; A12 says gates are policy-surface")
+	}
+
+	got = settle(t, newReconciler(true), a)
+
+	if got.Status.Phase == plumev1alpha1.PhaseHeld {
+		t.Error("phase is Held on the revision that is serving 100% of traffic: gates apply " +
+			"to a candidate that has not taken traffic, not retroactively to what is already live")
+	}
+	if got.Status.CandidateRevision == rev {
+		t.Errorf("revision %s is listed as its own candidate while being the active "+
+			"revision — kubectl get ag shows identical Active and Candidate columns, and "+
+			"design 02 §7's 'candidate held >1h' alert fires immediately and can never clear",
+			rev)
+	}
+	if got.Status.ActiveRevision != rev {
+		t.Errorf("the running revision was demoted to %q by adding a gate", got.Status.ActiveRevision)
+	}
+	if c := condition(&got, plumev1alpha1.CondProgressing); c != nil && c.Status == metav1.ConditionTrue {
+		t.Error("Progressing=True claiming a rollout that cannot exist")
+	}
+}
+
+// X2 — one tamper per field, so each comparison in containersEquivalent is
+// individually load-bearing.
+//
+// TestOutOfBandDriftIsCorrected tampers with Image AND SecurityContext in one
+// update, and the rewrite restores the whole container — so any single surviving
+// comparison makes its assertion pass, and four of five comparisons could be
+// deleted unnoticed. Attribution needs isolation.
+func TestEachContainerFieldIsIndividuallyReconciled(t *testing.T) {
+	for _, tc := range []struct {
+		field  string
+		tamper func(*corev1.Container)
+		check  func(*testing.T, corev1.Container)
+	}{
+		{
+			// The sharpest case, and the one a derivative comparison cannot see:
+			// plume leaves Privileged unset, and DeepDerivative ignores fields that
+			// are empty in `desired`. So privilege escalation added out-of-band is
+			// invisible to everything EXCEPT the exact container comparison.
+			field: "capsAdd",
+			tamper: func(c *corev1.Container) {
+				c.SecurityContext.Capabilities.Add = []corev1.Capability{"NET_ADMIN", "SYS_PTRACE"}
+			},
+			check: func(t *testing.T, c corev1.Container) {
+				if c.SecurityContext != nil && c.SecurityContext.Capabilities != nil &&
+					len(c.SecurityContext.Capabilities.Add) > 0 {
+					t.Errorf("added capabilities survived reconcile: %v. plume sets "+
+						"Capabilities{Drop: ALL} and leaves Add unset, so a derivative "+
+						"comparison ignores it — anyone with deployments/update could grant "+
+						"SYS_PTRACE and the operator would keep reporting Ready",
+						c.SecurityContext.Capabilities.Add)
+				}
+			},
+		},
+		{
+			field: "hostPort",
+			tamper: func(c *corev1.Container) {
+				c.Ports[0].HostPort = 31337
+			},
+			check: func(t *testing.T, c corev1.Container) {
+				if len(c.Ports) > 0 && c.Ports[0].HostPort != 0 {
+					t.Errorf("hostPort %d survived: plume never sets it, so binding a node "+
+						"port out-of-band would be invisible to a derivative comparison",
+						c.Ports[0].HostPort)
+				}
+			},
+		},
+		{
+			field:  "roRootfs",
+			tamper: func(c *corev1.Container) { c.SecurityContext.ReadOnlyRootFilesystem = boolPtr(false) },
+			check: func(t *testing.T, c corev1.Container) {
+				if c.SecurityContext == nil || c.SecurityContext.ReadOnlyRootFilesystem == nil ||
+					!*c.SecurityContext.ReadOnlyRootFilesystem {
+					t.Error("hardening was not restored: a pure-hardening tamper is invisible, " +
+						"so the security context is a create-time decoration rather than an invariant")
+				}
+			},
+		},
+		{
+			field:  "env",
+			tamper: func(c *corev1.Container) { c.Env = []corev1.EnvVar{{Name: "INJECTED", Value: "x"}} },
+			check: func(t *testing.T, c corev1.Container) {
+				for _, e := range c.Env {
+					if e.Name == "INJECTED" {
+						t.Error("an injected env var survived: configuration drift is uncorrected")
+					}
+				}
+			},
+		},
+		{
+			field: "envFrom",
+			tamper: func(c *corev1.Container) {
+				c.EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "attacker-secret"}}}}
+			},
+			check: func(t *testing.T, c corev1.Container) {
+				// The spec's own ConfigMap import must remain; the attacker's Secret
+				// must not.
+				for _, f := range c.EnvFrom {
+					if f.SecretRef != nil && f.SecretRef.Name == "attacker-secret" {
+						t.Error("an injected envFrom survived — anyone with deployments/update " +
+							"could mount a Secret the CR never granted")
+					}
+				}
+				if len(c.EnvFrom) != 1 || c.EnvFrom[0].ConfigMapRef == nil {
+					t.Errorf("the spec's own envFrom was not restored: %v", c.EnvFrom)
+				}
+			},
+		},
+		{
+			field:  "ports",
+			tamper: func(c *corev1.Container) { c.Ports = []corev1.ContainerPort{{Name: "a2a", ContainerPort: 9999}} },
+			check: func(t *testing.T, c corev1.Container) {
+				if len(c.Ports) != 1 || c.Ports[0].ContainerPort != 8080 {
+					t.Errorf("port drift was not corrected: %v", c.Ports)
+				}
+			},
+		},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			ns := newNamespace(t)
+			name := "tamper-" + strings.ToLower(tc.field)
+			a := mustCreateAgent(t, ns, name, func(a *plumev1alpha1.Agent) {
+				a.Spec.Runtime.Env = []corev1.EnvVar{{Name: "MODE", Value: "strict"}}
+				a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "cfg"}}}}
+			})
+			r := newReconciler(false)
+			rev := revision.Hash(a.Spec)
+			settle(t, r, a)
+			key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName(name, rev)}
+			markAvailable(t, ns, key.Name, 1)
+			settle(t, r, a)
+
+			var d appsv1.Deployment
+			if err := k8s.Get(context.Background(), key, &d); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			// Exactly one field, so only one comparison can detect it.
+			tc.tamper(&d.Spec.Template.Spec.Containers[0])
+			if err := k8s.Update(context.Background(), &d); err != nil {
+				t.Fatalf("tamper: %v", err)
+			}
+
+			settle(t, r, a)
+
+			if err := k8s.Get(context.Background(), key, &d); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			tc.check(t, d.Spec.Template.Spec.Containers[0])
+		})
+	}
+}
+
+// m9 — spec.runtime.port is the second of A12's policy-surface fields that
+// reaches the template, and nothing covered editing it.
+func TestPortEditReachesTheWorkloadWithoutANewRevision(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "portedit", nil)
+	r := newReconciler(false)
+	rev := revision.Hash(a.Spec)
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("portedit", rev), 1)
+	settle(t, r, a)
+
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	a.Spec.Runtime.Port = 9090
+	if err := k8s.Update(context.Background(), a); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if revision.Hash(a.Spec) != rev {
+		t.Fatal("fixture: a port edit minted a revision; A12 says port is policy-surface")
+	}
+	settle(t, r, a)
+
+	var d appsv1.Deployment
+	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("portedit", rev)}
+	if err := k8s.Get(context.Background(), key, &d); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if p := d.Spec.Template.Spec.Containers[0].Ports; len(p) != 1 || p[0].ContainerPort != 9090 {
+		t.Errorf("container port is %v after an in-place edit to 9090", p)
 	}
 }

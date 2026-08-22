@@ -144,14 +144,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// candidate is ever in flight; the abandoned one is recorded so the
 	// transition is auditable rather than silent.
 	if status.CandidateRevision != "" && status.CandidateRevision != desired {
-		if !containsString(status.SupersededCandidates, status.CandidateRevision) {
-			status.SupersededCandidates = append(status.SupersededCandidates, status.CandidateRevision)
-			// Keep the newest within the CRD's cap; the durable audit trail is
-			// events and receipts, not this list.
-			if n := len(status.SupersededCandidates); n > maxSupersededCandidates {
-				status.SupersededCandidates = status.SupersededCandidates[n-maxSupersededCandidates:]
-			}
-		}
+		status.SupersededCandidates = appendSuperseded(status.SupersededCandidates, status.CandidateRevision)
 		logger.Info("superseding in-flight candidate",
 			"superseded", status.CandidateRevision, "candidate", desired)
 		status.CandidateRevision = ""
@@ -209,9 +202,16 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadNotAvailable",
 			fmt.Sprintf("revision %s has no available replicas yet", desired))
 
-	case !r.gatesSatisfied(&agent):
+	case !r.gatesSatisfied(&agent) && status.ActiveRevision != desired:
 		// Gates are required and have not passed: hold the candidate at zero
-		// traffic (§3.3). Whether the AGENT is ready is a separate question from
+		// traffic (§3.3).
+		//
+		// The `ActiveRevision != desired` guard is load-bearing. `gates` is
+		// policy-surface (A12), so adding one does not mint a revision — and
+		// without the guard, adding a gate to a running agent held the revision
+		// already serving 100% of traffic, listing it as its own candidate. A12
+		// put gates on the policy surface with the reason that "a gate that
+		// re-gated itself on edit could not converge"; this is that case. Whether the AGENT is ready is a separate question from
 		// whether the CANDIDATE may promote — if an active revision is still
 		// serving, saying Ready=False would page the on-call for adding gates to a
 		// healthy agent, which is the same defect A13 fixed in the branch below.
@@ -351,41 +351,40 @@ func templateEquivalent(existing, desired *appsv1.Deployment) bool {
 	return equality.Semantic.DeepDerivative(desired.Spec.Template, existing.Spec.Template)
 }
 
-// containersEquivalent compares the container fields this operator sets, exactly.
-// It deliberately does not compare the whole Container: the API server defaults
-// terminationMessagePath, imagePullPolicy and protocol, none of which plume owns.
+// containersEquivalent reports whether the running containers match what this
+// operator rendered.
+//
+// The comparison is EXACT over the whole container, with the API server's own
+// defaults normalized away first. A hand-listed set of fields was the weaker
+// design: it left every field nobody thought to list invisible, while the fields
+// that WERE listed were already covered by the derivative check in the caller —
+// so the list added no coverage while looking as though it did. Exact-with-
+// normalization inverts that: a field nobody listed is still compared, and only
+// the named defaults are exempt.
 func containersEquivalent(existing, desired []corev1.Container) bool {
 	if len(existing) != len(desired) {
 		return false
 	}
 	for i := range desired {
-		e, d := existing[i], desired[i]
-		switch {
-		case e.Name != d.Name,
-			e.Image != d.Image,
-			!equality.Semantic.DeepEqual(e.Resources, d.Resources),
-			!equality.Semantic.DeepEqual(e.Env, d.Env),
-			!equality.Semantic.DeepEqual(e.EnvFrom, d.EnvFrom),
-			!equality.Semantic.DeepEqual(e.SecurityContext, d.SecurityContext),
-			!portsEquivalent(e.Ports, d.Ports):
+		if !equality.Semantic.DeepEqual(normalizeContainer(existing[i]), normalizeContainer(desired[i])) {
 			return false
 		}
 	}
 	return true
 }
 
-// portsEquivalent compares only name and number: the API server defaults
-// protocol to TCP, which plume never sets.
-func portsEquivalent(existing, desired []corev1.ContainerPort) bool {
-	if len(existing) != len(desired) {
-		return false
+// normalizeContainer clears the fields the API server fills in on write. plume
+// never sets these, so comparing them would make the operator rewrite the
+// Deployment on every reconcile and never converge.
+func normalizeContainer(c corev1.Container) corev1.Container {
+	out := *c.DeepCopy()
+	out.TerminationMessagePath = ""
+	out.TerminationMessagePolicy = ""
+	out.ImagePullPolicy = ""
+	for i := range out.Ports {
+		out.Ports[i].Protocol = ""
 	}
-	for i := range desired {
-		if existing[i].Name != desired[i].Name || existing[i].ContainerPort != desired[i].ContainerPort {
-			return false
-		}
-	}
-	return true
+	return out
 }
 
 // deploymentFor renders one revision's workload. Design 02 §6: non-root,
@@ -679,4 +678,24 @@ func removeString(xs []string, s string) []string {
 		}
 	}
 	return out
+}
+
+// appendSuperseded records an abandoned candidate, deduplicated and trimmed to
+// the CRD's MaxItems.
+//
+// The cap is not free. Design 02 §3.3 promises the abandoned revision is
+// "appended to status.supersededCandidates AND emitted as an event" — status
+// being the convenience and the event the durable record. No EventRecorder is
+// wired yet, so past the cap the record is GONE rather than relocated. Stated
+// plainly rather than justified by a mechanism that does not exist; wiring the
+// recorder is what makes the cap harmless.
+func appendSuperseded(list []string, rev string) []string {
+	if rev == "" || containsString(list, rev) {
+		return list
+	}
+	list = append(list, rev)
+	if n := len(list); n > maxSupersededCandidates {
+		list = list[n-maxSupersededCandidates:]
+	}
+	return list
 }
