@@ -483,13 +483,14 @@ Every claim above is backed by an ADR and a critique-passed design. The corpus l
 
 ### Open items carried into implementation
 
-The design phase is complete; it is not frictionless. Four items are deliberately carried forward rather than closed on paper:
+The design phase is complete; it is not frictionless. Five items are deliberately carried forward rather than closed on paper:
 
 | Item | Nature |
 |---|---|
 | **Research item R1** | agentgateway same-level/same-field policy-overlap semantics are not crisply documented; a reproducing test ships with the policy compiler. The one-concern-per-policy rule holds either way |
-| **Re-critique of designs 01 and 02** | Both were critiqued in the session that authored them; the reviews carry the caveat and both are flagged for independent re-critique before implementation |
+| **~~Re-critique of designs 01 and 02~~ — CLOSED 2026-08-22** | Both independently re-critiqued: `01: PASS — 1 outstanding`, `02: PASS — 2 outstanding`, all three residuals since cleared. The exercise justified itself — designs that had passed self-review yielded one blocker and 19 findings |
 | **Pinned third-party versions** | The agentgateway minimum (virtual models, OSS token exchange), the semconv commit SHA, Unsloth's BuiltinTrainer status, and the **`LLMInferenceService` / `InferencePool` contracts** (the fastest mover — llm-d went v0.5→v0.6 in two months) will all move; research notes carry re-verify dates |
+| **Design 18's `skills` facet has no declared format** | Under ADR-0003 that is an invented standard by omission. **Agent Skills** (agentskills.io — Anthropic-originated, released open, adopted by ~45 clients including Cursor, Copilot, VS Code, Gemini CLI, Codex, OpenHands, Goose, Spring AI, Pulumi, Snowflake) specifies exactly this unit, and its progressive-disclosure tiers map onto design 18 §4's existing indexing rule. Proposed binding in `research/agent-skills-standard-2026-08.md`; needs an ADR and a design 18 amendment **before** design 18 is implemented, since the later cost is a pack-format migration |
 | **Nothing is execution-validated** | These plans survived adversarial review, not running code. First implementation tests what no review can — DBOS-in-Job resume, interpreter determinism, gateway policy behavior |
 
 ### Process note

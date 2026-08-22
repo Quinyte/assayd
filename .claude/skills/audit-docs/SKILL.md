@@ -1,6 +1,8 @@
 ---
 name: audit-docs
 description: Mechanical consistency audit of the plume docs tree — cross-references, status tables, naming. Use before commits that touch multiple docs, or when the user asks to check docs consistency.
+when_to_use: check docs consistency, before a multi-doc commit, audit the corpus
+paths: docs/**
 ---
 
 # Docs audit checklist

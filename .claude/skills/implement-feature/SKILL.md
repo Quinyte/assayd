@@ -1,37 +1,41 @@
 ---
 name: implement-feature
-description: Implement one plume feature test-first. Use when writing or changing operator/compiler/CLI code. Enforces the loop — failing test → implement → review → critic → merge — and refuses to finalize untested work.
+description: Implement one plume feature test-first. Use when writing or changing operator, compiler, CLI, or API-type code. Enforces the loop — read the design → failing test → implement → mutation-check → independent critic → merge — and refuses to finalize untested work.
+when_to_use: implement, build, write the reconciler, add a feature, start coding
+paths: api/**, internal/**, cmd/**, test/**, config/**, charts/**
+allowed-tools: Bash(make *) Bash(go *) Bash(git status *) Bash(git diff *) Bash(git show *)
 ---
 
-# The implementation loop
+One feature at a time, through the whole loop. A feature is not done when it works; it is done when a test proves it works and an independent reviewer failed to break it.
 
-**No feature is finalized or merged until its tests exist, run, and pass in CI.** Tests come first, not after. This is the standing instruction, not a preference.
+## The loop
 
-## The loop, per feature
+1. **Read the design.** The design doc is the spec — `docs/designs/`. If the design is silent on something you need, the design is what changes first, as a numbered amendment. Code that diverges from an approved design without an amendment is drift, whatever it does.
+2. **Write the failing test first**, and watch it fail for the stated reason. A test that passes before you implement is testing the wrong thing.
+3. **Implement** the smallest change that makes it pass.
+4. **Mutation-check.** Delete the rule the test claims to enforce and confirm the test fails. Restore from a backup copy — `cp file file.bak` first, and never `git checkout`, which discards uncommitted work in the same file. Two tests in this repo's first harness passed with their subject deleted; that is the default outcome, not an unlucky one.
+5. **`make test`** — fmt, vet, unit, envtest. `make race` for anything touching shared state.
+6. **Self-review** against `review-code`'s lenses.
+7. **Independent critic** — invoke `review-code`, which forks its own context. Self-review has never once caught what the independent pass caught.
+8. **Fix everything**, or record what you are not fixing and why. Then commit.
 
-1. **Read the design.** The approved design in `docs/designs/` is the spec — the body is authoritative (amendments are folded in). If the design is silent on what you need, that is a design gap: stop and raise it rather than inventing behaviour in code.
-2. **Write the failing test first.**
-   - *Unit* (`internal/...`, `_test.go`): pure logic — the policy compiler, revision arithmetic, card validation. Table-driven. Golden files for anything the design calls deterministic.
-   - *envtest* (`test/envtest/`): reconcile behaviour against a real API server — conditions, phases, ownership, finalizers.
-   - *e2e* (`test/e2e/`): the real cluster path on k3d — routes served, receipts landing, degraded conditions surfacing.
-   Run it. **It must fail for the right reason** before you write the implementation.
-3. **Implement the smallest thing that passes**, following §Design patterns below.
-4. **Make the whole suite green**: `make test` (unit + envtest) locally, `make e2e` before merge.
-5. **Self-review** against `review-code`'s checklist.
-6. **Independent critic pass** — spawn/prompt the critic agent on the diff. It reviews as an adversary, not an author. Findings are fixed or explicitly deferred with a reason in the PR body.
-7. **Merge** only when: tests green, critic PASS, design honoured, no untracked deviation.
+## Test layers
 
-## Design patterns (binding)
+- **unit** (`api/`, `internal/`) — pure logic and schema properties. Assert against the *generated* artifact, never a fixture defined in the test file: a fixture-counting test proves only that the fixture is unchanged.
+- **envtest** (`test/envtest/`) — defaulting, CEL validation, status subresources, reconciler behaviour against a real API server. This is where a rule becomes true.
+- **e2e** (`test/e2e/`) — k3d. A skipped e2e is an untested feature: the runner fails loudly rather than skipping.
 
-- **Ports and adapters.** Every external system sits behind an interface owned by the consuming package — gateway client, directory store, IdP, KG provider, receipt sink. Reconcile logic depends on interfaces, never concrete SDKs, so it is testable without a cluster.
-- **Pure core, imperative shell.** Decision logic (what should the state be?) is pure functions over inputs; effects (apply, patch, publish) live at the edges. The policy compiler is the archetype: `Compile(intents) → ResourceSet` is pure and golden-tested; `Apply` is the shell.
-- **Errors carry context** (`fmt.Errorf("...: %w", err)`), never swallowed, never `panic` in reconcile paths. Typed sentinel errors where callers branch on them.
-- **Context everywhere.** `ctx` is the first parameter of anything that does I/O; honour cancellation.
-- **No global mutable state.** Dependencies are injected through constructors. This is what makes parallel tests possible.
-- **Structured logging** via `logr` from the context; log actionable events, not narration.
-- **Idempotency by construction.** Server-side apply with field ownership; content-addressed identities (revision hashes, receipt IDs) rather than generated ones — the corpus has two blockers that came from minting IDs at the wrong moment.
-- **Conditions over silence.** Every unavailable guarantee sets a condition (NFR-8). If code degrades behaviour without a condition, that is a bug even when it "works".
+## Binding patterns
 
-## Refusals
+- Ports and adapters: the core takes interfaces, adapters bind the world. A reconciler that calls a cloud SDK directly is untestable by construction.
+- Pure core, imperative shell. Decisions in functions that take values and return values; effects at the edge.
+- `ctx` first, always, and honored — every loop checks cancellation.
+- Wrap errors with what was being attempted (`fmt.Errorf("fetch card for %s: %w", …)`). Never discard one.
+- No global mutable state. No `init()` side effects.
+- Idempotency by construction: derive names and keys from inputs so a re-run converges rather than duplicating.
+- Conditions over silence: a degraded path sets a condition naming the consequence (NFR-8).
+- Structured logging with the object key; never log a secret, a token, or a card body.
 
-Do not mark a feature done if: tests were written after the fact to match the implementation; a test asserts current behaviour rather than designed behaviour; e2e was skipped because "it works locally"; or the critic's findings were closed without being fixed or recorded.
+## Refuse to finalize
+
+Untested code · a test that passes when its subject is deleted · a `TODO` where an error should be · a divergence from the design with no amendment · generated files not regenerated (`make verify`) · a new field that changes what a principal can name, without a test that pins the boundary.

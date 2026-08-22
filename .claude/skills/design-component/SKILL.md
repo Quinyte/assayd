@@ -1,6 +1,8 @@
 ---
 name: design-component
 description: Produce or revise a plume component design doc. Use when the user asks to design a component, pick the next design, or review a design. Enforces the lightweight doctrine and pattern-charter gates.
+when_to_use: design a component, pick the next design, draft a design doc
+paths: docs/designs/**
 ---
 
 # Designing a plume component
