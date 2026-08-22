@@ -42,7 +42,9 @@ http://<provider-svc>/kgp/<graph>/admin/mcp             # graph-level admin: beg
                                                         # promote, drop_version — platform identity only
 ```
 
-The Agent CR binding `{name, version}` compiles to a route to that exact endpoint. An agent **cannot** name a version at call time — crossing versions is structurally impossible, caching is trivial, and `kg diff` compares two endpoints.
+The Agent CR binding `{name, version}` compiles to a route to that exact endpoint. An agent **has no vocabulary to name a version** at call time — caching is trivial, and `kg diff` compares two endpoints.
+
+*Prior art, and the honest limit of the claim.* Version-in-the-path over a knowledge graph is established practice: [Snowstorm](https://github.com/IHTSDO/snowstorm/blob/master/docs/code-systems-and-branches.md) serves SNOMED CT at `MAIN/2021-07-31/...` and already separates consumption from authoring paths ("Working branches should NOT be used to access versioned content"). Path-scoped MCP endpoints as an isolation boundary are documented for *tenants*. Declared capability profiles behind an engine-agnostic port is [SPARQL 1.1 Service Description](https://www.w3.org/TR/sparql11-service-description/), standardized 2013. What is not established is the assembly, and specifically **lifecycle-gated bindability** — `staging` and `quarantined` versions are not routable to agents at all, so demotion is de-registration rather than a permission edit. Note also that [capability URLs leak](https://www.w3.org/TR/capability-urls/) through logs and history: the guarantee is that an agent cannot *name* another version, not that one is unreachable by other means. Say the narrower thing.
 `version: active` is permitted only in the `local` profile (dev convenience); prod bindings must pin.
 
 *Rejected alternatives*: version as a tool parameter (agents can wander; every tool schema polluted); gateway header injection (invisible in traces; harder to reason about).
