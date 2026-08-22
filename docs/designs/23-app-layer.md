@@ -19,7 +19,7 @@ Makes ADR-0016 mechanical: the App CR's composition, the HTTP/SSE projection sha
 |---|---|---|
 | `workflowRef` | `POST /api/<name>` | body validated against the Workflow's `input.schema` (21) → starts a run → `202 {run_id}`; **`Idempotency-Key` forwarded to 21's run-id derivation** (generated client sends one by default — retries never double-run; r1 f3); `GET /api/<name>/runs/<id>` for status/result |
 | `agentRef` (chat) | `POST /api/chat` + **SSE** `GET /api/chat/<task_id>/events` | A2A task lifecycle projected as SSE events (`status`, `message`, `artifact`, `done`) — a thin, *documented* mapping of A2A's own stream, not a new protocol |
-| `knowledge` (optional, read-only) | `GET /api/kg/*` | the kgp query surface, scope-filtered per the App's declared entity types — for UIs that render graph context directly |
+| `graphRef` (optional, read-only) | `GET /api/kg/*` | the kgp query surface, scope-filtered per the App's declared entity types — for UIs that render graph context directly |
 
 All routes: OIDC-authenticated (the App's client, 06), user token exchanged at the gateway (on-behalf-of — per-user receipts/budgets with zero app code, ADR-0016's core claim), CORS pinned to the App's `route` host, rate limits per `consumerBudgets`.
 

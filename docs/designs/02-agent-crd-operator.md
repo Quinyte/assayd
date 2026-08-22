@@ -41,7 +41,10 @@ spec:
       version: "v12"
       scope: {entityTypes: [Policy, Procedure]}   # gateway-INJECTED, provider-ENFORCED (design 01 A1)
   tools:
-    - name: claims-system
+    - name: claims-system                         # a Connector tool facet OR an MCPServer CR;
+                                                  # names are unique across both kinds in a
+                                                  # namespace (admission), so no kind discriminator
+                                                  # is needed — and none may be cross-namespace
       requiresApproval: false                     # true ⇒ approval interceptor (design 22)
   llm:                                            # designs 03/20/25 compile against this
     providers: [openai/gpt-x, internal/pa-classifier]
@@ -71,7 +74,9 @@ status:
                ReceiptsDegraded, Killed, Ready, Degraded]
 ```
 
-`kubectl get agents` printer columns: `PHASE · ACTIVE · EVAL(last score) · COST/DAY · AGE`.
+`kubectl get agents` printer columns: `PHASE · ACTIVE · EVAL(last score) · COST/DAY · AGE`, sourced from `status.phase`, `status.activeRevision`, `status.eval.score`, `status.budget.usdSpentToday` and the creation timestamp. The set is a contract, pinned by `TestPrinterColumnsMatchTheDesign`: the case for a twenty-condition status rests on these five answering the common questions, and `EVAL`/`COST/DAY` are precisely the two a developer could otherwise reach only by reading conditions.
+
+**Tool and graph names resolve in the agent's own namespace, and only there.** A tool name may be served by a Connector tool facet or by an `MCPServer` CR; the two share one namespace-unique name space, enforced at admission (design 11 §4), which is why the binding carries no kind discriminator. There is deliberately no `namespace` field on either binding: design 24 §4.1 derives the `can_call` tuple **from** the binding, so a cross-namespace reference would authorize itself — anyone able to create an Agent in one namespace could reach a tool in another. Cross-namespace use requires consent published by the target namespace (the `ReferenceGrant` shape) and is out of scope until a design specifies it.
 
 ### 3.2 Workload materialization
 
@@ -201,3 +206,5 @@ ADR-0019.
 A1–A8 (2026-08-20) and A9–A10 (2026-08-22) recorded, in order: budget backstop wiring and its conditions; the canonical directory key layout; `agent-actor` client provisioning; the core-tier gating contract; `GatesBypassed`; card-signature verification; the injected env contract; `llm.fallback`; the seven behaviours from the independent re-critique; and a blanket supersession rule. **All are now folded into §§3–5** — the integration pass the re-critique asked for, so an implementer reads one spec rather than a body plus ten patches.
 
 A11 (2026-08-22, **ADR-0027**) — the ergonomics pass, run at the start of implementation rather than after users existed. `knowledge[].graphRef` and `tools[].mcpRef` are **flattened to inline `{name, version}` / `{name, namespace}`**: a binding points at exactly one kind of thing, so the wrapper nested without discriminating. `expose.a2a` keeps its wrapper — the arm names a protocol and MCP exposure follows it. Two rules §3 stated in prose are now **CEL on the schema** (exactly-one-of runtime/external; sandbox excludes `replicas>1`), so they are rejected at `kubectl apply` with a message naming the fix rather than discovered at reconcile. §3.1 above shows the amended shape; the whole contract is pinned by `test/envtest/agent_dx_test.go` against a real API server.
+
+A11 was revised after independent critique (REVISE: 1 blocker, 4 major). The first pass also added `tools[].namespace`, which design 24 §4.1 would have turned into a self-authorizing cross-namespace grant — deleted, and kept deleted by `TestToolBindingCannotReachAnotherNamespace`. The flattening's stated premise ("a binding points at one kind") was false for tools, which resolve against a Connector facet *or* an `MCPServer`; the corrected premise and the namespace-unique resolution rule are now in §3.1. `status.eval` and `status.budget.usdSpentToday` were added so this design's own printer columns have fields to read.

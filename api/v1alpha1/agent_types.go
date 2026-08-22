@@ -124,10 +124,10 @@ type CardSpec struct {
 // KnowledgeBinding pins one graph version. Binds are refused to versions that
 // are not active or superseded (design 01 A5.2).
 //
-// The graph reference is inline rather than wrapped in a graphRef object: a
-// binding can point at exactly one kind of thing, so the wrapper would add a
-// nesting level that discriminates nothing. Compare ExposeSpec, where the
-// protocol arm does discriminate and the nesting is therefore earned.
+// The graph reference is inline rather than wrapped in a graphRef object: the
+// wrapper named a protocol, not a choice, so it nested without discriminating.
+// Compare ExposeSpec, whose arm does select between protocols and earns it.
+// Graphs resolve in the agent's own namespace, for the reason ToolBinding gives.
 type KnowledgeBinding struct {
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
@@ -145,26 +145,25 @@ type KGScope struct {
 	EntityTypes []string `json:"entityTypes,omitempty"`
 }
 
-// ToolBinding grants this agent one MCP tool server. As with KnowledgeBinding
-// the reference is inline — an mcpRef wrapper would nest without discriminating.
+// ToolBinding grants this agent one MCP tool server, resolved in the agent's own
+// namespace. A name may be served by a Connector tool facet or by an MCPServer
+// CR; names are unique across both kinds within a namespace, enforced at
+// admission (design 11 §4), so the binding needs no kind discriminator — which
+// is why the reference is inline rather than wrapped.
+//
+// There is deliberately no namespace field. Design 24 §4.1 derives the `can_call`
+// ReBAC tuple FROM this binding, so a cross-namespace reference would authorize
+// itself: whoever may create an Agent in one namespace could reach a tool in
+// another. Cross-namespace tool use needs consent from the target namespace (the
+// ReferenceGrant shape) — a design change, not a field.
 type ToolBinding struct {
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
-	// Namespace defaults to the agent's own namespace.
-	// +optional
-	Namespace string `json:"namespace,omitempty"`
 	// RequiresApproval routes calls through the approval interceptor, which
 	// returns a retryable typed pending and issues a single-use voucher the
 	// gateway consumes (design 22).
 	// +optional
 	RequiresApproval bool `json:"requiresApproval,omitempty"`
-}
-
-type NamespacedRef struct {
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-	// +optional
-	Namespace string `json:"namespace,omitempty"`
 }
 
 type LLMSpec struct {
@@ -244,26 +243,26 @@ const (
 // Condition types. Every unavailable guarantee surfaces as one of these — the
 // platform never degrades silently (NFR-8).
 const (
-	CondRegistered                = "Registered"
-	CondCardUnsigned              = "CardUnsigned"
-	CondIdentityIssued            = "IdentityIssued"
-	CondIdPUnavailable            = "IdPUnavailable"
-	CondOnBehalfOfUnavailable     = "OnBehalfOfUnavailable"
-	CondIdentityBootstrapIncomple = "IdentityBootstrapIncomplete"
-	CondKnowledgeBound            = "KnowledgeBound"
-	CondGatesPassed               = "GatesPassed"
-	CondGatesSkipped              = "GatesSkipped"
-	CondGatesBypassed             = "GatesBypassed"
-	CondSandboxDowngraded         = "SandboxDowngraded"
-	CondTaskStateUnverified       = "TaskStateUnverified"
-	CondScratchpadDegraded        = "ScratchpadDegraded"
-	CondBudgetExhausted           = "BudgetExhausted"
-	CondBudgetEnforcementDegraded = "BudgetEnforcementDegraded"
-	CondPricingStale              = "PricingStale"
-	CondReceiptsDegraded          = "ReceiptsDegraded"
-	CondKilled                    = "Killed"
-	CondReady                     = "Ready"
-	CondDegraded                  = "Degraded"
+	CondRegistered                  = "Registered"
+	CondCardUnsigned                = "CardUnsigned"
+	CondIdentityIssued              = "IdentityIssued"
+	CondIdPUnavailable              = "IdPUnavailable"
+	CondOnBehalfOfUnavailable       = "OnBehalfOfUnavailable"
+	CondIdentityBootstrapIncomplete = "IdentityBootstrapIncomplete"
+	CondKnowledgeBound              = "KnowledgeBound"
+	CondGatesPassed                 = "GatesPassed"
+	CondGatesSkipped                = "GatesSkipped"
+	CondGatesBypassed               = "GatesBypassed"
+	CondSandboxDowngraded           = "SandboxDowngraded"
+	CondTaskStateUnverified         = "TaskStateUnverified"
+	CondScratchpadDegraded          = "ScratchpadDegraded"
+	CondBudgetExhausted             = "BudgetExhausted"
+	CondBudgetEnforcementDegraded   = "BudgetEnforcementDegraded"
+	CondPricingStale                = "PricingStale"
+	CondReceiptsDegraded            = "ReceiptsDegraded"
+	CondKilled                      = "Killed"
+	CondReady                       = "Ready"
+	CondDegraded                    = "Degraded"
 )
 
 type AgentStatus struct {
@@ -285,6 +284,11 @@ type AgentStatus struct {
 	Cards []CardStatus `json:"cards,omitempty"`
 	// +optional
 	Budget *BudgetStatus `json:"budget,omitempty"`
+	// Eval carries the last gate result. It is a printer column because it answers
+	// "why is this Held?", which a developer would otherwise reconstruct by
+	// reading conditions.
+	// +optional
+	Eval *EvalStatus `json:"eval,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// +optional
@@ -306,11 +310,31 @@ type CardStatus struct {
 	Signed bool `json:"signed,omitempty"`
 }
 
+// EvalStatus is the last gate result for whichever revision was gated most
+// recently — the candidate during a rollout, the active revision otherwise.
+type EvalStatus struct {
+	// Score is the headline number the gate produced, rendered verbatim in the
+	// Eval printer column.
+	// +optional
+	Score string `json:"score,omitempty"`
+	// +optional
+	Suite string `json:"suite,omitempty"`
+	// Revision names what was gated, so a stale score is recognisable as stale.
+	// +optional
+	Revision string `json:"revision,omitempty"`
+	// +optional
+	At *metav1.Time `json:"at,omitempty"`
+}
+
 type BudgetStatus struct {
 	// +optional
 	TokensRemaining *int64 `json:"tokensRemaining,omitempty"`
 	// +optional
 	USDRemaining *string `json:"usdRemaining,omitempty"`
+	// USDSpentToday backs the Cost/Day printer column. Spend is what an operator
+	// scans a namespace for; remaining is what an agent is throttled on.
+	// +optional
+	USDSpentToday *string `json:"usdSpentToday,omitempty"`
 	// +optional
 	WindowResetsAt *metav1.Time `json:"windowResetsAt,omitempty"`
 }
@@ -318,9 +342,15 @@ type BudgetStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=ag
+// Printer columns are design 02 §3.1's list, and they are a contract: the case
+// for a twenty-condition status rests on `kubectl get ag` answering the common
+// questions without reading one. Candidate is deliberately absent — Held and
+// Canary already imply a candidate, whereas Eval and Cost/Day are unreachable any
+// other way. Pinned by TestPrinterColumnsMatchTheDesign.
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Active",type=string,JSONPath=`.status.activeRevision`
-// +kubebuilder:printcolumn:name="Candidate",type=string,JSONPath=`.status.candidateRevision`
+// +kubebuilder:printcolumn:name="Eval",type=string,JSONPath=`.status.eval.score`
+// +kubebuilder:printcolumn:name="Cost/Day",type=string,JSONPath=`.status.budget.usdSpentToday`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Agent is any container that speaks A2A and serves an Agent Card.
@@ -342,4 +372,32 @@ type AgentList struct {
 
 func init() {
 	SchemeBuilder.Register(&Agent{}, &AgentList{})
+}
+
+// designConditions is the closed condition vocabulary of design 02 §3.1. A
+// []metav1.Condition accepts any string, so this list and its test are the only
+// things standing between the vocabulary and drift.
+func designConditions() []string {
+	return []string{
+		CondRegistered,
+		CondCardUnsigned,
+		CondIdentityIssued,
+		CondIdPUnavailable,
+		CondOnBehalfOfUnavailable,
+		CondIdentityBootstrapIncomplete,
+		CondKnowledgeBound,
+		CondGatesPassed,
+		CondGatesSkipped,
+		CondGatesBypassed,
+		CondSandboxDowngraded,
+		CondTaskStateUnverified,
+		CondScratchpadDegraded,
+		CondBudgetExhausted,
+		CondBudgetEnforcementDegraded,
+		CondPricingStale,
+		CondReceiptsDegraded,
+		CondKilled,
+		CondReady,
+		CondDegraded,
+	}
 }

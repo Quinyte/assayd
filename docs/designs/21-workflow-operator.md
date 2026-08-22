@@ -94,3 +94,7 @@ Interpreter golden runs (graph fixtures ⇒ step traces, byte-stable); resume dr
 ## 11. Resulting ADRs
 
 ADR-0025 (P4) after critique PASS.
+
+## Amendments
+
+A1 (2026-08-22, **ADR-0027**) — the workflow step's tool reference is `{server, name, args}`, not `{mcpRef, name, args}`. The wrapper is load-bearing here (it groups a server, a method and its arguments) but `mcpRef` sat beside a `name` meaning the *method*, so one step carried two things called a name. `server` names the server; `name` names the method, as it does everywhere else. The server resolves in the Workflow's own namespace, matching design 02's rule and for the same reason.

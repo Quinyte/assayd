@@ -23,8 +23,11 @@ spec:
     - jsonPath: .status.activeRevision
       name: Active
       type: string
-    - jsonPath: .status.candidateRevision
-      name: Candidate
+    - jsonPath: .status.eval.score
+      name: Eval
+      type: string
+    - jsonPath: .status.budget.usdSpentToday
+      name: Cost/Day
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -149,10 +152,10 @@ spec:
                     KnowledgeBinding pins one graph version. Binds are refused to versions that
                     are not active or superseded (design 01 A5.2).
 
-                    The graph reference is inline rather than wrapped in a graphRef object: a
-                    binding can point at exactly one kind of thing, so the wrapper would add a
-                    nesting level that discriminates nothing. Compare ExposeSpec, where the
-                    protocol arm does discriminate and the nesting is therefore earned.
+                    The graph reference is inline rather than wrapped in a graphRef object: the
+                    wrapper named a protocol, not a choice, so it nested without discriminating.
+                    Compare ExposeSpec, whose arm does select between protocols and earns it.
+                    Graphs resolve in the agent's own namespace, for the reason ToolBinding gives.
                   properties:
                     name:
                       minLength: 1
@@ -533,14 +536,20 @@ spec:
                   surface (ADR-0009).
                 items:
                   description: |-
-                    ToolBinding grants this agent one MCP tool server. As with KnowledgeBinding
-                    the reference is inline — an mcpRef wrapper would nest without discriminating.
+                    ToolBinding grants this agent one MCP tool server, resolved in the agent's own
+                    namespace. A name may be served by a Connector tool facet or by an MCPServer
+                    CR; names are unique across both kinds within a namespace, enforced at
+                    admission (design 11 §4), so the binding needs no kind discriminator — which
+                    is why the reference is inline rather than wrapped.
+
+                    There is deliberately no namespace field. Design 24 §4.1 derives the `can_call`
+                    ReBAC tuple FROM this binding, so a cross-namespace reference would authorize
+                    itself: whoever may create an Agent in one namespace could reach a tool in
+                    another. Cross-namespace tool use needs consent from the target namespace (the
+                    ReferenceGrant shape) — a design change, not a field.
                   properties:
                     name:
                       minLength: 1
-                      type: string
-                    namespace:
-                      description: Namespace defaults to the agent's own namespace.
                       type: string
                     requiresApproval:
                       description: |-
@@ -568,6 +577,11 @@ spec:
                     format: int64
                     type: integer
                   usdRemaining:
+                    type: string
+                  usdSpentToday:
+                    description: |-
+                      USDSpentToday backs the Cost/Day printer column. Spend is what an operator
+                      scans a namespace for; remaining is what an agent is throttled on.
                     type: string
                   windowResetsAt:
                     format: date-time
@@ -658,6 +672,27 @@ spec:
                   - type
                   type: object
                 type: array
+              eval:
+                description: |-
+                  Eval carries the last gate result. It is a printer column because it answers
+                  "why is this Held?", which a developer would otherwise reconstruct by
+                  reading conditions.
+                properties:
+                  at:
+                    format: date-time
+                    type: string
+                  revision:
+                    description: Revision names what was gated, so a stale score is
+                      recognisable as stale.
+                    type: string
+                  score:
+                    description: |-
+                      Score is the headline number the gate produced, rendered verbatim in the
+                      Eval printer column.
+                    type: string
+                  suite:
+                    type: string
+                type: object
               observedGeneration:
                 format: int64
                 type: integer

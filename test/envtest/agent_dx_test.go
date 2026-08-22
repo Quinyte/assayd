@@ -2,9 +2,11 @@ package envtest
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -87,23 +89,14 @@ spec:
     - name: claims-db
 `
 
-func TestRealisticAgentStaysReadable(t *testing.T) {
+func TestRealisticAgentIsAccepted(t *testing.T) {
 	ns := newNamespace(t)
 	if _, err := applyYAML(t, ns, realisticAgent); err != nil {
 		t.Fatalf("the realistic agent must be accepted as written: %v", err)
 	}
-
-	var typed int
-	for _, l := range strings.Split(strings.TrimSpace(realisticAgent), "\n") {
-		if strings.TrimSpace(l) != "" {
-			typed++
-		}
-	}
-	// An agent with pinned domain knowledge and a governed tool should still fit
-	// on a screen. This ceiling is the DX budget, not an incidental measurement.
-	if const_ceiling := 14; typed > const_ceiling {
-		t.Errorf("a knowledge+tools agent is %d lines; the DX budget is %d", typed, const_ceiling)
-	}
+	// How short this document is, is a schema property, asserted in
+	// api/v1alpha1/schema_contract_test.go. Counting the lines of the fixture
+	// above would only prove the fixture had not been edited.
 }
 
 // The mistakes a developer will actually make, and what they should be told.
@@ -202,5 +195,99 @@ func TestStatusIsLegibleWithoutReadingConditions(t *testing.T) {
 	// precisely so `kubectl get ag` answers the question on its own.
 	if got.Status.CandidateRevision != "rev-2" {
 		t.Errorf("candidate revision did not persist: %q", got.Status.CandidateRevision)
+	}
+}
+
+// A tool binding names a server in the agent's own namespace. There is no
+// namespace field, and this test is why: design 24 §4.1 derives the `can_call`
+// ReBAC tuple FROM the binding, so a reference the schema accepts is a grant the
+// platform mints. Reintroducing the field would let anyone who can create an
+// Agent in one namespace reach a tool in another.
+func TestToolBindingCannotReachAnotherNamespace(t *testing.T) {
+	ns := newNamespace(t)
+	doc := `
+apiVersion: plume.dev/v1alpha1
+kind: Agent
+metadata: {name: reacher}
+spec:
+  runtime: {image: ghcr.io/acme/a:1}
+  tools:
+    - name: prod-payments-db
+      namespace: finance
+`
+	// Sent unstructured on purpose. Unmarshalling into the Go type would drop the
+	// field client-side and the request would never carry it — proving nothing
+	// about what the cluster does with the YAML a developer actually writes.
+	var obj unstructured.Unstructured
+	if err := yaml.Unmarshal([]byte(doc), &obj.Object); err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	obj.SetNamespace(ns)
+
+	// kubectl has sent fieldValidation=Strict since 1.25, so this is what a
+	// developer gets back.
+	err := k8s.Create(context.Background(), obj.DeepCopy(), client.FieldValidation("Strict"))
+	if err == nil {
+		t.Fatal("a cross-namespace tool reference was accepted — design 24 §4.1 mints a " +
+			"can_call tuple from this binding, so this is privilege escalation")
+	}
+	if !strings.Contains(err.Error(), "namespace") {
+		t.Errorf("rejected, but not for the namespace field: %v", err)
+	}
+
+	// Without strict validation the API server *prunes* the field instead. The
+	// escalation is still impossible — a pruned field never reaches the operator,
+	// so no tuple can be minted from it — but the developer is not told, which is
+	// the silence NFR-8 forbids. Pin the pruning so that if `namespace` is ever
+	// added back for another purpose, this test fails rather than going quiet.
+	lenient := obj.DeepCopy()
+	lenient.SetName("reacher-lenient")
+	if err := k8s.Create(context.Background(), lenient); err != nil {
+		t.Fatalf("lenient create: %v", err)
+	}
+	var got plumev1alpha1.Agent
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(lenient), &got); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if len(got.Spec.Tools) != 1 || got.Spec.Tools[0].Name != "prod-payments-db" {
+		t.Fatalf("unexpected tools after pruning: %+v", got.Spec.Tools)
+	}
+	raw, err := json.Marshal(got.Spec.Tools[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "finance") {
+		t.Error("the namespace field survived pruning — it is reaching the operator")
+	}
+}
+
+// Design 02 §3.1's printer columns must resolve against a real object, not just
+// exist as markers: a JSONPath naming a field that was never added renders empty
+// forever and nobody notices.
+func TestPrinterColumnsResolveAgainstRealStatus(t *testing.T) {
+	ns := newNamespace(t)
+	a, err := applyYAML(t, ns, minimalAgent)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	spent := "12.40"
+	a.Status.Phase = plumev1alpha1.PhaseCanary
+	a.Status.ActiveRevision = "rev-1"
+	a.Status.Eval = &plumev1alpha1.EvalStatus{Score: "0.94", Suite: "pa-regression", Revision: "rev-2"}
+	a.Status.Budget = &plumev1alpha1.BudgetStatus{USDSpentToday: &spent}
+	if err := k8s.Status().Update(context.Background(), a); err != nil {
+		t.Fatalf("status update: %v", err)
+	}
+
+	var got plumev1alpha1.Agent
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got.Status.Eval == nil || got.Status.Eval.Score != "0.94" {
+		t.Errorf("status.eval.score is what the Eval column reads; it did not persist: %+v", got.Status.Eval)
+	}
+	if got.Status.Budget == nil || got.Status.Budget.USDSpentToday == nil || *got.Status.Budget.USDSpentToday != spent {
+		t.Errorf("status.budget.usdSpentToday backs the Cost/Day column; it did not persist")
 	}
 }

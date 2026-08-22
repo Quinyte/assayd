@@ -1,0 +1,61 @@
+# The gate the corpus keeps claiming. Until this existed, "enforced by a test
+# rather than by review discipline" meant "enforced by remembering to type make".
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: build, vet, unit, envtest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: generation is reproducible and committed
+        run: make verify
+
+      - name: vet
+        run: make vet
+
+      - name: unit
+        run: make unit
+
+      - name: unit (race)
+        run: make race
+
+      - name: envtest against a real API server
+        run: make envtest
+
+  e2e:
+    name: e2e on k3d
+    runs-on: ubuntu-latest
+    # A skipped e2e is an untested feature, so this job fails rather than skips
+    # when the suite is empty — see hack/e2e.sh.
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: install k3d
+        run: curl -sfL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+
+      - name: e2e
+        run: make e2e
