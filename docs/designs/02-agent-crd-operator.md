@@ -91,6 +91,24 @@ status:
 k8s rolling update mixes old/new traffic and would defeat eval gating, so the operator owns revisions:
 
 1. Spec change → `revisionHash(spec)` — **spec only**; the card digest is status, and card drift triggers re-registration, never a new revision → creates a parallel workload `<name>-<hash>`.
+
+   **The hash covers a projection of spec, not all of it (A12).** Two surfaces share one CR: a **behaviour surface**, where a change can alter what the agent does and must therefore pass a gate, and a **policy surface**, which §3.6 compiles to gateway resources and applies in place. Hashing the whole spec would make `replicas: 2 → 3` or a budget edit trigger a full eval-and-canary cycle; hashing too little would let an operator swap the model or the knowledge-graph version under a running agent with **no gate at all**, which would hollow out ADR-0006 and ADR-0005 together. The split is therefore normative, not an implementation detail:
+
+   | Behaviour surface — **mints a revision** | Policy surface — **applied in place** |
+   |---|---|
+   | `runtime.image` | `runtime.replicas` (a scale operation) |
+   | `runtime.env`, `runtime.envFrom` | `runtime.resources` (capacity, not behaviour) |
+   | `runtime.sandbox.profile` | `budget` (§3.6 policy; backstop is live) |
+   | `card.path` | `gates` (a gate that re-gated itself on edit could not converge) |
+   | `knowledge[].name`, `knowledge[].version` | `expose` (gateway visibility) |
+   | `knowledge[].scope` (narrowing changes what the agent can see) | `tools[].requiresApproval` (approval policy, gateway-enforced) |
+   | `tools[].name` (a capability grant) | `loop` (lineage governance, gateway-enforced) |
+   | `llm.providers`, `llm.fallback` | `external.oauthClientRef` (credential rotation) |
+   | `external.endpoint` | |
+
+   Two consequences worth stating because they are easy to get wrong. `tools[].name` mints a revision while its sibling `tools[].requiresApproval` does not, so the hash is computed over a **projected copy** of spec rather than its serialization. And the projection is **allowlist-shaped**: a field added to the CRD in future is policy-surface by default and only becomes revision-minting when this table says so — the safe direction is a missing gate on a policy knob, never a missing gate on behaviour.
+
+   Hashing is over the projection's canonical JSON (map keys sorted; list order preserved, since a reordered `tools` list is a different grant sequence and cheap to re-gate).
 2. Candidate registers, gets identity, passes readiness — gateway route weight **0** (`phase: Held`).
 3. The gate controller (16) runs the EvalSuite against the candidate through the gateway on a **candidate-only route** whose admitted set is exactly the eval run's own SVID, granted at Job launch and revoked at Job end. Eval traffic otherwise uses the identical path as prod.
 4. Pass → weights shift (canary steps, default `10 → 100`); `activeRevision` flips; superseded revisions GC'd per `revisionHistoryLimit`.
@@ -208,3 +226,5 @@ A1–A8 (2026-08-20) and A9–A10 (2026-08-22) recorded, in order: budget backst
 A11 (2026-08-22, **ADR-0027**) — the ergonomics pass, run at the start of implementation rather than after users existed. `knowledge[].graphRef` and `tools[].mcpRef` are **flattened to inline `{name, version}` / `{name, namespace}`**: a binding points at exactly one kind of thing, so the wrapper nested without discriminating. `expose.a2a` keeps its wrapper — the arm names a protocol and MCP exposure follows it. Two rules §3 stated in prose are now **CEL on the schema** (exactly-one-of runtime/external; sandbox excludes `replicas>1`), so they are rejected at `kubectl apply` with a message naming the fix rather than discovered at reconcile. §3.1 above shows the amended shape; the whole contract is pinned by `test/envtest/agent_dx_test.go` against a real API server.
 
 A11 was revised after independent critique (REVISE: 1 blocker, 4 major). The first pass also added `tools[].namespace`, which design 24 §4.1 would have turned into a self-authorizing cross-namespace grant — deleted, and kept deleted by `TestToolBindingCannotReachAnotherNamespace`. The flattening's stated premise ("a binding points at one kind") was false for tools, which resolve against a Connector facet *or* an `MCPServer`; the corrected premise and the namespace-unique resolution rule are now in §3.1. `status.eval` and `status.budget.usdSpentToday` were added so this design's own printer columns have fields to read.
+
+A12 (2026-08-22) — **which spec fields mint a revision.** §3.3 said `revisionHash(spec)` and §3.6 sent `tools`, `budgets`, `llm`, `expose` and KG scopes into the live policy path; nothing reconciled the two, so an implementer had to guess. The dangerous guess was not the expensive one — hashing everything merely makes a replica bump pay for an eval cycle — but the cheap one, where `llm.providers` or `knowledge[].version` compile straight to gateway config and an operator swaps the model or the domain data under a running agent with no gate. §3.3 now carries the normative split, the rule that the projection is allowlist-shaped so new fields default to policy-surface, and the canonicalization. Raised while implementing the reconciler, before any code was written.

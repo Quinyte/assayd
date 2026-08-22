@@ -1,5 +1,15 @@
 # Is there a paper here? — scope decision
 
+> **DECIDED 2026-08-22: not pursuing a paper.** The platform is the goal; a paper is
+> opportunistic — if something genuinely new is invented while building, it gets
+> written up then. The scans below are why: the architecture is well-precedented,
+> and a project optimizing for publishability would start choosing mechanisms for
+> how well they compare rather than how well they work, which is the opposite of
+> what "bind, don't build" asks for. Nothing here is wasted: the scans caught a
+> live defect in design 22 and two false claims in the corpus, and the one
+> instrumentation item worth keeping (structured gate-decision records) is
+> justified by debugging alone.
+
 **Date**: 2026-08-22 · Four adversarial prior-art scans, each briefed to **refute** rather than support. Details in `01`–`04` alongside this file.
 
 ## Verdict on the three technical claims
