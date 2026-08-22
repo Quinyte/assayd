@@ -18,7 +18,7 @@ manifests: ## CRDs + RBAC
 	$(CONTROLLER_GEN) crd rbac:roleName=plume-operator paths=./... output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
 
 ## ---------- the loop ----------
-.PHONY: fmt vet lint unit envtest test race cover e2e verify
+.PHONY: fmt vet unit envtest test race cover e2e verify
 fmt: ; go fmt ./...
 vet: ; go vet ./...
 unit: ## pure logic, no cluster

@@ -168,3 +168,20 @@ func requireCluster(t *testing.T) {
 		t.Skip("no cluster: see TestE2EWasNotRun")
 	}
 }
+
+// The ServiceAccount admission plugin runs on a real cluster and not in
+// envtest, so it defaults spec.serviceAccountName to "default" on every pod
+// template. The operator sets that field explicitly for exactly this reason: if
+// it did not, a real cluster would default it, read-back would differ from what
+// was rendered, and the operator would rewrite the Deployment on every single
+// reconcile forever.
+//
+// This assertion cannot be made in envtest — the mutation that removes the
+// field survives there — which is why it lives here.
+func TestServiceAccountDefaultingDoesNotCauseChurn(t *testing.T) {
+	requireCluster(t)
+	t.Skip("pending: needs the operator deployed to the cluster (cmd/operator + chart, " +
+		"design 07). The assertion is written so the gap is visible in the run output " +
+		"rather than absent: envtest cannot cover ServiceAccount admission, so nothing " +
+		"currently proves the operator does not churn against a real API server.")
+}

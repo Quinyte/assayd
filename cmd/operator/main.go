@@ -11,11 +11,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -51,8 +53,10 @@ func run() error {
 	flag.BoolVar(&leaderElect, "leader-elect", true,
 		"run leader election so only one operator reconciles at a time")
 	flag.DurationVar(&gateCheckTTL, "eval-suite-check-interval", 30*time.Second,
-		"how long a cached answer to 'is the EvalSuite CRD installed?' may persist. "+
-			"Bounds how long an agent keeps promoting ungated after the gate controller is installed.")
+		"how long a cached answer to 'is the EvalSuite CRD installed?' may persist "+
+			"before the next reconcile re-checks it. This bounds the CACHE, not the "+
+			"agent: an Agent nobody touches is not re-reconciled when the answer flips, "+
+			"so use `kubectl annotate` or wait for the resync period to pick it up.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -81,7 +85,11 @@ func run() error {
 	// Discovered, not configured. A cached answer expires, and a discovery
 	// failure resolves to "installed" so gated agents hold rather than promoting
 	// ungated — see EvalSuiteDetector.
-	detector, err := controller.NewEvalSuiteDetector(cfg, gateCheckTTL)
+	// Bound how long a reconcile can block on discovery. The client default is
+	// 32s, which a single-worker controller would wear on every cache miss.
+	discoveryCfg := rest.CopyConfig(cfg)
+	discoveryCfg.Timeout = 5 * time.Second
+	detector, err := controller.NewEvalSuiteDetector(discoveryCfg, gateCheckTTL)
 	if err != nil {
 		return fmt.Errorf("build eval-suite detector: %w", err)
 	}
@@ -91,7 +99,7 @@ func run() error {
 	ctx := ctrl.SetupSignalHandler()
 
 	agents, err := controller.NewAgentReconciler(mgr.GetClient(), mgr.GetScheme(),
-		func() bool { return detector.Installed(ctx) })
+		func() bool { return detector.Installed() })
 	if err != nil {
 		return fmt.Errorf("build agent reconciler: %w", err)
 	}
@@ -99,10 +107,25 @@ func run() error {
 		return fmt.Errorf("register agent reconciler: %w", err)
 	}
 
+	// Liveness is "the process is alive"; readiness must mean "this process is
+	// actually reconciling". healthz.Ping for readiness returns nil
+	// unconditionally, so an operator that cannot acquire its lease — or whose
+	// cache never syncs — would report Ready and reconcile nothing forever, which
+	// is precisely the silence NFR-8 forbids.
 	if err := mgr.AddHealthzCheck("ping", healthz.Ping); err != nil {
 		return fmt.Errorf("add health check: %w", err)
 	}
-	if err := mgr.AddReadyzCheck("ping", healthz.Ping); err != nil {
+	if err := mgr.AddReadyzCheck("reconciling", func(_ *http.Request) error {
+		select {
+		case <-mgr.Elected():
+			return nil
+		default:
+			return fmt.Errorf("not reconciling: leader election has not completed. " +
+				"If this persists, check that the operator's ClusterRole grants " +
+				"coordination.k8s.io/leases — a forbidden lease is retried forever rather " +
+				"than reported")
+		}
+	}); err != nil {
 		return fmt.Errorf("add ready check: %w", err)
 	}
 

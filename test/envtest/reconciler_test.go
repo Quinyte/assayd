@@ -379,7 +379,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	r := newReconciler(false)
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("idempotent", revision.Hash(a.Spec)), 1)
-	stable := settle(t, r, a)
+	settle(t, r, a)
 
 	// Count writes rather than compare resourceVersions: the API server does not
 	// bump the version on a no-op update, so a controller that writes status every
@@ -396,12 +396,6 @@ func TestReconcileIsIdempotent(t *testing.T) {
 			"An operator that rewrites unchanged status churns the API server and fights "+
 			"every other writer of the object.", n)
 	}
-
-	var got plumev1alpha1.Agent
-	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	_ = stable
 
 	// Exactly one workload: content-addressed revisions must never double-create.
 	var list appsv1.DeploymentList

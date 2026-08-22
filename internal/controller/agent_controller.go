@@ -91,6 +91,15 @@ func NewAgentReconciler(c client.Client, scheme *runtime.Scheme, evalSuiteInstal
 // +kubebuilder:rbac:groups=plume.dev,resources=agents/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=plume.dev,resources=agents/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// Leader election. Without these the elector retries a forbidden lease forever:
+// the pod runs, reports Ready, and reconciles nothing — the silence NFR-8 forbids.
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch
+// Events are the durable record design 02 §3.3 promises for a superseded
+// candidate; status is the convenience and is capped.
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// Discovery of whether the EvalSuite CRD is installed decides whether rollouts
+// are eval-gated (ADR-0006), so the operator must be able to see CRDs.
+// +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
 
 func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -194,6 +203,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			// promotion from a healthier moment.
 			status.Phase = plumev1alpha1.PhaseDegraded
 			status.CandidateRevision = ""
+			// Assert Degraded, do not merely set the phase. CondDegraded is owned and
+			// non-sticky, so a path that sets the phase without the condition actively
+			// CLEARS it — and an alert keyed on the condition would miss the worst
+			// case in this machine.
+			conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "WorkloadUnavailable",
+				fmt.Sprintf("revision %s is the active revision but has no available replicas", desired))
 			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadUnavailable",
 				fmt.Sprintf("revision %s is the active revision but has no available replicas", desired))
 			break
@@ -348,40 +363,29 @@ func templateEquivalent(existing, desired *appsv1.Deployment) bool {
 		*existing.Spec.Replicas != *desired.Spec.Replicas {
 		return false
 	}
-	if !containersEquivalent(existing.Spec.Template.Spec.Containers, desired.Spec.Template.Spec.Containers) {
-		return false
-	}
-	return equality.Semantic.DeepDerivative(desired.Spec.Template, existing.Spec.Template)
+	return podSpecEquivalent(existing.Spec.Template.Spec, desired.Spec.Template.Spec)
 }
 
-// containersEquivalent reports whether the running containers match what this
-// operator rendered. The comparison is EXACT, with no exemptions.
+// podSpecEquivalent compares the WHOLE pod spec exactly.
 //
-// It took three attempts to get here, and the last one deleted code. A
-// hand-listed set of fields added no coverage: everything it named was already
-// caught by the caller's derivative comparison, and the one class it could
-// uniquely catch — fields plume leaves unset — it did not check. Normalizing
-// four server-defaulted fields away fixed that but left those four as
-// unreverted drift, one of which (imagePullPolicy: Never, pinning whatever
-// local image carries the tag) defeated the image revert entirely. deploymentFor
-// now SETS all four, so defaulting has nothing to fill, read-back matches, and
-// every field is compared.
+// It used to compare containers exactly and the surrounding PodSpec
+// derivatively — which skipped every field unset in desired, and deploymentFor
+// set none of them. An injected initContainer with an escalated
+// serviceAccountName therefore survived reconciliation forever: arbitrary code
+// before the agent starts, holding a token the same edit could grant. That is a
+// more complete bypass than the image swap this drift correction was built for,
+// and it hid behind container-level tests that all passed.
 //
-// The general rule, worth keeping: apimachinery's derivative comparison skips
-// zero values only for Slice, String, Map and Ptr kinds — scalars fall through
-// to full equality. So the gap a derivative comparison leaves is exactly the
-// UNSET slice, string, map and pointer fields, which is where drift hides:
-// Command, Args, VolumeMounts, WorkingDir, capability lists.
-func containersEquivalent(existing, desired []corev1.Container) bool {
-	if len(existing) != len(desired) {
-		return false
-	}
-	for i := range desired {
-		if !equality.Semantic.DeepEqual(existing[i], desired[i]) {
-			return false
-		}
-	}
-	return true
+// The lesson generalizes past this function: apimachinery's derivative
+// comparison skips zero values for Slice, String, Map and Ptr kinds, so ANY
+// object compared that way has a hole shaped like the fields its renderer does
+// not set. The fix is always the same — own the fields, then compare exactly.
+func podSpecEquivalent(existing, desired corev1.PodSpec) bool {
+	e, d := *existing.DeepCopy(), *desired.DeepCopy()
+	// DeprecatedServiceAccount is mirrored from ServiceAccountName by admission
+	// and cannot be set independently, so comparing it would never converge.
+	e.DeprecatedServiceAccount, d.DeprecatedServiceAccount = "", ""
+	return equality.Semantic.DeepEqual(e, d)
 }
 
 // deploymentFor renders one revision's workload. Design 02 §6: non-root,
@@ -420,6 +424,22 @@ func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, rev string) 
 						RunAsNonRoot:   yes,
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
+					// An agent has no reason to hold an API token, and turning this
+					// off closes the exfil path an injected initContainer would use.
+					AutomountServiceAccountToken: no,
+					// Named explicitly so a tampered value is a difference rather than
+					// a field the operator never had an opinion about. A real cluster's
+					// ServiceAccount admission plugin defaults this to "default";
+					// envtest does not, so leaving it unset would make the two
+					// environments disagree about what "unchanged" means.
+					ServiceAccountName: "default",
+					// The four fields the API server defaults on a pod template. Set
+					// here so read-back matches and the PodSpec can be compared
+					// exactly; unset, each was a hole rather than a default.
+					RestartPolicy:                 corev1.RestartPolicyAlways,
+					TerminationGracePeriodSeconds: ptr(int64(30)),
+					DNSPolicy:                     corev1.DNSClusterFirst,
+					SchedulerName:                 corev1.DefaultSchedulerName,
 					Containers: []corev1.Container{{
 						Name:      "agent",
 						Image:     rt.Image,
