@@ -23,6 +23,9 @@ spec:
     - jsonPath: .status.activeRevision
       name: Active
       type: string
+    - jsonPath: .status.candidateRevision
+      name: Candidate
+      type: string
     - jsonPath: .status.eval.score
       name: Eval
       type: string
@@ -718,9 +721,12 @@ spec:
               supersededCandidates:
                 description: |-
                   SupersededCandidates records abandoned in-flight candidates so the
-                  transition is auditable rather than silent.
+                  transition is auditable rather than silent. It is capped: the audit trail
+                  belongs in events and receipts, which are durable, whereas an unbounded
+                  status list grows an object nobody prunes.
                 items:
                   type: string
+                maxItems: 10
                 type: array
             type: object
         required:

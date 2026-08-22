@@ -195,8 +195,38 @@ func TestUngatedRolloutIsLoudAboutIt(t *testing.T) {
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatal("an ungated rollout must set GatesSkipped=True (NFR-8: never silent)")
 	}
+	// This agent declares no gates, so that is the precise cause: even with the
+	// EvalSuite CRD installed, nothing would gate it. Naming the CRD instead would
+	// report a cause that is true but not the operative one.
+	if c.Reason != "NoGatesDeclared" {
+		t.Errorf("reason is %q; with no spec.gates the operative cause is that none were "+
+			"declared, not the state of the CRD", c.Reason)
+	}
+}
+
+// The other ungated path: gates ARE declared, but the CRD that would enforce
+// them is absent, so the core tier rule applies (design 02 §3.3).
+func TestGatesDeclaredWithoutTheCRDIsLoudAboutIt(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "gatesnocrd", func(a *plumev1alpha1.Agent) {
+		a.Spec.Gates = []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
+	})
+	r := newReconciler(false) // gates declared, EvalSuite CRD absent
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("gatesnocrd", revision.Hash(a.Spec)), 1)
+	got := settle(t, r, a)
+
+	c := condition(&got, plumev1alpha1.CondGatesSkipped)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatal("declared gates with no EvalSuite CRD must set GatesSkipped=True")
+	}
 	if c.Reason != "EvalSuiteCRDAbsent" {
-		t.Errorf("reason is %q; it must name why the gate did not apply", c.Reason)
+		t.Errorf("reason is %q; here the operative cause IS the missing CRD, because gates "+
+			"were declared and would otherwise have applied", c.Reason)
+	}
+	if got.Status.ActiveRevision == "" {
+		t.Error("core tier: with no EvalSuite CRD the rollout proceeds (loudly) rather than " +
+			"blocking on a controller that was never installed")
 	}
 }
 

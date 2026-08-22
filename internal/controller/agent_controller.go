@@ -46,6 +46,11 @@ const (
 	// them inside the limit would let a rollout garbage-collect its own rollback
 	// target, destroying the instant-rollback property ADR-0019 exists for.
 	DefaultRevisionHistoryLimit = 2
+
+	// maxSupersededCandidates matches the CRD's MaxItems on the same field. The
+	// API server would reject a longer list, so the operator must trim rather than
+	// discover the cap at write time.
+	maxSupersededCandidates = 10
 )
 
 // AgentReconciler reconciles an Agent toward its desired revision.
@@ -141,6 +146,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if status.CandidateRevision != "" && status.CandidateRevision != desired {
 		if !containsString(status.SupersededCandidates, status.CandidateRevision) {
 			status.SupersededCandidates = append(status.SupersededCandidates, status.CandidateRevision)
+			// Keep the newest within the CRD's cap; the durable audit trail is
+			// events and receipts, not this list.
+			if n := len(status.SupersededCandidates); n > maxSupersededCandidates {
+				status.SupersededCandidates = status.SupersededCandidates[n-maxSupersededCandidates:]
+			}
 		}
 		logger.Info("superseding in-flight candidate",
 			"superseded", status.CandidateRevision, "candidate", desired)
@@ -162,20 +172,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	r.assessTaskState(&agent, conds)
 
 	switch {
-	case !ready:
+	case !ready && status.ActiveRevision != "" && status.ActiveRevision != desired:
+		// A genuine rollout: an earlier revision still holds all traffic and is
+		// healthy while its successor comes up. Reporting Ready=False here would
+		// trip every alert keyed on the canonical condition on any routine spec
+		// edit; reporting Canary would claim a weighted shift that §3.3 defines
+		// and that no gateway is performing yet (A13).
 		status.CandidateRevision = desired
-		if status.ActiveRevision == "" {
-			// Nothing serves yet.
-			status.Phase = plumev1alpha1.PhasePending
-			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadNotAvailable",
-				fmt.Sprintf("revision %s has no available replicas yet", desired))
-			break
-		}
-		// An active revision still holds all traffic and is healthy. Reporting
-		// Ready=False here would trip every alert keyed on the canonical condition
-		// on any routine spec edit; reporting Canary would claim a weighted shift
-		// that §3.3 defines and that no gateway is performing yet. The rollout is
-		// carried by CandidateRevision and Progressing instead (A13).
 		status.Phase = plumev1alpha1.PhaseReady
 		conds.set(plumev1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", status.ActiveRevision))
@@ -183,12 +186,50 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			fmt.Sprintf("revision %s is rolling out; %s continues to serve",
 				desired, status.ActiveRevision))
 
+	case !ready:
+		// Either nothing has ever served, or — the case the guard above exists for
+		// — the ACTIVE revision itself has no available replicas. `ready` is
+		// computed for the DESIRED revision, so without the active != desired test
+		// an agent whose pods died would report "revision X is serving" about a
+		// workload serving nothing, and Progressing about a revision rolling out
+		// over itself.
+		status.CandidateRevision = desired
+		conds.set(plumev1alpha1.CondProgressing, metav1.ConditionFalse, "NoRolloutInFlight",
+			"no other revision is coming up")
+		if status.ActiveRevision == desired {
+			// It was serving and is not any more. Say so; do not silently keep the
+			// promotion from a healthier moment.
+			status.Phase = plumev1alpha1.PhaseDegraded
+			status.CandidateRevision = ""
+			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadUnavailable",
+				fmt.Sprintf("revision %s is the active revision but has no available replicas", desired))
+			break
+		}
+		status.Phase = plumev1alpha1.PhasePending
+		conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadNotAvailable",
+			fmt.Sprintf("revision %s has no available replicas yet", desired))
+
 	case !r.gatesSatisfied(&agent):
-		// Gates are required and have not passed: hold at zero traffic (§3.3).
+		// Gates are required and have not passed: hold the candidate at zero
+		// traffic (§3.3). Whether the AGENT is ready is a separate question from
+		// whether the CANDIDATE may promote — if an active revision is still
+		// serving, saying Ready=False would page the on-call for adding gates to a
+		// healthy agent, which is the same defect A13 fixed in the branch below.
 		status.Phase = plumev1alpha1.PhaseHeld
 		status.CandidateRevision = desired
-		conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "AwaitingGates",
+		// Progressing must be asserted here too: it is sticky, so a branch that
+		// stays silent leaves the previous reason in place — and "CandidateNotAvailable"
+		// is false once the candidate is available and merely held.
+		conds.set(plumev1alpha1.CondProgressing, metav1.ConditionTrue, "AwaitingGates",
 			fmt.Sprintf("revision %s is available and held at zero traffic pending its eval gates", desired))
+		if status.ActiveRevision != "" {
+			conds.set(plumev1alpha1.CondReady, metav1.ConditionTrue, "Available",
+				fmt.Sprintf("revision %s is serving", status.ActiveRevision))
+		} else {
+			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "AwaitingGates",
+				fmt.Sprintf("revision %s is held at zero traffic pending its eval gates, "+
+					"and no earlier revision is serving", desired))
+		}
 
 	default:
 		// Promote. Without the gateway there are no weights to shift, so this
@@ -285,17 +326,66 @@ func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alph
 }
 
 // templateEquivalent reports whether a workload already matches what this
-// revision and its current policy fields ask for. Comparing the rendered
-// template rather than tracking individual fields means a field added to
-// deploymentFor later is converged automatically instead of being forgotten.
+// revision and its current policy fields ask for.
+//
+// Two comparisons, because neither alone is correct. The API server defaults
+// many PodSpec fields on write (terminationGracePeriodSeconds, dnsPolicy,
+// scheduler name…), so an exact comparison of the whole template would never
+// converge and the operator would rewrite the Deployment forever. But a
+// derivative comparison IGNORES fields that are empty in `desired`, so clearing
+// a value is invisible to it — dropping one key from a resource map leaves the
+// stale entry, because every key that remains still matches, and an operator
+// removing a request would get a green agent and no change.
+//
+// So: the container is fully owned by this operator and is compared EXACTLY,
+// which sees removals; the surrounding PodSpec is compared derivatively, which
+// tolerates server defaulting.
 func templateEquivalent(existing, desired *appsv1.Deployment) bool {
 	if existing.Spec.Replicas == nil || desired.Spec.Replicas == nil ||
 		*existing.Spec.Replicas != *desired.Spec.Replicas {
 		return false
 	}
-	// The API server defaults many PodSpec fields on write, so a naive DeepEqual
-	// would never converge. Compare the fields this operator actually sets.
+	if !containersEquivalent(existing.Spec.Template.Spec.Containers, desired.Spec.Template.Spec.Containers) {
+		return false
+	}
 	return equality.Semantic.DeepDerivative(desired.Spec.Template, existing.Spec.Template)
+}
+
+// containersEquivalent compares the container fields this operator sets, exactly.
+// It deliberately does not compare the whole Container: the API server defaults
+// terminationMessagePath, imagePullPolicy and protocol, none of which plume owns.
+func containersEquivalent(existing, desired []corev1.Container) bool {
+	if len(existing) != len(desired) {
+		return false
+	}
+	for i := range desired {
+		e, d := existing[i], desired[i]
+		switch {
+		case e.Name != d.Name,
+			e.Image != d.Image,
+			!equality.Semantic.DeepEqual(e.Resources, d.Resources),
+			!equality.Semantic.DeepEqual(e.Env, d.Env),
+			!equality.Semantic.DeepEqual(e.EnvFrom, d.EnvFrom),
+			!equality.Semantic.DeepEqual(e.SecurityContext, d.SecurityContext),
+			!portsEquivalent(e.Ports, d.Ports):
+			return false
+		}
+	}
+	return true
+}
+
+// portsEquivalent compares only name and number: the API server defaults
+// protocol to TCP, which plume never sets.
+func portsEquivalent(existing, desired []corev1.ContainerPort) bool {
+	if len(existing) != len(desired) {
+		return false
+	}
+	for i := range desired {
+		if existing[i].Name != desired[i].Name || existing[i].ContainerPort != desired[i].ContainerPort {
+			return false
+		}
+	}
+	return true
 }
 
 // deploymentFor renders one revision's workload. Design 02 §6: non-root,
@@ -400,17 +490,22 @@ func (r *AgentReconciler) evalSuiteInstalled() bool {
 
 func (r *AgentReconciler) assessGates(agent *plumev1alpha1.Agent, c *conditionSet) {
 	switch {
+	// The no-gates case comes FIRST, and deliberately. With nothing declared to
+	// gate, detection cannot change the outcome — the agent promotes either way —
+	// so reporting "holding rather than promoting ungated" on an agent that just
+	// promoted would be loud and wrong, which is exactly what NFR-8 forbids.
+	case len(agent.Spec.Gates) == 0:
+		c.set(plumev1alpha1.CondGatesSkipped, metav1.ConditionTrue, "NoGatesDeclared",
+			"no spec.gates are declared, so this rollout is not eval-gated")
 	case r.EvalSuiteInstalled == nil:
-		// Unwired: we do not know, so we hold and say exactly that.
+		// Gates ARE declared and we cannot tell whether the CRD is present. Hold,
+		// and say exactly that.
 		c.set(plumev1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateDetectionUnwired",
 			"the operator was built without EvalSuite detection, so it cannot tell whether "+
 				"this rollout should be eval-gated; holding rather than promoting ungated")
 	case !r.evalSuiteInstalled():
 		c.set(plumev1alpha1.CondGatesSkipped, metav1.ConditionTrue, "EvalSuiteCRDAbsent",
 			"the EvalSuite CRD is not installed, so this rollout is NOT eval-gated (design 02 §3.3, core tier)")
-	case len(agent.Spec.Gates) == 0:
-		c.set(plumev1alpha1.CondGatesSkipped, metav1.ConditionTrue, "NoGatesDeclared",
-			"no spec.gates are declared, so this rollout is not eval-gated")
 	default:
 		c.set(plumev1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateControllerUnimplemented",
 			"spec.gates are declared but the gate controller (design 16) is not implemented; "+

@@ -129,7 +129,7 @@ func TestOnlyTheUnavoidableFieldsAreRequired(t *testing.T) {
 // twenty-condition status stays legible rests entirely on these columns, so they
 // are a contract, not a convenience.
 func TestPrinterColumnsMatchTheDesign(t *testing.T) {
-	want := []string{"Phase", "Active", "Eval", "Cost/Day", "Age"}
+	want := []string{"Phase", "Active", "Candidate", "Eval", "Cost/Day", "Age"}
 
 	raw, _ := agentVersion(t)["additionalPrinterColumns"].([]any)
 	var got []string
@@ -139,7 +139,7 @@ func TestPrinterColumnsMatchTheDesign(t *testing.T) {
 
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("printer columns are %v, design 02 §3.1 specifies %v.\n"+
-			"These columns are the whole reason 20 conditions is defensible: Eval and "+
+			"These columns are the whole reason 21 conditions is defensible: Eval and "+
 			"Cost/Day are exactly what a developer would otherwise read conditions for.", got, want)
 	}
 }

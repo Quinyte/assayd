@@ -282,7 +282,10 @@ type AgentStatus struct {
 	// +optional
 	CandidateRevision string `json:"candidateRevision,omitempty"`
 	// SupersededCandidates records abandoned in-flight candidates so the
-	// transition is auditable rather than silent.
+	// transition is auditable rather than silent. It is capped: the audit trail
+	// belongs in events and receipts, which are durable, whereas an unbounded
+	// status list grows an object nobody prunes.
+	// +kubebuilder:validation:MaxItems=10
 	// +optional
 	SupersededCandidates []string `json:"supersededCandidates,omitempty"`
 	// Cards carries one entry per live revision — two coexist during a rollout.
@@ -357,13 +360,18 @@ type BudgetStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=ag
-// Printer columns are design 02 §3.1's list, and they are a contract: the case
-// for a twenty-condition status rests on `kubectl get ag` answering the common
-// questions without reading one. Candidate is deliberately absent — Held and
-// Canary already imply a candidate, whereas Eval and Cost/Day are unreachable any
-// other way. Pinned by TestPrinterColumnsMatchTheDesign.
+// Printer columns are design 02 §3.1's list (A14), and they are a contract: the
+// case for a twenty-one-condition status rests on `kubectl get ag` answering the
+// common questions without reading one.
+//
+// Candidate earns its column because Phase no longer implies it. Since A13 a
+// rollout in flight renders as Phase=Ready — correctly, the agent IS serving —
+// so without this column a candidate that never becomes available shows as a
+// completely healthy agent, with Progressing=True visible only to someone who
+// thinks to read conditions. Pinned by TestPrinterColumnsMatchTheDesign.
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Active",type=string,JSONPath=`.status.activeRevision`
+// +kubebuilder:printcolumn:name="Candidate",type=string,JSONPath=`.status.candidateRevision`
 // +kubebuilder:printcolumn:name="Eval",type=string,JSONPath=`.status.eval.score`
 // +kubebuilder:printcolumn:name="Cost/Day",type=string,JSONPath=`.status.budget.usdSpentToday`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

@@ -384,3 +384,252 @@ func TestSpecEditOnAServingAgentStaysReady(t *testing.T) {
 func boolPtr(b bool) *bool { return &b }
 
 var _ = ctrl.Request{}
+
+// N1 — DeepDerivative ignores fields that are empty in `desired`, so CLEARING a
+// value was invisible: B2's silent no-op surviving inside B2's fix, on the
+// narrower input of removal rather than change.
+func TestPolicySurfaceRemovalsAlsoReachTheWorkload(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "removal", func(a *plumev1alpha1.Agent) {
+		a.Spec.Runtime.Resources = corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceMemory: resource.MustParse("64Mi"),
+				corev1.ResourceCPU:    resource.MustParse("250m"),
+			},
+		}
+	})
+	r := newReconciler(false)
+	rev := revision.Hash(a.Spec)
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("removal", rev), 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("removal", rev)}
+
+	// Drop ONE key. Every key still in desired matches, so a derivative
+	// comparison sees no difference and the stale cpu request survives.
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	delete(a.Spec.Runtime.Resources.Requests, corev1.ResourceCPU)
+	if err := k8s.Update(context.Background(), a); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	settle(t, r, a)
+
+	var d appsv1.Deployment
+	if err := k8s.Get(context.Background(), key, &d); err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if _, stale := d.Spec.Template.Spec.Containers[0].Resources.Requests[corev1.ResourceCPU]; stale {
+		t.Error("a removed cpu request is still on the pod: dropping one key from the map " +
+			"left the stale value, because every key that remains still matches")
+	}
+
+	// Clear the block entirely.
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	a.Spec.Runtime.Resources = corev1.ResourceRequirements{}
+	if err := k8s.Update(context.Background(), a); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	settle(t, r, a)
+
+	if err := k8s.Get(context.Background(), key, &d); err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if len(d.Spec.Template.Spec.Containers[0].Resources.Requests) != 0 {
+		t.Errorf("resources are still %v after being cleared: an operator removing a "+
+			"request gets a green agent and no change",
+			d.Spec.Template.Spec.Containers[0].Resources.Requests)
+	}
+}
+
+// N2 — the gate-hold branch must not report a serving agent unhealthy, and must
+// not let a sticky Progressing reason go stale.
+func TestHoldingOnGatesKeepsAServingAgentReady(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "holdready", nil)
+	// Promote once with no gates and no EvalSuite CRD.
+	r := newReconciler(false)
+	first := revision.Hash(a.Spec)
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("holdready", first), 1)
+	settle(t, r, a)
+
+	// Now add gates and the CRD: the new candidate must hold, while the old
+	// revision keeps serving.
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	a.Spec.Gates = []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
+	a.Spec.Runtime.Image = "ghcr.io/acme/agent:2.0.0"
+	if err := k8s.Update(context.Background(), a); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	gated := newReconciler(true)
+	second := revision.Hash(a.Spec)
+	settle(t, gated, a)
+	markAvailable(t, ns, controller.WorkloadName("holdready", second), 1)
+	got := settle(t, gated, a)
+
+	if got.Status.ActiveRevision != first {
+		t.Fatalf("fixture: active is %q, want the original %q", got.Status.ActiveRevision, first)
+	}
+	ready := condition(&got, plumev1alpha1.CondReady)
+	if ready == nil || ready.Status != metav1.ConditionTrue {
+		t.Error("Ready=False while the original revision still serves all traffic: adding " +
+			"gates to a healthy agent must not page the on-call")
+	}
+	// Ready is sticky, so finding it True is not enough: an inherited value from
+	// before the gates were added would look identical. The hold branch must
+	// ASSERT it, which shows up as an observedGeneration matching the current one.
+	if ready != nil && ready.ObservedGeneration != got.Generation {
+		t.Errorf("Ready was carried over from generation %d rather than asserted at %d — "+
+			"a sticky condition the branch never speaks to can go stale",
+			ready.ObservedGeneration, got.Generation)
+	}
+	c := condition(&got, plumev1alpha1.CondProgressing)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatal("a candidate held on gates is still a rollout in flight")
+	}
+	if c.Reason != "AwaitingGates" {
+		t.Errorf("Progressing reason is %q, but the candidate IS available and is held on "+
+			"gates — a sticky condition whose branch stays silent goes stale", c.Reason)
+	}
+}
+
+// N3 — with nothing declared to gate, detection cannot change an outcome, so the
+// condition must not claim to be holding an agent it just promoted.
+func TestUnwiredWithNoGatesDoesNotClaimToHold(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "unwirednogates", nil) // no spec.gates
+	r := &controller.AgentReconciler{Client: k8s, Scheme: scheme}
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("unwirednogates", revision.Hash(a.Spec)), 1)
+	got := settle(t, r, a)
+
+	if got.Status.ActiveRevision == "" {
+		t.Fatal("fixture: an agent with no gates should promote regardless of wiring")
+	}
+	if c := condition(&got, plumev1alpha1.CondGatesPassed); c != nil && c.Reason == "GateDetectionUnwired" {
+		t.Error("the agent promoted, but the condition says it is holding rather than " +
+			"promoting ungated — loud and wrong is the NFR-8 failure this was meant to fix")
+	}
+	if c := condition(&got, plumev1alpha1.CondGatesSkipped); c == nil || c.Status != metav1.ConditionTrue {
+		t.Error("with no gates declared the honest condition is GatesSkipped, whatever the wiring")
+	}
+}
+
+// A defect found while mutation-testing the N2 fix: `ready` is computed for the
+// DESIRED revision, so when desired == active and its pods die, the rollout
+// branch was reporting Ready=True naming a revision that serves nothing — and a
+// Progressing message claiming a revision was rolling out over itself.
+func TestActiveRevisionLosingItsPodsIsNotReportedReady(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "podsdie", nil)
+	r := newReconciler(false)
+	rev := revision.Hash(a.Spec)
+	settle(t, r, a)
+	name := controller.WorkloadName("podsdie", rev)
+	markAvailable(t, ns, name, 1)
+	got := settle(t, r, a)
+	if got.Status.ActiveRevision != rev {
+		t.Fatalf("fixture: not promoted")
+	}
+
+	// The pods die. No spec change: desired is still the active revision.
+	markAvailable(t, ns, name, 0)
+	got = settle(t, r, a)
+
+	if c := condition(&got, plumev1alpha1.CondReady); c == nil || c.Status != metav1.ConditionFalse {
+		t.Errorf("Ready=%v while the only revision has no available replicas — the agent "+
+			"serves nothing and says it is fine",
+			func() any {
+				if c == nil {
+					return "absent"
+				}
+				return c.Status
+			}())
+	}
+	if c := condition(&got, plumev1alpha1.CondProgressing); c != nil && c.Status == metav1.ConditionTrue {
+		t.Error("Progressing=True with no rollout in flight: the active revision is not " +
+			"rolling out over itself")
+	}
+	if got.Status.CandidateRevision == rev {
+		t.Error("the active revision was recorded as its own candidate")
+	}
+}
+
+// Progressing is sticky, so every branch must speak to it or a stale True
+// survives. Two paths where that matters:
+//
+//  1. a rollout that completes — Progressing must go False, not linger True
+//  2. a rollout abandoned by reverting the spec, whose workload then dies — the
+//     agent is degraded with NO rollout in flight, and must not still claim one
+func TestProgressingIsClearedOnEveryExitFromARollout(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "progclear", nil)
+	r := newReconciler(false)
+	first := revision.Hash(a.Spec)
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("progclear", first), 1)
+	settle(t, r, a)
+
+	// Start a rollout.
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	a.Spec.Runtime.Image = "ghcr.io/acme/agent:2.0.0"
+	if err := k8s.Update(context.Background(), a); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	second := revision.Hash(a.Spec)
+	got := settle(t, r, a)
+	if c := condition(&got, plumev1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatal("fixture: the rollout did not register as Progressing")
+	}
+
+	// Path 1: it completes.
+	markAvailable(t, ns, controller.WorkloadName("progclear", second), 1)
+	got = settle(t, r, a)
+	if c := condition(&got, plumev1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionFalse {
+		t.Error("Progressing did not go False when the rollout completed: a sticky " +
+			"condition left True reports a rollout that finished long ago")
+	}
+
+	// Path 2: start another rollout, revert it, then the surviving workload dies.
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	a.Spec.Runtime.Image = "ghcr.io/acme/agent:3.0.0"
+	if err := k8s.Update(context.Background(), a); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	got = settle(t, r, a)
+	if c := condition(&got, plumev1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatal("fixture: second rollout did not register")
+	}
+
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	a.Spec.Runtime.Image = "ghcr.io/acme/agent:2.0.0" // back to the active revision
+	if err := k8s.Update(context.Background(), a); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	markAvailable(t, ns, controller.WorkloadName("progclear", second), 0)
+	got = settle(t, r, a)
+
+	if c := condition(&got, plumev1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionFalse {
+		t.Errorf("Progressing is %v on a degraded agent with no rollout in flight — the "+
+			"branch that changed the situation stayed silent and the stale value survived",
+			func() any {
+				if c == nil {
+					return "absent"
+				}
+				return c.Status
+			}())
+	}
+}
