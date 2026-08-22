@@ -47,7 +47,7 @@ The Agent CR binding `{graphRef: {name, version}}` compiles to a route to that e
 
 *Rejected alternatives*: version as a tool parameter (agents can wander; every tool schema polluted); gateway header injection (invisible in traces; harder to reason about).
 
-### 3.3 Query surface — six tools (closed set)
+### 3.3 Query surface — 6 tools (closed set)
 
 Anything beyond these six is provider-specific bonus, invisible to portable agents (ADR-0005).
 
@@ -67,16 +67,16 @@ Notes:
 - **Errors are a closed set** (MCP error `data.code`): `KG_NOT_FOUND · KG_SCOPE_DENIED · KG_VERSION_GONE · KG_VERSION_NOT_STAGING · KG_VERSION_IN_USE · KG_VERSION_CONFLICT · KG_BUNDLE_UNKNOWN · KG_UNAVAILABLE · KG_COMMIT_REJECTED` (violations in `data.violations`). `KG_BUDGET_EXCEEDED` is **removed** — budgets are the gateway's, never the provider's (r2 f6) — portable handling, no provider-specific error parsing.
 - **Pagination**: v1alpha1 is `limit`-only by design; cursor pagination is a tracked v1beta1 item (review 01, finding 4).
 
-### 3.4 Admin surface — five tools (platform-only)
+### 3.4 Admin surface — 7 tools (platform-only)
 
 Called by the ingestion pipeline (design 14) and the operator. Same MCP transport, separate endpoint + authz scope (SPIRE platform identity only; never routed to agents).
 
 | Tool | Purpose |
 |---|---|
-| `kg.admin.begin_version` | *(graph-level)* open staging version `vN+1`; **single-flight per graph** — a concurrent call returns `KG_VERSION_CONFLICT` naming the in-flight version. The provider allocates the number; callers never propose one (r2 f5) |
+| `kg.admin.begin_version` | *(graph-level)* `begin_version(from: vN | empty)` — the caller names the **source**, the provider allocates the **number**. **Single-flight per graph** — a concurrent call returns `KG_VERSION_CONFLICT` naming the in-flight version. The provider allocates the number; callers never propose one (r2 f5) |
 | `kg.admin.list_versions` | *(graph-level)* `[{version, state, created_at, promoted_at, embedder, element_counts?}]` — the enumeration bind-validation, `kg diff` and retention all need (r2 f3) |
 | `kg.admin.write_batch` | *(per-version path)* upsert nodes/edges with mandatory `provenance`; idempotent by `(batch_id, seq)`. **Precondition: target version MUST be `staging`** — any other state refused with `KG_VERSION_NOT_STAGING` (r2 f1). Concurrent batches merge last-write-wins per element key; each batch is atomic within itself (r2 f5) |
-| `kg.admin.commit_version` | run ontology invariants; **fail → version quarantined**, never promoted; returns violation list |
+| `kg.admin.commit_version` | *(per-version path)* **precondition: target MUST be `staging`** — `KG_VERSION_NOT_STAGING` otherwise, so invariants can never re-run against a live graph (r2 R1). Runs ontology invariants; **fail → version quarantined**, never promoted; returns violation list |
 | `kg.admin.promote` | *(graph-level)* mark `vN+1` active **atomically** — the previous active becomes `superseded` in the same operation, so there is never a window with two active versions or none (r2 f5). Readiness still requires probes — the operator's call |
 | `kg.admin.load_artifact` | bulk load from a signed OCI artifact ref (nodes/edges/provenance in a columnar layout) — the high-throughput ingestion path; same invariant gate at commit |
 | `kg.admin.drop_version` | *(graph-level)* delete a version. **In-use interlock (r2 f4)**: refused with `KG_VERSION_IN_USE` while any Agent CR binds it (the operator passes its bindings) or an in-flight query holds it; the guard reads the authoritative version record, never a replica cache. Pinned-version retention pressure surfaces as a KG CR condition |
@@ -122,7 +122,7 @@ probes:
 
 Main paths:
 
-1. **Bind**: agent-operator reconciles `graphRef` → validates the endpoint serves `kgp/v1alpha1` at that version (via `kg.schema`) → compiles gateway route + scope filters → condition `KnowledgeBound`.
+1. **Bind**: agent-operator reconciles `graphRef` → validates via `kg.schema` that the endpoint serves `kgp/v1alpha1`, declares profile `query` or `full`, and reports the bound version in state **`active` or `superseded`** — `staging` and `quarantined` are refused (r2 f2/R4) → compiles gateway route + scope filters → condition `KnowledgeBound`.
 2. **Query**: agent → gateway (authz, budget, receipt, `Mcp-Method` metering) → version endpoint → response with provenance refs.
 3. **Ingest**: pipeline → `begin_version` → `write_batch`× → `commit_version` (invariants) → operator runs probes → `promote` + `Ready`, else quarantine + `KnowledgeStale` stays.
 4. **Rollback**: repoint bindings to `vN−1` endpoint (pure routing; provider untouched).
@@ -153,17 +153,17 @@ Per-tool metrics at the gateway (count, latency, tokens-of-context served, trunc
 `plume-kgp-conformance` (container + `plume kgp conformance --endpoint …`): runs a fixture ontology ("clinic-sop", ~40 nodes) + seeded corpus against any endpoint:
 
 1. `kg.schema` round-trips the ontology; contract id correct.
-2. `kg.search` recall ≥ threshold on seeded known-answer queries.
+2. `kg.search` recall **≥ 0.9 on the seeded known-answer set** (stated so implementers do not each pick a gate).
 3. `kg.neighbors` exact edge sets; depth/direction/limit honored.
 4. `kg.get_context_bundle`: every built-in recipe; determinism (same version+params → same citation set); budget truncation flagged.
-5. `kg.cite` resolves every ref emitted by 2–4; no uncited facts.
+5. `kg.cite` resolves every ref emitted by 2–4; no uncited facts. Every closed-set error code — pre-existing and new — has an assertion that the provider returns it in its stated condition (r2 R3).
 6. `kg.probe` executes the fixture probe set with correct pass/fail.
-7. **Version isolation**: write v2, assert v1 responses byte-stable.
+7. **Version isolation**: write v2, then assert v1's *bundle* outputs are byte-stable and its `search`/`neighbors` result **sets** are unchanged — bundles are the only surface the contract mandates determinism for, so byte-stability elsewhere would fail a conforming provider (r2 R3).
 8. Admin lifecycle: begin→write→commit(with a deliberate invariant violation → quarantine)→promote.
-9. Latency budget (warm): search p95 < 800ms, bundle p95 < 1.5s (advisory in v1alpha1).
+9. Latency budget (warm) on the fixture **and** on a 100k-element synthetic corpus — the small fixture alone cannot distinguish an implementation that collapses at scale: search p95 < 800ms, bundle p95 < 1.5s (advisory in v1alpha1).
 10. Portability check: warns on any `portable: false` ontology elements.
 
-A provider "supports kgp/v1alpha1" iff the suite passes. The suite ships with the contract, versioned together.
+A provider **supports `kgp/v1alpha1` at profile `query`** iff points 1–7, 9 and 10 pass, and **at profile `full`** iff point 8 (the admin lifecycle) also passes (A5.4). Binding and querying require `query`; the version-mutating platform features (designs 14, 15) require `full`. The suite ships with the contract, versioned together.
 
 ## 9. Resolved questions (decided 2026-08-20)
 
@@ -174,7 +174,7 @@ A provider "supports kgp/v1alpha1" iff the suite passes. The suite ships with th
 **Q3 — Escape hatches: allowed, marked `portable: false`**, conformance warns. As recommended.
 ## 10. Resulting ADRs
 
-Recorded: ADR-0017 (kgp/v1alpha1 contract: 6+5 tools, version-scoped endpoints, ontology/v1) · ADR-0018 (Q1 decision) · note in ADR-0003 that MCP target is spec 2026-07-28.
+Recorded: ADR-0017 (r2: the surface is **6 query + 7 admin**; admin mutating tools moved to `/kgp/<graph>/admin/<version>/mcp`) (kgp/v1alpha1 contract: 6+5 tools, version-scoped endpoints, ontology/v1) · ADR-0018 (Q1 decision) · note in ADR-0003 that MCP target is spec 2026-07-28.
 
 ## Appendix: Graphiti reference mapping
 
@@ -203,3 +203,4 @@ The adapter wraps **graphiti-core as a library** in the provider pod (Graphiti's
   4. **f7 — conformance profiles.** `query` (tools 1–7 + the A1 scope battery + A3's walk case) and `full` (adds the admin lifecycle). A provider declares its profile in `kg.schema`; **binding and querying require `query`, version-mutating platform features (designs 14, 15) require `full`.** Without this, a read-only corporate graph — the archetypal BYO case §9 promises — could never claim support.
   5. **f10 — §3.5's ontology sketch is superseded by design 12** (`ontology/v1` normative: no `ref()` attrs, canonical triple relation refs, `via` required on probes, `health.pass_threshold`). It is retained as illustration only.
 - **A6 (2026-08-22, f8 — conformance suite gaps)**: the suite additionally asserts version **state transitions** (staging → active → superseded), that a `quarantined` version is not bindable, `list_versions` completeness after a fork, drop-interlock refusal, and the closed-error mapping for each new code — the four ways a non-conforming provider would previously have passed.
+- **A7 (2026-08-22, r2 R6)**: single-flight `begin_version` interacts with design 14's review park (up to `reviewTimeout: 72h`). Rule: a parked build **holds** the graph's staging slot, and a competing `begin_version` — including design 20's automatic `KnowledgeStale` rebuild — receives `KG_VERSION_CONFLICT` naming the parked build. The operator's response is **queue, never supersede**: the rebuild is recorded as pending on the KG CR (`RebuildQueued`) and launches when the park resolves or times out. Recorded here because neither design 14 nor design 20 carried the path.

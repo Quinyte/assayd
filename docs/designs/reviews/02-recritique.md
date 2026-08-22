@@ -108,3 +108,49 @@ The amendments are properly recorded in §11; the body was never updated, so a r
 **REVISE.** The load-bearing decisions have aged well — operator-owned revisions, card-as-code with a spec-only hash, one templated ClusterSPIFFEID, admission-enforced signing and gating — and nothing downstream had to fight them, which is the real test. But this design was written first and never re-opened: eight amendments sit in an appendix while §3 still tells the old story, one of them (A8) presupposes a CRD field that was never added even though three designs compile against it, and the state machine was specified for a single well-behaved candidate at a time. Findings 1–7 are all things the first implementer hits in week one: a missing field, a second candidate, a GC'd rollback target, a wiped scratchpad, a silently broken multi-replica agent, an undefined delete, and a phase that can't say why traffic stopped.
 
 02: VERDICT REVISE — 10 findings
+
+---
+
+## Fix verification (2026-08-22)
+
+- **Verdict**: **REVISE** — 7 outstanding. 6 of 10 findings fixed, 3 partial, 1 claimed but not delivered.
+- **Verified against**: design 02 r2 (A9, A10), designs 03/06/09/16/20/22/25/26, ADR-0019.
+
+### Per-finding disposition
+
+| # | Status | Evidence |
+|---|---|---|
+| **f1** missing `llm` block | **Fixed** | `spec.llm: {providers, egressAllowlist, fallback}` is now in the CRD, and A9.1 explicitly restates A8's `runtime.llm.fallback` to `spec.llm.fallback`. Matches design 03's `PolicyIntent.llm` and design 25 §5's `llm.providers`. (A8's own text still says `runtime.llm.fallback`, but A9.1 supersedes it in terms — the A4/A5 precedent.) |
+| **f2** spec change during canary | **Fixed** | A9.2: the new generation **supersedes** the in-flight candidate, `C1` drains to weight 0 respecting `taskTimeout` (reusing design 22's kill drain), `GatesPassed` resets, and `status.supersededCandidates` makes the abandonment auditable. Status field added. See R5 for a typo in the same block. |
+| **f3** `revisionHistoryLimit` | **Fixed** | A9.3: "two retained revisions **in addition to** active and any in-flight candidate", with design 20's retention hold acknowledged as this operator's behaviour. The instant-rollback property is restored under rollout. |
+| **f4** Sandbox scratchpad | **Fixed in semantics** | A9.4: the volume is revision-independent and reattached on promotion; a candidate under eval attaches it **read-only**; and the eval consequence is stated ("design 16 gates a cold candidate against a warm active"). Implementability question in R6. |
+| **f5** silent `replicas>1` | **Fixed** | A9.5: the A2A card is the declaration point; absent the assertion with `replicas>1` the operator sets **`TaskStateUnverified=True`** and the CLI warns. Condition added to §3.1. Cross-design obligation in R7. |
+| **f6** finalization | **Fixed** | A9.6 specifies the ordered teardown the §1 scope statement always promised — drain → revoke routes/policies in design 03's reverse order → **deactivate** (never delete) the `agent-actor` client per design 06 D3 → GC directory entries and SPIRE labels → release the finalizer — plus design 26's hard-mode split. Thorough. |
+| **f7** phase enum / conditions | **PARTIAL** | Phase enum now carries `BudgetHeld` and `Killed`, and `TaskStateUnverified`/`BudgetExhausted`/`Killed` joined the condition list. Nine amendment-declared conditions are still missing — R4. |
+| **f8** stale body passages | **PARTIAL** | A10 asserts a blanket supersession rule and names four specifics. Two of the five passages are untouched and one is arguably outside the clause's wording — R3. |
+| **f9** card/registration gaps | **NOT DELIVERED** | A10 is titled "f8–f10" but addresses only f8 and f10. None of f9's three sub-points appears anywhere in r2 — R1. |
+| **f10** failure-table rows | **PARTIAL** | A10 promises four new rows; the §5 table is unchanged, and none of the five originally-named rows was added — R2. |
+
+### Outstanding
+
+**R1 — f9 is claimed but not delivered.** A10's heading reads "(f8–f10)", yet nothing in r2 addresses any of f9's three sub-points: `status.card` is still a **single** object (`:59`) while two revisions coexist through every rollout, each with its own image and therefore its own card; there is still **no terminal state** for a permanently unregistrable candidate (retry-with-backoff and an alert at 10m/1h, but nothing ever fails it, so it holds a retention slot indefinitely — which now interacts with A9.3's slot accounting); and there is still no card-vs-CR cross-check (a card advertising a capability the CR doesn't grant registers cleanly and fails at runtime). An amendment that names a finding it doesn't address is worse than one that omits it, because the tracking table says done.
+
+**R2 — the failure table was never edited.** A10 states "The failure table gains rows for superseded-candidate drain, finalization stall, scratchpad reattach failure, and `TaskStateUnverified`" — §5 still holds its original seven rows. Separately, none of f10's five originally-named rows was added either: budget exhaustion → `BudgetHeld` (A1), rollback target GC'd (design 20 owns the row; this design owns the GC), kill during rollout (design 22), IdP unavailable at `agent-actor` provisioning (A3), and spend-aggregate unavailable (A1's new reconcile input). The table is the operator's runbook index and it now under-describes eleven behaviours.
+
+**R3 — two stale passages survive f8, one of them outside A10's clause.** `:42`'s `scope:` comment still reads "**gateway-enforced** (design 01 §6)", superseded by design 01 A1 (gateway-*injected*, provider-enforced) — and A10's rule covers "body passages stale against **their own amendments**", which this is not: it is stale against *another design's* amendment, so the blanket clause does not reach it. This is the same phrase the architecture audit chased through two sections. `:104`'s "we target the **2.2** CRD surface only" is likewise untouched (tracked as 06-review R2-a, but design 02's body is what ADR-0019(5) cites). Note also that a blanket supersession clause resolves ambiguity by rule while leaving the reader of §3.1 and §3.4 with the wrong answer and no signal — acceptable as a stopgap, not as the end state for the design the first implementer reads.
+
+**R4 — f7's condition list is only partly extended.** §3.1 now lists `TaskStateUnverified`, `BudgetExhausted` and `Killed`, but nine conditions declared in amendments are still absent: `BudgetEnforcementDegraded`, `PricingStale`, `ReceiptsDegraded` (A1), `IdPUnavailable`, `OnBehalfOfUnavailable`, `IdentityBootstrapIncomplete` (A3), `GatesSkipped` (A4), `GatesBypassed` (A5), `CardUnsigned` (A6). The defect f7 named — the declared surface not keeping up with the amendments — persists for nine of twelve.
+
+**R5 — duplicate key in the status block.** `candidateRevision` appears twice (`:58` and `:60`), introduced by the r2 edit. In the platform's front-door CRD schema, in YAML, where duplicate keys are invalid.
+
+**R6 — the read-only reattach may not be schedulable on the storage the platform mandates.** A9.4 has the candidate attach the scratchpad read-only while the active revision holds it read-write. That requires `ReadOnlyMany`/`ReadWriteMany` or co-scheduling on one node; §17 commits the platform to `local-path` storage for local profiles, which is `ReadWriteOnce` and node-bound. State the access mode the mechanism assumes and what happens when the storage class can't provide it (the platform's own pattern would be a loud condition and a degraded path, as with `SandboxDowngraded`).
+
+**R7 — A9.5 creates an unrecorded obligation on design 09.** The mechanism turns on the card declaring shared task state, but design 09's template contract (which ships the JetStream-KV task store) says nothing about emitting that declaration. Without it, every template-built agent with `replicas>1` — the case the store exists to make work — raises `TaskStateUnverified`, which is precisely backwards. One line in design 09's §3 contract list.
+
+### Verdict
+
+**REVISE.** The high-value fixes landed and landed properly: the missing `spec.llm` block (which three designs compile against), the supersede-during-canary rule with an auditable trail, the corrected `revisionHistoryLimit` scope that restores instant rollback, a real scratchpad lifecycle, detection instead of silence for multi-replica agents, and a finalization section that closes a scope promise the design had carried unspecified since v0.1. Six of ten are done.
+
+What holds it back is bookkeeping rather than design: one finding tracked as addressed but absent (R1), a failure table amended in prose but not in fact (R2), a condition list still nine short (R4), and a duplicate key in the CRD schema (R5). The pattern is the one this design has had all along — amendments accumulating faster than the body absorbs them — and A10's blanket supersession clause manages it rather than resolving it. Given this is the first thing anyone will build, the body deserves one integration pass rather than a rule telling implementers which half to believe.
+
+02: REVISE — 7 outstanding

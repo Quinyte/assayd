@@ -32,7 +32,7 @@ The reference kgp provider: a container wrapping **graphiti-core as a library** 
 | `kg.neighbors` | direct backend traversal (FalkorDB/Neo4j driver) filtered by relation types; bitemporal fields passed through |
 | `kg.get_context_bundle` | adapter-side deterministic recipe engine (walk/subtree/neighborhood_summary/timeline) over typed edges — **no LLM calls in the adapter, ever** (ADR-0017); `text` is template-rendered; `require_scope` checked first |
 | `kg.cite` | element provenance stored at write (§3.4) |
-| `kg.schema` | the embedded ontology doc verbatim + `{contract, version, pattern?, embedder: {model, dim}}` |
+| `kg.schema` | the embedded ontology doc verbatim + `{contract, version, **state**, **profile**, pattern?, embedder: {model, dim}}` — state and profile per design 01 A5 (r2 R8); the adapter declares profile `full` |
 | `kg.probe` | executes the probe set via the same query paths agents use; matchers per design 12 §3.6 |
 
 **Scope enforcement (design 01 A1)**: every request carries the gateway-injected `X-Plume-KG-Scope` header — **trust derives from the mTLS connection's verified gateway SVID** (ingress is gateway-only, §6); no separate header signature exists or is needed (r1 f4; design 03's row wording aligned). All four fact-bearing tools filter to scoped entity types and answer `KG_SCOPE_DENIED` otherwise. The closed error set (ADR-0017) maps from adapter errors — never provider-native errors on the wire.

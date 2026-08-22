@@ -109,3 +109,57 @@ Requested scrutiny area; all three are genuinely open in the text.
 **REVISE.** The query surface, the version-scoped-endpoint decision and the determinism requirements have held up under two years of downstream design — every consumer built against them without needing a change, which is the strongest evidence a contract can have. What never got tested is the **admin half**: it lacks version state, version listing, lifecycle interlocks, concurrency semantics, and — after A2 stretched it to admit third-party writers — an enforceable authorization story. Finding 1 is a blocker because a pack-supplied reader image can silently overwrite live graph data; findings 2–5 are the missing object model behind it. The fixes are additive (one tool, one state field, one path change, three error codes, conformance profiles) and none disturbs the query surface that agents and packs already write against.
 
 01: VERDICT REVISE — 10 findings
+
+---
+
+## Fix verification (2026-08-22)
+
+- **Verdict**: **REVISE** — 9 outstanding. **The BLOCKER is genuinely closed**; 8 of 10 findings fixed, 1 partial, 1 not fixed (and made worse by its own amendment).
+- **Verified against**: design 01 r2 (A5, A6), design 13 r2, design 14, design 20, ADR-0017.
+
+### The blocker (f1) — closed
+
+The fix works, and it works for the right reason. `/kgp/<graph>/admin/<version>/mcp` puts the version **in the path**, so A2's per-version grant becomes a route match on `(path, Mcp-Name)` — the gateway never needs to read a body to know which version a write targets, which was the exact impossibility. Lifecycle tools (`begin_version`, `list_versions`, `promote`, `drop_version`) correctly stay graph-level under platform identity, so a granted principal cannot reach them. The staging-only precondition on `write_batch`/`load_artifact` with `KG_VERSION_NOT_STAGING` is real defence in depth: even a mis-issued route cannot mutate the active graph. Design 11's claim ("a per-connector, per-staging-version route scoped to `write_batch` only") is now implementable rather than aspirational.
+
+Two completeness gaps remain around it (R1, R2 below) — neither reopens the hole.
+
+### Per-finding disposition
+
+| # | Status | Evidence |
+|---|---|---|
+| **f1** BLOCKER | **Fixed** | §3.2 three-path split + §3.4 staging precondition + `KG_VERSION_NOT_STAGING`; A5.1 states the reasoning. See R1/R2. |
+| **f2** version state | **Fixed** | `state ∈ staging\|active\|superseded\|quarantined` in `kg.schema`; A5.2 refuses binds to anything but `active`/`superseded`, `quarantined` platform-only. (§4's bind step not updated — R4.) |
+| **f3** enumeration | **Fixed** | `kg.admin.list_versions` with the recommended shape `[{version, state, created_at, promoted_at, embedder, element_counts?}]`. |
+| **f4** drop interlock | **Fixed** | `KG_VERSION_IN_USE`; refused while any Agent CR binds it or an in-flight query holds it; guard reads the authoritative record, not a replica cache; retention pressure surfaces as a KG CR condition. |
+| **f5** concurrency | **Fixed** | All three sub-points: `begin_version` single-flight with `KG_VERSION_CONFLICT` and provider-side allocation; `write_batch` merge stated (last-write-wins per element key, batch-atomic); `promote` atomic with previous-active → `superseded` in the same operation. New interaction in R6. |
+| **f6** error taxonomy | **Fixed** | `KG_UNAVAILABLE` (design 13's "typed unavailable" now exists), `KG_COMMIT_REJECTED` with `data.violations` (commit-failure shape defined), `KG_VERSION_NOT_STAGING`, `KG_VERSION_IN_USE`, `KG_VERSION_CONFLICT`; `KG_BUDGET_EXCEEDED` **removed** with the right reason ("budgets are the gateway's, never the provider's"). No other design referenced the removed code. |
+| **f7** conformance profiles | **Fixed** | `query` / `full` declared in `kg.schema`; binding requires `query`, version-mutating features require `full`. (§8 body contradicts — R5.) |
+| **f8** suite gaps | **PARTIAL — outstanding** | A6 adds state transitions, quarantined-not-bindable, `list_versions` completeness, drop-interlock refusal, and error mapping for **each new code**. Three of the four original sub-points remain — see R3. |
+| **f9** tool count | **NOT FIXED — worse** | See R7. |
+| **f10** stale ontology sketch | **Fixed** | A5.5 marks §3.5 superseded by design 12 and retained as illustration — the A4 precedent, correctly applied. |
+
+### Outstanding
+
+**R1 — `commit_version` has no state precondition.** `write_batch` and `load_artifact` are restricted to `staging`; `commit_version` — which lives on the same per-version path and *quarantines on failure* — is not. Calling it against an `active` version would re-run invariants on a live graph and could quarantine it. Exposure is limited (a `write_batch` grant doesn't carry `commit_version`, since the route matches on `Mcp-Name` too), but the precondition belongs in the same sentence as its siblings.
+
+**R2 — `begin_version`'s `from` parameter was dropped in the rewrite.** The r1 row read "open staging version `vN+1` (**from empty or copy-on-write of `vN`**)"; the r2 row describes allocation and single-flight but no longer documents `from`. Design 13 r2 §3.1 calls `begin_version(from: vN)` and maps it to `GRAPH.COPY vN vN+1` — so the contract no longer documents a parameter its reference adapter depends on. An editing casualty of an otherwise-good fix; restore it alongside the allocation rule (the two are compatible: the caller names the *source*, the provider allocates the *number*).
+
+**R3 — f8 is three-quarters open.** A6 covers the new surface well, but the original sub-points survive: (a) point 2's recall threshold is still unspecified, so each implementer picks their own gate; (b) point 7 still asserts v1 responses are **byte-stable**, a determinism the contract mandates only for bundles — `kg.search` returns floats and has no stated tie-break, so this can fail a *conforming* provider; (c) point 9's latency budget against ~40 nodes still can't distinguish an implementation that would collapse at corpus scale. Also, A6 asserts error mapping for "each **new** code" — the pre-existing codes (`KG_NOT_FOUND`, `KG_BUNDLE_UNKNOWN`, `KG_VERSION_GONE`) still have no conformance assertion.
+
+**R4 — §4's bind step wasn't updated for f2.** It still reads "validates the endpoint serves `kgp/v1alpha1` at that version (via `kg.schema`)" — the state check that A5.2 makes the whole point of f2 is absent from the path description that implements it. (Design 02's bind behaviour is likewise unamended, though A5.2 arguably owns the rule.)
+
+**R5 — §8 contradicts A5.4 on the definition of conformance.** The body still says "A provider 'supports `kgp/v1alpha1`' **iff the suite passes**" with point 8 (the admin lifecycle) as an unconditional gate — which is exactly what A5.4 says a `query`-profile provider need not pass. The definitional sentence of the contract now has two answers.
+
+**R6 — single-flight `begin_version` collides with design 14's 72-hour review park.** With one staging version per graph and design 14 §5 parking a build for up to `reviewTimeout: 72h` awaiting a human, no other build can start for that graph for three days — including design 20's automatic `KnowledgeStale` rebuild, which would now receive `KG_VERSION_CONFLICT`. Neither design 14 nor design 20 has that path. Single-flight is defensible; the interaction needs recording (and probably a "supersede the parked build" or "queue" rule).
+
+**R7 — f9 not fixed, and the amendment added a fifth count.** The document now states its tool count five ways: §3.3 heading "**six** tools" (correct for query), §3.4 heading "Admin surface — **five** tools" (unchanged, now wrong by two), §10 "**6+5** tools" (unchanged), A5.3 "**7 query-side + 7 admin-side**" (admin is right; **query is 6, not 7**), and ADR-0017 "six-tool admin surface" (now stale — `list_versions` makes seven). A5.3 also declares §3.3's "six tools" language superseded when it is the one correct statement in the set. **Fix**: 6 query + 7 admin, stated once in §3.3/§3.4's headings, with §10 and ADR-0017 corrected.
+
+**R8 — design 13's `kg.schema` row is stale against the new contract** (corpus): it returns `{contract, version, pattern?, embedder}` and now must also return `state` and `profile` (§3.3). One row in design 13 §3.3.
+
+**R9 — ADR-0017 needs the admin-surface count and the new paths** (corpus): it records "six-tool admin surface" and `/kgp/<graph>/<version>/mcp` only. The blocker fix changed the URL structure, which is exactly the kind of thing an ADR exists to carry.
+
+### Verdict
+
+**REVISE.** The substantive work is done and done well: the blocker is closed by the elegant fix (the design's own version-scoping trick applied where it had been omitted), and findings 2–7 collectively add the version object model the contract was missing — state, enumeration, interlocks, concurrency semantics, error coverage, and profiles. What remains is finishing work, but it includes one finding that regressed (R7 — the count is now stated five ways, one of them introduced by the fix), one that is three-quarters open (R3), and two contract-vs-consumer mismatches that would bite the first implementer (R2's dropped parameter, R5's contradictory conformance definition).
+
+01: REVISE — 9 outstanding
