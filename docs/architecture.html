@@ -995,7 +995,7 @@
       <rect x="560" y="238" width="300" height="118" rx="10" fill="none" stroke="currentColor" stroke-width="1.5"/>
       <text x="710" y="264" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--ink)" font-family="system-ui, sans-serif">3 · Controllers act</text>
       <g font-size="11" fill="currentColor" font-family="system-ui, sans-serif">
-        <text x="582" y="290">· trigger ingestion Workflow (re-index)</text>
+        <text x="582" y="290">· trigger ingestion build Job (re-index)</text>
         <text x="582" y="308">· pin previous model / route fallback</text>
         <text x="582" y="326">· auto-rollback to last eval-passing rev</text>
         <text x="582" y="344">· escalate: alert with the receipt trail</text>
@@ -1774,7 +1774,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
   </div>
   <p class="pod-total">Total: <b>≈ 8 pods</b> — one <code>helm install</code>. Rossoctl's dev setup asks for 16 GB / 4 cores <em>with flags</em>; graphene should demo on half that. Exactly one pod in the core tier is graphene's own code.</p>
   <h3>Beyond core</h3>
-  <div class="prose"><p><code>plus</code> adds workflow-operator + workflow-runtime (+2, scaling 0→N with trigger registrations), OpenFGA with its co-located ext-authz adapter (+1), model-operator (+1), optionally Argo and Phoenix. Enterprise adds tenant-operator (+1). Each managed knowledge graph costs 2 workload pods (adapter + backend). A hard-isolated tenant is ~4–5 pods core-only — NATS, Postgres, Zitadel, OpenObserve and the gateway stay shared — and +2–3 at plus. <b>The budget is CI-enforced</b>: one job counts rendered pods against a ledger, another checks stateful workloads against a reasoned allowlist; a PR that adds either fails unless it edits the ledger in the same commit.</p></div>
+  <div class="prose"><p><code>plus</code> adds workflow-operator + workflow-runtime (+2, scaling 0→N with trigger registrations), OpenFGA with its co-located ext-authz adapter (+1), model-operator (+1), optionally Argo and Phoenix. Enterprise adds tenant-operator (+1). Each managed knowledge graph costs 2 workload pods (adapter + backend); generative serving adds KServe's <code>llmisvc</code> controller at plus tier and <b>+1 endpoint-picker per inference pool</b> alongside the vLLM pods (design 25 A1). A hard-isolated tenant is ~4–5 pods core-only — NATS, Postgres, Zitadel, OpenObserve and the gateway stay shared — and +2–3 at plus. <b>The budget is CI-enforced</b>: one job counts rendered pods against a ledger, another checks stateful workloads against a reasoned allowlist; a PR that adds either fails unless it edits the ledger in the same commit.</p></div>
   <h3>Runs anywhere — local distros are a CI target</h3>
   <div class="prose">
     <p>The same chart must install unmodified on <strong>minikube, k3d, kind, and k3s</strong> as on any managed cluster — CI runs the full e2e suite against k3d and kind on every merge, so "works on a laptop" is enforced, not aspirational. Three design consequences:</p>
@@ -1831,7 +1831,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
   <div class="tablewrap"><table>
     <thead><tr><th>Risk</th><th>Posture</th></tr></thead>
     <tbody>
-      <tr><td>OTel GenAI semconv churn</td><td>Conventions are pre-stable (mid-2026); adopt now, pin the convention version, absorb renames at upgrade time</td></tr>
+      <tr><td>OTel GenAI semconv churn</td><td>Conventions are pre-stable and now live in an unreleased repo; adopt now, pin a <b>commit SHA</b> (§07), absorb renames in the transform</td></tr>
       <tr><td>A2A maturity</td><td>Multi-turn streaming edge cases still settling; keep the gateway as the one place protocol quirks are absorbed</td></tr>
       <tr><td>kro is young</td><td>The App layer is last in the build order; plain CRs + GitOps work without it</td></tr>
       <tr><td>Rossoctl convergence</td><td>If its security layer stabilizes, compose it — the moat is §04 + §08 + §09, not the intercept</td></tr>
