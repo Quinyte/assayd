@@ -37,10 +37,11 @@ spec:
   card:
     path: /.well-known/agent-card.json     # served by the container (SoT = code)
   knowledge:
-    - graphRef: {name: payer-policies, version: "v12"}
+    - name: payer-policies
+      version: "v12"
       scope: {entityTypes: [Policy, Procedure]}   # gateway-INJECTED, provider-ENFORCED (design 01 A1)
   tools:
-    - mcpRef: {name: claims-system}
+    - name: claims-system
       requiresApproval: false                     # true ⇒ approval interceptor (design 22)
   llm:                                            # designs 03/20/25 compile against this
     providers: [openai/gpt-x, internal/pa-classifier]
@@ -198,3 +199,5 @@ ADR-0019.
 ## 12. Amendment history (provenance only — the body above is authoritative)
 
 A1–A8 (2026-08-20) and A9–A10 (2026-08-22) recorded, in order: budget backstop wiring and its conditions; the canonical directory key layout; `agent-actor` client provisioning; the core-tier gating contract; `GatesBypassed`; card-signature verification; the injected env contract; `llm.fallback`; the seven behaviours from the independent re-critique; and a blanket supersession rule. **All are now folded into §§3–5** — the integration pass the re-critique asked for, so an implementer reads one spec rather than a body plus ten patches.
+
+A11 (2026-08-22, **ADR-0027**) — the ergonomics pass, run at the start of implementation rather than after users existed. `knowledge[].graphRef` and `tools[].mcpRef` are **flattened to inline `{name, version}` / `{name, namespace}`**: a binding points at exactly one kind of thing, so the wrapper nested without discriminating. `expose.a2a` keeps its wrapper — the arm names a protocol and MCP exposure follows it. Two rules §3 stated in prose are now **CEL on the schema** (exactly-one-of runtime/external; sandbox excludes `replicas>1`), so they are rejected at `kubectl apply` with a message naming the fix rather than discovered at reconcile. §3.1 above shows the amended shape; the whole contract is pinned by `test/envtest/agent_dx_test.go` against a real API server.

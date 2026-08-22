@@ -51,7 +51,7 @@ approval interrupt · kill switch. Gold beat: the boundary.
 ## 06 — API surface (1:1)
 Hub and spoke. Centre **gold `Agent` box** ("any A2A container"); App top-left, KnowledgeGraph
 top-right, Workflow bottom-left, EvalSuite bottom-right, Model bottom-centre. Exactly five arrows with
-explicit destinations: App→Agent `members` · Agent→KnowledgeGraph `graphRef` · Agent→EvalSuite `gates` ·
+explicit destinations: App→Agent `members` · Agent→KnowledgeGraph `knowledge` · Agent→EvalSuite `gates` ·
 Workflow→Agent `steps` · Model→EvalSuite `gates`. Gold beat: Agent.
 *Lesson: state arrowhead destinations explicitly — v1 reversed one and mis-targeted another.*
 

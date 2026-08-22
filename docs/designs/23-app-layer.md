@@ -19,7 +19,7 @@ Makes ADR-0016 mechanical: the App CR's composition, the HTTP/SSE projection sha
 |---|---|---|
 | `workflowRef` | `POST /api/<name>` | body validated against the Workflow's `input.schema` (21) → starts a run → `202 {run_id}`; **`Idempotency-Key` forwarded to 21's run-id derivation** (generated client sends one by default — retries never double-run; r1 f3); `GET /api/<name>/runs/<id>` for status/result |
 | `agentRef` (chat) | `POST /api/chat` + **SSE** `GET /api/chat/<task_id>/events` | A2A task lifecycle projected as SSE events (`status`, `message`, `artifact`, `done`) — a thin, *documented* mapping of A2A's own stream, not a new protocol |
-| `graphRef` (optional, read-only) | `GET /api/kg/*` | the kgp query surface, scope-filtered per the App's declared entity types — for UIs that render graph context directly |
+| `knowledge` (optional, read-only) | `GET /api/kg/*` | the kgp query surface, scope-filtered per the App's declared entity types — for UIs that render graph context directly |
 
 All routes: OIDC-authenticated (the App's client, 06), user token exchanged at the gateway (on-behalf-of — per-user receipts/budgets with zero app code, ADR-0016's core claim), CORS pinned to the App's `route` host, rate limits per `consumerBudgets`.
 
@@ -27,7 +27,7 @@ All routes: OIDC-authenticated (the App's client, 06), user token exchanged at t
 
 Per architecture §03, plus what P4 machinery makes enforceable:
 
-- **Pinning**: `members` pin exact versions (agent revision-producing image tags, graph versions, frontend digest). Admission (prod profile): unpinned members rejected; **cross-member coherence** validated by the watcher — an App naming `pa-reviewer@1.4.2` + `payer-policies@v12` warns if that agent revision's `graphRef` pins a *different* graph version (`MemberSkew` condition — the coherent-set promise made checkable).
+- **Pinning**: `members` pin exact versions (agent revision-producing image tags, graph versions, frontend digest). Admission (prod profile): unpinned members rejected; **cross-member coherence** validated by the watcher — an App naming `pa-reviewer@1.4.2` + `payer-policies@v12` warns if that agent revision's `knowledge[]` binding pins a *different* graph version (`MemberSkew` condition — the coherent-set promise made checkable).
 - **Release = the App CR change** (GitOps); member rollouts still run their own gates (an App bump to `agent@1.5.0` triggers that agent's eval-gated rollout — the App reaches `Ready` only when all members do; `plume deploy` streams the aggregate).
 - **Rollback** = previous App spec; members individually re-point (instant for graphs/frontends; agents re-point to retained revisions per `revisionHistoryLimit` — the design 20 linkage note applies).
 - Status aggregates member conditions (`MembersReady n/m`, `MemberSkew`, worst-member condition surfaced).

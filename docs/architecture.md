@@ -91,9 +91,10 @@ spec:
   card: {path: /.well-known/agent-card.json}
   identity: {}                             # SPIRE SVID injected
   knowledge:
-    - graphRef: {name: payer-policies, version: "v12"}
+    - name: payer-policies
+      version: "v12"
   tools:
-    - mcpRef: claims-system
+    - name: claims-system
   budget: {tokensPerDay: 2M, usdPerDay: 40}
   gates:
     - evalSuiteRef: pa-regression
@@ -146,7 +147,7 @@ Probes, their `via` execution, and the promotion threshold live in the **ontolog
 
 Three properties nobody else has:
 
-- **Versioned like a deployment.** Agents pin `graphRef.version`; roll forward = rollout, roll back = repoint; the ontology diff is code review.
+- **Versioned like a deployment.** Agents pin `knowledge[].version`; roll forward = rollout, roll back = repoint; the ontology diff is code review.
 - **Semantic readiness.** Ready = probe set passes, not pod-up. Agents bound to a non-Ready graph get no traffic.
 - **The ontology is the eval scaffold.** Probe sets, golden sets, and drift baselines all derive from the one reviewed artifact.
 
@@ -430,7 +431,7 @@ Runs anywhere: no LoadBalancer requirement, `local-path` storage, no managed-ide
 
 Discipline: the differentiation only exists once P2/P3 ship — never polish the runtime layer at their expense.
 
-**Status**: all five phases are **designed and approved** (27/27, each critique-passed). Implementation has not started. Per ADR-0022, the P1 slice can begin with designs **02 (agent-operator) + 03 (policy compiler) + 07 (chart/CI) concurrently**; the first milestone is the mechanized demo the CI matrix is specified around — two agents from different SDKs collaborating through the gateway on k3d, fully receipted.
+**Status**: all five phases are **designed and approved** (27/27, each critique-passed). Implementation has begun with the test harness: the Agent types, the generated CRD, and an envtest control plane that pins design 02's contract — including the ergonomics rules of ADR-0027 — against a real API server. Per ADR-0022, the P1 slice can begin with designs **02 (agent-operator) + 03 (policy compiler) + 07 (chart/CI) concurrently**; the first milestone is the mechanized demo the CI matrix is specified around — two agents from different SDKs collaborating through the gateway on k3d, fully receipted.
 
 ## 19 · Risks held honestly
 
@@ -449,7 +450,7 @@ Discipline: the differentiation only exists once P2/P3 ship — never polish the
 
 ## 20 · The decision record
 
-Every claim above is backed by an ADR and a critique-passed design. The corpus lives in the repo: `docs/decisions/` (26 ADRs), `docs/designs/` (27 designs + `reviews/`), `docs/research/` (12 dated notes).
+Every claim above is backed by an ADR and a critique-passed design. The corpus lives in the repo: `docs/decisions/` (27 ADRs), `docs/designs/` (27 designs + `reviews/`), `docs/research/` (12 dated notes).
 
 ### ADRs
 
@@ -468,6 +469,7 @@ Every claim above is backed by an ADR and a critique-passed design. The corpus l
 | 0011 | Three authz layers; ReBAC slot | 0024 | P3 semantic admission (designs 16–18) |
 | 0012 | No mesh in core; ambient profile | 0025 | P4 governance (designs 20–24) |
 | 0013 | Layered tenancy; Tenant CR fan-out | 0026 | P5 + enterprise (designs 25–27) |
+| | | 0027 | CRD ergonomics: nesting must discriminate |
 
 ### Designs by phase
 
@@ -492,4 +494,4 @@ The design phase is complete; it is not frictionless. Four items are deliberatel
 
 ### Process note
 
-Each design ran draft → independent adversarial critique → revision → re-critique → approval. Roughly 150 findings were raised and fixed, including **three blockers** that would otherwise have shipped as real defects: a **circular revision hash** (a content hash depending on a value only knowable after the workload it identifies had run), **non-deterministic receipt IDs** (which silently defeated the dedup audit integrity rests on), and — the most security-relevant — **non-atomic policy apply**, which left fail-open windows where a route could serve traffic before its auth and rate-limit policies were accepted; that one produced ADR-0020's fail-closed apply ordering. Where a design amended an already-approved one, the delta is recorded as a numbered amendment in the amended design — design 02 carries eight (A1–A8).
+Each design ran draft → independent adversarial critique → revision → re-critique → approval. Roughly 150 findings were raised and fixed, including **three blockers** that would otherwise have shipped as real defects: a **circular revision hash** (a content hash depending on a value only knowable after the workload it identifies had run), **non-deterministic receipt IDs** (which silently defeated the dedup audit integrity rests on), and — the most security-relevant — **non-atomic policy apply**, which left fail-open windows where a route could serve traffic before its auth and rate-limit policies were accepted; that one produced ADR-0020's fail-closed apply ordering. Where a design amended an already-approved one, the delta is recorded as a numbered amendment in the amended design — design 02 carries eleven (A1–A11).

@@ -596,9 +596,10 @@
   <span class="k">card</span>: {<span class="k">path</span>: <span class="s">/.well-known/agent-card.json</span>}  <span class="c"># A2A Agent Card; OASF schema</span>
   <span class="k">identity</span>: {}                            <span class="c"># SPIRE SVID injected; nothing to configure</span>
   <span class="k">knowledge</span>:
-    - <span class="k">graphRef</span>: {<span class="k">name</span>: <span class="s">payer-policies</span>, <span class="k">version</span>: <span class="s">"v12"</span>}  <span class="c"># injected as MCP endpoint</span>
+    - <span class="k">name</span>: <span class="s">payer-policies</span>
+      <span class="k">version</span>: <span class="s">"v12"</span>                 <span class="c"># injected as MCP endpoint</span>
   <span class="k">tools</span>:
-    - <span class="k">mcpRef</span>: <span class="s">claims-system</span>              <span class="c"># routed via agentgateway, policy applied there</span>
+    - <span class="k">name</span>: <span class="s">claims-system</span>               <span class="c"># routed via agentgateway, policy applied there</span>
   <span class="k">budget</span>: {<span class="k">tokensPerDay</span>: <span class="s">2M</span>, <span class="k">usdPerDay</span>: <span class="s">40</span>}   <span class="c"># compiled to gateway policy</span>
   <span class="k">gates</span>:
     - <span class="k">evalSuiteRef</span>: <span class="s">pa-regression</span>        <span class="c"># rollout blocked until suite passes (§08)</span>
@@ -718,11 +719,11 @@
       <!-- agents pinning -->
       <rect x="668" y="292" width="228" height="58" rx="8" fill="none" stroke="currentColor"/>
       <text x="782" y="315" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">Agents</text>
-      <text x="782" y="334" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">graphRef: {version: "v12"}</text>
+      <text x="782" y="334" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">knowledge: {version: "v12"}</text>
       <line x1="668" y1="321" x2="580" y2="321" stroke="currentColor" marker-end="url(#arr2)"/>
       <text x="624" y="312" text-anchor="middle" font-size="10.5" fill="currentColor" font-family="ui-monospace, Menlo, monospace">pin</text>
 
-      <text x="424" y="392" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)" font-family="system-ui, sans-serif">roll forward = a rollout &nbsp;·&nbsp; roll back = repoint the graphRef &nbsp;·&nbsp; the ontology diff is reviewable in a PR</text>
+      <text x="424" y="392" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)" font-family="system-ui, sans-serif">roll forward = a rollout &nbsp;·&nbsp; roll back = repoint the version &nbsp;·&nbsp; the ontology diff is reviewable in a PR</text>
     </svg>
     <figcaption><b>Fig 2 — One artifact drives correctness end-to-end.</b> Providers are interchangeable behind the MCP surface. The ontology inside the CR is the domain contract, and the probe set, eval golden set, and drift baseline are all derived from it — write the domain once, get readiness, gating, and drift detection for free.</figcaption>
   </figure>
@@ -730,7 +731,7 @@
   <div class="prose">
     <p>Three properties nobody else has:</p>
     <ul class="tight">
-      <li><strong>Versioned like a deployment.</strong> Agents pin <code>graphRef.version</code>. Rolling a graph forward is a rollout; rolling back is repointing. The ontology diff is code review.</li>
+      <li><strong>Versioned like a deployment.</strong> Agents pin <code>knowledge[].version</code>. Rolling a graph forward is a rollout; rolling back is repointing. The ontology diff is code review.</li>
       <li><strong>Semantic readiness.</strong> A graph isn't <code>Ready</code> because its pod is up — it's <code>Ready</code> because the known-answer probe set passes. Agents bound to a non-Ready graph receive no traffic. A readiness probe for <em>meaning</em>.</li>
       <li><strong>The ontology is the eval scaffold.</strong> Golden sets, probes, and drift baselines derive from one reviewed artifact — no second source of truth to drift from the first.</li>
     </ul>

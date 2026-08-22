@@ -29,7 +29,7 @@ One record per registered agent revision, JSON, OASF `Agent` root object with pl
   "locators": [{"type": "a2a", "url": "https://gw…/agents/claims/pa-reviewer"}],
   "extensions": [
     {"name": "plume.card",   "data": { /* verbatim A2A Agent Card */ }},
-    {"name": "plume.status", "data": {"phase": "Ready", "graphRefs": ["payer-policies@v12"]}},   // operator RE-WRITES on phase transitions (r1 f5) — single writer, per-agent key, cheap
+    {"name": "plume.status", "data": {"phase": "Ready", "knowledge": ["payer-policies@v12"]}},   // operator RE-WRITES on phase transitions (r1 f5) — single writer, per-agent key, cheap
     {"name": "plume.provenance", "data": {"imageDigest": "…", "cardDigest": "…", "sigstore": "…"}}
   ]
 }

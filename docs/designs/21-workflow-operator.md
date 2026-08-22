@@ -28,7 +28,7 @@ spec:
     - cron: "0 6 * * *"
     - http: {}                          # exposed per §05 arch (POST /api/prior-auth-check via 03/23)
   steps:                                # v1 step kinds — CLOSED set
-    - {id: fetch,   tool:  {mcpRef: claims-system, name: read_claim, args: {...}}}
+    - {id: fetch,   tool:  {server: claims-system, name: read_claim, args: {...}}}
     - {id: review,  agent: {agentRef: pa-reviewer, task: {...}}}
     - {id: gatecheck, branch: {on: "review.outcome", cases: {approve: [notify], deny: [escalate]}}}
     - {id: escalate, approval: {approvers: role:reviewer, timeout: 48h}}     # design 22's interceptor

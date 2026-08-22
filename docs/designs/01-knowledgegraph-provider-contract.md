@@ -42,7 +42,7 @@ http://<provider-svc>/kgp/<graph>/admin/mcp             # graph-level admin: beg
                                                         # promote, drop_version — platform identity only
 ```
 
-The Agent CR binding `{graphRef: {name, version}}` compiles to a route to that exact endpoint. An agent **cannot** name a version at call time — crossing versions is structurally impossible, caching is trivial, and `kg diff` compares two endpoints.
+The Agent CR binding `{name, version}` compiles to a route to that exact endpoint. An agent **cannot** name a version at call time — crossing versions is structurally impossible, caching is trivial, and `kg diff` compares two endpoints.
 `version: active` is permitted only in the `local` profile (dev convenience); prod bindings must pin.
 
 *Rejected alternatives*: version as a tool parameter (agents can wander; every tool schema polluted); gateway header injection (invisible in traces; harder to reason about).
@@ -122,7 +122,7 @@ probes:
 
 Main paths:
 
-1. **Bind**: agent-operator reconciles `graphRef` → validates via `kg.schema` that the endpoint serves `kgp/v1alpha1`, declares profile `query` or `full`, and reports the bound version in state **`active` or `superseded`** — `staging` and `quarantined` are refused (r2 f2/R4) → compiles gateway route + scope filters → condition `KnowledgeBound`.
+1. **Bind**: agent-operator reconciles a `knowledge[]` binding → validates via `kg.schema` that the endpoint serves `kgp/v1alpha1`, declares profile `query` or `full`, and reports the bound version in state **`active` or `superseded`** — `staging` and `quarantined` are refused (r2 f2/R4) → compiles gateway route + scope filters → condition `KnowledgeBound`.
 2. **Query**: agent → gateway (authz, budget, receipt, `Mcp-Method` metering) → version endpoint → response with provenance refs.
 3. **Ingest**: pipeline → `begin_version` → `write_batch`× → `commit_version` (invariants) → operator runs probes → `promote` + `Ready`, else quarantine + `KnowledgeStale` stays.
 4. **Rollback**: repoint bindings to `vN−1` endpoint (pure routing; provider untouched).
