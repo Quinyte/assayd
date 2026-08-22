@@ -174,7 +174,7 @@ A provider **supports `kgp/v1alpha1` at profile `query`** iff points 1–7, 9 an
 **Q3 — Escape hatches: allowed, marked `portable: false`**, conformance warns. As recommended.
 ## 10. Resulting ADRs
 
-Recorded: ADR-0017 (r2: the surface is **6 query + 7 admin**; admin mutating tools moved to `/kgp/<graph>/admin/<version>/mcp`) (kgp/v1alpha1 contract: 6+5 tools, version-scoped endpoints, ontology/v1) · ADR-0018 (Q1 decision) · note in ADR-0003 that MCP target is spec 2026-07-28.
+Recorded: ADR-0017 (kgp/v1alpha1 contract: **6 query + 7 admin** tools, version-scoped query *and* mutating-admin endpoints, `ontology/v1`) · ADR-0018 (Q1 decision) · note in ADR-0003 that MCP target is spec 2026-07-28.
 
 ## Appendix: Graphiti reference mapping
 
@@ -199,7 +199,7 @@ The adapter wraps **graphiti-core as a library** in the provider pod (Graphiti's
 - **A5 (2026-08-22, from the independent re-critique — reviews/01-recritique.md)**: five contract changes, listed together because they interlock.
   1. **BLOCKER f1 — the admin surface is version-scoped.** Mutating tools (`write_batch`, `load_artifact`, `commit_version`) live at `/kgp/<graph>/admin/<version>/mcp`, so A2's per-version grants are enforceable **by route** — the gateway never needs to read a body to know which version a write targets. Lifecycle tools (`begin_version`, `list_versions`, `promote`, `drop_version`) stay graph-level under platform identity. Defence in depth: `write_batch`/`load_artifact` accept **only `staging` versions** and refuse anything else with `KG_VERSION_NOT_STAGING`. Without this a pack-provided reader image (design 11) could write into the *active* graph — silently, since nothing errored and nothing alerted.
   2. **f2 — versions carry state.** `staging | active | superseded | quarantined`, exposed in `kg.schema`. **Bind validation refuses anything but `active` or `superseded`**; `quarantined` is reachable only under platform identity for inspection. Pinned binds previously bypassed the entire promotion gate.
-  3. **f3/f4 — `list_versions` and the drop interlock**, as tabled above. The surface is now **7 query-side + 7 admin-side**; §3.3's "six tools" language is superseded here (f9).
+  3. **f3/f4 — `list_versions` and the drop interlock**, as tabled above. The surface is now **6 query-side + 7 admin-side** — stated once in the §3.3 and §3.4 headings, which are authoritative (f9/R7).
   4. **f7 — conformance profiles.** `query` (tools 1–7 + the A1 scope battery + A3's walk case) and `full` (adds the admin lifecycle). A provider declares its profile in `kg.schema`; **binding and querying require `query`, version-mutating platform features (designs 14, 15) require `full`.** Without this, a read-only corporate graph — the archetypal BYO case §9 promises — could never claim support.
   5. **f10 — §3.5's ontology sketch is superseded by design 12** (`ontology/v1` normative: no `ref()` attrs, canonical triple relation refs, `via` required on probes, `health.pass_threshold`). It is retained as illustration only.
 - **A6 (2026-08-22, f8 — conformance suite gaps)**: the suite additionally asserts version **state transitions** (staging → active → superseded), that a `quarantined` version is not bindable, `list_versions` completeness after a fork, drop-interlock refusal, and the closed-error mapping for each new code — the four ways a non-conforming provider would previously have passed.

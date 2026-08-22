@@ -163,3 +163,43 @@ Two completeness gaps remain around it (R1, R2 below) — neither reopens the ho
 **REVISE.** The substantive work is done and done well: the blocker is closed by the elegant fix (the design's own version-scoping trick applied where it had been omitted), and findings 2–7 collectively add the version object model the contract was missing — state, enumeration, interlocks, concurrency semantics, error coverage, and profiles. What remains is finishing work, but it includes one finding that regressed (R7 — the count is now stated five ways, one of them introduced by the fix), one that is three-quarters open (R3), and two contract-vs-consumer mismatches that would bite the first implementer (R2's dropped parameter, R5's contradictory conformance definition).
 
 01: REVISE — 9 outstanding
+
+---
+
+## r3 verification (2026-08-22)
+
+- **Verdict**: **PASS** — 1 outstanding (leftover text in a provenance section; every authoritative statement is now correct)
+- **Verified against**: design 01 r3 (A5–A7), design 13 r2, design 14, design 20, ADR-0017 (amended).
+
+### Disposition of the nine R items
+
+| R | Status | Evidence |
+|---|---|---|
+| **R1** `commit_version` precondition | **Fixed** | §3.4's row now carries the same guard as its siblings — "precondition: target MUST be `staging` … so invariants can never re-run against a live graph". |
+| **R2** dropped `from` parameter | **Fixed** | `begin_version(from: vN \| empty)` — "the caller names the **source**, the provider allocates the **number**". Reconciles the restored parameter with the allocation rule exactly, and design 13's `begin_version(from: vN)` → `GRAPH.COPY` call is documented again. |
+| **R3** f8 remainder | **Fixed, all four** | Point 2 now states the gate (**recall ≥ 0.9**, "so implementers do not each pick a gate"); point 7 is rescoped to bundle byte-stability plus `search`/`neighbors` result *sets*, with the reason ("byte-stability elsewhere would fail a conforming provider"); point 9 adds a **100k-element synthetic corpus** alongside the fixture; and point 5 now asserts **every** closed-set code, "pre-existing and new" — the sub-point A6 had missed. |
+| **R4** §4 bind step | **Fixed** | Bind now validates profile *and* that the bound version is `active`/`superseded`, refusing `staging`/`quarantined`. |
+| **R5** §8 conformance definition | **Fixed** | "supports `kgp/v1alpha1` at profile `query` iff points 1–7, 9 and 10 pass, and at profile `full` iff point 8 also passes" — the contradiction with A5.4 is gone and the definitional sentence is now precise about which points gate which profile. |
+| **R6** park vs single-flight | **Fixed** (A7) | A parked build holds the staging slot; a competing `begin_version` — "including design 20's automatic `KnowledgeStale` rebuild" — gets `KG_VERSION_CONFLICT` naming the parked build, and the operator **queues rather than supersedes** (`RebuildQueued` on the KG CR). The right call: superseding a build a human is reviewing would discard the review. |
+| **R7** tool counts | **PARTIAL — outstanding** | Three of five statements corrected; two stale ones survive. See below. |
+| **R8** design 13's `kg.schema` row | **Fixed** (corpus) | Design 13 §3.3 now returns `{contract, version, state, profile, pattern?, embedder}` and declares profile `full`. |
+| **R9** ADR-0017 | **Fixed** (corpus) | Amended 2026-08-22 with the corrected surface (6 query + 7 admin), the version-scoped admin path and its rationale, version state, profiled conformance, and the full error-set correction. The ADR now carries the blocker fix, which is where a decision of that weight belongs. |
+
+### Outstanding
+
+**R7 (carried) — two stale tool-count statements survive alongside the corrected ones.** The authoritative places are now right: §3.3 "Query surface — **6 tools**", §3.4 "Admin surface — **7 tools**", and ADR-0017's amendment ("**6 query + 7 admin**"). But:
+
+- **§10 contains both answers in one sentence**: "…(r2: the surface is **6 query + 7 admin**; admin mutating tools moved to `/kgp/<graph>/admin/<version>/mcp`) (kgp/v1alpha1 contract: **6+5 tools**, version-scoped endpoints, ontology/v1)". The new parenthetical was inserted without deleting the old one.
+- **A5.3 still reads "7 query-side + 7 admin-side"** and still declares "§3.3's 'six tools' language is superseded here" — the query side is six, and §3.3's heading is the statement that is *correct*, so the amendment supersedes the right answer with a wrong one.
+
+Both are one deletion each, and §12-style provenance sections are exactly where stale numbers hide. Fix them and the count is stated once, correctly, everywhere.
+
+### New issues introduced by r3
+
+**None.** I checked the three edits most likely to break something: the `from`-parameter restoration is compatible with single-flight allocation (source vs number are different concerns); the profile split does not weaken the `full` profile (point 8 still gates it, and designs 14/15 still require it); and A7's queue-don't-supersede rule composes with design 14's park semantics without touching them. The new `RebuildQueued` condition is declared here and flagged as belonging to designs 14/20 — worth landing there eventually, but it is recorded rather than assumed.
+
+### Verdict
+
+**PASS.** The blocker closed at r2 and r3 completed it properly — the `commit_version` guard removes the last way invariants could run against a live graph, and the restored `from` parameter reconnects the contract to its reference adapter. R3's conformance work is the standout: a stated recall gate, a determinism assertion scoped to what the contract actually mandates, a corpus size that can fail a bad implementation, and an error battery covering every code. With ADR-0017 amended, the corpus is consistent end to end. One deletion of stale text remains.
+
+01: PASS — 1 outstanding

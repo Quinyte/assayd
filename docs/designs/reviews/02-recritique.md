@@ -154,3 +154,52 @@ The amendments are properly recorded in §11; the body was never updated, so a r
 What holds it back is bookkeeping rather than design: one finding tracked as addressed but absent (R1), a failure table amended in prose but not in fact (R2), a condition list still nine short (R4), and a duplicate key in the CRD schema (R5). The pattern is the one this design has had all along — amendments accumulating faster than the body absorbs them — and A10's blanket supersession clause manages it rather than resolving it. Given this is the first thing anyone will build, the body deserves one integration pass rather than a rule telling implementers which half to believe.
 
 02: REVISE — 7 outstanding
+
+---
+
+## r3 verification (2026-08-22)
+
+- **Verdict**: **PASS** — 2 outstanding
+- **Verified against**: design 02 r3 (integrated), designs 03/05/06/09/16/20/22/26, ADR-0019.
+
+### Disposition of the seven R items
+
+| R | Status | Evidence |
+|---|---|---|
+| **R1** f9 not delivered | **Fixed, all three** | `status.cards[]` is now an array, "ONE PER LIVE REVISION — two coexist during rollout", with per-revision digest and `signed`. **`registrationDeadline` (default 30m)** gives the unregistrable candidate a terminal state — "failed and deleted, freeing its retention slot… Nothing holds a slot indefinitely", which also closes the interaction with the new retention arithmetic. And the **card-vs-CR cross-check** lands as a registration failure naming the mismatch. All three have failure rows and tests. |
+| **R2** failure table | **Fixed** | The table went from 7 rows to 18. All four A10-promised rows are present (superseded-candidate drain, finalization stall, scratchpad access mode, `TaskStateUnverified`) **and** all five originally-named f10 rows (budget exhausted → `BudgetHeld`, rollback target GC'd, kill during rollout, IdP unavailable at `agent-actor` provisioning, spend aggregate unavailable). |
+| **R3** two stale passages | **Fixed** | `scope:` now reads "gateway-**INJECTED**, provider-**ENFORCED** (design 01 A1)" — the phrase the architecture audit chased across three documents is finally consistent. §3.6 replaces "2.2 CRD surface only" with "pinned by the chart (design 07) at a minimum version carrying OSS token exchange and virtual models", which also resolves design 02's half of the long-open 06-review R2-a. |
+| **R4** condition list | **PARTIAL — outstanding** | 20 conditions now listed, covering every one declared in A1–A10. Two declared in *other* designs are still missing — below. |
+| **R5** duplicate key | **Fixed** | `status` keys are `phase, activeRevision, candidateRevision, supersededCandidates, cards, budget, conditions` — seven distinct. |
+| **R6** scratchpad access mode | **Fixed — properly** | §3.2 states the requirement (`ReadOnlyMany`/`ReadWriteMany` or co-scheduling), names the case that cannot satisfy it ("`local-path` in the `local` profile, which is `ReadWriteOnce` and node-bound"), and degrades the platform's way: the candidate runs without the scratchpad and `ScratchpadDegraded=True` names the reason. Failure row and e2e test added. |
+| **R7** design 09 obligation | **Fixed** (corpus) | Design 09 §3 item 5 is now "Task-state store **+ its declaration**… the card asserts the shared-task-state capability — design 02 §3.2 keys `TaskStateUnverified` off that assertion". Recorded on both sides. See the editing artifact below. |
+
+### Question 2 — the integration itself
+
+**Does the body contain what the amendments promised?** Yes — I traced all ten. A1 → §2 (read-only spend input), §3.1 conditions, §5 rows, `BudgetHeld` phase; A2 → §3.4's `agents.<ns>.<name>.<revision>` + `.active`; A3 → §3.5's `agent-actor` client + its three conditions; A4 → §3.3's core-tier paragraph and the `gates:` comment; A5 → `GatesBypassed`; A6 → §3.4's signature validation + `CardUnsigned`; A7 → §11's owned interfaces; A8 → `spec.llm.fallback`; A9's seven → §§3.1–3.4, 3.7, 5; A10 → obsolete by construction. Nothing was dropped. The two clauses that did not carry over (`tools.<ns>.<name>` from A2, tier-downgrade refusal from A4) belong to designs 05 and 07 respectively and are recorded there.
+
+**Is the CRD schema valid YAML with no duplicate keys?** No duplicates — verified key-by-key in both `spec` and `status`. (`resources: {…}` and `env: [...]` remain illustrative placeholders that a strict parser would reject; that is pre-existing and appropriate for a design doc, but worth knowing before anyone points a linter at it.)
+
+**Does the condition list cover every condition any design declares?** Not quite — two clear misses, both declared elsewhere and both landing on the Agent CR:
+
+- **`PolicyApplyIncomplete`** — design 03 §3.3 sets it on the source CR when a policy fails acceptance ("dependent routes are not created… condition `PolicyApplyIncomplete` with the resource + reason"), and it recurs in 03's §5, §7 and §8, plus design 22 §6's "`PolicyApplyIncomplete`-family surfacing".
+- **`ModelDrifted`** — design 20 §3 states it explicitly "on affected **Agents**", and design 20 §4's correlation rule reads it back.
+
+Also worth naming while the sweep is open: design 22 §6's interceptor-down row says "condition on affected Agents" without naming the condition — it has no name anywhere in the corpus. (`GatewayIncompatible` from design 03 §5 is ambiguous as to object; if it is per-Agent it belongs here too.)
+
+### Question 3 — new contradictions from the integration
+
+**None found, and the integration silently repaired one.** §3.3 step 3 previously read "bound to the gate controller's platform SVID", which design 16 r2 had superseded with per-run eval SVIDs; the integrated body now says "admitted set is exactly the eval run's own SVID, granted at Job launch and revoked at Job end" — matching design 16 and design 03's "Eval temporary grant" row. Two other latent gaps were closed unprompted: `loop: {allowReentry, maxVisits}` now exists in the CRD (design 22 §3 had declared the field without design 02 ever carrying it), and `status.budget` makes concrete what §3.1 had only promised as "remaining budget in status".
+
+One editing artifact, in the corpus rather than this design: **design 09 §3 item 5 now repeats itself** — "JetStream-KV-backed A2A task store wired by default" appears twice in the same bullet, once with the new declaration clause and once in the original sentence. A leftover from the R7 edit.
+
+### Outstanding
+
+1. **Condition list is two short** (R4): add `PolicyApplyIncomplete` (design 03) and `ModelDrifted` (design 20); optionally name design 22's interceptor-down condition, which is currently anonymous.
+2. **Design 09 §3 item 5 contains a duplicated clause** from the R7 fix.
+
+### Verdict
+
+**PASS.** This is the integration pass the re-critique asked for, and it was done properly rather than cosmetically: the body now reads as one spec, §12 keeps provenance without authority, and every behaviour the ten amendments carried is findable where an implementer would look for it. The two hardest r2 items were fixed with real mechanism rather than prose — `registrationDeadline` gives the stuck-candidate case a terminal state that closes a retention leak, and the scratchpad's degraded path names `local-path` by name and falls back loudly instead of assuming storage that the platform's own local profile cannot provide. Both remaining items are single-line additions, and neither affects behaviour.
+
+02: PASS — 2 outstanding
