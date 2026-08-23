@@ -69,3 +69,25 @@ Stated plainly, because a supply-chain page that overclaims is worse than none:
 ## For reviewers
 
 The bar this page claims to meet is the one plume imposes on its users. If any item under "not yet true" would block adoption, say so — the gap is recorded here precisely so it is arguable rather than discovered.
+
+## Running the loop locally
+
+```bash
+make e2e          # k3d: create, build, load, helm install, test
+DISTRO=kind make e2e
+```
+
+**On Colima, raise the inotify instance limit first.** The default is 128, and
+every Kubernetes component wants watchers — with more than one k3d or kind
+cluster resident, the k3s API server fails to start with `error creating
+fsnotify watcher: too many open files`. The cluster is *created*, so the failure
+presents as a missing load balancer or an unreachable API, which sends you
+looking at the wrong thing:
+
+```bash
+colima ssh -- sudo sysctl -w fs.inotify.max_user_instances=8192
+colima ssh -- sudo sh -c 'echo fs.inotify.max_user_instances=8192 > /etc/sysctl.d/99-inotify.conf'
+```
+
+Give the VM real resources too — `colima start --cpu 8 --memory 16`. This is not
+plume-specific; it affects any multi-cluster local Kubernetes work.

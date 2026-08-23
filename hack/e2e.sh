@@ -17,15 +17,31 @@ k3d)
     echo "==> creating k3d cluster ${CLUSTER}"
     k3d cluster create "${CLUSTER}" --agents 0 --wait
   fi
+  # Merge explicitly rather than assume `cluster create` left a context behind.
+  # A cluster outlives its kubeconfig entry — restarting the Docker VM, or
+  # reusing a cluster from an earlier session, leaves the cluster running with
+  # no context pointing at it, and the run then fails on something unrelated to
+  # what it is testing.
+  echo "==> merging kubeconfig for ${CLUSTER}"
+  k3d kubeconfig merge "${CLUSTER}" --kubeconfig-merge-default >/dev/null
   kubectl config use-context "k3d-${CLUSTER}" >/dev/null
   ;;
 kind)
   command -v kind >/dev/null || { echo "kind is not installed"; exit 1; }
+  kind export kubeconfig --name "${CLUSTER}" >/dev/null
   kubectl config use-context "kind-${CLUSTER}" >/dev/null
   ;;
 *)
   echo "DISTRO must be k3d or kind, got ${DISTRO}"; exit 1 ;;
 esac
+
+# Fail here, with a useful message, rather than three steps later on something
+# that looks like a product bug.
+if ! kubectl cluster-info >/dev/null 2>&1; then
+  echo "the ${DISTRO} cluster '${CLUSTER}' is not reachable. If the Docker VM was"
+  echo "restarted, delete and recreate it:  k3d cluster delete ${CLUSTER}"
+  exit 1
+fi
 
 echo "==> building the operator image"
 docker build -t "${IMAGE}" -f Dockerfile .
