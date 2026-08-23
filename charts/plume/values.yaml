@@ -21,7 +21,10 @@ operator:
     # rollout. Set to a digest in any environment that matters.
     tag: "0.1.0"
     pullPolicy: IfNotPresent
-  replicas: 1
+  # Two at the prod profile: the operator is leader-elected, so a standby takes
+  # over on node failure rather than waiting for a reschedule. The local profile
+  # forces this to 1 regardless.
+  replicas: 2
 
   # Leader election is on by default. The chart grants the leases permission it
   # needs; without that grant controller-runtime retries a forbidden lease
@@ -45,8 +48,19 @@ operator:
     enabled: false
     port: 8443
 
+  # Disruption budget, prod profile only. maxUnavailable rather than
+  # minAvailable: with N replicas a minAvailable of N permits no eviction at
+  # all, so `kubectl drain` hangs and routine node maintenance becomes an
+  # incident.
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+
   nodeSelector: {}
   tolerations: []
+  # Left empty on purpose: the template renders a soft anti-affinity by default
+  # so both replicas do not land on one node. Setting this replaces it, which is
+  # the right escape hatch for a cluster with its own topology rules.
   affinity: {}
 
 # The namespace the operator runs in. CRs may live anywhere.

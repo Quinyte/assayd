@@ -355,3 +355,78 @@ func TestFloatingImageTagIsRefused(t *testing.T) {
 		t.Errorf("the refusal does not say what to do instead: %s", out)
 	}
 }
+
+// The prod profile must render what it claims. values.yaml described prod as
+// "replicas, anti-affinity, PDBs" while rendering a single unprotected pod —
+// the same defect as a flag whose help text names a bound the code does not
+// enforce, which is worse than saying nothing.
+func TestProdProfileRendersWhatItClaims(t *testing.T) {
+	docs := render(t) // prod is the default
+
+	deploys := kindsOf(docs, "Deployment")
+	if len(deploys) == 0 {
+		t.Fatal("no Deployment rendered")
+	}
+	for _, d := range deploys {
+		if n := replicasOf(t, d); n < 2 {
+			t.Errorf("%s renders %d replica(s) at the prod profile. The operator is "+
+				"leader-elected, so a standby takes over on node failure instead of waiting "+
+				"for a reschedule — one replica means an outage lasts as long as scheduling does.",
+				nameOf(d), n)
+		}
+		spec := dig(d, "spec", "template", "spec")
+		if len(dig(spec, "affinity")) == 0 && spec["topologySpreadConstraints"] == nil {
+			t.Errorf("%s has neither anti-affinity nor topology spread at prod: both replicas "+
+				"can land on one node, so the standby dies with the active one", nameOf(d))
+		}
+	}
+
+	if len(kindsOf(docs, "PodDisruptionBudget")) == 0 {
+		t.Error("no PodDisruptionBudget at the prod profile: a node drain can take every " +
+			"operator replica at once, and nothing reconciles until they reschedule")
+	}
+}
+
+// A PDB that cannot be satisfied is worse than none: it blocks drains forever
+// and turns routine node maintenance into an incident.
+func TestPodDisruptionBudgetPermitsDrains(t *testing.T) {
+	docs := render(t)
+	for _, pdb := range kindsOf(docs, "PodDisruptionBudget") {
+		spec := dig(pdb, "spec")
+		if spec["minAvailable"] != nil && spec["maxUnavailable"] != nil {
+			t.Errorf("%s sets both minAvailable and maxUnavailable, which is rejected", nameOf(pdb))
+		}
+		// With N replicas, minAvailable: N permits no disruption at all.
+		if mn, ok := spec["minAvailable"]; ok && mn != nil {
+			for _, d := range kindsOf(docs, "Deployment") {
+				if toNum(mn) >= replicasOf(t, d) {
+					t.Errorf("%s requires minAvailable=%v against %d replicas: no pod can ever "+
+						"be evicted, so `kubectl drain` hangs and node maintenance becomes an "+
+						"incident", nameOf(pdb), mn, replicasOf(t, d))
+				}
+			}
+		}
+	}
+}
+
+// The local profile must NOT render a PDB. On a single-node laptop cluster a
+// disruption budget can only block things.
+func TestLocalProfileHasNoDisruptionBudget(t *testing.T) {
+	docs := render(t, "--set", "profile=local")
+	if n := len(kindsOf(docs, "PodDisruptionBudget")); n != 0 {
+		t.Errorf("the local profile renders %d PodDisruptionBudget(s). On a single-node "+
+			"cluster that only blocks drains.", n)
+	}
+}
+
+func toNum(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
+}

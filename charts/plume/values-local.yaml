@@ -9,6 +9,9 @@ tier: core
 
 operator:
   replicas: 1
+  # No disruption budget on a single-node cluster: it could only block drains.
+  podDisruptionBudget:
+    enabled: false
   image:
     pullPolicy: IfNotPresent
   resources:
