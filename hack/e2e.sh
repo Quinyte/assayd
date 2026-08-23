@@ -44,7 +44,13 @@ if ! kubectl cluster-info >/dev/null 2>&1; then
 fi
 
 echo "==> building the operator image"
-docker build -t "${IMAGE}" -f Dockerfile .
+# DOCKER_BUILD_NETWORK is an escape hatch for hosts whose container DNS returns
+# an IPv6 address the bridge network cannot route — the build then fails on
+# `go mod download` with "network is unreachable". Setting it to `host` sidesteps
+# that. It is a WORKAROUND: the real fix is the host's Docker DNS config, since
+# a build that needs the host network is a build that is not isolated.
+docker build ${DOCKER_BUILD_NETWORK:+--network "${DOCKER_BUILD_NETWORK}"} \
+  -t "${IMAGE}" -f Dockerfile .
 
 echo "==> loading the image into ${DISTRO}"
 case "${DISTRO}" in
