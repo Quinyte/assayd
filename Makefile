@@ -6,15 +6,36 @@ SETUP_ENVTEST  := $(GOBIN)/setup-envtest
 ENVTEST_K8S    ?= 1.36.x
 CLUSTER        ?= plume-local
 
+# Tool versions are pinned here, not floated with @latest. A build whose output
+# depends on when it ran is not reproducible, and `make verify` would fail for
+# whoever happened to pick up a new controller-gen first. CI proved the older
+# assumption wrong on its first run: the tools were present on one laptop and
+# absent everywhere else.
+CONTROLLER_TOOLS_VERSION ?= v0.21.0
+ENVTEST_VERSION          ?= release-0.24
+
 .PHONY: help
 help: ## show targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "};{printf "  \033[36m%-16s\033[0m %s\n",$$1,$$2}'
 
+## ---------- tools ----------
+# Installed on demand and pinned. Every target that needs a tool depends on it,
+# so a fresh clone or a fresh CI runner works without a setup document nobody
+# reads.
+.PHONY: tools
+tools: $(CONTROLLER_GEN) $(SETUP_ENVTEST) ## install the pinned build tools
+
+$(CONTROLLER_GEN):
+	GOBIN=$(GOBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
+
+$(SETUP_ENVTEST):
+	GOBIN=$(GOBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION)
+
 ## ---------- generate ----------
 .PHONY: generate manifests
-generate: ## deepcopy funcs
+generate: $(CONTROLLER_GEN) ## deepcopy funcs
 	$(CONTROLLER_GEN) object paths=./api/...
-manifests: ## CRDs + RBAC
+manifests: $(CONTROLLER_GEN) ## CRDs + RBAC
 	$(CONTROLLER_GEN) crd rbac:roleName=plume-operator paths=./... output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
 
 ## ---------- the loop ----------
@@ -25,7 +46,7 @@ unit: ## pure logic, no cluster
 	go test ./internal/... ./api/... -count=1
 race: ## unit tests under the race detector (required evidence for review)
 	go test -race ./internal/... ./api/... -count=1
-envtest: ## reconcile behaviour against a real API server
+envtest: $(SETUP_ENVTEST) ## reconcile behaviour against a real API server
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S) -p path)" go test ./test/envtest/... -count=1
 cover: ## coverage over changed packages
 	go test ./internal/... ./api/... -coverprofile=cover.out -count=1 && go tool cover -func=cover.out | tail -1
