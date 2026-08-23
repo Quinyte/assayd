@@ -1,5 +1,10 @@
 # The gate the corpus keeps claiming. Until this existed, "enforced by a test
 # rather than by review discipline" meant "enforced by remembering to type make".
+#
+# Actions are pinned by commit SHA and tools by version, not by moving tag.
+# plume's own admission story requires agent images to be cosign-signed and
+# digest-pinned; a CI that pipes an unpinned script from a moving branch into
+# bash would be the platform failing its own bar in the most visible place.
 name: ci
 
 on:
@@ -14,14 +19,18 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  K3D_VERSION: v5.9.0
+  KUBECONFORM_VERSION: v0.8.0
+
 jobs:
   verify:
-    name: build, vet, unit, envtest
+    name: build, vet, unit, envtest, chart
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -44,28 +53,60 @@ jobs:
       - name: chart doctrine (pod budget, stateful allowlist, RBAC drift)
         run: make chart
 
-      - name: rendered manifests validate against supported k8s versions
+      - name: install kubeconform
         run: |
+          set -euo pipefail
           curl -sSLo /tmp/kubeconform.tar.gz \
-            https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
-          tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
-          make chart-conform
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          sudo tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
 
+      - name: rendered manifests validate against supported k8s versions
+        run: make chart-conform
+
+  # NFR-3 says plume runs anywhere. Design 07 §5 makes that enforced rather than
+  # aspirational by running the same scenario on more than one distro: a bug that
+  # only appears on k3s's storage class or kind's networking is exactly what a
+  # single-distro pipeline misses.
   e2e:
-    name: e2e on k3d
+    name: e2e (${{ matrix.distro }})
     runs-on: ubuntu-latest
-    # A skipped e2e is an untested feature, so this job fails rather than skips
-    # when the suite is empty — see hack/e2e.sh.
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [k3d, kind]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
 
       - name: install k3d
-        run: curl -sfL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+        if: matrix.distro == 'k3d'
+        run: |
+          set -euo pipefail
+          curl -sSLo /tmp/k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
+          sudo install -m 0755 /tmp/k3d /usr/local/bin/k3d
+          k3d version
 
+      - name: create kind cluster
+        if: matrix.distro == 'kind'
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: plume-local
+
+      # A skipped e2e is an untested feature: hack/e2e.sh exits non-zero rather
+      # than skipping, and the suite itself registers a failing sentinel when
+      # PLUME_E2E is unset.
       - name: e2e
         run: make e2e
+        env:
+          DISTRO: ${{ matrix.distro }}
+
+      - name: operator logs on failure
+        if: failure()
+        run: |
+          kubectl -n plume-system describe deploy/plume-agent-operator || true
+          kubectl -n plume-system logs -l app.kubernetes.io/component=agent-operator --tail=200 || true
+          kubectl get agents -A -o yaml || true
