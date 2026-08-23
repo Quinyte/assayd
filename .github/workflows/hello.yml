@@ -1,0 +1,11 @@
+# Diagnostic: the smallest possible valid workflow. If this fails at startup,
+# nothing about plume's workflow files is the cause.
+name: hello
+on:
+  push:
+    branches: [main]
+jobs:
+  hello:
+    runs-on: [self-hosted, dgx]
+    steps:
+      - run: echo "the runner picked up a job"
