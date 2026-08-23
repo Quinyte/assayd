@@ -34,7 +34,10 @@ env:
 jobs:
   image:
     name: build, push, sign
-    runs-on: ubuntu-latest
+    # Self-hosted: this org's GitHub-hosted minutes are consumed by another
+    # project. See the security note in ci.yml — this runner must be removed or
+    # restricted before the repository goes public.
+    runs-on: [self-hosted, dgx]
     permissions:
       contents: read
       packages: write      # push to GHCR
@@ -145,7 +148,7 @@ jobs:
 
   chart:
     name: package, push, sign the chart
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, dgx]
     needs: image
     permissions:
       contents: read
@@ -162,6 +165,14 @@ jobs:
       - name: pin the chart to the published digest
         run: |
           set -euo pipefail
+          # yq is not on the runner; install it pinned rather than assume it.
+          if ! command -v yq >/dev/null; then
+            mkdir -p "${HOME}/.local/bin"
+            curl -sSLo "${HOME}/.local/bin/yq" \
+              https://github.com/mikefarah/yq/releases/download/v4.48.1/yq_linux_arm64
+            chmod 0755 "${HOME}/.local/bin/yq"
+            export PATH="${HOME}/.local/bin:${PATH}"
+          fi
           v="${{ needs.image.outputs.version }}"
           d="${{ needs.image.outputs.digest }}"
           yq -i ".version = \"${v}\" | .appVersion = \"${v}\"" charts/plume/Chart.yaml
@@ -171,6 +182,11 @@ jobs:
       - name: package and push
         run: |
           set -euo pipefail
+          export PATH="${HOME}/.local/bin:${PATH}"
+          if ! command -v helm >/dev/null; then
+            curl -sSL https://get.helm.sh/helm-v3.19.0-linux-arm64.tar.gz | tar -xz -C /tmp
+            install -m 0755 /tmp/linux-arm64/helm "${HOME}/.local/bin/helm"
+          fi
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login "${REGISTRY}" \
             --username "${{ github.actor }}" --password-stdin
           helm package charts/plume --destination /tmp
