@@ -99,17 +99,39 @@ jobs:
           cosign attest --yes --predicate sbom.spdx.json --type spdxjson \
             "${REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}"
 
+      # SLSA provenance via GitHub's attestation API is not available for
+      # user-owned PRIVATE repositories — the API returns "Feature not available
+      # for user-owned private repositories". The first v0.1.0 run failed here,
+      # after successfully pushing, signing and attesting the SBOM.
+      #
+      # Conditional rather than continue-on-error: a step that always "succeeds"
+      # teaches nobody anything, and this one starts working by itself the day
+      # the repository goes public or moves to an organization. The gap is
+      # recorded in docs/supply-chain.md, because a supply-chain page that
+      # implies provenance exists when it does not is worse than one that admits
+      # the hole.
       - name: SLSA provenance
+        if: github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
+      - name: note that provenance was skipped
+        if: github.event.repository.visibility != 'public'
+        run: |
+          echo "::warning::SLSA provenance skipped: GitHub's attestation API does not " \
+            "support user-owned private repositories. The image is still cosign-signed " \
+            "and carries an SBOM attestation. See docs/supply-chain.md."
+
       # Verify what we just published, from the outside, exactly as a consumer
-      # would. Publishing without verifying is how an unsigned artifact ships
-      # while a workflow reports success.
+      # would. `if: always()` because this is the step that proves the signature
+      # is real — gating it behind an optional step meant the first release
+      # pushed a signed image and never checked it, which is how an unverified
+      # artifact ships while the log looks reassuring.
       - name: verify the published image
+        if: always() && steps.push.outcome == 'success'
         run: |
           set -euo pipefail
           cosign verify \
