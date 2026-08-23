@@ -1,0 +1,19 @@
+# The local profile: a laptop cluster (k3d, kind, minikube, k3s).
+#
+# Design 07 calls this "the honest mode of NFR-8" — things that cannot work on a
+# laptop degrade loudly rather than pretending. Sandboxed agents fall back to a
+# hardened Deployment with SandboxDowngraded=True, because no laptop distro
+# ships gVisor.
+profile: local
+tier: core
+
+operator:
+  replicas: 1
+  image:
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi

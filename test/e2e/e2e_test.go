@@ -25,6 +25,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	plumev1alpha1 "github.com/ejs-5/plume/api/v1alpha1"
+	"github.com/ejs-5/plume/internal/controller"
+	"github.com/ejs-5/plume/internal/revision"
 )
 
 var (
@@ -117,27 +119,133 @@ func TestCRDInstallsAndAcceptsTheMinimalAgent(t *testing.T) {
 	}
 }
 
-// Placeholder for the claim this suite exists to make once the operator is
-// deployed here rather than driven in-process: an Agent produces a Deployment
-// whose pods actually reach Ready. Written as a skip with a stated reason rather
-// than omitted, so the gap is visible in the run output.
+// The claim envtest cannot make: a plume-created pod actually runs.
+//
+// envtest has no kubelet, so every availability assertion there is made against
+// a Deployment status the test itself wrote. Here a real scheduler places a real
+// pod and a real kubelet pulls a real image. This is the only test in the repo
+// that can fail because the thing does not work, as opposed to because the
+// operator decided wrongly.
+//
+// Requires the operator deployed (make e2e installs the chart).
 func TestWorkloadActuallyRuns(t *testing.T) {
 	requireCluster(t)
-	t.Skip("pending: needs the operator deployed to the cluster (cmd/operator + chart, design 07). " +
-		"Until then no suite proves a plume-created pod reaches Ready — envtest cannot, " +
-		"because it has no kubelet.")
-
+	requireOperator(t)
 	ctx := context.Background()
+	ensureNamespace(t, ctx, "plume-e2e")
+
+	a := &plumev1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "runs", Namespace: "plume-e2e"},
+		Spec: plumev1alpha1.AgentSpec{
+			Runtime: &plumev1alpha1.AgentRuntime{
+				// A real image that starts, serves a port and stays up. The agent
+				// contract (an A2A card) is not exercised here — card fetch is
+				// unimplemented — so this asserts the workload story only.
+				Image: "registry.k8s.io/pause:3.10",
+			},
+		},
+	}
+	_ = k8s.Delete(ctx, a)
+	if err := k8s.Create(ctx, a); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(context.Background(), a) })
+
+	rev := revision.Hash(a.Spec)
+	name := controller.WorkloadName("runs", rev)
+
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		var d appsv1.Deployment
+		if err := k8s.Get(ctx, types.NamespacedName{Namespace: "plume-e2e", Name: name}, &d); err == nil {
+			if d.Status.AvailableReplicas > 0 {
+				return
+			}
+		}
+		time.Sleep(3 * time.Second)
+	}
+
+	// Say what went wrong, not just that it did.
 	var d appsv1.Deployment
+	if err := k8s.Get(ctx, types.NamespacedName{Namespace: "plume-e2e", Name: name}, &d); err != nil {
+		t.Fatalf("the operator never created a workload for revision %s: %v", rev, err)
+	}
+	t.Fatalf("workload %s never became available: %d/%d replicas, conditions %+v",
+		name, d.Status.AvailableReplicas, d.Status.Replicas, d.Status.Conditions)
+}
+
+// The operator's own PodSpec must survive a real cluster's admission defaulting
+// without churning. envtest has no ServiceAccount admission plugin, so the
+// mutation that removes ServiceAccountName from deploymentFor survives there —
+// this is where that gap closes.
+func TestOperatorDoesNotChurnAgainstRealAdmission(t *testing.T) {
+	requireCluster(t)
+	requireOperator(t)
+	ctx := context.Background()
+	ensureNamespace(t, ctx, "plume-e2e")
+
+	a := &plumev1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "nochurn", Namespace: "plume-e2e"},
+		Spec: plumev1alpha1.AgentSpec{
+			Runtime: &plumev1alpha1.AgentRuntime{Image: "registry.k8s.io/pause:3.10"},
+		},
+	}
+	_ = k8s.Delete(ctx, a)
+	if err := k8s.Create(ctx, a); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(context.Background(), a) })
+
+	name := controller.WorkloadName("nochurn", revision.Hash(a.Spec))
+	key := types.NamespacedName{Namespace: "plume-e2e", Name: name}
+
+	var first appsv1.Deployment
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
-		if err := k8s.Get(ctx, types.NamespacedName{Namespace: "plume-e2e", Name: "smoke"}, &d); err == nil &&
-			d.Status.AvailableReplicas > 0 {
-			return
+		if err := k8s.Get(ctx, key, &first); err == nil {
+			break
 		}
 		time.Sleep(2 * time.Second)
 	}
-	t.Fatal("no available replicas within the deadline")
+	if first.Name == "" {
+		t.Fatalf("the operator never created %s", name)
+	}
+
+	// Let several reconciles happen. A ServiceAccount admission plugin defaulting
+	// a field the operator compares but does not set would show up as a
+	// monotonically climbing generation.
+	time.Sleep(30 * time.Second)
+
+	var later appsv1.Deployment
+	if err := k8s.Get(ctx, key, &later); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if later.Generation != first.Generation {
+		t.Errorf("the workload's generation moved from %d to %d with no spec change. The "+
+			"operator is rewriting it every reconcile, which means it compares a field a "+
+			"real cluster defaults and it does not set — the exact failure envtest cannot "+
+			"see, because envtest runs no ServiceAccount admission plugin.",
+			first.Generation, later.Generation)
+	}
+}
+
+// requireOperator fails when the chart is not installed, rather than letting a
+// workload test time out and blame the operator's logic for its absence.
+func requireOperator(t *testing.T) {
+	t.Helper()
+	var d appsv1.Deployment
+	err := k8s.Get(context.Background(),
+		types.NamespacedName{Namespace: "plume-system", Name: "plume-agent-operator"}, &d)
+	if err != nil {
+		t.Fatalf("the agent-operator is not installed: %v. Run `make e2e`, which helm-installs "+
+			"the chart. Without it these tests would time out and read as operator bugs.", err)
+	}
+	if d.Status.AvailableReplicas == 0 {
+		t.Fatalf("the agent-operator is installed but has no available replicas. If this "+
+			"persists, check its readiness probe: readiness means leader election completed, "+
+			"so a missing coordination.k8s.io/leases grant shows up here. Conditions: %+v",
+			d.Status.Conditions)
+	}
 }
 
 func ensureNamespace(t *testing.T, ctx context.Context, name string) {

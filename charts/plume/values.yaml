@@ -1,0 +1,53 @@
+# Defaults are the prod profile at the core tier (design 07 §3).
+# For a laptop, add: -f values-local.yaml
+
+# tier: core | plus
+#   core  — the engine: what is needed to run governed agents.
+#   plus  — adds Argo Workflows, Phoenix, OpenFGA, eval runner images.
+# Only `core` is implemented; `plus` is rejected at render rather than silently
+# ignored, because a values file that appears to take effect and does not is
+# worse than one that errors.
+tier: core
+
+# profile: prod | local
+#   prod  — replicas, anti-affinity, PDBs.
+#   local — single replica everything, local-path storage; the honest mode.
+profile: prod
+
+operator:
+  image:
+    repository: ghcr.io/ejs-5/plume-operator
+    # Pinned, never floating: a rollout that cannot be reproduced is not a
+    # rollout. Set to a digest in any environment that matters.
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  replicas: 1
+
+  # Leader election is on by default. The chart grants the leases permission it
+  # needs; without that grant controller-runtime retries a forbidden lease
+  # forever while the pod reports Ready and reconciles nothing.
+  leaderElection: true
+
+  # How long a cached answer to "is the EvalSuite CRD installed?" may persist
+  # before the next reconcile re-checks it. This bounds the cache, not the agent.
+  evalSuiteCheckInterval: 30s
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  # Bound to :8443 with authn/authz filters in a later change; until then the
+  # metrics listener is off rather than unauthenticated on all interfaces.
+  metrics:
+    enabled: false
+    port: 8443
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# The namespace the operator runs in. CRs may live anywhere.
+namespace: plume-system

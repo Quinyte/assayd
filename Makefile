@@ -18,7 +18,7 @@ manifests: ## CRDs + RBAC
 	$(CONTROLLER_GEN) crd rbac:roleName=plume-operator paths=./... output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
 
 ## ---------- the loop ----------
-.PHONY: fmt vet unit envtest test race cover e2e verify
+.PHONY: fmt vet unit envtest chart chart-conform test race cover e2e verify
 fmt: ; go fmt ./...
 vet: ; go vet ./...
 unit: ## pure logic, no cluster
@@ -29,14 +29,27 @@ envtest: ## reconcile behaviour against a real API server
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S) -p path)" go test ./test/envtest/... -count=1
 cover: ## coverage over changed packages
 	go test ./internal/... ./api/... -coverprofile=cover.out -count=1 && go tool cover -func=cover.out | tail -1
-test: fmt vet unit envtest ## the pre-commit gate
+chart: ## render the chart and hold it to the doctrine (pods, stateful deps, RBAC)
+	helm lint charts/plume
+	go test ./test/chart/... -count=1
+
+chart-conform: ## validate rendered manifests against the k8s schemas we support
+	@for v in 1.34.0 1.35.0 1.36.0; do \
+		echo "==> kubeconform $$v"; \
+		helm template plume charts/plume | kubeconform -strict -summary \
+			-kubernetes-version $$v -ignore-missing-schemas || exit 1; \
+	done
+
+test: fmt vet unit envtest chart ## the pre-commit gate
 e2e: ## real cluster path on k3d (design 07's matrix, locally)
 	./hack/e2e.sh
 verify: ## what CI runs — generation must be reproducible
 # `git diff` cannot see an untracked file, so a newly generated CRD that nobody
 # committed would pass this gate silently. --porcelain reports both.
 	@$(MAKE) generate manifests
-	@out="$$(git status --porcelain -- api config)"; \
+	@cp config/crd/plume.dev_agents.yaml charts/plume/crds/plume.dev_agents.yaml
+	@sed -n '/^rules:/,$$p' config/rbac/role.yaml > charts/plume/files/operator-rules.yaml
+	@out="$$(git status --porcelain -- api config charts)"; \
 	if [ -n "$$out" ]; then \
 		echo "generated files are stale or uncommitted — run 'make generate manifests' and commit:"; \
 		echo "$$out"; \

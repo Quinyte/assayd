@@ -1,0 +1,86 @@
+{{- include "plume.validate" . -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "plume.operator.name" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "plume.labels" . | nindent 4 }}
+# The operator reads its own token from the projected volume the API client
+# mounts; it does not need one automounted into every container.
+automountServiceAccountToken: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "plume.operator.name" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "plume.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-operator
+spec:
+  replicas: {{ if eq .Values.profile "local" }}1{{ else }}{{ .Values.operator.replicas }}{{ end }}
+  selector:
+    matchLabels:
+      {{- include "plume.operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "plume.operator.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "plume.operator.name" . }}
+      # The operator is held to the standard it holds agents to. A control plane
+      # that hardens its workloads and not itself is making an argument it does
+      # not believe.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: operator
+          image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
+          imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+          args:
+            - --leader-elect={{ .Values.operator.leaderElection }}
+            - --eval-suite-check-interval={{ .Values.operator.evalSuiteCheckInterval }}
+            - --health-probe-bind-address=:8081
+            {{- if .Values.operator.metrics.enabled }}
+            - --metrics-bind-address=:{{ .Values.operator.metrics.port }}
+            {{- else }}
+            # Off rather than unauthenticated on all interfaces.
+            - --metrics-bind-address=0
+            {{- end }}
+          ports:
+            - name: probes
+              containerPort: 8081
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          # Readiness means "this process is reconciling", not "a listener
+          # exists": it fails until leader election completes, so an operator
+          # that cannot acquire its lease is visibly not ready rather than
+          # silently idle.
+          livenessProbe:
+            httpGet: {path: /healthz, port: probes}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /readyz, port: probes}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.operator.resources | nindent 12 }}
+      {{- with .Values.operator.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.operator.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.operator.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

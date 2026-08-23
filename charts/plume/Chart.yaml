@@ -1,0 +1,18 @@
+apiVersion: v2
+name: plume
+description: >-
+  A Kubernetes-native platform for governed AI agents. This chart is the
+  umbrella; today it installs only the agent-operator, because that is the only
+  component that exists. Subcharts (agentgateway, SPIRE, NATS, Postgres,
+  Zitadel, OpenObserve) arrive with the designs that bind them.
+type: application
+
+# Chart version IS the platform version (design 07 §4). The appVersion is the
+# operator image tag, which moves with it.
+version: 0.1.0
+appVersion: "0.1.0"
+
+kubeVersion: ">=1.30.0-0"
+
+keywords: [agents, a2a, mcp, operator]
+home: https://github.com/ejs-5/plume

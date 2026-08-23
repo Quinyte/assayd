@@ -41,6 +41,16 @@ jobs:
       - name: envtest against a real API server
         run: make envtest
 
+      - name: chart doctrine (pod budget, stateful allowlist, RBAC drift)
+        run: make chart
+
+      - name: rendered manifests validate against supported k8s versions
+        run: |
+          curl -sSLo /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
+          make chart-conform
+
   e2e:
     name: e2e on k3d
     runs-on: ubuntu-latest
