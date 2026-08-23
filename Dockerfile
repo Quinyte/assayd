@@ -1,5 +1,12 @@
 # Two stages: build with the toolchain, ship without it.
-FROM golang:1.26 AS build
+# --platform=$BUILDPLATFORM pins this stage to the RUNNER's architecture, and Go
+# cross-compiles to $TARGETARCH from there. Without it, buildx runs the arm64
+# compile under QEMU emulation — roughly 10-20x slower, because it emulates a
+# CPU to run a compiler that does not need emulating. A multi-arch release went
+# from >20 minutes to about one.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 # Dependencies first, so a code change does not re-download the module cache.
 COPY go.mod go.sum ./
@@ -8,7 +15,9 @@ COPY api/ api/
 COPY cmd/ cmd/
 COPY internal/ internal/
 # CGO off and a static binary, so the runtime image can be distroless-static.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/operator ./cmd/operator
+# -trimpath strips local paths, which is a prerequisite for reproducibility.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -trimpath -ldflags="-s -w" -o /out/operator ./cmd/operator
 
 # Pinned by digest, not by tag. `:nonroot` is rebuilt upstream, so the same
 # source would otherwise produce different bytes over time — which is the exact
