@@ -11,7 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/ejs-5/plume/api/v1alpha1"
+	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
 )
 
 // The Agent CRD is the platform's front door. These tests hold it to a

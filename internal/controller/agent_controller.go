@@ -26,8 +26,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	plumev1alpha1 "github.com/ejs-5/plume/api/v1alpha1"
-	"github.com/ejs-5/plume/internal/revision"
+	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	"github.com/Quinyte/plume/internal/revision"
 )
 
 const (

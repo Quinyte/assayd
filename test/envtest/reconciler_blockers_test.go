@@ -15,9 +15,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/ejs-5/plume/api/v1alpha1"
-	"github.com/ejs-5/plume/internal/controller"
-	"github.com/ejs-5/plume/internal/revision"
+	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	"github.com/Quinyte/plume/internal/controller"
+	"github.com/Quinyte/plume/internal/revision"
 )
 
 // Regression tests for the four blockers the independent review found. Each is

@@ -5,7 +5,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	plumev1alpha1 "github.com/ejs-5/plume/api/v1alpha1"
+	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
 )
 
 // conditionSet accumulates the conditions one reconcile pass wants to assert.

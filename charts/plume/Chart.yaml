@@ -15,4 +15,4 @@ appVersion: "0.1.0"
 kubeVersion: ">=1.30.0-0"
 
 keywords: [agents, a2a, mcp, operator]
-home: https://github.com/ejs-5/plume
+home: https://github.com/Quinyte/plume

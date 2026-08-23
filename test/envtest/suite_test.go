@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	plumev1alpha1 "github.com/ejs-5/plume/api/v1alpha1"
+	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
 )
 
 var (

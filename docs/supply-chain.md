@@ -6,14 +6,14 @@ plume's admission rejects agent images that are not cosign-signed (ADR-0019), an
 
 | Artifact | Location | State at v0.1.0 |
 |---|---|---|
-| Operator image | `ghcr.io/ejs-5/plume-operator` (amd64, arm64) | published, signed, SBOM attested |
-| Helm chart | `oci://ghcr.io/ejs-5/charts/plume` | **not published** — see below |
+| Operator image | `ghcr.io/Quinyte/plume-operator` (amd64, arm64) | published, signed, SBOM attested |
+| Helm chart | `oci://ghcr.io/Quinyte/charts/plume` | **not published** — see below |
 
 Both are published only by `.github/workflows/release.yml`, on a `v*` tag. The
 packages inherit the repository's visibility, so while the repo is private they
 are private and a pull requires `docker login ghcr.io`.
 
-The v0.1.0 image digest is `sha256:749ef617444b176c6adeb7e58443bb3abdd65c1d6fd0a856454b912d818a2582`.
+**v0.1.0 predates the move to the Quinyte organization** and was published under `ghcr.io/ejs-5/plume-operator` at digest `sha256:749ef617444b176c6adeb7e58443bb3abdd65c1d6fd0a856454b912d818a2582`, signed by the workflow identity `https://github.com/ejs-5/plume/`. That artifact is not moved or re-signed: a signature attests to who built what and when, and rewriting history to look tidier would defeat the point. Verify it against the identity it was actually signed with. Everything from v0.1.1 lives under `Quinyte`.
 
 ## Signing is keyless, and that is the point
 
@@ -22,11 +22,11 @@ Signatures come from Fulcio and are logged in Rekor, using GitHub's OIDC token �
 So the identity you verify against is a workflow, not a person:
 
 ```bash
-IMAGE=ghcr.io/ejs-5/plume-operator
+IMAGE=ghcr.io/Quinyte/plume-operator
 DIGEST=sha256:...          # from `helm show values`, or the release notes
 
 cosign verify "${IMAGE}@${DIGEST}" \
-  --certificate-identity-regexp '^https://github.com/ejs-5/plume/' \
+  --certificate-identity-regexp '^https://github.com/Quinyte/plume/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -38,7 +38,7 @@ The SBOM is attached as a signed attestation rather than a release file, because
 
 ```bash
 cosign verify-attestation --type spdxjson "${IMAGE}@${DIGEST}" \
-  --certificate-identity-regexp '^https://github.com/ejs-5/plume/' \
+  --certificate-identity-regexp '^https://github.com/Quinyte/plume/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   | jq -r '.payload | @base64d | fromjson | .predicate.packages[].name'
 ```
@@ -52,7 +52,7 @@ The chart takes `operator.image.digest`, and **the digest wins over the tag when
 A tag can be repointed at other content after it was signed. A digest names the content. The release workflow pins the chart to the digest it just published and verified, so `helm install` at defaults runs the artifact that was signed.
 
 ```bash
-helm install plume oci://ghcr.io/ejs-5/charts/plume --version 0.1.0 \
+helm install plume oci://ghcr.io/Quinyte/charts/plume --version 0.1.0 \
   --set operator.image.digest=sha256:...
 ```
 

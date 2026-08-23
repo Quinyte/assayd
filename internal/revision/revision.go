@@ -37,7 +37,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	plumev1alpha1 "github.com/ejs-5/plume/api/v1alpha1"
+	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
 )
 
 // HashLength is how many hex characters of the digest name a revision. Ten hex

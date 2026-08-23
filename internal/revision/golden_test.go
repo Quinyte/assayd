@@ -6,7 +6,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	plumev1alpha1 "github.com/ejs-5/plume/api/v1alpha1"
+	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
 )
 
 // goldenSpec exercises every projected field and every policy field at once.

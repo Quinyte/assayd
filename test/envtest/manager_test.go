@@ -16,9 +16,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	plumev1alpha1 "github.com/ejs-5/plume/api/v1alpha1"
-	"github.com/ejs-5/plume/internal/controller"
-	"github.com/ejs-5/plume/internal/revision"
+	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	"github.com/Quinyte/plume/internal/controller"
+	"github.com/Quinyte/plume/internal/revision"
 )
 
 // Every other envtest here drives Reconcile directly, which is right for

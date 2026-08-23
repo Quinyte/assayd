@@ -1,4 +1,4 @@
-module github.com/ejs-5/plume
+module github.com/Quinyte/plume
 
 go 1.26.0
 

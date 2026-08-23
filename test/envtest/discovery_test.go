@@ -9,7 +9,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/ejs-5/plume/internal/controller"
+	"github.com/Quinyte/plume/internal/controller"
 )
 
 // Whether the EvalSuite CRD is installed decides whether rollouts are eval-gated
