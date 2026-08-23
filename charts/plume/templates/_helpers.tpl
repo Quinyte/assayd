@@ -38,3 +38,21 @@ app.kubernetes.io/name: {{ include "plume.name" . }}
 app.kubernetes.io/component: agent-operator
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
+
+{{/*
+The operator image reference.
+
+A digest wins when set, and the tag is dropped rather than carried alongside it:
+`repo:tag@digest` is legal, but the digest decides and the tag then reads as
+though it mattered. plume's own admission requires agent images to be
+digest-pinned and cosign-signed (ADR-0019); the release workflow pins this to
+the digest it published and signed, so the platform meets the bar it sets.
+*/}}
+{{- define "plume.operator.image" -}}
+{{- $img := .Values.operator.image -}}
+{{- if $img.digest -}}
+{{ $img.repository }}@{{ $img.digest }}
+{{- else -}}
+{{ $img.repository }}:{{ $img.tag }}
+{{- end -}}
+{{- end -}}

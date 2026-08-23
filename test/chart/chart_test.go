@@ -430,3 +430,58 @@ func toNum(v any) int {
 	}
 	return 0
 }
+
+// A digest pins content; a tag pins a name that can be moved to point at other
+// content after it was signed. plume's own admission rejects agent images that
+// are not digest-pinned and cosign-signed (ADR-0019), so the chart has to be
+// able to express the same thing about the operator.
+func TestChartSupportsDigestPinning(t *testing.T) {
+	const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	docs := render(t, "--set", "operator.image.digest="+digest)
+
+	for _, d := range kindsOf(docs, "Deployment") {
+		spec := dig(d, "spec", "template", "spec")
+		containers, _ := spec["containers"].([]any)
+		for _, c := range containers {
+			img := toStr(dig2(c)["image"])
+			if !strings.Contains(img, "@"+digest) {
+				t.Errorf("%s renders image %q with a digest set. A tag can be repointed "+
+					"after signing; only a digest names the content that was signed.",
+					nameOf(d), img)
+			}
+			if strings.Contains(img, ":") && strings.Contains(img, "@") {
+				// repo:tag@digest is legal but the tag is then decorative and
+				// misleading — the digest wins, silently.
+				before, _, _ := strings.Cut(img, "@")
+				if strings.Count(before, ":") > 0 {
+					t.Errorf("%s renders %q, carrying both a tag and a digest. The digest "+
+						"wins, so the tag is decorative and reads as though it mattered.",
+						nameOf(d), img)
+				}
+			}
+		}
+	}
+}
+
+// The default values must not point at an image that does not exist. An
+// aspirational default is a `helm install` that fails with ImagePullBackOff and
+// no explanation of why.
+func TestDefaultImageIsPublishable(t *testing.T) {
+	docs := render(t)
+	for _, d := range kindsOf(docs, "Deployment") {
+		spec := dig(d, "spec", "template", "spec")
+		containers, _ := spec["containers"].([]any)
+		for _, c := range containers {
+			img := toStr(dig2(c)["image"])
+			if !strings.HasPrefix(img, "ghcr.io/") {
+				t.Errorf("%s renders image %q, which is not in the registry the release "+
+					"workflow publishes to", nameOf(d), img)
+			}
+		}
+	}
+}
+
+func dig2(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
+}

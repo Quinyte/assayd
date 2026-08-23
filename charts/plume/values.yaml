@@ -18,8 +18,18 @@ operator:
   image:
     repository: ghcr.io/ejs-5/plume-operator
     # Pinned, never floating: a rollout that cannot be reproduced is not a
-    # rollout. Set to a digest in any environment that matters.
+    # rollout.
     tag: "0.1.0"
+    # A digest WINS over the tag when set, and the release workflow sets it to
+    # the digest it published and cosign-signed. A tag can be repointed at other
+    # content after signing; a digest names the content itself, which is the
+    # same rule plume's admission applies to agent images (ADR-0019).
+    #
+    # Verify what you are about to run:
+    #   cosign verify ghcr.io/ejs-5/plume-operator@<digest> \
+    #     --certificate-identity-regexp '^https://github.com/ejs-5/plume/' \
+    #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    digest: ""
     pullPolicy: IfNotPresent
   # Two at the prod profile: the operator is leader-elected, so a standby takes
   # over on node failure rather than waiting for a reschedule. The local profile

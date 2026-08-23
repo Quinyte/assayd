@@ -1,0 +1,65 @@
+# Supply chain
+
+plume's admission rejects agent images that are not cosign-signed (ADR-0019), and design 07 §4 says the platform ships "as a cosign-signed OCI chart, all images pinned by digest, SBOM attached — **the same admission story agents get**." This page is how you check that plume holds itself to it, without taking our word for anything.
+
+## What is published, and where
+
+| Artifact | Location |
+|---|---|
+| Operator image | `ghcr.io/ejs-5/plume-operator` (linux/amd64, linux/arm64) |
+| Helm chart | `oci://ghcr.io/ejs-5/charts/plume` |
+
+Both are published only by `.github/workflows/release.yml`, on a `v*` tag.
+
+## Signing is keyless, and that is the point
+
+Signatures come from Fulcio and are logged in Rekor, using GitHub's OIDC token — **there is no private key**. Nothing to store, rotate, or leak, and no "someone with the key signed it" to reason about. The signature binds an artifact to *a workflow, in a repository, at a commit*, which is a stronger and more checkable claim.
+
+So the identity you verify against is a workflow, not a person:
+
+```bash
+IMAGE=ghcr.io/ejs-5/plume-operator
+DIGEST=sha256:...          # from `helm show values`, or the release notes
+
+cosign verify "${IMAGE}@${DIGEST}" \
+  --certificate-identity-regexp '^https://github.com/ejs-5/plume/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Verification failing is the correct outcome for anything that did not come from that workflow. **Do not relax the identity regexp to make it pass** — a signature that verifies against any identity verifies nothing.
+
+## Read the SBOM before you run it
+
+The SBOM is attached as a signed attestation rather than a release file, because an SBOM nobody can verify is documentation, not evidence:
+
+```bash
+cosign verify-attestation --type spdxjson "${IMAGE}@${DIGEST}" \
+  --certificate-identity-regexp '^https://github.com/ejs-5/plume/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  | jq -r '.payload | @base64d | fromjson | .predicate.packages[].name'
+```
+
+SLSA build provenance is attached to the registry too, and is readable with `gh attestation verify`.
+
+## Digests, not tags
+
+The chart takes `operator.image.digest`, and **the digest wins over the tag when both are set** — the tag is dropped from the rendered reference rather than carried alongside it, because `repo:tag@digest` resolves by digest and the tag then reads as though it mattered.
+
+A tag can be repointed at other content after it was signed. A digest names the content. The release workflow pins the chart to the digest it just published and verified, so `helm install` at defaults runs the artifact that was signed.
+
+```bash
+helm install plume oci://ghcr.io/ejs-5/charts/plume --version 0.1.0 \
+  --set operator.image.digest=sha256:...
+```
+
+## What is NOT yet true
+
+Stated plainly, because a supply-chain page that overclaims is worse than none:
+
+- **The chart's default `digest` is empty.** Until the first tagged release runs, `helm install` at defaults resolves by tag. Set the digest explicitly, or install a released chart version, which carries it.
+- **No `.sig` verification at install time.** Nothing forces a cluster to reject an unsigned plume chart; that is a policy-controller job (Kyverno, or sigstore-policy-controller) and plume does not ship one for itself yet — while it *does* enforce exactly this for agent images.
+- **No release has been published.** Everything above describes a workflow that exists and has not run.
+
+## For reviewers
+
+The bar this page claims to meet is the one plume imposes on its users. If any item under "not yet true" would block adoption, say so — the gap is recorded here precisely so it is arguable rather than discovered.

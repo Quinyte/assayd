@@ -39,7 +39,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: operator
-          image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
+          image: {{ include "plume.operator.image" . | quote }}
           imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
           args:
             - --leader-elect={{ .Values.operator.leaderElection }}
