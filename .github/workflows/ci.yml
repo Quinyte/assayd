@@ -64,9 +64,13 @@ jobs:
       - name: install kubeconform
         run: |
           set -euo pipefail
+          # /usr/local/bin is already on PATH here. Writing to ~/.local/bin was a
+          # leftover from the self-hosted runner, where sudo needed a password —
+          # and it depended on a mkdir in a step that no longer exists.
           curl -sSLo /tmp/kubeconform.tar.gz \
             "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-${RUNNER_ARCH_SUFFIX}.tar.gz"
-          tar -xzf /tmp/kubeconform.tar.gz -C "${HOME}/.local/bin" kubeconform
+          sudo tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
+          kubeconform -v
 
       - name: rendered manifests validate against supported k8s versions
         run: make chart-conform
@@ -101,10 +105,8 @@ jobs:
         if: matrix.distro == 'k3d'
         run: |
           set -euo pipefail
-          mkdir -p "${HOME}/.local/bin"
-          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
           curl -sSLo /tmp/k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-${RUNNER_ARCH_SUFFIX}"
-          install -m 0755 /tmp/k3d "${HOME}/.local/bin/k3d"
+          sudo install -m 0755 /tmp/k3d /usr/local/bin/k3d
           k3d version
 
       - name: create kind cluster
