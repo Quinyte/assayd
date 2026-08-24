@@ -24,21 +24,12 @@ env:
   KUBECONFORM_VERSION: v0.8.0
   HELM_VERSION: v3.19.0
   KUBECTL_VERSION: v1.36.2
-  # The self-hosted runner is aarch64 (a DGX Spark). Tool downloads must match.
-  RUNNER_ARCH_SUFFIX: arm64
+  RUNNER_ARCH_SUFFIX: amd64
 
 jobs:
   verify:
     name: build, vet, unit, envtest, chart
-    # Self-hosted, because this organization's shared GitHub-hosted minute pool
-    # is consumed by another project. Self-hosted runners bill zero minutes.
-    #
-    # SECURITY: a self-hosted runner executes whatever a workflow tells it to,
-    # on a real machine. That is acceptable while this repository is PRIVATE and
-    # every contributor is trusted. Before it goes public, this runner must be
-    # removed or restricted to non-fork events — otherwise anyone opening a pull
-    # request gets code execution on the DGX.
-    runs-on: [self-hosted, dgx]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -103,7 +94,7 @@ jobs:
   # single-distro pipeline misses.
   e2e:
     name: e2e (${{ matrix.distro }})
-    runs-on: [self-hosted, dgx]
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -142,6 +133,8 @@ jobs:
         if: matrix.distro == 'k3d'
         run: |
           set -euo pipefail
+          mkdir -p "${HOME}/.local/bin"
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
           curl -sSLo /tmp/k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-${RUNNER_ARCH_SUFFIX}"
           install -m 0755 /tmp/k3d "${HOME}/.local/bin/k3d"
           k3d version
