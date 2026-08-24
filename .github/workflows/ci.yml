@@ -22,8 +22,6 @@ concurrency:
 env:
   K3D_VERSION: v5.9.0
   KUBECONFORM_VERSION: v0.8.0
-  HELM_VERSION: v3.19.0
-  KUBECTL_VERSION: v1.36.2
   RUNNER_ARCH_SUFFIX: amd64
 
 jobs:
@@ -38,27 +36,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: install pinned tools
-        run: |
-          set -euo pipefail
-          mkdir -p "${HOME}/.local/bin"
-          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
-          export PATH="${HOME}/.local/bin:${PATH}"
-
-          if [ "$(helm version --short 2>/dev/null | cut -d+ -f1)" != "${HELM_VERSION}" ]; then
-            curl -sSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${RUNNER_ARCH_SUFFIX}.tar.gz" \
-              | tar -xz -C /tmp
-            install -m 0755 "/tmp/linux-${RUNNER_ARCH_SUFFIX}/helm" "${HOME}/.local/bin/helm"
-          fi
-
-          if [ "$(kubectl version --client -o json 2>/dev/null | grep -o "\"gitVersion\":\"[^\"]*" | head -1 | cut -d'"' -f4)" != "${KUBECTL_VERSION}" ]; then
-            curl -sSLo "${HOME}/.local/bin/kubectl" \
-              "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${RUNNER_ARCH_SUFFIX}/kubectl"
-            chmod 0755 "${HOME}/.local/bin/kubectl"
-          fi
-
-          helm version --short
-          kubectl version --client 2>/dev/null | head -1
+      # helm and kubectl ship in the ubuntu-latest image. The hand-rolled
+      # installer that used to live here existed only while CI ran on a bare
+      # self-hosted box, and it carried a race: `grep -o ... | head -1` lets
+      # head close the pipe first, grep takes SIGPIPE, and pipefail turns that
+      # into a step failure. It passed in two jobs and failed in a third on the
+      # same commit, which is the signature of exactly that.
 
       - name: generation is reproducible and committed
         run: make verify
@@ -107,27 +90,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: install pinned tools
-        run: |
-          set -euo pipefail
-          mkdir -p "${HOME}/.local/bin"
-          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
-          export PATH="${HOME}/.local/bin:${PATH}"
-
-          if [ "$(helm version --short 2>/dev/null | cut -d+ -f1)" != "${HELM_VERSION}" ]; then
-            curl -sSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${RUNNER_ARCH_SUFFIX}.tar.gz" \
-              | tar -xz -C /tmp
-            install -m 0755 "/tmp/linux-${RUNNER_ARCH_SUFFIX}/helm" "${HOME}/.local/bin/helm"
-          fi
-
-          if [ "$(kubectl version --client -o json 2>/dev/null | grep -o "\"gitVersion\":\"[^\"]*" | head -1 | cut -d'"' -f4)" != "${KUBECTL_VERSION}" ]; then
-            curl -sSLo "${HOME}/.local/bin/kubectl" \
-              "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${RUNNER_ARCH_SUFFIX}/kubectl"
-            chmod 0755 "${HOME}/.local/bin/kubectl"
-          fi
-
-          helm version --short
-          kubectl version --client 2>/dev/null | head -1
+      # helm and kubectl ship in the ubuntu-latest image. The hand-rolled
+      # installer that used to live here existed only while CI ran on a bare
+      # self-hosted box, and it carried a race: `grep -o ... | head -1` lets
+      # head close the pipe first, grep takes SIGPIPE, and pipefail turns that
+      # into a step failure. It passed in two jobs and failed in a third on the
+      # same commit, which is the signature of exactly that.
 
       - name: install k3d
         if: matrix.distro == 'k3d'
