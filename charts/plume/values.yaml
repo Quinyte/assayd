@@ -16,7 +16,7 @@ profile: prod
 
 operator:
   image:
-    repository: ghcr.io/Quinyte/plume-operator
+    repository: ghcr.io/quinyte/plume-operator
     # Pinned, never floating: a rollout that cannot be reproduced is not a
     # rollout.
     tag: "0.1.0"
@@ -26,7 +26,7 @@ operator:
     # same rule plume's admission applies to agent images (ADR-0019).
     #
     # Verify what you are about to run:
-    #   cosign verify ghcr.io/Quinyte/plume-operator@<digest> \
+    #   cosign verify ghcr.io/quinyte/plume-operator@<digest> \
     #     --certificate-identity-regexp '^https://github.com/Quinyte/plume/' \
     #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
     digest: ""

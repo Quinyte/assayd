@@ -28,8 +28,14 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/plume-operator
-  CHART_NAME: ${{ github.repository_owner }}/charts/plume
+  # Lowercased at use, not here: OCI repository names must be lowercase and this
+  # organization is "Quinyte". github.repository_owner preserves its case, so
+  # interpolating it directly produces an invalid tag — which is exactly how
+  # v0.1.1 first failed. The certificate identity below is a GitHub URL and
+  # deliberately keeps the original case.
+  IMAGE_NAME: quinyte/plume-operator
+  CHART_NAME: quinyte/charts/plume
+  CHART_REPO: quinyte/charts
 
 jobs:
   image:
@@ -188,7 +194,7 @@ jobs:
             --username "${{ github.actor }}" --password-stdin
           helm package charts/plume --destination /tmp
           helm push "/tmp/plume-${{ needs.image.outputs.version }}.tgz" \
-            "oci://${REGISTRY}/${{ github.repository_owner }}/charts" | tee /tmp/push.log
+            "oci://${REGISTRY}/${CHART_REPO}" | tee /tmp/push.log
           grep -oE "sha256:[0-9a-f]{64}" /tmp/push.log | head -1 > /tmp/chart.digest
 
       - name: sign the chart

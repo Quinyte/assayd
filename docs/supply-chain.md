@@ -6,8 +6,8 @@ plume's admission rejects agent images that are not cosign-signed (ADR-0019), an
 
 | Artifact | Location | State at v0.1.0 |
 |---|---|---|
-| Operator image | `ghcr.io/Quinyte/plume-operator` (amd64, arm64) | published, signed, SBOM attested |
-| Helm chart | `oci://ghcr.io/Quinyte/charts/plume` | **not published** — see below |
+| Operator image | `ghcr.io/quinyte/plume-operator` (amd64, arm64) | published, signed, SBOM attested |
+| Helm chart | `oci://ghcr.io/quinyte/charts/plume` | **not published** — see below |
 
 Both are published only by `.github/workflows/release.yml`, on a `v*` tag. The
 packages inherit the repository's visibility, so while the repo is private they
@@ -22,7 +22,7 @@ Signatures come from Fulcio and are logged in Rekor, using GitHub's OIDC token �
 So the identity you verify against is a workflow, not a person:
 
 ```bash
-IMAGE=ghcr.io/Quinyte/plume-operator
+IMAGE=ghcr.io/quinyte/plume-operator
 DIGEST=sha256:...          # from `helm show values`, or the release notes
 
 cosign verify "${IMAGE}@${DIGEST}" \
@@ -52,7 +52,7 @@ The chart takes `operator.image.digest`, and **the digest wins over the tag when
 A tag can be repointed at other content after it was signed. A digest names the content. The release workflow pins the chart to the digest it just published and verified, so `helm install` at defaults runs the artifact that was signed.
 
 ```bash
-helm install plume oci://ghcr.io/Quinyte/charts/plume --version 0.1.0 \
+helm install plume oci://ghcr.io/quinyte/charts/plume --version 0.1.0 \
   --set operator.image.digest=sha256:...
 ```
 

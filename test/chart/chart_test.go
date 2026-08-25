@@ -485,3 +485,26 @@ func dig2(v any) map[string]any {
 	m, _ := v.(map[string]any)
 	return m
 }
+
+// OCI repository names must be lowercase. The organization is "Quinyte", so any
+// path interpolated from github.repository_owner produces an invalid tag —
+// which is how the first v0.1.1 release failed, after the build had already run.
+// Certificate identities are GitHub URLs and keep their original case, so this
+// checks image references specifically rather than every mention of the org.
+func TestRegistryPathsAreLowercase(t *testing.T) {
+	docs := render(t)
+	for _, d := range kindsOf(docs, "Deployment") {
+		spec := dig(d, "spec", "template", "spec")
+		containers, _ := spec["containers"].([]any)
+		for _, c := range containers {
+			img := toStr(dig2(c)["image"])
+			repo, _, _ := strings.Cut(img, "@")
+			repo, _, _ = strings.Cut(repo, ":")
+			if repo != strings.ToLower(repo) {
+				t.Errorf("%s renders image %q: an OCI repository name must be lowercase, "+
+					"so this is rejected at push time — after the build has already run",
+					nameOf(d), img)
+			}
+		}
+	}
+}
