@@ -14,6 +14,8 @@ Read `docs/architecture.md` (canonical), the design under review in `docs/design
 
 **Disagreement with another model's review is signal, not noise.** Say so explicitly and argue it; do not defer.
 
+Several agents run at once and can reach each other through `herdr`. Read **`docs/agent-protocol.md`** before messaging one: the channels are deliberately narrow, because two agents that talk freely converge, and a consensus reached between models is worth less than the disagreement it replaced. The short version — findings are files, clarification is a message, reviewers never reconcile with each other, and nobody asks a peer what they could determine by running something.
+
 ## The rules this project learned the hard way
 
 These are not style preferences. Each one is here because it was violated and something broke.

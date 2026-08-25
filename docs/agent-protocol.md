@@ -1,0 +1,64 @@
+# Agent-to-agent protocol
+
+Several agents work on plume at once, from different models. They can already reach each other — `herdr` is on PATH and any of them can run `herdr agent prompt <name> "..."`. This document is about **when not to**.
+
+## Why this is constrained rather than open
+
+The reason a second model reviews plume at all is that it has *not* been anchored by the first one's reasoning. Two agents that talk freely converge: the reviewer softens a finding after hearing the rationale, the implementer adopts the reviewer's framing, and what looked like independent agreement is an echo. That failure is invisible — it produces a clean review and a bug in production.
+
+The evidence is already in this repo. A reviewer of the **same** model, given a fresh context, found three blockers in code that had passed five rounds with a reviewer that had been in the conversation the whole time. Same model, same rules; the only variable was whether it had been anchored. Cross-model review buys more of that, and chat spends it.
+
+So the rule is: **anything that would change a reviewer's mind must be a fact, not an argument.**
+
+## Who exists
+
+| name | model | role |
+|---|---|---|
+| `plume` | Claude | implementation — writes code and designs |
+| `critic2` | Claude | review — same family, fresh context |
+| `codex-critic` | Codex | review — different family, deliberately orthogonal |
+
+`herdr agent list` is authoritative; names change.
+
+## What travels as a file, and what travels as a message
+
+**Findings are files.** A review lands in `docs/designs/reviews/` and is committed. It is durable, diffable, readable a year later, and readable by a model that did not exist when it was written. A finding delivered only as a message is lost the moment a session ends.
+
+**Messages are for coordination, not content.** "Review of commit abc123 is in reviews/03-codex.md" is a message. The review is not.
+
+## The channels, and their direction
+
+**Reviewer → implementer: findings. One-way.**
+Deliver the file location. Do not accept a rebuttal and do not withdraw a finding because the implementer explained the intent — the finding is about what the code does, and intent that is not in the code is the defect.
+
+**Implementer → reviewer: factual clarification only.**
+Permitted: *"B2 says the cold-start path is unguarded — do you mean the case where the CRD was never installed, or where it was installed and then removed?"* That is asking what a sentence means.
+
+Not permitted: *"B2 isn't a blocker because the chart doesn't install the gateway yet."* That is arguing, and it belongs in the fix commit where a human can see it — not in a channel that ends with the reviewer agreeing.
+
+**Reviewer ↔ reviewer: nothing.**
+Two reviewers must not reconcile. If Claude calls something a blocker and Codex calls it a minor, **the disagreement is the finding** — record both verdicts and escalate to the human. A consensus reached between two models is worth less than the disagreement it replaced, because the human loses the one signal that told them where to look.
+
+## The rule that overrides all of the others
+
+**Never ask another agent what you can determine by running something.**
+
+This project has been wrong repeatedly by reasoning where it could have measured: four wrong hypotheses about a CI failure that a five-line workflow settled in one push; nine tests that passed with their subject deleted, each found by mutation and none by reading. Another agent's opinion is a worse source than the cluster, the test, or the log — it is the same guessing with more latency.
+
+Ask a peer only for something it *knows and you cannot observe*: what it meant, what it already tried, where it put a file.
+
+## Mechanics
+
+```bash
+herdr agent list                                   # who is alive, and their state
+herdr agent prompt <name> "..." --wait --timeout 300000
+herdr agent read <name> --source recent-unwrapped --lines 200
+```
+
+`--wait` blocks until the peer settles. Without it you have posted, not asked.
+
+A peer that is `working` is mid-task: prompting it queues behind what it is doing, so a "quick question" can sit for ten minutes. Check `herdr agent list` first and prefer a file if the answer is not urgent.
+
+## When a reviewer runs out of context
+
+Reviews degrade as a context fills — the five-round reviewer had stopped finding things well before it hit its limit. **Start a fresh one rather than pushing an exhausted one further.** Nothing is lost: findings are files, and the new reviewer reads them.

@@ -1,6 +1,6 @@
 # Design 02: Agent CRD + agent-operator
 
-- **Status**: **integrated r3** — amendments A1–A10 folded into the body (the independent re-critique asked for one integration pass rather than a rule telling implementers which half to believe). Amendment history is preserved in §12 for provenance only; **the body is authoritative**. · ADR-0019
+- **Status**: **integrated r3** — amendments A1–A15 folded into the body (A15, 2026-08-25, is not yet critique-passed) (the independent re-critique asked for one integration pass rather than a rule telling implementers which half to believe). Amendment history is preserved in §12 for provenance only; **the body is authoritative**. · ADR-0019
 - **Phase**: P1 · **Size**: L · **Date**: 2026-08-20, integrated 2026-08-22
 - **ADRs**: 0002, 0003, 0006 (gating), 0016 (expose/apps), 0019 (this design), 0020 (compiled policy), 0025 (governance) · reviews: `reviews/02-review.md`, `reviews/02-recritique.md`
 
@@ -71,10 +71,11 @@ status:
                KnowledgeBound, GatesPassed, GatesSkipped, GatesBypassed,
                SandboxDowngraded, TaskStateUnverified, ScratchpadDegraded,
                BudgetExhausted, BudgetEnforcementDegraded, PricingStale,
-               ReceiptsDegraded, Killed, Ready, Progressing, Degraded]
+               ReceiptsDegraded, Killed, Ready, Progressing, Degraded,
+               PolicyCompileFailed, PolicyApplyIncomplete, GatewayIncompatible]
 ```
 
-`kubectl get agents` printer columns: `PHASE · ACTIVE · CANDIDATE · EVAL(last score) · COST/DAY · AGE` (A14), sourced from `status.phase`, `status.activeRevision`, `status.eval.score`, `status.budget.usdSpentToday` and the creation timestamp. The set is a contract, pinned by `TestPrinterColumnsMatchTheDesign`: the case for a twenty-condition status rests on these five answering the common questions, and `EVAL`/`COST/DAY` are precisely the two a developer could otherwise reach only by reading conditions.
+`kubectl get agents` printer columns: `PHASE · ACTIVE · CANDIDATE · EVAL(last score) · COST/DAY · AGE` (A14), sourced from `status.phase`, `status.activeRevision`, `status.eval.score`, `status.budget.usdSpentToday` and the creation timestamp. The set is a contract, pinned by `TestPrinterColumnsMatchTheDesign`: the case for a twenty-four-condition status rests on these five answering the common questions, and `EVAL`/`COST/DAY` are precisely the two a developer could otherwise reach only by reading conditions.
 
 **Tool and graph names resolve in the agent's own namespace, and only there.** A tool name may be served by a Connector tool facet or by an `MCPServer` CR; the two share one namespace-unique name space, enforced at admission (design 11 §4), which is why the binding carries no kind discriminator. There is deliberately no `namespace` field on either binding: design 24 §4.1 derives the `can_call` tuple **from** the binding, so a cross-namespace reference would authorize itself — anyone able to create an Agent in one namespace could reach a tool in another. Cross-namespace use requires consent published by the target namespace (the `ReferenceGrant` shape) and is out of scope until a design specifies it.
 
@@ -197,10 +198,12 @@ Idempotent; server-side apply with field ownership; no state outside CR status +
 | Kill switch during rollout | `Killed` guard state wins over every rollout state; gate controller observes and abandons cleanly (design 22) |
 | Budget exhausted (exact tier) | `BudgetExhausted` + `phase: BudgetHeld`; serving weights 0 until the 00:00 UTC window resets |
 | Spend aggregate unavailable (design 04 down) | Gateway approximation still enforcing; `BudgetEnforcementDegraded` — the exact-tier gap is visible |
-| Pricing row missing for a usd budget | `PricingStale`; compile error if the model matches no pattern (ADR-0020) |
+| Pricing row missing for a usd budget | `PolicyCompileFailed` naming the model (design 03 §3.5). **Not** `PricingStale`, which means the table is older than 30 days — one condition cannot carry both meanings and mean either (A15) |
 | Receipt pipeline gaps affecting this agent | `ReceiptsDegraded` (design 04) |
 | IdP unavailable at `agent-actor` provisioning | `IdPUnavailable`; machine mTLS paths continue, human/on-behalf-of paths fail closed (design 06) |
-| Gateway API unavailable | Last-applied config stands; `Ready` degrades to stale-but-serving; retry |
+| Gateway API unavailable, config previously applied | Last-applied config stands; `Ready` degrades to stale-but-serving; retry |
+| **Gateway CRDs never installed** (A15) | `GatewayIncompatible=CRDsAbsent`. Nothing stands — nothing was ever applied. Outside the `local` profile this withholds `Ready`; inside it, it is recorded and does not, exactly as `GatesBypassed=DevProfile` treats a missing EvalSuite CRD (§3.3) |
+| Policy compile or apply fails for this agent | `PolicyCompileFailed` / `PolicyApplyIncomplete` (design 03 §3.3, §3.3.1); routes withheld, so no ungoverned traffic path exists |
 | SPIRE down | Existing SVIDs valid until expiry; new revisions held (`IdentityIssued=False`) |
 | KG binding invalid or not `active`/`superseded` | `KnowledgeBound=False` → `Degraded`; no traffic if it is the sole knowledge source (design 01 A5) |
 | Finalization stalls (drain or revoke blocked) | Finalizer holds; condition names the stuck step; never force-deleted |
@@ -256,3 +259,9 @@ The state is now: `phase: Ready`, `Ready=True` naming the revision that serves, 
 Condition count: **21**.
 
 A14 (2026-08-22) — **`CANDIDATE` returns to the printer columns.** A13 made a rollout in flight render as `phase: Ready`, which is correct — the agent *is* serving — but it removed the last thing that made an in-flight rollout visible at a glance. With `registrationDeadline` (§3.4) still unimplemented, a candidate that never becomes available then shows as a completely healthy agent, with `Progressing=True` visible only to someone who thinks to read conditions. The previous behaviour reported `Canary`, which was wrong in meaning but at least visible; the fix improved correctness and reduced discoverability, and the column restores it for one line of markers.
+
+A15 (2026-08-25, from design 03 A1/A2) — **the three conditions design 03 needs, and what `Ready` may claim without a gateway.** Design 03 §5 raises `PolicyCompileFailed`, `PolicyApplyIncomplete` and `GatewayIncompatible` on the Agent CR; design 08 §8 already prints `PolicyApplyIncomplete` as one, and design 22 §6 calls it a family. None was in §3.1's vocabulary, which is closed and mechanically pinned — `api/v1alpha1/schema_contract_test.go:151` fails on any count but 21 — so design 03 could not be implemented without either amending this design or quietly editing the test. All three are **abnormal-true**: their absence is the signal, so they may be dropped when they stop applying, unlike `Ready`, `Progressing` and `GatesPassed` (A13). Condition count: **24**.
+
+The second half is what `Ready=True` is allowed to mean. §5 described gateway trouble only as a regression from a working state — "last-applied config stands" — which is true when something *was* applied and vacuous when nothing ever was. The latter is the only state a cluster without the agentgateway subchart is ever in, and it is the state the P1 chart ships (`charts/plume/Chart.yaml`). An agent whose budget, authn and tool-filter were never compiled is not serving under the guarantees `Ready` asserts: architecture §02 puts every guarantee at a hop the traffic never took. So `GatewayIncompatible=CRDsAbsent` **withholds `Ready`** — with one carve-out, the `local` profile, where it is recorded and does not withhold. That carve-out is not a softening: it is the same shape §3.3 already uses for a missing EvalSuite CRD (`GatesSkipped` / `GatesBypassed=DevProfile`), where the gap is loud and the developer loop keeps working. The e2e path installs `values-local.yaml`, so it is unaffected.
+
+Also corrected here: §5 said a missing pricing row raises `PricingStale`, while design 03 §3.5 defines `PricingStale` as the table being more than 30 days old. Two meanings for one condition is rule 8's loud-and-wrong — the condition names a plausible cause that was never checked. A missing row is `PolicyCompileFailed` naming the model; staleness is age. **Not changed**: `runtime.resources` and the rest of A12's classification table, which this amendment does not touch.
