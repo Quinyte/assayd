@@ -164,7 +164,7 @@ func project(spec plumev1alpha1.AgentSpec) behaviour {
 	}
 
 	if e := spec.External; e != nil {
-		b.External = &external{Endpoint: e.Endpoint}
+		b.External = &external{Endpoint: e.Endpoint, OAuthClientRef: e.OAuthClientRef}
 	}
 
 	for _, k := range spec.Knowledge {

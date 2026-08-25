@@ -90,9 +90,16 @@ func TestEveryFieldIsClassified(t *testing.T) {
 // classified as behaviour but never projected is the same ungated hole as one
 // left unclassified, just harder to see.
 func TestBehaviourFieldsAreProjected(t *testing.T) {
-	base := baseSpec()
 	for path := range behaviourFields {
 		t.Run(path, func(t *testing.T) {
+			// The base must already carry the surrounding structure, or a subfield
+			// test passes on the block appearing rather than the field changing.
+			// External.OAuthClientRef did exactly that: base had no External at
+			// all, so the hash differed because External showed up and Runtime
+			// vanished. The projection could drop OAuthClientRef entirely and this
+			// still passed — and did, undetected, until a cross-model review
+			// mutated it.
+			base := baseFor(path)
 			mutated := mutateField(t, path)
 			if Hash(base) == Hash(mutated) {
 				t.Errorf("%s is classified behaviour-surface but changing it does not mint a "+
@@ -102,7 +109,21 @@ func TestBehaviourFieldsAreProjected(t *testing.T) {
 	}
 }
 
-// mutateField returns baseSpec with exactly the named field changed.
+// baseFor gives a field's test the surrounding structure it needs, so that
+// mutateField changes exactly one thing.
+func baseFor(path string) plumev1alpha1.AgentSpec {
+	s := baseSpec()
+	if strings.HasPrefix(path, "External.") {
+		s.Runtime = nil
+		s.External = &plumev1alpha1.ExternalAgent{
+			Endpoint:       "https://base.example.com",
+			OAuthClientRef: "client-a",
+		}
+	}
+	return s
+}
+
+// mutateField returns the field's base with exactly the named field changed.
 func mutateField(t *testing.T, path string) plumev1alpha1.AgentSpec {
 	t.Helper()
 	s := baseSpec()
@@ -123,11 +144,11 @@ func mutateField(t *testing.T, path string) plumev1alpha1.AgentSpec {
 	case "LLM":
 		s.LLM = &plumev1alpha1.LLMSpec{Providers: []string{"openai/gpt-x"}}
 	case "External.Endpoint":
-		s.Runtime = nil
-		s.External = &plumev1alpha1.ExternalAgent{Endpoint: "https://x.example.com"}
+		s = baseFor(path)
+		s.External.Endpoint = "https://other.example.com"
 	case "External.OAuthClientRef":
-		s.Runtime = nil
-		s.External = &plumev1alpha1.ExternalAgent{Endpoint: "https://x.example.com", OAuthClientRef: "client-b"}
+		s = baseFor(path)
+		s.External.OAuthClientRef = "client-b"
 	default:
 		t.Fatalf("no mutation defined for %q — add one when classifying a new field", path)
 	}

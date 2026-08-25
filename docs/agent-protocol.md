@@ -59,6 +59,33 @@ herdr agent read <name> --source recent-unwrapped --lines 200
 
 A peer that is `working` is mid-task: prompting it queues behind what it is doing, so a "quick question" can sit for ten minutes. Check `herdr agent list` first and prefer a file if the answer is not urgent.
 
+## Never `git add -A` while another agent shares the worktree
+
+A reviewer running a mutation ledger is *deliberately* leaving broken code in the
+tree — that is how a mutation is tested. Any other agent that commits with
+`git add -A` at that moment sweeps the mutation into history.
+
+That happened here, and it is not hypothetical. A protocol-documentation commit
+picked up a live mutation that had deleted `OAuthClientRef` from the revision
+projection, and pushed it. That field is the identity an external agent
+authenticates as, so removing it from the projection means repointing it reaches
+production **ungated** — the exact blocker an earlier review had already found
+and fixed. It went unnoticed because the test covering it was vacuous, which is
+precisely what the mutation was proving.
+
+Two failures compounding: one agent committed another's in-flight breakage, and
+the test that should have caught it could not fail.
+
+So, whenever `herdr agent list` shows another agent alive in this repo:
+
+- Stage **explicit paths**: `git add docs/ AGENTS.md`, never `-A` or `.`.
+- Run `git status --porcelain` first and account for every line. A modified file
+  you did not touch belongs to someone else.
+- Prefer committing while peers are `idle`, and never mid-ledger.
+
+The durable fix is a worktree per agent (`git worktree add`), which herdr
+supports. Until then, this discipline is the whole defence.
+
 ## When a reviewer runs out of context
 
 Reviews degrade as a context fills — the five-round reviewer had stopped finding things well before it hit its limit. **Start a fresh one rather than pushing an exhausted one further.** Nothing is lost: findings are files, and the new reviewer reads them.
