@@ -195,7 +195,12 @@ jobs:
           helm package charts/plume --destination /tmp
           helm push "/tmp/plume-${{ needs.image.outputs.version }}.tgz" \
             "oci://${REGISTRY}/${CHART_REPO}" | tee /tmp/push.log
-          grep -oE "sha256:[0-9a-f]{64}" /tmp/push.log | head -1 > /tmp/chart.digest
+          # grep -m1, not `grep | head -1`: head closes the pipe, grep takes
+          # SIGPIPE, and pipefail turns a successful push into a failed step.
+          # That exact race already cost a CI run; it was fixed in ci.yml and
+          # missed here, which is the same one-file-at-a-time mistake twice.
+          grep -m1 -oE "sha256:[0-9a-f]{64}" /tmp/push.log > /tmp/chart.digest
+          test -s /tmp/chart.digest || { echo "no chart digest in push output"; exit 1; }
 
       - name: sign the chart
         run: |
