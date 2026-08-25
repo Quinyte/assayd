@@ -168,14 +168,9 @@ jobs:
       - name: pin the chart to the published digest
         run: |
           set -euo pipefail
-          # yq is not on the runner; install it pinned rather than assume it.
-          if ! command -v yq >/dev/null; then
-            mkdir -p "${HOME}/.local/bin"
-            curl -sSLo "${HOME}/.local/bin/yq" \
-              https://github.com/mikefarah/yq/releases/download/v4.48.1/yq_linux_arm64
-            chmod 0755 "${HOME}/.local/bin/yq"
-            export PATH="${HOME}/.local/bin:${PATH}"
-          fi
+          # yq ships in the ubuntu-latest image. The pinned installer that used
+          # to live here fetched yq_linux_arm64 — correct only for the DGX, and
+          # an unrunnable binary anywhere else.
           v="${{ needs.image.outputs.version }}"
           d="${{ needs.image.outputs.digest }}"
           yq -i ".version = \"${v}\" | .appVersion = \"${v}\"" charts/plume/Chart.yaml
@@ -185,16 +180,17 @@ jobs:
       - name: package and push
         run: |
           set -euo pipefail
-          export PATH="${HOME}/.local/bin:${PATH}"
-          if ! command -v helm >/dev/null; then
-            curl -sSL https://get.helm.sh/helm-v3.19.0-linux-arm64.tar.gz | tar -xz -C /tmp
-            install -m 0755 /tmp/linux-arm64/helm "${HOME}/.local/bin/helm"
-          fi
+          # helm ships in the ubuntu-latest image. An arm64 fallback lived here
+          # from the brief self-hosted detour and would have installed the wrong
+          # architecture had it ever fired.
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login "${REGISTRY}" \
             --username "${{ github.actor }}" --password-stdin
           helm package charts/plume --destination /tmp
+          # 2>&1 matters: helm writes "Pushed:" and "Digest:" to STDERR, so a
+          # plain pipe to tee captures an empty file and the digest extraction
+          # below finds nothing — after the chart has already been pushed.
           helm push "/tmp/plume-${{ needs.image.outputs.version }}.tgz" \
-            "oci://${REGISTRY}/${CHART_REPO}" | tee /tmp/push.log
+            "oci://${REGISTRY}/${CHART_REPO}" 2>&1 | tee /tmp/push.log
           # grep -m1, not `grep | head -1`: head closes the pipe, grep takes
           # SIGPIPE, and pipefail turns a successful push into a failed step.
           # That exact race already cost a CI run; it was fixed in ci.yml and
