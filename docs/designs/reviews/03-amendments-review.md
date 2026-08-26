@@ -97,12 +97,29 @@ Verified by execution: the arithmetic re-derived in Go across 8 budgets × 8 rep
 | 1 | BLOCKER | Six-digit grammar fixed in design 03; design 02 §3.1 — which design 03 calls the authoritative schema — still said `{1,7}` | Fixed |
 | 2 | BLOCKER | Design 10's alert keys on the condition **type** and on profile, so every Agent pages on a stock P1 install; design 08 makes the same type terminal for `deploy` | Fixed — tier-absence split into its own condition type, `GovernanceSkipped` |
 | 3 | BLOCKER | The 4.17% capacity overshoot fixed in §3.5, still live in §3.4's rate row | Fixed |
-| 4 | BLOCKER | The asymmetric `egressAllowlist` gate is not expressible in `revisionHash(spec)`, and `{A}→{A,B}→{B}` launders an ungated widening onto the serving revision | **Reverted** — A18. The premise was also false: design 27 §4 ships the allowlist as a pack filter, not by editing every Agent |
+| 4 | BLOCKER | The asymmetric `egressAllowlist` gate is not expressible in `revisionHash(spec)`, and `{A}→{A,B}→{B}` launders an ungated widening onto the serving revision | **Reverted** — A18. The premise was also false: design 27 §5 ships the allowlist as a pack filter, not by editing every Agent |
 | 5 | BLOCKER | `gateway.enabled` "default `true` at core tier" reproduces the never-`Ready` fleet on the P1 chart | Fixed — bound to the subchart's `dependencies[].condition`; P1 ships `false` explicitly |
 | 6–15 | MAJOR | Backend acceptance never verified; `-ratelimit` keyed on a budget field falsifies design 25's always-compiles guarantee; `internal/*` fallback fails its own reachability check; the perturber registry named three types that need no perturber and missed the one drift that occurred; the no-stall claim false against `MaxConcurrentReconciles: 1`; `GovernanceSkipped` vs the per-class objection; no teardown on `true → false`; `CRDsAbsent` scoped to cold start; §8 still promised the impossible property test; round 2 had no dispositions | All fixed |
-| — | MINOR ×10 | four wrong-section citations, stale A2/A4 provenance text, `NOTES.txt` unowed, `floor` over-enforcement unsignalled, map-graph ambiguity, list indentation | All fixed |
+| — | MINOR ×9 | four wrong-section citations, stale A2 and A4 provenance text, `floor` over-enforcement unsignalled, map-graph ambiguity, list indentation | All fixed. **`NOTES.txt` was recorded fixed here and was not** — it did not exist and no design owed it; round 4 caught the contradiction between this row and `a8be2ef`'s own NOT DONE list, and design 07 §3 now owes it |
 
 **What the verification agents added beyond the review**: only **one** type in `AgentSpec`'s graph carries unexported state (`resource.Quantity`); `metav1.Time` and `intstr.IntOrString` are not in the graph at all. Measured `k8s.io/api` drift v0.28→v0.36 is +1 type / +5 leaves, and the one arrival (`FileKeySelector`) has all-exported fields — so a registry keyed on unexported state would have stayed silent on exactly the regression A12 rule 2 records as having shipped. The **path** walk is what catches drift. Separately, adding `SystemPrompt` to `LLMSpec` left the entire unit suite green, confirming `TestEveryFieldIsClassified` walks only nine top-level fields.
+
+## Round 4 (2026-08-26) — REVISE: **0 BLOCKER**, 5 MAJOR, 6 MINOR
+
+Scoped to whether `a8be2ef` landed everywhere and introduced anything new. Verified by an independent reflection walk of `AgentSpec`'s type graph and by grepping every restatement of each retracted claim corpus-wide, commit messages included.
+
+**"The substance has converged."** All five round-3 blockers landed; no surviving restatement of four of the five retracted claims anywhere; the condition split reaches every consumer; the arithmetic is right; and four of five type-graph measurements reproduce exactly under an independent walk — including "exactly one unexported-state type", the claim the registry design rests on. No new design defect.
+
+What had not converged was still **reach**, now narrower: five of the eleven findings were the amended paragraph fixed and the sentence beside it, the ADR that restates it, or the index row not opened.
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| 1 | MAJOR | A17's bullet still stated the retracted asymmetric gate in the present tense, unmarked, asserting the false design-27 premise as fact | Fixed — struck and marked RETRACTED BY A18 |
+| 2 | MAJOR | "design 27 §4" is wrong (§5 pack contents, §3 admission) — a **new** wrong-section citation, minted by the commit whose message says it corrected four | Fixed at all sites |
+| 3 | MAJOR | §3.3 step 2's scope sentence said "Backends included" while its three normative clauses still said "policy" — the round-3 pattern reproduced *inside the paragraph the fix opened* | Fixed; also flagged that Backend `Accepted` status has no research citation |
+| 4 | MAJOR | ADR-0027 and design 02 A15 both said §3.1 declares 25; it declares 26 — the **third** consecutive wrong version of the sentence whose only job is to state what is enforced | Fixed by deleting the literal from both; §3.1's list is now the sole statement |
+| 5 | MAJOR | `NOTES.txt` and `gateway.enabled` asserted as existing chart mechanisms; neither exists and no design owned either. The review file recorded `NOTES.txt` "fixed" while the same commit's NOT DONE said it does not exist | Fixed — design 07 §3 now owes both; this file's row corrected |
+| — | MINOR ×6 | owed-list short by one condition; `GovernanceSkipped` unclassified normal/abnormal-true; the 57-leaf figure does not reproduce; the `(enabled × CRDs)` table called total but silent on transitions; README's design 02 row unopened; a miscount in this file | All fixed |
 
 ## Standing disagreement, unresolved by design
 

@@ -24,6 +24,7 @@ charts/plume/                    # umbrella
   charts/                        # vendored/pinned subcharts
     agent-operator (ours)        # + CRDs, admission policies, receipt-tap mode config
     agentgateway                 # pinned ≥ the OSS token-exchange release (design 06/research)
+                                 # gated by dependencies[].condition: gateway.enabled (design 03 A8)
     spire (server+agent+csi+controller-manager)
     zitadel                      # on platform Postgres (own database); keycloak/ alt-profile
     nats                         # JetStream, accounts template
@@ -36,6 +37,13 @@ charts/plume/                    # umbrella
 - **Tiers (NFR-7)**: `tier: core | plus` — plus adds Argo Workflows, Phoenix, OpenFGA, eval runner images. **Core-tier gating contract (r1 f2)**: the gates-required admission rule applies **iff the EvalSuite CRD is installed**; on core-only installs rollouts proceed with a loud `GatesSkipped=True` condition (NFR-8 — visible, never silent), and prod-profile installs *warn at install time* that semantic admission is off. **Tier downgrade pre-hook refuses while any Agent is `Held`/`Canary`** (same spirit as the contract pre-hook). Recorded as design 02 §11 A4. Removal otherwise clean (pre-delete hooks verify no orphans).
 - **Profiles**: `prod` (default; replicas, anti-affinity, PDBs) · `local` (single replica everything, `local-path` storage, NodePort/default gateway class, sandbox-fallback expected — the honest mode of NFR-8) · `ambient` (adds ztunnel-only overlay per ADR-0012) · IdP profile switch `idp: zitadel | keycloak | byo` (byo = discovery URL + pre-provisioned creds).
 - **CRDs**: shipped in the chart's `crds/` (install) + a `plume upgrade crds` step for upgrades (Helm's CRD-upgrade gap handled explicitly, not silently).
+
+**Two chart mechanisms design 03 depends on, owed here (A1, 2026-08-26).** Design 03 §3.1/§5 and design 02 A15/A18 make `Ready`, `GovernanceSkipped` and the whole compile/don't-compile decision turn on them, and **neither exists** in `charts/plume/` today:
+
+- **`gateway.enabled`** — the agentgateway subchart's `dependencies[].condition`, so the declared switch *is* the install and the two cannot diverge by typo. `Chart.yaml` has no `dependencies:` block yet, so **P1 ships `gateway.enabled: false` explicitly** rather than inheriting a core-tier default; design 03 §3.1's table then puts every P1 Agent in the declared-off row instead of the broken-install row. The operator needs the matching input.
+- **`NOTES.txt`** — `charts/plume/templates/` has none. It is one of the two legs of `GovernanceSkipped`'s NFR-8 loudness claim (the other is the per-Agent condition), so it must state, when `gateway.enabled` is false, that agents are running **ungoverned**: no budgets, no authn, no tool filtering at the gateway.
+
+Both were asserted in the present tense by design 03 before this amendment, which is rule 7 — a bound stated that nothing enforces. They are recorded here because this design owns the chart.
 
 ## 4. Versioning & upgrade discipline
 
