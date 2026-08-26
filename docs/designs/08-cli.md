@@ -81,7 +81,7 @@ Contract-aware health: **reads the `plume-contracts` ConfigMap ledger** (design 
 | Keychain unavailable (CI) | Token via env var path, documented as the CI mode |
 | GitOps repo unreachable | `deploy` fails before touching anything; nothing half-committed |
 | Wizard data sources down (directory) | Wizard degrades to manual entry with a warning — never blocks on optional enrichment |
-| `deploy` streaming a rollout that can never reach `Ready` | `GatewayIncompatible` / `PolicyCompileFailed` / `PolicyApplyIncomplete` are **terminal for the stream**: it stops and prints the condition, the resource it names and the next command, rather than waiting on a `Ready` design 02 A15 is deliberately withholding. Without this the verb hangs indefinitely on any cluster with no agentgateway |
+| `deploy` streaming a rollout that can never reach `Ready` | `GatewayIncompatible=CRDsAbsent` / `PolicyCompileFailed` / `PolicyApplyIncomplete` are **terminal for the stream** (`GovernanceSkipped` is not — it is the normal state of a declared-ungoverned tier, and aborting on it would break `deploy` on every P1 cluster): it stops and prints the condition, the resource it names and the next command, rather than waiting on a `Ready` design 02 A15 is deliberately withholding. Without this the verb hangs indefinitely on any cluster with no agentgateway |
 
 ## 10. Testing
 

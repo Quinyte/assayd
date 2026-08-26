@@ -29,6 +29,8 @@ Reviewed A1–A5 as first drafted.
 
 ## Round 2 (2026-08-25) — REVISE: 4 BLOCKER, 12 MAJOR, 6 MINOR
 
+**Dispositions**: all 22 addressed in `5e3b043` (design 03 A7, design 02 A17). Round 3 then found that three of the fixes were applied at the point of edit and **not propagated** to the document the amended text points at — B1 to design 02 §3.1's schema comment, B3 to design 03 §3.4's rate row, and the alert/CLI consumers of the condition split. Two more (the asymmetric gate, the perturber registry) were mechanism-shaped rules that did not survive being built. See round 3.
+
 Reviewed the revised A1–A6 plus A15–A16. Verified by execution: wrote and ran
 the leaf walker A16 mandates, mutated the projection to test whether that shape
 can be satisfied without closing its own hole, re-derived the overflow bound in
@@ -83,6 +85,24 @@ restatement of the proposition in dispute by a reviewer that had read it.
 `agent-protocol.md` names this failure exactly. Codex's *fix* does support the
 withhold on the merits; its agreement is not independent of the text. Codex also
 never adjudicated `phase: Pending`.
+
+## Round 3 (2026-08-26) — REVISE: 5 BLOCKER, 10 MAJOR, 10 MINOR
+
+Verified by execution: the arithmetic re-derived in Go across 8 budgets × 8 replica counts, the `AgentSpec` type graph walked and enumerated, the condition test mutation-checked, every cross-design citation grepped. Two parallel verification agents corroborated independently.
+
+**The diagnosis, in the reviewer's words: "The reasoning is converging. What is not converging is reach."** Three blockers were one-line edits in files the round-2 fix commit never opened — the amended paragraph was fixed and the document it points at was not. Two were rules whose shape did not survive being built.
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| 1 | BLOCKER | Six-digit grammar fixed in design 03; design 02 §3.1 — which design 03 calls the authoritative schema — still said `{1,7}` | Fixed |
+| 2 | BLOCKER | Design 10's alert keys on the condition **type** and on profile, so every Agent pages on a stock P1 install; design 08 makes the same type terminal for `deploy` | Fixed — tier-absence split into its own condition type, `GovernanceSkipped` |
+| 3 | BLOCKER | The 4.17% capacity overshoot fixed in §3.5, still live in §3.4's rate row | Fixed |
+| 4 | BLOCKER | The asymmetric `egressAllowlist` gate is not expressible in `revisionHash(spec)`, and `{A}→{A,B}→{B}` launders an ungated widening onto the serving revision | **Reverted** — A18. The premise was also false: design 27 §4 ships the allowlist as a pack filter, not by editing every Agent |
+| 5 | BLOCKER | `gateway.enabled` "default `true` at core tier" reproduces the never-`Ready` fleet on the P1 chart | Fixed — bound to the subchart's `dependencies[].condition`; P1 ships `false` explicitly |
+| 6–15 | MAJOR | Backend acceptance never verified; `-ratelimit` keyed on a budget field falsifies design 25's always-compiles guarantee; `internal/*` fallback fails its own reachability check; the perturber registry named three types that need no perturber and missed the one drift that occurred; the no-stall claim false against `MaxConcurrentReconciles: 1`; `GovernanceSkipped` vs the per-class objection; no teardown on `true → false`; `CRDsAbsent` scoped to cold start; §8 still promised the impossible property test; round 2 had no dispositions | All fixed |
+| — | MINOR ×10 | four wrong-section citations, stale A2/A4 provenance text, `NOTES.txt` unowed, `floor` over-enforcement unsignalled, map-graph ambiguity, list indentation | All fixed |
+
+**What the verification agents added beyond the review**: only **one** type in `AgentSpec`'s graph carries unexported state (`resource.Quantity`); `metav1.Time` and `intstr.IntOrString` are not in the graph at all. Measured `k8s.io/api` drift v0.28→v0.36 is +1 type / +5 leaves, and the one arrival (`FileKeySelector`) has all-exported fields — so a registry keyed on unexported state would have stayed silent on exactly the regression A12 rule 2 records as having shipped. The **path** walk is what catches drift. Separately, adding `SystemPrompt` to `LLMSpec` left the entire unit suite green, confirming `TestEveryFieldIsClassified` walks only nine top-level fields.
 
 ## Standing disagreement, unresolved by design
 
