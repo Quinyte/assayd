@@ -5,7 +5,7 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | # | Component | Phase | Size | Design status |
 |---|---|---|---|---|
 | 1 | KnowledgeGraphProvider contract (6-tool MCP surface + ontology schema + probe format + conformance) | P2 | M | **approved** (`01-…`, ADR-0017/0018, review PASS) |
-| 2 | Agent CRD + agent-operator | P1 | L | **approved** (`02-…`, ADR-0019, review PASS); amendments A15–A19 (2026-08-26) — four REVISE rounds addressed (last: 0 blockers), none has returned PASS |
+| 2 | Agent CRD + agent-operator | P1 | L | **approved** (`02-…`, ADR-0019, review PASS); amendments A15–A21 (2026-08-26) — four REVISE rounds addressed (last: 0 blockers); A20–A21 uncritiqued |
 | 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | **approved** (`03-…`, ADR-0020, review PASS); amendments A1–A9 (2026-08-26) — four REVISE rounds addressed (last: 0 blockers), none has returned PASS |
 | 4 | Receipt tap + receipt envelope schema | P1 | M | r2 — critique **PASS** (`04-…`, `reviews/04-review.md`; awaiting user approval + ADR-0021) |
 | 5 | Agent directory (OASF on JetStream KV) | P1 | S | r2 — critique **PASS** (`05-…`, `reviews/05-review.md`; awaiting user approval, ADR-0022) |

@@ -27,7 +27,7 @@ kind: Agent
 metadata: {name: pa-reviewer, namespace: claims}
 spec:
   runtime:                       # exactly one of image | external
-    image: ghcr.io/acme/pa-agent:1.4.2     # cosign-signed (admission)
+    image: ghcr.io/acme/pa-agent@sha256:3f9a…  # digest required (CEL, A21); signature NOT verified today
     replicas: 2                            # >1 ⇒ Deployment; see §3.2 task-state rule
     port: 8080                             # A2A server port (default 8080)
     sandbox: {profile: gvisor}             # optional ⇒ kind=Sandbox (singleton)
@@ -75,10 +75,10 @@ status:
                BudgetExhausted, BudgetEnforcementDegraded, PricingStale,
                ReceiptsDegraded, Killed, Ready, Progressing, Degraded,
                PolicyCompileFailed, PolicyApplyIncomplete, GatewayIncompatible,
-               ModelDrifted, GovernanceSkipped]
+               ModelDrifted, GovernanceSkipped, EnvSourceMutable]
 ```
 
-`kubectl get agents` printer columns: `PHASE · ACTIVE · CANDIDATE · EVAL(last score) · COST/DAY · AGE` (A14), sourced from `status.phase`, `status.activeRevision`, `status.eval.score`, `status.budget.usdSpentToday` and the creation timestamp. The set is a contract, pinned by `TestPrinterColumnsMatchTheDesign`: the case for a twenty-six-condition status rests on these five answering the common questions, and `EVAL`/`COST/DAY` are precisely the two a developer could otherwise reach only by reading conditions.
+`kubectl get agents` printer columns: `PHASE · ACTIVE · CANDIDATE · EVAL(last score) · COST/DAY · AGE` (A14), sourced from `status.phase`, `status.activeRevision`, `status.eval.score`, `status.budget.usdSpentToday` and the creation timestamp. The set is a contract, pinned by `TestPrinterColumnsMatchTheDesign`: the case for a twenty-seven-condition status rests on these five answering the common questions, and `EVAL`/`COST/DAY` are precisely the two a developer could otherwise reach only by reading conditions.
 
 **Tool and graph names resolve in the agent's own namespace, and only there.** A tool name may be served by a Connector tool facet or by an `MCPServer` CR; the two share one namespace-unique name space, enforced at admission (design 11 §4), which is why the binding carries no kind discriminator. There is deliberately no `namespace` field on either binding: design 24 §4.1 derives the `can_call` tuple **from** the binding, so a cross-namespace reference would authorize itself — anyone able to create an Agent in one namespace could reach a tool in another. Cross-namespace use requires consent published by the target namespace (the `ReferenceGrant` shape) and is out of scope until a design specifies it.
 
@@ -119,7 +119,7 @@ k8s rolling update mixes old/new traffic and would defeat eval gating, so the op
    Five rules that are easy to get wrong:
 
    1. **`external.oauthClientRef` is behaviour, not "credential rotation".** It selects *which client* an external agent authenticates as — the principal design 24 §3 keys `can_invoke`, `can_call` and the act-chain check on. Repointing it reaches a different set of tools. (Rotating the credential *behind* a client is a Secret update the hash never sees, which is correct and is what the earlier wording confused it with.)
-   2. **Env sources are hashed by referent.** Repointing at a different Secret is a behaviour change; rotating the value inside one is not. Any union arm the implementation does not name explicitly must hash **injectively** (over-gate), never collapse to a constant — a constant let `fileKeyRef` repoints through ungated.
+   2. **Env sources are hashed by referent, and A20 makes that safe rather than merely convenient.** Repointing at a different Secret is a behaviour change; rotating the value inside one is not. By-referent hashing is only sound if contents *cannot* change under a referent — otherwise anyone with `update` on a referenced ConfigMap replaces a system prompt or a provider endpoint, the pod restarts, and the new behaviour runs under the old revision and the old gate result, with no permission to touch the Agent at all. So **every ConfigMap referenced by `envFrom` or `env[].valueFrom` must be `immutable: true`**. A change then requires a *new* ConfigMap, which is a new referent, which already mints a revision — the projection needs no change and the hash stays computed from spec alone. **Secrets are the deliberate exception**: live credential rotation is the case this rule was written for, and a Secret's contents are a credential, not behaviour. Extending that exception to arbitrary configuration is what A20 closes. Any union arm the implementation does not name explicitly must hash **injectively** (over-gate), never collapse to a constant — a constant let `fileKeyRef` repoints through ungated.
    3. **List order is not semantic.** Nothing in the corpus treats tool or provider order as meaningful — design 03 compiles tools to a set-semantics filter and providers to a commutative max-price — while kustomize, helm and `kubectl apply` round-trips all re-serialize lists. The projection therefore **sorts** `tools`, `llm.providers` and `knowledge`, so a re-serialized manifest does not re-gate. `env` keeps its order, which is semantic for interpolation.
    4. **`llm.egressAllowlist` is behaviour, and was in neither column (A16).** It is the set of endpoints an agent may reach, so widening it changes what the agent can do — the same argument A12 already makes for `knowledge[].scope`, where narrowing what an agent may retrieve changes what it answers exactly as removing a tool does. It is also the control ADR-0014's compliance profiles pin, so an ungated edit would let an operator widen egress on a HIPAA cluster with no eval and no gate. Design 03 §3.1 consumes it, which is how the omission surfaced. The gate is **symmetric** — any change to the set mints a revision — and compared as a set, since the projection already sorts `llm.providers`.
 
@@ -226,7 +226,10 @@ Idempotent; server-side apply with field ownership; no state outside CR status +
 
 | Failure | Behavior |
 |---|---|
-| Image unsigned / prod gates missing | Rejected at admission (CEL); never reconciled |
+| Image is a tag, not a digest | Rejected at admission by CEL; never reconciled (A21) |
+| `envFrom`/`valueFrom` references a **mutable** ConfigMap | `EnvSourceMutable=True` naming the ConfigMap; **no workload is created** and no revision is promoted (A20). Checked at reconcile rather than admission because CEL on the Agent cannot read another object, and the ConfigMap may not exist when the Agent is applied — reconcile is total over creation order where admission is not |
+| Image unsigned | **Nothing enforces this today.** CEL cannot verify a signature and the chart ships no admission policy; the guarantee arrives with a Sigstore policy-controller or Kyverno binding, which A21 records as owed (§6) |
+| Prod gates missing | Rejected at admission when the EvalSuite CRD is installed; never reconciled |
 | Card fetch fails | `Registered=False`, candidate held, backoff; **failed and deleted at `registrationDeadline`** so no retention slot leaks |
 | Card advertises ungranted capability | `Registered=False` naming the mismatch (§3.4) |
 | Card unsigned (BYO/external) | Registers with `CardUnsigned=True` — the BYO promise holds, the gap is visible |
@@ -252,7 +255,7 @@ Idempotent; server-side apply with field ownership; no state outside CR status +
 
 ## 6. Security
 
-Admission: cosign verification, prod-gate presence, sandbox/replicas exclusivity, `expose: public` requires an approval label. Workload pods: default-deny NetworkPolicy (egress = gateway only), non-root, read-only rootfs. Directory writes: operator identity only. External-agent OAuth secrets in k8s Secrets (ESO-compatible), never in spec. The candidate-only eval route admits exactly one principal (design 16).
+Admission, **and what actually enforces each** (A21 — an earlier version of this line asserted all four as enforced and none was): digest-pinned image (CEL on the schema) · prod-gate presence (CEL) · sandbox/replicas exclusivity (CEL, ADR-0027) · `expose: public` requires an approval label (CEL). **Cosign signature verification is not CEL-expressible and is not shipped** — it needs a Sigstore policy-controller or Kyverno `verifyImages` binding on the workload namespaces, owed to design 07 §3. Digest-pinning is what makes that verification meaningful when it lands, because a signature is verified *against a digest*. Workload pods: default-deny NetworkPolicy (egress = gateway only), non-root, read-only rootfs. Directory writes: operator identity only. External-agent OAuth secrets in k8s Secrets (ESO-compatible), never in spec. The candidate-only eval route admits exactly one principal (design 16).
 
 ## 7. Observability
 
@@ -326,7 +329,7 @@ The rule and the required test shape are folded into §3.3. The test **reflects 
 
 **Why the design says this rather than the code just fixing it**: a leaf sweep run against the current projection reached 31 leaves and would have missed four of the seven, while looking like it had passed. Proving absence is the hard part, so the test shape is a contract, not an implementation detail.
 
-**Two further amendments are owed — A20 and A21 — and are deliberately not drafted, because each needs a decision rather than a correction.** Codex BLOCKER 2: A12 hashes env sources "by referent, not contents", which is right for credential rotation and an eval bypass for arbitrary behavioural ConfigMaps — someone who cannot edit an Agent but can edit its ConfigMap replaces a system prompt, and a pod restart runs it under the old revision and old gate result. Codex BLOCKER 3: `runtime.image` accepts a mutable tag with `imagePullPolicy: Always`, so retagging serves new code under an unchanged hash, while the CRD comment claims admission rejects unsigned images and nothing in this repository enforces that. Both change what the revision hash *covers*, both have more than one defensible answer, and neither should be settled by an implementer mid-task.
+Both were settled by the user on 2026-08-26 and are recorded as **A20** and **A21** below.
 
 A17 (2026-08-26) — **A15 and A16 revised after the second critique.** Round 2 returned REVISE against this set; `docs/designs/reviews/03-amendments-review.md` carries both rounds and the standing Claude-vs-Codex disagreement. Three changes here, each because the previous text was wrong rather than incomplete.
 
@@ -338,7 +341,7 @@ A17 (2026-08-26) — **A15 and A16 revised after the second critique.** Round 2 
 
 **`Ready` is rekeyed on `gateway.enabled` (BLOCKER 3)**, retracting both of A15's earlier framings — see A15 above for why profile was the wrong key and what the declared-configuration split is. **ADR-0027's erratum was itself false** and is corrected there: the test asserts a hard-coded 21 while §3.1 declares more, so nothing is enforced, not even the count. (A19 removed the literal from this sentence too — it had been wrong in three consecutive rounds.)
 
-**Still owed, unchanged**: A20–A21 (`envFrom` ConfigMap contents; mutable image tags), each needing a decision rather than a correction; `gateway.enabled` in the chart and the operator; the `designConditions()`-vs-§3.1 comparison; and the **five** condition constants (A15's four plus `GovernanceSkipped`), none of which exists in code.
+**Still owed**: `gateway.enabled` and `NOTES.txt` in the chart (design 07 §3); the signature-verification binding (A21); the `designConditions()`-vs-§3.1 comparison; and the six condition constants, the digest CEL and the immutability check, none of which exists in code.
 
 A18 (2026-08-26) — **round 3: the asymmetric gate retracted, the registry corrected against measurement, tier-absence given its own condition.** Three rounds of critique, all REVISE; `reviews/03-amendments-review.md` carries them.
 
@@ -352,4 +355,18 @@ A18 (2026-08-26) — **round 3: the asymmetric gate retracted, the registry corr
 
 A19 (2026-08-26) — **round 4 corrections.** REVISE with **0 blocker**; the substance has converged and what remained was reach. A17's asymmetric-gate bullet still stated the retracted rule in the present tense with no marker, asserting as fact the design-27 premise A18 declares false — now struck and marked, because an amendment log that reads as current is the same defect as round 1's misresolved citation. The "§3.1 declares 25" sentence was wrong for the **third** consecutive round, inside the paragraph whose only purpose is to state exactly what is enforced; the literal is deleted from both here and ADR-0027, and §3.1's list is now the single place the count lives. `GovernanceSkipped` is classified **abnormal-true** (dropped when the tier is turned on, not flipped to `False`), which A13 makes load-bearing and A18 omitted. The owed list is corrected to **five** condition constants. The 57-leaf figure is withdrawn — two independent walks produced different counts under different termination rules, and the rule is what matters, not a number that only looks authoritative.
 
-**Still owed**: A20–A21 (`envFrom` ConfigMap contents; mutable image tags), each a decision rather than a correction.
+**A20–A21 are now drafted** (`envFrom` ConfigMap contents; mutable image tags) — decided by the user on 2026-08-26, and neither has been critiqued.
+
+A20 (2026-08-26, from `reviews/02-codex-review.md` BLOCKER 2; decided by the user) — **`envFrom` ConfigMaps must be immutable, which makes by-referent hashing correct instead of a hole.** A12's "by referent, not contents" is right for credential rotation and was silently extended to arbitrary behavioural configuration. `envFrom` accepts any ConfigMap, so an actor with no access to the Agent CR but `update` on a referenced ConfigMap could replace a system prompt or a provider endpoint; the pod restarts, and the new behaviour serves under the old revision and the old gate result. `project()` stores the reference, so the digest never moves. That is a privilege-escalation path into ADR-0006's gate.
+
+The rule is in §3.3 rule 2: **every ConfigMap referenced by `envFrom` or `env[].valueFrom` must be `immutable: true`**; Secrets remain mutable, deliberately and for the stated reason. The decisive property is that Kubernetes does not allow `immutable` to be unset or immutable data to be edited, so one check is durable — a change requires a new ConfigMap, which is a new referent, which mints a revision through the projection that already exists.
+
+**Two alternatives were rejected, and why matters.** Hashing the ConfigMap's *contents* into the projection closes the hole with no user convention, but makes the digest depend on cluster state — surrendering the spec-alone property that content-addressing, "no double-create" and instant rollback all rest on. That is the same mistake A17's asymmetric gate made and A18 retracted; twice in one amendment set is enough. Documenting the gap and changing nothing was honest but leaves the escalation live.
+
+**Enforced at reconcile, not admission, and the amendment says so rather than claiming CEL.** CEL on the Agent cannot read another object, and the ConfigMap may legitimately not exist when the Agent is applied — reconcile is total over creation order where admission is not. `EnvSourceMutable=True` names the offending ConfigMap and **no workload is created**, so the failure is fail-closed and loud (NFR-8) rather than a late surprise. An operator-served webhook could add apply-time feedback later; it would couple Agent writes to operator availability, which is a trade for a separate amendment. Condition count: **27**.
+
+A21 (2026-08-26, from `reviews/02-codex-review.md` BLOCKER 3; decided by the user) — **`runtime.image` must be digest-pinned, and this design's admission claims were false.** The API accepted any non-empty string, the controller sets `imagePullPolicy: Always`, and the CRD comment read "Image must be cosign-signed; admission rejects unsigned images" — generated verbatim into the shipped CRD at `config/crd/plume.dev_agents.yaml:437`. Gate `registry/agent:prod` while it points at X, retag to Y, reschedule: Kubernetes pulls Y while the spec, the revision hash and the gate result are all unchanged. The hash is not content-addressed, which is precisely the property `Rollback = re-point to a retained revision` depends on.
+
+`runtime.image` now requires an `@sha256:` digest, as **CEL on the schema** — rejected at `kubectl apply` with a message naming the fix, costing no pod, and expressible because it reads only the Agent's own field. CI resolves digests already; the `local` profile may relax it for `:dev` loops.
+
+**The honesty half is the larger correction.** §5 said an unsigned image is "Rejected at admission (CEL)" and §6 listed "cosign verification" among four enforced admission rules. **CEL cannot verify a signature, and `charts/plume/` ships no admission policy of any kind**, so all four were unenforced and one is not CEL-expressible at all. §5 and §6 now state, per rule, what actually enforces it. Signature verification needs a Sigstore policy-controller or a Kyverno `verifyImages` binding on the workload namespaces, **owed to design 07 §3** — and digest-pinning is what will make it meaningful when it lands, because a signature is verified against a digest. Until then the design says plainly that nothing verifies signatures.

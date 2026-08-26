@@ -45,6 +45,8 @@ charts/plume/                    # umbrella
 
 Both were asserted in the present tense by design 03 before this amendment, which is rule 7 — a bound stated that nothing enforces. They are recorded here because this design owns the chart.
 
+**A third, from design 02 A21 (2026-08-26)**: `charts/plume/` ships **no admission policy of any kind**, while design 02 §6 listed cosign verification among its enforced admission rules. Digest-pinning is now CEL on the Agent schema, but **signature verification is not CEL-expressible** and needs a Sigstore policy-controller or a Kyverno `verifyImages` binding scoped to the workload namespaces, shipped and pinned here. Until it lands, no image signature is verified anywhere in this platform, and design 02 §5 says so.
+
 ## 4. Versioning & upgrade discipline
 
 - Chart version = platform version (semver). Subchart bumps are renovate PRs that must pass the full matrix.
