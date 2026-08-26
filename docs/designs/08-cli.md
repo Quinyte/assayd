@@ -67,7 +67,7 @@ Contract-aware health: **reads the `plume-contracts` ConfigMap ledger** (design 
 
 ## 8. UX & distribution rules
 
-- Errors name the failing contract/condition and the next command (`PolicyApplyIncomplete on pa-reviewer — run: plume agent status pa-reviewer`).
+- `doctor` also reports the **tier gap**: which route classes the policy compiler is not emitting because their producing design is not installed, and whether `gateway.enabled` is false (design 03 §3.1, §5). Design 03 relies on this verb as the sole report for a whole class of un-emitted governance, so it is named here rather than assumed. Errors name the failing contract/condition and the next command (`PolicyApplyIncomplete on pa-reviewer — run: plume agent status pa-reviewer`).
 - No emoji in machine paths; human output stable-ordered; secrets never printed; `NO_COLOR` honored.
 - Distribution: single binary via GitHub releases + Homebrew tap; `plume upgrade-check` compares against the chart's platform version (skew warning, not auto-update). **No telemetry in core, at all** — trust is the funnel (ADR-0015); an explicit opt-in flag may come later, never default-on.
 - Binary name is `plume` until rename (ADR-0001); a `PLUME_BINARY_NAME` build var makes rename a rebuild, not a refactor.
