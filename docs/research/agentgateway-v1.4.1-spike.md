@@ -274,3 +274,29 @@ is a real state.
 - **Whether sealing beats snapshots operationally** when a source is legitimately retired while
   a revision still holds it. The lock is correct and will be *unpopular*; that is a product
   question, not a correctness one.
+
+---
+
+## 5. Third spike (2026-08-27) — the finalizer refcount, for design 02 A26
+
+A26 proposed using a source's finalizer list as the reference count for which revisions
+hold a sealed env source, on the reasoning that Kubernetes updates that list under optimistic
+concurrency and therefore gives compare-and-swap "by construction". Measured, because the
+draft asserted it.
+
+| Check | Result |
+|---|---|
+| 20 concurrent **naive** JSON-patch appends | **1 of 20 survived** |
+| 20 concurrent read-modify-write with `resourceVersion` + retry | **20 of 20** |
+| 19 concurrent releases, one holder remaining | remaining holder survived; each removed only its own entry |
+| `kubectl delete` with one holder remaining | blocked; `deletionTimestamp` set, object retained |
+
+**The claim was half right and the wrong half was load-bearing.** The list *is* a correct
+refcount — releases do not interfere, and the last holder blocks deletion, which is what the
+seal needs. But CAS is **not** free: the writer must supply `resourceVersion` and retry. The
+naive append is what an implementer reaches for first and it silently discarded 95% of the
+holds, which would have unsealed sources still referenced by serving revisions — the exact
+bypass A23 exists to close, reintroduced by its own refcount.
+
+A26 now states the retry loop as a contract and names the lossy variant so it lands in the
+mutation battery rather than being discovered.

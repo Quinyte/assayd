@@ -79,10 +79,11 @@ status:
                BudgetExhausted, BudgetEnforcementDegraded, PricingStale,
                ReceiptsDegraded, Killed, Ready, Progressing, Degraded,
                PolicyCompileFailed, PolicyApplyIncomplete, GatewayIncompatible,
-               ModelDrifted, GovernanceSkipped, EnvSourceUnresolved]
+               ModelDrifted, GovernanceSkipped, EnvSourceUnresolved,
+               EnvSourceProtectionUnavailable, RevisionMaterialChanged]
 ```
 
-`kubectl get agents` printer columns: `PHASE · ACTIVE · CANDIDATE · EVAL(last score) · COST/DAY · AGE` (A14), sourced from `status.phase`, `status.activeRevision`, `status.eval.score`, `status.budget.usdSpentToday` and the creation timestamp. The set is a contract, pinned by `TestPrinterColumnsMatchTheDesign`: the case for a twenty-seven-condition status rests on these five answering the common questions, and `EVAL`/`COST/DAY` are precisely the two a developer could otherwise reach only by reading conditions.
+`kubectl get agents` printer columns: `PHASE · ACTIVE · CANDIDATE · EVAL(last score) · COST/DAY · AGE` (A14), sourced from `status.phase`, `status.activeRevision`, `status.eval.score`, `status.budget.usdSpentToday` and the creation timestamp. The set is a contract, pinned by `TestPrinterColumnsMatchTheDesign`: the case for a twenty-nine-condition status rests on these five answering the common questions, and `EVAL`/`COST/DAY` are precisely the two a developer could otherwise reach only by reading conditions.
 
 **Tool and graph names resolve in the agent's own namespace, and only there.** A tool name may be served by a Connector tool facet or by an `MCPServer` CR; the two share one namespace-unique name space, enforced at admission (design 11 §4), which is why the binding carries no kind discriminator. There is deliberately no `namespace` field on either binding: design 24 §4.1 derives the `can_call` tuple **from** the binding, so a cross-namespace reference would authorize itself — anyone able to create an Agent in one namespace could reach a tool in another. Cross-namespace use requires consent published by the target namespace (the `ReferenceGrant` shape) and is out of scope until a design specifies it.
 
@@ -407,7 +408,7 @@ A23 (2026-08-27, from `reviews/03-codex-review-b3.md`; decided by the user, then
 - **The obvious policy is bypassable.** A match inspecting only the *new* object let a label-removal opt itself out, after which the data change succeeded. The old-**or**-new match condition is load-bearing; a reasonable implementer writing the natural version ships a seal any holder of `update` can remove in one request.
 - **Deleting the admission binding immediately reopened the bypass.** The Policy and Binding are **trust boundary**, not drift to be healed afterwards: the chart protects them, and the operator withholds new revisions and raises `EnvSourceProtectionUnavailable` when either is absent or skewed, verified at startup and every reconcile. The finalizer is not redundant — it covers exactly that window.
 
-**Owed, and not drafted**: the typed credential binding (so genuine credentials rotate without an eval, which sealing alone does not give); refcounting when two Agents share a source, and lock release when the last retained revision drops it; and the node-drain assertion, which needs a kubelet and is e2e-only. Snapshots remain the stated fallback if the refcount transaction cannot be made race-free.
+**Refcounting and guard-loss behaviour are specified by A26.** Still owed after that: the typed credential binding (so genuine credentials rotate without an eval, which sealing alone does not give), and the node-drain assertion, which needs a kubelet and is e2e-only. Snapshots remain the stated fallback if A26's lease cannot be shown race-free.
 
 A24 (2026-08-27, from design 03 A18; supersedes A22's shape) — **`llm.providers` and `llm.fallback` become the same typed endpoint identity, which closes the non-injective key too.** A22 typed only `egressAllowlist`, leaving `providers[]` a flat `[]string` and `fallback` a `{provider, model}` object. That left two defects:
 
@@ -433,3 +434,41 @@ Design 03 A17's escape — "a concern with no sound witness goes through the rev
 **Symmetric, and deliberately so.** Both fields move wholly: any change mints, including a loosening. An asymmetric "tightening mints, loosening applies in place" rule is not expressible — `revisionHash(spec)` is computed from spec alone and a subset predicate needs `(old, new)`. A17 was retracted for exactly that reason and this amendment will not reintroduce it.
 
 **The cost, stated plainly.** Raising a budget or changing `expose.a2a.visibility` now pays an eval-and-canary cycle. A12 rejected that as too expensive, and on its own terms it was right — a scale-shaped edit should not need an eval. What changed is not the cost but the alternative: the cheap path was measured to be unsound, and an ungated tightening that silently does not apply is worse than a slow one that does. `gates`, `loop`, `runtime.replicas/port/resources`, `card.path` and `external.inlineCard` stay on the policy surface, and design 20's status-driven fallback activation is untouched.
+
+A26 (2026-08-27, from `reviews/03-codex-review-r4.md` BLOCKER 5 and 6) — **who holds a sealed source, and what happens when the guard goes away.** A23 named both as owed. The scoped B3 review had made the first a *precondition* of the seal rather than a test detail, and the second is a live gap in a mechanism already committed.
+
+**The finalizer list is the reference count.** Rather than a side-car lease object with its own consistency problem, each retaining revision adds its **own** finalizer to the source — `plume.dev/src.<agent-uid8>.<revision8>` — and removes only that one. This is deliberate:
+
+- Add and remove **must be an explicit read-modify-write carrying `resourceVersion`, with retry** — this is *not* free, and the obvious implementation is badly wrong. Measured: **20 concurrent naive JSON-patch appends left ONE finalizer**, losing 19 of 20 holds. The same 20 writers doing read-modify-write with `resourceVersion` and retry produced all 20. A26's first draft said the list was "compare-and-swap by construction"; it is compare-and-swap only if the writer supplies the precondition.
+- "Release only after an authoritative list of all live leases" collapses to "remove your own entry", because the object *is* the list. The source is sealed while any `plume.dev/src.*` finalizer remains, and becomes deletable when the last one goes.
+- The admission policy already denies finalizer removal by every principal but the operator (spike §4), so a holder cannot be evicted by the source's editor.
+- Finalizers are durable in etcd, so a crashed operator's holds survive the crash. On startup the operator lists sealed sources and drops entries whose agent-UID or revision no longer exists — orphan reclamation is a startup sweep, not a liveness protocol.
+
+Acquire order is fixed and matters: **seal first, then read.** Add the finalizer and observe it, *then* re-read the source's UID and content and hash it. Reading first would hash content that could change before the seal landed, which is the same before-and-after race the seal exists to close. The recorded material is `{uid, resourceVersion, selected keys, digest}`; a UID change means delete-and-recreate happened while unsealed and is treated as divergence, not as the same source.
+
+**Guard loss does not keep serving blindly, and does not nuke the fleet either.** The spike measured that deleting the admission Binding immediately restores the editor's write (§4.2), and A23's response — withhold new revisions, raise `EnvSourceProtectionUnavailable` — protects only future revisions while retained ones keep resolving a now-mutable object by name. That is truthful and not fail-closed.
+
+The correction distinguishes *possible* from *realised* compromise, because the operator already watches every sealed source for A20's content hashing:
+
+| State | Response |
+|---|---|
+| Guard absent or skewed, every sealed source still matches its retained `{uid, digest}` | `EnvSourceProtectionUnavailable`; **no new revisions**; serving continues. The exposure is prospective, and taking a healthy fleet down for a routine upgrade window would be its own outage |
+| Guard absent **and** any sealed source diverges from its retained digest or UID | **`RevisionMaterialChanged`, weight 0 for every revision referencing it**, `phase: Degraded`. The bypass has occurred, so the affected revisions stop serving — via the existing rollout weight machinery, not a new route mutation (A19 removed those) |
+| Guard restored | Re-verify every retained source against its recorded material **before** republishing. Divergence found on restoration is treated as the row above, never repaired in place |
+
+**The residual, stated because it is the honest part.** Detection rides the source watch, so a change that is applied and reverted between watch events is not observed, and a running Pod that already read the changed value keeps it. The seal is what makes that window small; it is not zero, and no arrangement of conditions makes it zero while the guard is absent.
+
+**Vocabulary.** `EnvSourceProtectionUnavailable` was named by A23 and never added to §3.1's closed list — caught here by the count, which is what that list is for. With `RevisionMaterialChanged` the count is **29**; both are abnormal-true.
+
+**Measured** (k3d, ConfigMap finalizers):
+
+| Check | Result |
+|---|---|
+| 20 concurrent **naive** appends | **1 of 20 survived** — the obvious implementation silently drops holds |
+| 20 concurrent `resourceVersion` CAS adds with retry | **20 of 20** |
+| 19 concurrent releases while one holder remains | the remaining holder survived; each writer removed only its own entry |
+| `delete` while one holder remains | blocked — `deletionTimestamp` set, object retained |
+
+So the refcount is sound *with* CAS and unsound without, which makes the retry loop a contract rather than an implementation detail. The lossy variant is the one an implementer reaches for first, so it is named here and belongs in the mutation battery.
+
+**Still unmeasured**: orphan reclamation after an operator crash, and the divergence→weight-0 transition. Codex's condition stands — if any part of this cannot be shown race-free, A23's fallback is snapshots.
