@@ -2,7 +2,7 @@
 
 - **Status**: **integrated r3** — amendments A1–A19 folded into the body. A15–A19 (2026-08-25/26) are **not yet critique-passed**: four rounds returned REVISE (the fourth with 0 blockers) and all findings are addressed, but no pass has returned PASS. A20–A21 are owed and undrafted — each needs a decision, not a correction (§12) (the independent re-critique asked for one integration pass rather than a rule telling implementers which half to believe). Amendment history is preserved in §12 for provenance only; **the body is authoritative**. · ADR-0019
 - **Phase**: P1 · **Size**: L · **Date**: 2026-08-20, integrated 2026-08-22
-- **ADRs**: 0002, 0003, 0006 (gating), 0016 (expose/apps), 0019 (this design), 0020 (compiled policy), 0025 (governance) · reviews: `reviews/02-review.md`, `reviews/02-recritique.md`
+- **ADRs**: 0002, 0003, 0006 (gating), 0016 (expose/apps), 0019 (this design), **0028** (compiled policy — supersedes 0020), 0025 (governance) · reviews: `reviews/02-review.md`, `reviews/02-recritique.md`
 
 ## 1. Purpose & scope
 
