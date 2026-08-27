@@ -116,7 +116,7 @@ k8s rolling update mixes old/new traffic and would defeat eval gating, so the op
    | `runtime.sandbox.profile` | `runtime.resources` — see the note below |
    | `knowledge[].name`, `.version`, `.scope` | `card.path` — a path change is re-registration, exactly as card drift is |
    | `tools[].name` — a capability grant | `tools[].requiresApproval` — approval policy |
-   | `llm.providers`, `llm.fallback`, **`llm.egressAllowlist`** | `budget`, `gates`, `expose`, `loop` |
+   | `llm.providers`, `llm.fallback`, **`llm.egressAllowlist`**, **`budget`** (A25), **`expose`** (A25) | `gates`, `loop` |
    | `external.endpoint` | `external.inlineCard` — a description, not a grant |
    | `external.oauthClientRef` — **identity**, see below | |
 
@@ -418,3 +418,18 @@ A24 (2026-08-27, from design 03 A18; supersedes A22's shape) — **`llm.provider
 Both fields therefore carry `{arm, instance fields, model}`, and `egressAllowlist` entries carry the same identity minus the model plus optional `models`. `providers`, `fallback` and the allowlist now share one type, compare as tuples, and need no canonical string at all.
 
 **Breaking, and correct now**: this changes `llm` for every existing manifest, touches A12's projection (the field stays behaviour surface and symmetric), and invalidates the flat examples throughout this design — all of which is cheaper before v1beta1 than after. **Owed**: the pricing table (design 03 §3.5) is still keyed by the flat string it was given; keying it on the same tuple is the obvious follow-through and is not drafted here.
+
+A25 (2026-08-27, from `reviews/03-codex-review-r4.md` BLOCKER 2 and 4; decided by the user) — **`budget` and `expose` move to the behaviour surface, because in-place tightening cannot be made safe.**
+
+A12 drew the policy/behaviour line on *capability*: "how much, how fast, or who may call" was applied in place because it does not change what an agent can do. That reasoning assumed in-place application was **safe**. Two measurements say it is not:
+
+- a NACK'd policy **retains the previous configuration** while every Kubernetes condition reports converged (spike §2.8), so a tightening can silently fail to apply; and
+- the witness design 03 A17 introduced to detect that **cannot attribute** the result — a 401, a rejected tool, an unreachable host and a 429 all have producers other than the new policy, so a NACK and a passing witness can coexist (Codex r4 BLOCKER 2).
+
+Design 03 A17's escape — "a concern with no sound witness goes through the revision path" — was then found to be **structurally unavailable** for exactly these fields: a policy-surface change mints no candidate, so there was nothing to gate (r4 BLOCKER 4). The design offered a witness that cannot attribute and a fallback that cannot exist.
+
+**The scope is narrower than the argument suggests, and that is why this is affordable.** Of the concerns §3.3.1 makes mandatory, only two are fed by policy-surface fields — `-auth` from `expose`, and `-ratelimit` from `budget`. `tools[].name`, `knowledge[].scope` and `llm.egressAllowlist` are already behaviour surface, so narrowing a tool set, a KG scope or an egress list **already** mints a revision and already passes a gate. Two fields move; the rest of A12's table is unchanged.
+
+**Symmetric, and deliberately so.** Both fields move wholly: any change mints, including a loosening. An asymmetric "tightening mints, loosening applies in place" rule is not expressible — `revisionHash(spec)` is computed from spec alone and a subset predicate needs `(old, new)`. A17 was retracted for exactly that reason and this amendment will not reintroduce it.
+
+**The cost, stated plainly.** Raising a budget or changing `expose.a2a.visibility` now pays an eval-and-canary cycle. A12 rejected that as too expensive, and on its own terms it was right — a scale-shaped edit should not need an eval. What changed is not the cost but the alternative: the cheap path was measured to be unsound, and an ungated tightening that silently does not apply is worse than a slow one that does. `gates`, `loop`, `runtime.replicas/port/resources`, `card.path` and `external.inlineCard` stay on the policy surface, and design 20's status-driven fallback activation is untouched.
