@@ -31,7 +31,6 @@ PolicyIntent {
   // AllowEntry  = EndpointID minus model, plus optional models[]
   budget:      {tokensPerDay, usdPerDay, taskTimeout, maxHops}
   expose:      [{protocol, visibility, auth, consumerBudgets?}]
-  captureLevel: metadata|headers|full
   gatewayReplicas: int          // declared, never discovered — see "Field provenance" below (A3)
 }
 ```
@@ -51,7 +50,6 @@ PolicyIntent {
 | `llm.fallbackActive` | `status.llmFallbackActive`, controller-set by design 20 §3 — **status, not spec**, so it mints no revision by design | yes |
 | `expose[].protocol/visibility/auth` | `spec.expose.a2a` | yes |
 | `expose[].consumerBudgets` | design 26 `TenantPolicyIntent` — **not** an `AgentSpec` field | no |
-| `captureLevel` | chart value (design 04 §3), cluster-wide, not per-agent | no |
 | `gatewayReplicas` | chart value `gateway.replicas` → operator flag `--gateway-replicas`, default `1` | yes |
 
 A field whose source does not exist yet is **absent**, and absence is governed by §3.3.1 — it is never silently defaulted.
@@ -132,6 +130,16 @@ So the operator **applies once and returns**, and progress is driven by watches:
 **The unit is one Agent.** `Compile` takes one `PolicyIntent` and returns one `ResourceSet`; one Agent's failure never touches another's. Design 02 §4 reconciles per-CR, and anything wider would let one malformed Agent stop the fleet.
 
 **The rule.** Every route class names the concerns that must be present and `Accepted=True` before that route may be created. A mandatory concern whose input is absent is a **compile error** (`PolicyCompileFailed`, naming the missing input), never an omitted policy.
+
+**Routes are required or optional, and the Agent aggregates them (A24).** §3.3.1's classes split in two: the **serving-required** set — the A2A route, and the card route where `expose.a2a` is set — whose failure means the Agent is not serving what it advertises; and the **optional** set — tool, KG and LLM egress routes — whose failure removes a capability while the agent still answers.
+
+| Failing | `Ready` | `phase` | CLI |
+|---|---|---|---|
+| any serving-required route | `False`, reason `PolicyApplyIncomplete` | `Pending` (create) or `Degraded` (was serving) | terminal for `deploy` |
+| optional routes only | stays `True` | `Degraded` | reported, **not** terminal |
+| none | `True` | `Ready` | — |
+
+**One condition instance carries every failing path, and clears only when none remain.** A condition is one per type, so concurrent failures would otherwise overwrite each other's message and recovering one would hide the other. The message lists the failing resources in a **stable order** (route class, then name), so a second failure appends rather than replacing, and `PolicyApplyIncomplete` is cleared only when the set is empty — not when the most recent one recovers.
 
 **The failure is route-scoped, not set-scoped.** An unresolvable tool withholds that tool's route and anything depending on it; the serving route and the card route still compile and apply. The alternative — one bad input voids the whole `ResourceSet` — trades a fail-open for a fail-stuck, where a typo in one tool name takes an agent off the air entirely. §5's rows say this consistently: `PolicyCompileFailed` means *the affected routes* are not emitted, never "nothing applied".
 
@@ -230,10 +238,10 @@ Two transaction kinds remain:
 | App projections | workflow-POST (idempotency forwarded), chat-SSE (A2A resubscribe), KG-read — OIDC + exchange applied | design 23 r1 f2 |
 | Approval voucher check | single-use pass voucher CEL on approval-gated routes; gateway forwards the approved retry | design 22 r1 f4 |
 | Generative model serving | **`InferencePool`** (GAIE) emitted for LLM pools + HTTPRoute to it — agentgateway OSS inference routing; llm-d schedules below the seam | design 25 A1 |
-| Model serving | LLM Backend registration for `expose.llmBackend` + **virtual-model weighted shifting**; shadow candidate route admitted-set = the eval run principal only (launch→end) | design 25 r1 f2/f5 |
+| Model serving | LLM Backend registration for `expose.llmBackend` + **`backendRefs`-weighted shifting** (A24 — *not* virtual models, which ADR-0028 records as experimental and off by default); shadow candidate route admitted-set = the eval run principal only (launch→end) | design 25 r1 f2/f5 |
 | Tenant quotas | `TenantPolicyIntent` (tenant-scoped target): partition listener set + quota policies; approximation tier per ADR-0028, backstop tier = 04 A2 rollup | design 26 r1 f1 |
 | Interior telemetry | OTLP Backend + per-agent route to the tap's forward-only listener (rate-limited — telemetry is traffic) | design 10 r1 f1; agents are default-deny |
-| Receipts | OTLP tracing at **`AgentgatewayPolicy.spec.frontend.tracing`**. A frontend policy may target **only a Gateway**, so tracing is gateway-scoped and per-Agent `captureLevel` has no expression at v1.4.1 — **unresolved (A12)**: either one gateway-scoped tracing owner with a stated aggregation rule, or `captureLevel` leaves `PolicyIntent` | design 04 |
+| Receipts | OTLP tracing at **`AgentgatewayPolicy.spec.frontend.tracing`**, which may target **only a Gateway**. **`captureLevel` therefore leaves `PolicyIntent` entirely (A24)**: it is not per-Agent expressible at v1.4.1, and leaving it in the intent invited two reconcilers to last-writer-win one Gateway policy — a per-Agent field silently deciding a cluster-wide setting. Tracing is emitted **once per Gateway** by a single owner from a chart value, and design 04 records capture verbosity as a gateway-scoped setting rather than an Agent one | design 04 |
 
 ### 3.4.1 Egress is enumeration, not restriction (A11)
 
@@ -527,3 +535,16 @@ Folded into §§3–8 rather than left as patches, following the integration pas
 - **A21 (2026-08-28) — the pricing table is keyed on endpoint identity, and is two ConfigMaps.** A24 deleted the `<provider>/<model>` string everywhere else and left the pricing table as the last thing requiring the non-injective join, so `{azure, openai/gpt-4}` and `{azure/openai, gpt-4}` still collapsed to one row with potentially different prices and BAA status (r4 MAJOR 8). Rows are now a list matched most-specific-wins on the tuple, and an equal-specificity tie is a **load error** rather than a silent per-request choice. Separately (r4 MAJOR 7), the chart and the model-operator cannot own rows inside one YAML scalar — Kubernetes field ownership stops at `data.models` — so external and in-cluster prices live in **two** ConfigMaps with an identity appearing in both being a load error, and staleness evaluated on the chart-owned one alone so an internal upsert cannot clear the vendor-price alarm.
 - **A22 (2026-08-28) — propagation sweep for r4 MAJOR 6 and 16.** `PolicyIntent` still showed the flat `llm` shape A24 replaced; the `ReplicaUnverified` row called itself "the P1 state" when P1 runs no compiler and therefore has no divisor to leave unverified, which would have put a degradation condition and a tier-choice condition on the same stock Agent; design 02's reconcile outline still told implementers admission had "already enforced" a signed image, which A21 says nothing does. Each was in an authoritative body while the amendment log said otherwise — the failure mode that recurs in every round of this review set, which is why the docs gate now normalises formatting (r4 MAJOR 19) rather than matching raw bytes.
 - **A23 (2026-08-28) — the mandatory-entry test may not be generated from the registry.** r4 MAJOR 10. An earlier draft pinned each entry with "for every registered class, one test per mandatory entry", which deletes its own check along with the entry — the identical defect this repo has now shipped **twice**, once in the docs gate (removing a rule left the suite green) and once here. Cases enumerated from production data cannot pin production data. The security cases are now a **static catalog**, reviewable as a list, failing in both directions: a registered class with no case, and a case naming an entry the registry no longer has. `test/docs/superseded_test.go`'s `ruleFixtures` is the working precedent, and the mutation harness requires a **compiled** failure — a build error is INVALID, not KILLED.
+- **A24 (2026-08-28) — the last of r4's contract gaps.** Five holes where a sentence read as a rule but could not be implemented from what it said.
+
+  **An empty slice meant two things** (MAJOR 1). A resolved `tools: []` represented both "requested none" and "requested one and its producer failed" — opposite required outcomes, identical to a pure function, so an Agent asking for a tool it never got could compile as an Agent asking for none and report `Ready`. Bindings now carry `{requested, resolved?, state}` over `Resolved | ProducerAbsent | Unresolvable`, and the three are pinned independently.
+
+  **"Admitted set" is not a comparator** (MAJOR 3). Rate limits are stateful quantities, transforms are functions, timeouts are neither — so "every concern's admitted set is a superset" was not implementable and two reasonable implementations would classify the same edit differently. Replaced by a **closed per-concern registry** with an explicit ordering each, and **Unknown → `Tighten`**: a concern with no comparator entry, a comparison the registry cannot make, and a first application all fail safe. Property-tested for reflexivity and transitivity.
+
+  **Route failures had no aggregation contract** (MAJOR 11). One Agent has one `Ready`, one phase and one condition per type, so concurrent route failures overwrote each other's message and recovering one hid the other. Routes are now **serving-required** or **optional**, with a table for `Ready`/phase/CLI, a stable ordering in the message so a second failure appends, and clearing only when the failing set is **empty**.
+
+  **MCP emission was not total at the CRD's bounds** (MAJOR 13). `minItems: 1` means an empty allowed-tool set has no empty-list representation, and omitting the policy would restore upstream's default-allow — turning "no tools" into "every tool". It now emits a single `false`. Over 256 tools is a compile error rather than a silent truncation, and names go through a real CEL encoder because a broken expression denies everything under `Allow` and would fail **open** under `Deny`.
+
+  **`captureLevel` was per-Agent and unrepresentable** (MAJOR 14). Frontend tracing attaches only to a Gateway at v1.4.1, so two reconcilers would last-writer-win one policy — a per-Agent field silently deciding a cluster-wide setting. It leaves `PolicyIntent`; tracing is emitted once per Gateway from a chart value.
+
+  **Virtual models were the mandatory shift path** (MAJOR 15). ADR-0028 records `AgentgatewayModel` as experimental and **off by default**, yet design 03's mapping table and ADR-0026 required it for weighted shifting — an opt-in API as a core rollout mechanism, absent from a default install. Now Gateway API `backendRefs` weights, which design 02 §3.3 already uses for revision weights; virtual models are an opt-in enhancement (design 25 A2).

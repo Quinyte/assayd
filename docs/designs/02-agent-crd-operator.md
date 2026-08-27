@@ -463,6 +463,18 @@ The correction distinguishes *possible* from *realised* compromise, because the 
 | Guard absent **and** any sealed source diverges from its retained digest or UID | **`RevisionMaterialChanged`, weight 0 for every revision referencing it**, `phase: Degraded`. The bypass has occurred, so the affected revisions stop serving — via the existing rollout weight machinery, not a new route mutation (A19 removed those) |
 | Guard restored | Re-verify every retained source against its recorded material **before** republishing. Divergence found on restoration is treated as the row above, never repaired in place |
 
+**`EnvSourceProtectionUnavailable` is abnormal-true, and its full contract (A27).** It is in §3.1's vocabulary; here is what consumers may rely on:
+
+| Guard | Sources verified? | Condition | `Ready` | Route | Clears when |
+|---|---|---|---|---|---|
+| present | — | absent | unaffected | unaffected | — |
+| absent or skewed | all match | `True`, reason `GuardAbsent` | **unaffected** | unaffected; **no new revisions** | guard restored *and* re-verified |
+| absent or skewed | any diverges | `True` + `RevisionMaterialChanged` | `False` | **weight 0** for referencing revisions | divergence cannot clear — the revision is gone |
+| restored, not yet re-verified | pending | `True`, reason `VerificationPending` | unaffected | unaffected; no new revisions | re-verification completes |
+| restored and verified | all match | absent | unaffected | unaffected | — |
+
+Abnormal-true, so it is **dropped** when it stops applying rather than set `False` — its absence is the signal (A13). `phase` is unchanged by it alone; only the divergence row moves phase, via `Degraded`. The CLI treats it as a warning and **not** terminal for `deploy`, because a healthy fleet with a missing guard is still serving; design 10 alerts on it as a ticket, and on `RevisionMaterialChanged` as a page.
+
 **The residual, stated because it is the honest part.** Detection rides the source watch, so a change that is applied and reverted between watch events is not observed, and a running Pod that already read the changed value keeps it. The seal is what makes that window small; it is not zero, and no arrangement of conditions makes it zero while the guard is absent.
 
 **Vocabulary.** `EnvSourceProtectionUnavailable` was named by A23 and never added to §3.1's closed list — caught here by the count, which is what that list is for. With `RevisionMaterialChanged` the count is **29**; both are abnormal-true.
