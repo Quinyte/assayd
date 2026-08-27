@@ -1,4 +1,20 @@
-# agentgateway 2.2 — load-bearing facts for design 03 (2026-08; re-verify before implementation)
+# agentgateway 2.2 — SUPERSEDED, DO NOT CITE (2026-08-27)
+
+> **This note is superseded by [`agentgateway-v1.4.1-2026-08.md`](./agentgateway-v1.4.1-2026-08.md).**
+>
+> It was never re-verified, and the re-verification found it wrong on load-bearing points. In
+> particular: **there is no agentgateway "2.2"** (releases are `v1.x`; latest stable **v1.4.1**),
+> and every URL below points at `docs/kubernetes/2.2.x/`, a **frozen pre-v1.4 documentation
+> version that still returns HTTP 200** — so the citations look live and silently serve stale
+> content. The token-limit, apply/attach, egress, MCP-filter, OTLP-field-path and policy-overlap
+> claims below are all corrected in the replacement note.
+>
+> Retained only so the reviews that cite it remain readable. Do not cite it in a design.
+
+---
+
+## Original content (2026-08; re-verify before implementation) — retained for provenance
+
 
 - **Control plane split**: 2.2 separated agentgateway controllers from kgateway; kgateway APIs (TrafficPolicy) no longer supported for agentgateway. CRDs: `AgentgatewayBackend`, `AgentgatewayParameters`, `AgentgatewayPolicy`. https://agentgateway.dev/docs/kubernetes/2.2.x/reference/release-notes/ · https://kgateway.dev/blog/kgateway-v2.2-release-blog/
 - **Rate limiting**: local (in-process token bucket) and global (external Envoy-style rate-limit service over gRPC) modes; token-based limiting for LLM traffic exists in OSS. https://agentgateway.dev/docs/standalone/main/configuration/resiliency/rate-limits/ · https://agentgateway.dev/docs/kubernetes/2.2.x/security/rate-limit-global/ · local-vs-global discussion: https://github.com/agentgateway/agentgateway/issues/1911
