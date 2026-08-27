@@ -45,7 +45,7 @@ charts/plume/                    # umbrella
 
 Both were asserted in the present tense by design 03 before this amendment, which is rule 7 — a bound stated that nothing enforces. They are recorded here because this design owns the chart.
 
-**A third, from design 02 A21 (2026-08-26)**: `charts/plume/` ships **no admission policy of any kind**, while design 02 §6 listed cosign verification among its enforced admission rules. Digest-pinning is now CEL on the Agent schema, but **signature verification is not CEL-expressible** and needs a Sigstore policy-controller or a Kyverno `verifyImages` binding scoped to the workload namespaces, shipped and pinned here. Until it lands, no image signature is verified anywhere in this platform, and design 02 §5 says so.
+**A third, from design 02 A21 (2026-08-26)**: `charts/plume/` ships **no admission policy of any kind**, while design 02 §6 listed cosign verification among its enforced admission rules. Digest-pinning is now CEL on the Agent schema, but **signature verification is not CEL-expressible** and is decided by A2 below. Until it lands, no image signature is verified anywhere in this platform, and design 02 §5 says so.
 
 ## 4. Versioning & upgrade discipline
 
@@ -88,3 +88,18 @@ The chart *is* tested by §5. Additionally: `helm template` golden snapshots per
 ## 9. Resulting ADRs
 
 Folded into ADR-0022 (P1 infrastructure) after critique PASS.
+
+## A2 (2026-08-28, from `reviews/03-codex-review-r4.md` MAJOR 17) — the verifier is Sigstore policy-controller, required not bundled, and its absence is loud
+
+"Sigstore **or** Kyverno" is not a design. They are different controllers with different pods, lifecycles and outage behaviour, and a `verifyImages` binding without its engine verifies nothing.
+
+- **Which**: **Sigstore policy-controller**, pinned. It is purpose-built for this one check; Kyverno is a general policy engine whose other capabilities plume does not need and whose pods it would still pay for. Doctrine rule 1 (bind, don't build) and rule 5 (the ≤8-pod core budget, CI-enforced) point the same way.
+- **Bundled?** **No — required, not installed.** It costs the core budget nothing, and an org already running an admission stack is not forced into a second one. The chart declares the dependency and verifies its presence.
+- **Tier**: optional at `core`, **mandatory under any compliance profile** (ADR-0014). A profile that turns PHI redaction on while leaving image provenance unverified is not a compliance posture.
+- **Verifier absent**: at core, every Agent carries **`ImageSignatureUnverified`** — the platform states plainly that digests are pinned and signatures are not checked, rather than implying provenance it does not have. Under a compliance profile, **install fails**: a silent downgrade there is exactly what ADR-0014 exists to prevent.
+- **Verifier installed but unavailable**: its own `failurePolicy: Fail` denies workload admission, so the failure is toward denial. plume adds no second timeout on top; it surfaces the condition.
+- **BYO scope**: the binding covers the namespaces plume creates workloads in. Images outside that scope are not plume's to vouch for, and this says so rather than implying platform-wide coverage.
+
+**Owed**: the pinned version and the namespace-selector shape, and integration tests for an unsigned image and for a verifier that is installed but unavailable.
+
+**This is a recommendation taken on doctrine, not a measured result** — it should be confirmed before design 07 is implemented, since it binds a third-party controller.
