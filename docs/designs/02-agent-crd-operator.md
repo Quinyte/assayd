@@ -221,7 +221,7 @@ On delete, an operator finalizer gates ordered teardown: **drain traffic** (weig
 
 ```
 observe Agent CR + owned objects + spend aggregate (read-only, design 04)
-→ validate (admission already enforced: signed image, prod gates, sandbox/replicas exclusivity)
+→ validate. **Admission has already enforced only what CEL can express** (A21): digest-pinned image, prod-gate presence, sandbox/replicas exclusivity, the `usdPerDay` grammar. It has **not** verified an image signature — that needs a Sigstore or Kyverno binding the chart does not ship (design 07 §3), so the reconciler must not treat signature as a settled precondition
 → ensure workload for the desired revision (Deployment | Sandbox); scratchpad per §3.2
 → ensure identity labels / agent-actor client / oauth client (external)
 → candidate Ready? fetch + validate + cross-check card → directory upsert

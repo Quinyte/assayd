@@ -26,7 +26,9 @@ PolicyIntent {
   identity:    {spiffeID | oauthClientID}
   tools:       [{backendRef, toolAllowlist?, requiresApproval}]
   knowledge:   [{endpoint, scope: {entityTypes}}]        // `bundles?` dropped (r1 f7)
-  llm:         {providers[], egressAllowlist?, fallback?: {provider, model}, fallbackActive: bool}
+  llm:         {providers[]: EndpointID, egressAllowlist?: [AllowEntry], fallback?: EndpointID, fallbackActive: bool}
+  // EndpointID  = {arm, <arm's instance fields>, model?}   — design 02 A24, §3.4.1.1
+  // AllowEntry  = EndpointID minus model, plus optional models[]
   budget:      {tokensPerDay, usdPerDay, taskTimeout, maxHops}
   expose:      [{protocol, visibility, auth, consumerBudgets?}]
   captureLevel: metadata|headers|full
@@ -199,7 +201,7 @@ Two transaction kinds remain:
 | Intent | Gateway mechanism (OSS only) | Notes |
 |---|---|---|
 | Routing | HTTPRoute + Backend | per-revision weights (design 02) |
-| AuthN | JWT policy (IdP issuer) + SPIFFE mTLS | native order auth → rate-limit → guards (research note §evaluation-order) |
+| AuthN | JWT policy (IdP issuer) + SPIFFE mTLS | **Evaluation order is not asserted here.** An earlier draft claimed a native `auth → rate-limit → guards` order taken from a secondary source, while the Guards row disclaimed the same ordering — see §3.4.3 |
 | `budget.tokensPerDay` | **local token-bucket rate limit**, `tokens = ⌊tokensPerDay ÷ (24 × gateway_replicas)⌋`, `unit: Hours` (§3.5). **No burst**: `burst` applies to `requests` limits only, so the capacity arithmetic an earlier draft carried is void (A10) | **approximation tier**, and weaker than an earlier draft claimed: continuous refill ≠ calendar window, and the excess is bounded by **concurrency, not replica count** — v1.4.1 checks `available_refill() > 0` and decrements only after a response, so every concurrent request on one replica passes the same positive bucket. The `≤ replicas×` figure was wrong. **Resolved by measurement (A13)**: the excess is **unbounded** — 100 concurrent requests admitted 100x a one-replica budget (spike §2.7). No figure is published. Backstop tier = receipt aggregate (below). No external RLS / Redis — doctrine rule 2 |
 | `budget.usdPerDay` | token-equivalent local limit computed at the **max price across the agent's allowed models** — conservative on *price*, the only dimension it is conservative on (ADR-0028) | pricing table §3.5; **an unresolvable model ⇒ compile error** |
 | **Backstop budget tier (both tokens & usd)** | not a gateway mechanism, and **not exact in USD** — it sums the same `usd_est` estimates the gateway prices from (ADR-0028): **design 04's spend aggregation** (per-agent daily spend, 00:00 UTC windows, materialized where receipts land) is read by the operator each reconcile → overrun ⇒ `BudgetExhausted` condition + weight-0 via the rollout machinery | matches design 02's approved "windows reset 00:00 UTC; remaining in status" — status is fed from the aggregation, not gateway counters. Deltas recorded in design 02 §11 (r1 f3, f5) |
@@ -208,7 +210,7 @@ Two transaction kinds remain:
 | Tool allowlist | **`AgentgatewayPolicy.spec.backend.mcp.authorization`** — CEL over `mcp.tool.name`, `action: Allow` (default-deny once any allow rule exists). Filters `tools/list` items *and* rejects `tools/call`, so a denied tool is **invisible**, not merely unreachable (A11) | Header matching on `Mcp-Name` still exists as SEP-2243 but cannot filter a list response |
 | **KG scope** | **gateway-injected, provider-enforced** (r1 finding 6): compiler emits a request-transform policy injecting the `X-Plume-KG-Scope: {entityTypes}` header on **all** kgp routes (trust = the gateway's SVID on the provider connection — no separate header signature; design 13 r1 f4); the *provider* enforces it across all four fact-bearing tools (`search`, `neighbors`, `get_context_bundle`, `cite`) and answers out-of-scope with `KG_SCOPE_DENIED`. The gateway does not parse MCP bodies (consistent with design 01 §3.1); trust consequence: providers are scope-enforcing, and **kgp conformance gains a scope-enforcement battery** — recorded as amendments in design 01 §11 | |
 | `requiresApproval` | route to approval interceptor | design 22 |
-| Guards / egress | prompt-guard policies; **`llm.egressAllowlist` compiles to Backend *construction*, not restriction** (§3.4.1, A11) — the CRD has no egress, host, domain or provider allowlist field anywhere | ADR-0014. Evaluation order relative to rate-limit is a **stated gap** (research §9) and is not asserted here |
+| Guards / egress | prompt-guard policies; **`llm.egressAllowlist` compiles to Backend *construction*, not restriction** (§3.4.1, A11) — the CRD has no egress, host, domain or provider allowlist field anywhere | ADR-0014; ordering per §3.4.3 |
 | Expose visibility | listener class cluster / org / public (+ OAuth clients, consumer budgets) | |
 | Candidate isolation | header route matched only with gate-controller SVID | design 02 review f2; protected by §3.3 ordering |
 | On-behalf-of exchange | `-exchange` policy: `oauthTokenExchange` (subject = user JWT, actorToken = agent-actor client, `audiences` = compiled backend set, cache ≤ token TTL) — **OSS-verified** | design 06 §3.3 (r1 f1) |
@@ -296,20 +298,47 @@ Three rules the emission must follow:
 - **Auth moves to `traffic.jwtAuthentication.mcp`.** `backend.mcp.authentication` is deprecated in favour of it *"which ensures authentication runs before other policies such as transformation and rate limiting"* — directly the ordering §3.3.1 needs for `-auth` before `-toolfilter`. The two may not appear in the same policy, which one-concern-per-policy already prevents.
 - **Targeting constraints**: `backend.mcp` may not target a `Service`, and may not target an `AgentgatewayBackend` `sectionName`. Both are compile-time checks.
 
+### 3.4.3 Evaluation order is not known, and is not asserted (A20)
+
+An earlier draft asserted a native `auth → rate-limit → guards` order in the AuthN row **and disclaimed the same ordering two rows below**, in the Guards row. Both cannot be design. The assertion came from a blog post carried over by the superseded research note; the v1.4.1 re-verification listed it as one of the claims it could **not** establish from a primary source, and the design kept it anyway.
+
+It is removed rather than softened, because two things depend on the answer:
+
+- **whether an auth-rejected request consumes quota.** If the limiter runs first, a flood of unauthenticated requests exhausts a paying agent's budget — a denial-of-wallet an attacker needs no credential to run. If auth runs first, it cannot.
+- **where a compliance profile's `-guard` must attach** for PHI redaction to see a request that a rate limit would otherwise have already rejected (ADR-0014).
+
+**The experiment, written down so it is reproducible rather than re-derived.** One route carrying both a failing `traffic.jwtAuthentication` and `rateLimit.local: [{requests: 1, unit: Hours}]`. Send three unauthenticated requests:
+
+| Observed | Conclusion |
+|---|---|
+| `401, 401, 401` | auth precedes the limiter, and rejected requests **do not** consume quota |
+| `401, 429, 429` | the limiter precedes auth, or counts rejected requests — the denial-of-wallet path is real |
+
+Until that runs, no row in §3.4 states an order, and no design sentence may depend on one. Owed to `make conformance-cluster`, where the harness already exists.
+
 ### 3.5 Pricing table and the usd→token computation (A4)
 
 `ConfigMap plume-model-pricing` (chart-shipped, versioned). Used for usd→token compilation and receipt cost annotation.
 
-**Shape.** One row per model, keyed `<provider>/<model>`, carrying two prices in **USD per 1,000,000 tokens** — the unit vendors publish, chosen so no price is written as `0.000003` and rounded into nothing:
+**Shape (A21).** One row per **endpoint identity** — the same `{arm, instance fields, model}` tuple `providers[]`, `fallback` and the allowlist use (design 02 A24) — carrying two prices in **USD per 1,000,000 tokens**, the unit vendors publish, chosen so no price is written as `0.000003` and rounded into nothing.
+
+An earlier draft keyed this on `<provider>/<model>`. A24 deleted that string everywhere else, so the table was the last thing requiring a canonical join — and the join is the non-injective one: `{azure, openai/gpt-4}` and `{azure/openai, gpt-4}` collapse to one row while being different endpoints with potentially different prices and different BAA status. Two Azure deployments on one endpoint collapse the same way.
+
+Rows are therefore a list, not a map, and matching is on the tuple:
 
 ```yaml
 data:
   updated: "2026-08-19T00:00:00Z"        # RFC 3339; drives PricingStale
   models: |
-    anthropic/claude-opus-5:   {input: "15.00",  output: "75.00"}
-    anthropic/claude-sonnet-5: {input: "3.00",   output: "15.00"}
-    anthropic/*:               {input: "15.00",  output: "75.00"}   # optional per-provider fallback
+    - id: {arm: anthropic, model: claude-opus-5}
+      price: {input: "15.00", output: "75.00"}
+    - id: {arm: azureopenai, instance: {endpoint: acme.openai.azure.com, deploymentName: gpt4o-prod}}
+      price: {input: "5.00",  output: "15.00"}
+    - id: {arm: anthropic}                          # arm-wide default: no model field
+      price: {input: "15.00", output: "75.00"}
 ```
+
+**Matching is most-specific-wins over the tuple**, which is total and admits no tie: a row whose `id` is a subset of the requested identity matches, and the row matching on the most fields wins. Two rows matching on the same field count is a **load error**, not a runtime tie-break — the ambiguity is caught where a human can fix it rather than resolved silently per request.
 
 **Grammar.** Prices and `spec.budget.usdPerDay` are decimal strings matching `^[0-9]{1,6}(\.[0-9]{1,6})?$` — at most **six** integer digits and six fractional, no exponent, no currency symbol, no `resource.Quantity` suffixes. Six fractional digits make the arithmetic exact in integer **micro-USD**, so golden files pin exact integers rather than whatever a float happened to produce.
 
@@ -366,7 +395,14 @@ Two edges the arithmetic forces, both previously unstated:
 - **Both budget fields may be set.** `tokensPerDay` and `usdPerDay` each derive a rate; the compiler emits **one** `-ratelimit` policy at the **minimum** of the two. Emitting two policies would put the same field in two policies and break §3.2's disjointness by construction.
 - **A rate below 1 token/second is a compile error.** `usdPerDay: "0.50"` against a model priced at `75.00`/M tokens with two gateway replicas floors below 1 token/second — a bucket that denies everything. The test is `rate < 1`, not `rate == 0`: with the grammar bounded at six digits a negative rate is now unreachable, but a guard that only catches exact zero was how the overflow above stayed invisible, and the cheap predicate is the total one. Denial is fail-closed and therefore "safe", but an agent that answers nothing because of a rounding step is rule 8's loud-and-wrong: the condition would name a budget when the cause is arithmetic. `PolicyCompileFailed` names the floor and the smallest budget that clears it.
 
-**RBAC**: the ConfigMap is operator-writable only by default. A tampered table skews the gateway tier **and the receipt tier together**, since both price from it — so the receipt tier is **no longer** describable as a backstop for pricing at all, and §6 states that rather than implying protection that does not exist.
+**Two ConfigMaps, because two controllers cannot own rows inside one string (A21).** Kubernetes field ownership stops at `data.models`; it cannot give the chart and the model-operator disjoint ownership of YAML rows within that scalar, so a Helm upgrade refreshing external prices and a model-operator upserting an in-cluster row would conflict or lose each other's work in a read-modify-write race. So:
+
+- **`plume-model-pricing`** — chart-owned, external endpoints, `updated` lives here and only here;
+- **`plume-model-pricing-internal`** — operator-owned, in-cluster endpoints the model-operator upserts at serve time (design 25 §5).
+
+The compiler reads both and merges. **An identity appearing in both is a load error**, never a precedence rule: silently preferring one writer is how a stale external row would shadow a live internal one, or the reverse. Staleness is evaluated on the chart-owned map alone, so an internal upsert cannot clear the alarm that fires when vendor prices move.
+
+**RBAC**: both are operator-writable only by default. A tampered table skews the gateway tier **and the receipt tier together**, since both price from it — so the receipt tier is **no longer** describable as a backstop for pricing at all, and §6 states that rather than implying protection that does not exist.
 
 ## 4. Behavior
 
@@ -386,7 +422,7 @@ Two edges the arithmetic forces, both previously unstated:
 | `gateway.enabled: false` — the deliberately ungoverned tier (P1, `local`) | The compiler does not run. Every Agent carries **`GovernanceSkipped=GatewayDisabled`** and **`Ready` is not withheld**: nothing was promised, so nothing is broken. A per-Agent condition is right here and a per-*class* one is not (row above): this one is actionable — turn the tier on — and is a distinct type so nothing keyed on errors fires. Loud rather than silent: the per-Agent condition today, plus the `NOTES.txt` and `plume doctor` report owed to design 07 §3 and design 08 §8 |
 | `gateway.enabled` flipped `true → false` with routes already applied | The transition first runs §3.3's **reverse-order removal** — routes detached before their policies and backends — and only then sets `GovernanceSkipped`. Without it the condition and `NOTES.txt` would both assert the agents are ungoverned while their routes kept serving |
 | Gateway Deployment replicas **differ from** `--gateway-replicas` in either direction (A3) | `BudgetEnforcementDegraded` with reason **`ReplicaSkew`**, message naming both numbers. Scale *up* under-enforces by the ratio; scale *down* silently halves every agent's effective budget — both are drift and an earlier draft caught only the first. The operator observes `Deployment/<release>-agentgateway` in the release namespace, read-only, and does **not** recompile (§3.1) |
-| Gateway Deployment not observable (absent, or installed out-of-band) | `BudgetEnforcementDegraded` with reason **`ReplicaUnverified`** — the declared divisor cannot be checked, so the `÷ replicas` bound is unverified rather than wrong. This is the P1 state and the state on any cluster where agentgateway is installed outside the chart; with the flag defaulting to `1`, an unobserved gateway running two replicas would otherwise under-enforce in silence |
+| Gateway Deployment not observable (absent, or installed out-of-band) | `BudgetEnforcementDegraded` with reason **`ReplicaUnverified`** — the declared divisor cannot be checked, so the `÷ replicas` bound is unverified rather than wrong. **Scoped to `gateway.enabled: true` with at least one rate actually derived**: at P1 the compiler does not run and no limiter exists, so a divisor cannot be unverified there and the Agent carries `GovernanceSkipped` alone. An earlier draft called this "the P1 state", which would have put both conditions on every stock Agent and left an operator unable to tell a tier choice from an incident |
 | Policy mutated out-of-band | SSA ownership conflict → re-assert + event |
 | Spend aggregation unavailable (design 04 down) | Gateway approximation tier still enforcing; `BudgetEnforcementDegraded` with reason **`AggregateUnavailable`** — distinct from `ReplicaSkew`/`ReplicaUnverified` above, because the remediations share nothing: one is a restart, the others a flag. A bare condition with three causes and one message is rule 8's loud-and-wrong |
 
@@ -481,3 +517,6 @@ Folded into §§3–8 rather than left as patches, following the integration pas
   So tightening leaves the compiler. Design 02 A25 moves `budget` and `expose` — the only two policy-surface fields feeding a mandatory concern — to the behaviour surface, and every tightening becomes a spec change gated on a candidate route by machinery that already exists and already works. `Quiescing` and `Witnessing` are deleted; `Create` and `Loosen` remain. **The serving route is never mutated**, which dissolves the live-route-withdrawal question r4 BLOCKER 1 raised and the stale-restart-skips-a-safety-stage question in BLOCKER 3, rather than answering them.
 
   Also fixed here: A18 asserted "every arm carries its own `model` field" **twenty lines below its own table showing `azureopenai` does not** — the pattern this review set exists to catch, in the sentence claiming to be grounded in the CRD. A `models`-scoped entry for `azureopenai` is now a compile error unless a non-v1 `deploymentName` supplies the constrained identity.
+- **A20 (2026-08-28) — evaluation order is removed, not softened.** The AuthN row asserted a native `auth → rate-limit → guards` order **while the Guards row two rows below disclaimed the same ordering**; both cannot be design. The assertion came from a blog post carried by the superseded research note, and the v1.4.1 re-verification listed it among the claims it could *not* establish. New §3.4.3 states why the answer matters — if the limiter runs first, a flood of unauthenticated requests exhausts a paying agent's budget, a denial-of-wallet needing no credential — and writes the discriminating experiment down so it is reproducible rather than re-derived. No row states an order until it runs.
+- **A21 (2026-08-28) — the pricing table is keyed on endpoint identity, and is two ConfigMaps.** A24 deleted the `<provider>/<model>` string everywhere else and left the pricing table as the last thing requiring the non-injective join, so `{azure, openai/gpt-4}` and `{azure/openai, gpt-4}` still collapsed to one row with potentially different prices and BAA status (r4 MAJOR 8). Rows are now a list matched most-specific-wins on the tuple, and an equal-specificity tie is a **load error** rather than a silent per-request choice. Separately (r4 MAJOR 7), the chart and the model-operator cannot own rows inside one YAML scalar — Kubernetes field ownership stops at `data.models` — so external and in-cluster prices live in **two** ConfigMaps with an identity appearing in both being a load error, and staleness evaluated on the chart-owned one alone so an internal upsert cannot clear the vendor-price alarm.
+- **A22 (2026-08-28) — propagation sweep for r4 MAJOR 6 and 16.** `PolicyIntent` still showed the flat `llm` shape A24 replaced; the `ReplicaUnverified` row called itself "the P1 state" when P1 runs no compiler and therefore has no divisor to leave unverified, which would have put a degradation condition and a tier-choice condition on the same stock Agent; design 02's reconcile outline still told implementers admission had "already enforced" a signed image, which A21 says nothing does. Each was in an authoritative body while the amendment log said otherwise — the failure mode that recurs in every round of this review set, which is why the docs gate now normalises formatting (r4 MAJOR 19) rather than matching raw bytes.
