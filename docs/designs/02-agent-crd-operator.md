@@ -239,7 +239,7 @@ Idempotent; server-side apply with field ownership; no state outside CR status +
 | New generation during canary | In-flight candidate drains to 0, recorded in `supersededCandidates` + event |
 | Rollback target GC'd | Prevented by §3.3's retention arithmetic and design 20's hold; if it still occurs, rollback is refused and the escalation names the gap |
 | Kill switch during rollout | `Killed` guard state wins over every rollout state; gate controller observes and abandons cleanly (design 22) |
-| Budget exhausted (exact tier) | `BudgetExhausted` + `phase: BudgetHeld`; serving weights 0 until the 00:00 UTC window resets |
+| Budget exhausted (backstop tier — not exact in USD, ADR-0028) | `BudgetExhausted` + `phase: BudgetHeld`; serving weights 0 until the 00:00 UTC window resets |
 | Spend aggregate unavailable (design 04 down) | Gateway approximation still enforcing; `BudgetEnforcementDegraded` — the exact-tier gap is visible |
 | Pricing row missing for a usd budget | `PolicyCompileFailed` naming the model (design 03 §3.5). **Not** `PricingStale`, which means the table is older than 30 days — one condition cannot carry both meanings and mean either (A15) |
 | Receipt pipeline gaps affecting this agent | `ReceiptsDegraded` (design 04) |

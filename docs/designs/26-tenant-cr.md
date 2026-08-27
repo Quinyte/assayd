@@ -39,7 +39,7 @@ status:
 | Data | Postgres: per-tenant **roles + RLS** on the audit index and eval results. **DBOS state is NOT RLS-isolated in soft mode (r1 f3)** — one shared runtime process holds one DBOS runtime role, and RLS discriminates by connection role; soft-mode DBOS isolation is process-level only. Hard mode resolves it (per-tenant runtime + role). Per-tenant databases for IdP/FGA |
 | Identity | Zitadel **organization** (06 `ensureTenant`) — the interface already exists for exactly this |
 | Authz | per-tenant FGA **store** (24) — stores are OpenFGA's native isolation unit |
-| Traffic | gateway **partition** — **a new compiler concern, honestly (r1 f1)**: a `TenantPolicyIntent` (tenant-scoped target kind) recorded as a design 03 amendment with its own row; quota enforcement inherits ADR-0020's **approximation tier** (rate ÷ replicas — tenant quotas are *not* exactly enforced at the gateway, same arithmetic as agent budgets), and the **exact tier is a per-tenant rollup in design 04's audit index** (rows already carry `tenant` — cheap, recorded as a 04 amendment). Budget *nesting* (per-agent within per-tenant) is a separate axis from approximate-vs-exact |
+| Traffic | gateway **partition** — **a new compiler concern, honestly (r1 f1)**: a `TenantPolicyIntent` (tenant-scoped target kind) recorded as a design 03 amendment with its own row (approximation tier; the backstop tier is not exact in USD — ADR-0028); quota enforcement inherits ADR-0028's **approximation tier** (rate ÷ replicas — tenant quotas are *not* exactly enforced at the gateway, same arithmetic as agent budgets), and the **exact tier is a per-tenant rollup in design 04's audit index** (rows already carry `tenant` — cheap, recorded as a 04 amendment). Budget *nesting* (per-agent within per-tenant) is a separate axis from approximate-vs-exact |
 | Packs | per-tenant source allowlist (18) — a tenant cannot install from another's sources |
 | Workflows | the 21 r2 f4 seam **resolved here**: hard mode runs a per-tenant `workflow-runtime` inside the vCluster; soft mode keeps the shared runtime — whose honest exposure is **three credential classes** (r1 f3): N tenants' JetStream consumer creds, N tenants' `workflow-actor` client credentials (the identities the gateway keys budgets/ReBAC on), and one shared DBOS role. **Hard mode is the answer for untrusted tenants** |
 
@@ -73,7 +73,7 @@ Create → fan-out (idempotent, per-layer conditions). **Suspend** → gateway p
 | Failure | Behavior |
 |---|---|
 | Partial fan-out | Per-layer conditions name the stuck layer; idempotent retry; tenant is not `Ready` and gets no traffic until all layers are |
-| Quota exceeded | Gateway partition enforces (429 with tenant context); `QuotasEnforced` reflects; per-agent budgets still apply *within* the tenant quota (two-tier, like ADR-0020's own tiers) |
+| Quota exceeded | Gateway partition enforces (429 with tenant context); `QuotasEnforced` reflects; per-agent budgets still apply *within* the tenant quota (two-tier, like ADR-0028's own tiers) |
 | vCluster unhealthy (hard) | Tenant `Degraded`; host-side platform unaffected — blast radius is the design's point |
 | Cross-tenant reference attempt (Agent in A refs graph in B) | Admission denies (namespace/vCluster boundary + gateway partition); logged as a security event |
 | Tenant deleted upstream in IdP | `IdPReady=False`; no auto-recreate (identity objects are never auto-managed away — 06 D3) |

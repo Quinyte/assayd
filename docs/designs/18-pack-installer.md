@@ -51,7 +51,7 @@ provides:                       # the CLOSED facet catalog (v1)
 
 | Facet | Applied as |
 |---|---|
-| filters | Filter *contributions* with an explicit **`priority`** → the compiler merges multi-source contributions per concern **sorted by (priority band, source name)** — byte-deterministic; **platform/compliance bands outrank pack bands by construction** (ADR-0014 guards are never reorderable by a pack); two contributions touching the same *field* = hard install error naming both sources (r1 f1; recorded as an ADR-0020 amendment note + 03 golden-test case). Optional `selector` (namespaces/labels) scopes attachment; default all-agents (r1 f2) |
+| filters | Filter *contributions* with an explicit **`priority`** → the compiler merges multi-source contributions per concern **sorted by (priority band, source name)** — byte-deterministic; **platform/compliance bands outrank pack bands by construction** (ADR-0014 guards are never reorderable by a pack); two contributions touching the same *field* = hard install error naming both sources (r1 f1; recorded as an ADR-0028 amendment note + 03 golden-test case). Optional `selector` (namespaces/labels) scopes attachment; default all-agents (r1 f2) |
 | skills / templates / patterns | Indexed in the directory (`packs.*` KV space) — CLI/wizard read from there; content stays in the registry (the CR records the digest; no second copy) |
 | readers / catalog / runners | Type registrations (KV) consumed by designs 11/16 when a CR names them |
 | dashboards / signals | Merged into the 10-pack content (name-collision ⇒ install error, never silent override) |

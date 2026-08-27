@@ -7,7 +7,7 @@
 
 ## 1. Purpose & scope
 
-The governance ring's mechanics (FR-33): multi-agent **cyclic** runaway stopped at the data plane (volumetric runaway is budgets' job — §3), approvals as durable pauses, the kill switch. Everything here is **emitted by design 03** and enforced by the gateway — agents need nothing, which is the point. Out of scope: budgets (ADR-0020, shipped), ReBAC (24).
+The governance ring's mechanics (FR-33): multi-agent **cyclic** runaway stopped at the data plane (volumetric runaway is budgets' job — §3), approvals as durable pauses, the kill switch. Everything here is **emitted by design 03** and enforced by the gateway — agents need nothing, which is the point. Out of scope: budgets (ADR-0028, shipped), ReBAC (24).
 
 ## 2. Doctrine & charter gates
 
@@ -26,7 +26,7 @@ Why stateless matters: no cycle-detection service, no shared state, no new pod �
 
 **What this does NOT bound — stated because the omission is easy to miss (A1).** The lineage header describes the **ancestor chain of one request**, so every rule above bounds *ancestral* revisits and nothing else. Agent call graphs are trees with concurrency, not paths: two sibling branches that each legitimately call agent X once produce two lineages each containing X once, and no stateless check can see that X ran twice. A breadth-2, depth-6 fan-out whose leaves each re-enter one agent stays inside `maxHops` **and** inside any `maxVisits` occurrence budget while invoking that agent **64 times**.
 
-So this design bounds **cyclic** runaway. **Volumetric** runaway is bounded only by the budgets of ADR-0020 — which §1 puts out of scope, and which a fan-out storm can exhaust in seconds. Covering fan-out would require counting invocations across concurrent siblings, i.e. shared state, forfeiting the property that makes this design cost 0 pods; the deliberate choice is to leave it to budgets and say so. `plume doctor`'s lineage self-test therefore proves cycle enforcement, never cost enforcement. The prior art for the mechanism is [RFC 8586 `CDN-Loop`](https://www.rfc-editor.org/rfc/rfc8586.html) and BGP `allowas-in`, both of which share exactly this limitation for exactly this reason.
+So this design bounds **cyclic** runaway. **Volumetric** runaway is bounded only by the budgets of ADR-0028 — which §1 puts out of scope, and which a fan-out storm can exhaust in seconds. Covering fan-out would require counting invocations across concurrent siblings, i.e. shared state, forfeiting the property that makes this design cost 0 pods; the deliberate choice is to leave it to budgets and say so. `plume doctor`'s lineage self-test therefore proves cycle enforcement, never cost enforcement. The prior art for the mechanism is [RFC 8586 `CDN-Loop`](https://www.rfc-editor.org/rfc/rfc8586.html) and BGP `allowas-in`, both of which share exactly this limitation for exactly this reason.
 
 ## 4. Approvals: durable pause, retry-shaped
 

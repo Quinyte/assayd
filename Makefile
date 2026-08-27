@@ -39,7 +39,7 @@ manifests: $(CONTROLLER_GEN) ## CRDs + RBAC
 	$(CONTROLLER_GEN) crd rbac:roleName=plume-operator paths=./... output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
 
 ## ---------- the loop ----------
-.PHONY: fmt vet unit envtest chart chart-conform test race cover e2e verify
+.PHONY: fmt vet unit envtest docs chart chart-conform test race cover e2e verify
 fmt: ; go fmt ./...
 vet: ; go vet ./...
 unit: ## pure logic, no cluster
@@ -50,6 +50,9 @@ envtest: $(SETUP_ENVTEST) ## reconcile behaviour against a real API server
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S) -p path)" go test ./test/envtest/... -count=1
 cover: ## coverage over changed packages
 	go test ./internal/... ./api/... -coverprofile=cover.out -count=1 && go tool cover -func=cover.out | tail -1
+docs: ## a superseded guarantee must not survive in the text implementers build from
+	go test ./test/docs/... -count=1
+
 chart: ## render the chart and hold it to the doctrine (pods, stateful deps, RBAC)
 	helm lint charts/plume
 	go test ./test/chart/... -count=1
@@ -61,7 +64,7 @@ chart-conform: ## validate rendered manifests against the k8s schemas we support
 			-kubernetes-version $$v -ignore-missing-schemas || exit 1; \
 	done
 
-test: fmt vet unit envtest chart ## the pre-commit gate
+test: fmt vet unit docs envtest chart ## the pre-commit gate
 e2e: ## real cluster path on k3d (design 07's matrix, locally)
 	./hack/e2e.sh
 verify: ## what CI runs — generation must be reproducible

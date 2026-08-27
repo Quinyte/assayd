@@ -33,7 +33,7 @@ spec:
     - {name: cost_regression, maxIncrease: 15%}
     - {name: custom_geval, judge: {model: gpt-x@pinned, promptRef: pa-judge-v2}}   # LLM-judge, pinned
   gate: {minScore: 0.85, blocking: true}
-  budget: {tokensPerRun: 500k, usdPerRun: 5}    # the eval principal's own budget (ADR-0020 pattern)
+  budget: {tokensPerRun: 500k, usdPerRun: 5}    # the eval principal's own budget (ADR-0028 pattern)
 status:
   lastRun: {report: oci://…@sha256:…, datasetDigest: …, judgeDigest: …, scores: {…}, verdict: pass}
   conditions: [DatasetReady, LastRunPassed]
@@ -42,7 +42,7 @@ status:
 ## 4. The gate flow (with design 02's rollout machine)
 
 1. Candidate reaches `Held` (02 §3.3) → gate controller sees `gates:` on the Agent CR → `DatasetReady?` (build/refresh if stale, §5) → launches the **eval Job**.
-2. The Job drives **real A2A tasks through the gateway** at the candidate header-route. **Identity model (r1 f1)**: SVIDs are per-pod attested identities, never lent — the eval Job pod gets **its own SVID** via the existing label template (`spiffe://…/eval/<suite>/<run>`), and the compiler adds that principal to the candidate route's **admitted set at Job launch, removing it at Job end** — a narrow, temporary, compiled grant (the design 01 A2 pattern applied to routes; recorded as a design 03 row + ADR-0020 note). The gate controller never proxies eval traffic. **Runner trust bar** (runners are third-party pack images): signed image required (18), and the eval principal's compiled reachability is exactly {candidate route, pinned KG version, judge LLM egress} — fail-closed; the budget bounds the blast radius. Eval traffic exercises the identical path as prod, and every eval task produces **receipts** (§6).
+2. The Job drives **real A2A tasks through the gateway** at the candidate header-route. **Identity model (r1 f1)**: SVIDs are per-pod attested identities, never lent — the eval Job pod gets **its own SVID** via the existing label template (`spiffe://…/eval/<suite>/<run>`), and the compiler adds that principal to the candidate route's **admitted set at Job launch, removing it at Job end** — a narrow, temporary, compiled grant (the design 01 A2 pattern applied to routes; recorded as a design 03 row + ADR-0028 note). The gate controller never proxies eval traffic. **Runner trust bar** (runners are third-party pack images): signed image required (18), and the eval principal's compiled reachability is exactly {candidate route, pinned KG version, judge LLM egress} — fail-closed; the budget bounds the blast radius. Eval traffic exercises the identical path as prod, and every eval task produces **receipts** (§6).
 3. Runner writes the structured report (per-case results + scores) → report artifact (content-addressed) + Postgres rows + CR status; verdict per §7.
 4. **pass** → controller signals the operator: weight shift begins (canary steps). **Canary progression is judged on golden signals (SLOs), not re-evaluation** — the eval gate runs once, pre-canary; live-traffic degradation is the drift/SLO machinery's job (10/20). Stated to kill scope creep.
 5. **fail** → candidate deleted (02), report linked in status + PR annotation; `GatesPassed=False` with the failing metrics named.

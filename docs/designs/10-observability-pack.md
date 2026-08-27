@@ -38,7 +38,7 @@ Derived at the tap/OpenObserve from hop spans — definitions live in one `signa
 |---|---|---|
 | `task_success_rate` | terminal A2A task status ok ÷ total, per agent/revision | drift SLO burn (20), rollout observe |
 | `tool_error_rate` | hop status error ÷ tool hops | alerts |
-| `tokens_per_task`, `usd_per_task` | usage sums per task (null-pricing excluded, counted) | budget panels, ADR-0020 backstop visibility |
+| `tokens_per_task`, `usd_per_task` | usage sums per task (null-pricing excluded, counted) | budget panels, ADR-0028 backstop visibility |
 | `latency_per_hop` p50/p95 | by hop.type | perf panels |
 | `loop_depth` | max lineage.depth per task | loop governance (22) |
 | `handoff_count` | a2a hops per task | swarm visibility |

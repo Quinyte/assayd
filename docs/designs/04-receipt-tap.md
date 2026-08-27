@@ -3,7 +3,7 @@
 - **Status**: **approved** — critique PASS at r2 (reviews/04-review.md) · ADR-0021
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0002, 0003 (semconv — see pin note §3.1), 0010 (principal chain), 0013 (tenancy), 0014 (compliance hooks) · interfaces: 03 (OTLP config + pricing + **budget backstop consumer**), 16/17 (fidelity consumers), 26 (tenant fan-out seam)
-- **Research**: `docs/research/agentgateway-2.2-2026-08.md` (OTLP export claims) · `docs/research/otel-genai-semconv-2026-08.md` (pin mechanism)
+- **Research**: `docs/research/agentgateway-v1.4.1-2026-08.md` (OTLP export claims — note the field is `spec.frontend.tracing` and is **Gateway-scoped**, superseding the `2.2` note's `frontendPolicies`) · `docs/research/otel-genai-semconv-2026-08.md` (pin mechanism)
 
 ## 1. Purpose & scope
 
@@ -41,7 +41,7 @@ agentgateway natively exports OTLP traces (GenAI conventions incl. MCP tool span
 
 - **`receipt_id` is a pure function of the span** — every re-transform of a redelivered batch yields the same ID; `Nats-Msg-Id: receipt_id` then actually dedupes. Object-store keys derive the same way (idempotent overwrite-same-content).
 - **Dedup window sized to the retry horizon**: stream `Duplicates` = gateway exporter max retry horizon (default config: 10m exporter horizon → 15m window). Memory: ~150B/entry → at the 500/s split threshold, 15m ≈ 450k entries ≈ **~70MB** — stated, budgeted, and alarmed; window and horizon ship as one tunable pair.
-- `usd_est` from the design-03 pricing table; **unresolvable pricing ⇒ `usd_est: null` + `pricing: "unresolved"` + counter** — never 0; aggregates treat null as unknown (r1 f11).
+- `usd_est` from the design-03 pricing table (agentgateway v1.4.1; the former `2.2` note is superseded); **unresolvable pricing ⇒ `usd_est: null` + `pricing: "unresolved"` + counter** — never 0; aggregates treat null as unknown (r1 f11).
 - Bodies >8KB offload; `capture.level` compiled per-agent; unknown fields tolerated (additive; breaking ⇒ `receipt/v2`, N/N−1).
 
 ### 3.3 Storage & tenancy (r1 f3)
