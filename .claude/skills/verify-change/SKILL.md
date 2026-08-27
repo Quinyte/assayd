@@ -65,9 +65,12 @@ Write it into the amendment as owed and do not build on it.
 - **unit** (`api/`, `internal/`) — pure logic, asserted against the generated artifact.
 - **docs** (`test/docs/`) — text only. Proves no withdrawn guarantee survives; proves nothing
   about behaviour.
-- **conformance** (`test/conformance/`, `make conformance`) — the pinned dependency contract.
-  Needs a cluster. This is the layer that catches an upstream change, and the only layer whose
-  failure means *the world moved*, not that we broke something.
+- **conformance, offline** (`test/conformance/`, in `make test`) — schema facts read from the
+  vendored, digest-pinned dependency artifact. Hermetic; no network, no cluster.
+- **conformance, cluster** (`make conformance-cluster`) — behaviour measured against a real
+  gateway at the pinned tag; provisions and tears down. These two are the only layers whose
+  failure means *the world moved* rather than that we broke something, and each assertion
+  names the design sentence it protects.
 - **envtest** — a real API server, no kubelet. Every availability claim here is against a
   status the test wrote.
 - **e2e** — the only layer that can claim a pod runs and traffic flows.

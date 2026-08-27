@@ -39,7 +39,7 @@ manifests: $(CONTROLLER_GEN) ## CRDs + RBAC
 	$(CONTROLLER_GEN) crd rbac:roleName=plume-operator paths=./... output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
 
 ## ---------- the loop ----------
-.PHONY: fmt vet unit envtest docs conformance chart chart-conform test race cover e2e verify
+.PHONY: fmt vet unit envtest docs conformance conformance-cluster chart chart-conform test race cover e2e verify
 fmt: ; go fmt ./...
 vet: ; go vet ./...
 unit: ## pure logic, no cluster
@@ -55,6 +55,9 @@ docs: ## a superseded guarantee must not survive in the text implementers build 
 
 conformance: ## the dependency contract our design asserts, read from the pinned artifact
 	go test ./test/conformance/... -count=1
+
+conformance-cluster: ## the same contract, measured against a real gateway (provisions and tears down)
+	./hack/conformance-cluster.sh
 
 chart: ## render the chart and hold it to the doctrine (pods, stateful deps, RBAC)
 	helm lint charts/plume
