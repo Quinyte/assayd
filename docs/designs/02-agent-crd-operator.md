@@ -48,7 +48,9 @@ spec:
       requiresApproval: false                     # true ⇒ approval interceptor (design 22)
   llm:                                            # designs 03/20/25 compile against this
     providers: [openai/gpt-x, internal/pa-classifier]
-    egressAllowlist: [...]                        # compliance profiles may pin (ADR-0014)
+    egressAllowlist:                              # typed entries (A22); compliance profiles may pin (ADR-0014)
+    - {provider: anthropic}
+    - {provider: openai, models: [gpt-4o]}
     fallback: {provider: internal, model: pa-classifier}   # ModelDrifted target (design 20)
   budget: {tokensPerDay: 2000000, usdPerDay: "40.00", taskTimeout: 10m, maxHops: 8}
                                                   # per-day windows reset 00:00 UTC; remaining in status
@@ -383,3 +385,9 @@ A21 (2026-08-26, from `reviews/02-codex-review.md` BLOCKER 3; decided by the use
    **Unconditional, with no local-profile relaxation** (revised 2026-08-27, `reviews/03-codex-review-r2.md` BLOCKER 6). An earlier version said the `local` profile may relax it for `:dev` loops. CRD validation has no Helm profile, namespace tier or operator flag in its evaluation context, and one schema applies cluster-wide — so a CEL alternative permitting `:dev` would permit that mutable tag in **production** namespaces, which is exactly the bypass A21 exists to close, while omitting the alternative makes the promised relaxation nonexistent. There was never a middle option. The developer loop resolves its own build to a digest and writes that digest, which is what CI already does. If a mutable-tag path is ever genuinely needed it requires a separate namespace-scoped admission mechanism with an explicit dev trust boundary, and cannot be described as profile-sensitive CEL.
 
 **The honesty half is the larger correction.** §5 said an unsigned image is "Rejected at admission (CEL)" and §6 listed "cosign verification" among four enforced admission rules. **CEL cannot verify a signature, and `charts/plume/` ships no admission policy of any kind**, so all four were unenforced and one is not CEL-expressible at all. §5 and §6 now state, per rule, what actually enforces it. Signature verification needs a Sigstore policy-controller or a Kyverno `verifyImages` binding on the workload namespaces, **owed to design 07 §3** — and digest-pinning is what will make it meaningful when it lands, because a signature is verified against a digest. Until then the design says plainly that nothing verifies signatures.
+
+A22 (2026-08-27, from design 03 A16) — **`llm.egressAllowlist` becomes a typed list.** It is `[]string` today, and design 03 §3.4.1.1 shows a bare string is ambiguous exactly where it decides reachability: given `azure/openai/gpt-4`, an entry `azure/openai` is a provider prefix to one implementer and a host to another, and the two emit different reachable endpoints. Each entry now carries exactly one of `provider` (with optional `models`) or `host`. This is a **breaking schema change**, correct to make before v1beta1 and not after.
+
+It also sharpens the classification. A16 keeps the whole field on the **behaviour surface** and symmetric (§3.3 rule 4) — but note the field is a *ceiling*, not a selection: what an Agent may reach is `providers[] ∪ {fallback}` **∩** this list, and design 03 emits the requested set, never the permitted one. Widening the ceiling still mints a revision, because it widens what a subsequent `providers` edit could reach without further review.
+
+**Owed**: `llm.providers` is still a flat `[]string` while `llm.fallback` is structured `{provider, model}`, which is the non-injective key Codex r2 MAJOR 4 flags — `{azure, openai/gpt-4}` and `{azure/openai, gpt-4}` canonicalize identically. Making `providers` typed in the same pass is the obvious fix and is **not** drafted here; it touches A12's projection and every example in this design.
