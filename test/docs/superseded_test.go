@@ -96,6 +96,36 @@ var rules = []rule{
 		why:     "the CRD has no egress field; the control is Backend construction (design 03 §3.4.1)",
 	},
 	{
+		name:    "overshoot-bound",
+		banned:  regexp.MustCompile(`(?i)overshoot bound|measured overshoot|excess is bounded`),
+		allowed: regexp.MustCompile(`(?i)withdraw|retract|no bound|unbounded|refuted|is false|supersed`),
+		why:     "the spike measured 100x a one-replica budget under concurrency; no bound is published (design 03 A13)",
+	},
+	{
+		name:    "pricing-damage-bounded",
+		banned:  regexp.MustCompile(`(?i)backstop bounds|bounds the damage|damage is bounded`),
+		allowed: regexp.MustCompile(`(?i)withdraw|retract|not exact|no longer|supersed`),
+		why:     "the receipt tier prices from the same table it is meant to backstop; it bounds nothing (ADR-0028)",
+	},
+	{
+		name:    "in-worker-poll",
+		banned:  regexp.MustCompile("(?i)acceptance poll|poll each resource|bounded: 30s|on the reconcile worker"),
+		allowed: regexp.MustCompile(`(?i)earlier draft|supersed|no longer|replaced|state machine`),
+		why:     "A15 replaced the blocking poll with an event-driven staged reconcile; a worker that sleeps starves the fleet",
+	},
+	{
+		name:    "allowlist-equality",
+		banned:  regexp.MustCompile(`(?i)set equals the allowlist|equals the allowlist|exactly the resolved allowlist`),
+		allowed: regexp.MustCompile(`(?i)earlier draft|supersed|conflat|subset|not equality`),
+		why:     "egressAllowlist is a ceiling, not a selection: requested must be a SUBSET of permitted (A16)",
+	},
+	{
+		name:    "spec-only-hash",
+		banned:  regexp.MustCompile(`(?i)computed from spec alone|hashed by referent`),
+		allowed: regexp.MustCompile(`(?i)no longer|earlier|retract|supersed|was never|A20`),
+		why:     "A20 hashes env sources by content, so the digest is no longer spec-only",
+	},
+	{
 		// Scoped: routing, metering and budgeting on Mcp-Name is still valid at
 		// v1.4.1 (SEP-2243), and designs 01/24 use it that way. Only design 03
 		// claimed it as the TOOL FILTER, which is what backend.mcp.authorization
@@ -215,6 +245,58 @@ func TestNoSupersededGuaranteeInAnAuthoritativeBody(t *testing.T) {
 				}
 				t.Errorf("%s [%s]\n    %s\n    → %s", path, r.name, strings.TrimSpace(line), r.why)
 			}
+		}
+	}
+}
+
+// ruleFixtures is written INDEPENDENTLY of the rules above: one sentence per
+// rule that must be caught. It exists because a Codex review mutation-checked
+// this gate and found the hole it was built to close — deleting a rule from the
+// production slice deleted its own check and the suite stayed green, which is
+// exactly the defect the same reviewer had already found in design 03's emitter
+// registry. Cases derived from production data cannot pin production data.
+//
+// A deleted rule leaves its fixture uncaught. A weakened regex stops matching.
+// Either fails here.
+var ruleFixtures = map[string]string{
+	"superseded-research-note":  "See `agentgateway-2.2-2026-08.md` for the OTLP claims.",
+	"nonexistent-release":       "The compiler targets agentgateway 2.2 resources.",
+	"cuts-early-guarantee":      "The limiter is conservative: it cuts early, never late.",
+	"exact-usd-tier":            "The exact tier is the receipt backstop.",
+	"nonexistent-tracing-field": "Receipts are configured through frontendPolicies.",
+	"superseded-adr":            "Compilation follows ADR-0020's ordering.",
+	"egress-as-restriction":     "The allowlist compiles to a Backend restriction.",
+	"header-tool-filter":        "Tools are filtered by matching the Mcp-Name header.",
+	"overshoot-bound":           "Status publishes a measured overshoot bound per replica.",
+	"pricing-damage-bounded":    "A tampered table is safe because the backstop bounds the damage.",
+	"in-worker-poll":            "The acceptance poll runs on the reconcile worker for up to 30s.",
+	"allowlist-equality":        "The emitted Backend's provider set equals the allowlist.",
+	"spec-only-hash":            "The revision digest is computed from spec alone.",
+}
+
+// TestEveryRuleIsPinnedByAnIndependentFixture kills the mutation that deleting a
+// production rule survives.
+func TestEveryRuleIsPinnedByAnIndependentFixture(t *testing.T) {
+	byName := map[string]rule{}
+	for _, r := range rules {
+		byName[r.name] = r
+	}
+	for name, fixture := range ruleFixtures {
+		r, ok := byName[name]
+		if !ok {
+			t.Errorf("rule %q has a fixture but no rule — deleting a rule must fail here, not pass silently", name)
+			continue
+		}
+		if !r.banned.MatchString(fixture) {
+			t.Errorf("rule %q no longer catches its own fixture:\n    %s\n    the pattern was weakened", name, fixture)
+		}
+		if r.allowed != nil && r.allowed.MatchString(fixture) {
+			t.Errorf("rule %q rescues its own fixture — the retraction clause is too broad to catch an assertion", name)
+		}
+	}
+	for _, r := range rules {
+		if _, ok := ruleFixtures[r.name]; !ok {
+			t.Errorf("rule %q has no independent fixture; add one so its deletion is detectable", r.name)
 		}
 	}
 }
