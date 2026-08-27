@@ -253,25 +253,42 @@ Three consequences the old wording hid:
 
 A11 settled the mechanism and left the language undefined, which is not an implementable control. Three things follow.
 
-**Entries are typed, and the schema must change to carry them.** `llm.egressAllowlist` is `[]string` today, and a bare string is ambiguous exactly where it matters: given `azure/openai/gpt-4`, an entry `azure/openai` is a provider prefix to one implementer and a host-like identifier to another, and they emit different reachable endpoints. The field becomes a discriminated list:
+**Entries carry the provider's own identity, because a name and a host are both too weak (A18).** An earlier draft used `provider:` or `host:`, which the shipped CRD refutes: a managed provider's destination depends on **instance** fields, not on the arm alone. Verified in the v1.4.1 `AgentgatewayBackend` schema:
+
+| Arm | Instance fields it carries |
+|---|---|
+| `anthropic`, `openai` | `model` |
+| `azureopenai` | `apiVersion`, `deploymentName`, `endpoint` |
+| `vertexai` | `model`, `projectId`, `region` |
+| `bedrock` | `model`, `region`, `guardrail` |
+| `custom` | `backendRef`, `formats`, `model` |
+
+Two Azure OpenAI resources therefore share the `azureopenai` arm and differ in `endpoint` and `deploymentName` — and may differ in BAA status. An arm-level entry cannot tell them apart, so it must either reject a valid endpoint or permit both. A host-only entry is no better: it carries no port, and two services on one host at different ports are indistinguishable.
+
+Entries are therefore an **endpoint identity**, discriminated by arm and carrying that arm's instance fields:
 
 ```yaml
 egressAllowlist:
-  - provider: anthropic                    # every model this provider serves
-  - provider: openai
-    models: [gpt-4o, gpt-4o-mini]          # narrowed to named models
-  - host: llm.internal.example.com         # an explicit endpoint, for custom providers
+  - arm: anthropic                              # every model this arm serves
+  - arm: openai
+    models: [gpt-4o, gpt-4o-mini]               # narrowed
+  - arm: azureopenai
+    instance: {endpoint: acme.openai.azure.com, deploymentName: gpt4o-prod}
+  - arm: custom
+    endpoint: {scheme: https, host: llm.internal.example.com, port: 8443, pathPrefix: /v1}
 ```
 
-Exactly one of `provider` or `host` per entry; `models` is meaningful only with `provider`. Anything unresolvable is `PolicyCompileFailed` naming the entry — **never dropped**, because a dropped allow narrows nothing while a dropped *entry* silently widens the emitted set.
+**`models` is enforceable, and that is a property of the CRD rather than a hope**: every arm carries its own `model` field, so a narrowed model set compiles into the emitted provider block. An entry naming a model the arm cannot express is a compile error. Anything unresolvable is `PolicyCompileFailed` naming the entry — **never dropped**, because a dropped entry silently widens the emitted set.
 
 **The catalog is plume's, because agentgateway ships none.** A `ConfigMap plume-provider-endpoints`, chart-shipped and versioned exactly like the pricing table (§3.5), maps each `LLMProvider` arm — the closed set `openai azureopenai azure anthropic gemini vertexai bedrock custom`, verified in the shipped CRD — to its effective host(s). It carries the same staleness and single-writer rules as the pricing table, and for the same reason: two writers inside one YAML scalar cannot be given disjoint ownership.
 
 **Requested ⊆ permitted, and never equality.** A11 said the emitted Backend's provider set must *equal* the allowlist. That conflates two different things: `llm.providers` is what the Agent **requested**, `egressAllowlist` is a **ceiling** on what it may reach. Under equality, a compliance profile permitting `{A,B,C}` for an Agent that requested only `{A}` would emit a Backend that can reach B and C — turning a permission into a destination. The rule is:
 
 - the emitted Backend enumerates the resolved **requested** set, `providers[] ∪ {fallback}` (§3.5);
-- `egressEnumerated` holds iff every **effective host** in that Backend is in the resolved allowlist;
+- `egressEnumerated` holds iff every emitted provider's **resolved endpoint identity** — the tuple `{arm, scheme, host, port, pathPrefix, instance fields, model}` — is matched by an allowlist entry;
 - a destination is **never** added because it is permitted.
+
+The predicate compares **tuples, not hostnames**. An earlier draft compared effective hosts, which cannot separate two ports on one host or two Azure deployments behind one endpoint.
 
 **What this guarantee does not cover, stated rather than implied.** The predicate is over **names**, not addresses: plume does not resolve DNS, so a permitted hostname that later repoints is outside the control, and pinning addresses would break every managed provider. `host`/`port` overrides are themselves checked against the allowlist, since a managed-provider Backend is not pinned to its vendor's endpoint (§3.4.1). `internal/*` resolves inside any allowlist by construction — an in-cluster Service is not egress. And `dynamicForwardProxy` is never emitted at all.
 
@@ -308,9 +325,9 @@ data:
 
 The `usdPerDay` half belongs on the CRD as CEL and is landed by design 02 A15, since §3.1 there is the authoritative schema; the ConfigMap half is validated at load. **Neither is implemented yet** — `config/crd/plume.dev_agents.yaml` currently has a bare `type: string`.
 
-**Resolution is by literal key, longest-prefix, and the compiler never splits a model string.** `spec.llm.providers[]` entries are opaque strings (`openai/gpt-x`, `azure/openai/gpt-4`); a key is either that string exactly or a literal wildcard ending `/*`. Order: exact → longest matching wildcard → **compile error**. Longest-prefix is total and admits no tie, so the "at most one wildcard per provider" rule an earlier draft relied on is unnecessary and is dropped — `azure/*` and `azure/openai/*` may both exist and the longer wins.
+**Resolution is by endpoint identity, and no string is ever joined or split (A18).** Design 02 A24 makes `providers[]`, `fallback` and every allowlist entry the same tuple — `{arm, instance fields, model}` — so the flat-string key an earlier draft resolved by longest prefix no longer exists. That draft canonicalized `{provider, model}` with a `/`, which `internal/revision/revision.go:66` already records as non-injective: `{azure, openai/gpt-4}` and `{azure/openai, gpt-4}` collided on one row while being different endpoints, and a golden fixture pinning "a slash-containing model in both forms" could not have detected it, because production had already collapsed them.
 
-Splitting is avoided deliberately: `internal/revision/revision.go:66` already records the hazard in the other direction, where joining on `/` let `{provider: azure, model: openai/gpt-4}` and `{provider: azure/openai, model: gpt-4}` collide. `llm.fallback` is structured `{provider, model}` and canonicalizes to `provider + "/" + model` for lookup; a golden fixture pins a slash-containing model name in both forms. That `providers[]` is flat while `fallback` is structured is a real schema inconsistency and the right time to fix it is before v1beta1 — recorded as an open item, not resolved here.
+Lookup matches on the tuple. An entry matching nothing is `PolicyCompileFailed` naming it; a wildcard is expressed as an entry that omits `model`, not as a string suffix. **Owed**: the pricing ConfigMap is still keyed by the flat string it was given, and keying it on the same tuple is the obvious follow-through (design 02 A24).
 
 A model that resolves to nothing is `PolicyCompileFailed` naming the offending `spec.llm.providers[i]` (or `spec.llm.fallback`) — never a default price, because a guessed price is a guessed budget.
 
@@ -466,3 +483,4 @@ Folded into §§3–8 rather than left as patches, following the integration pas
   **Transaction kind is now persisted, because the stages differ.** `Create` costs nothing; `Tighten` quiesces first and the route answers **HTTP 500** for its whole convergence window; `Loosen` keeps the route live. Anything not *provably* a loosening is a `Tighten` — fail-closed by default, because being wrong that way costs availability while the other way serves the old permissive rule. The 500 is documented rather than discovered, since §2.6 measured it and an operator who is not told will read it as an outage.
 
   **The fail-open arm is deleted.** §3.3.2 said a tightening "must verify by observation — **or accept** that a silent NACK leaves the old rule serving". That second arm is not an option: §2.8 measured exactly that state reporting fully converged while the removed rule stayed callable. Replaced by `Witnessing` — the route is restored behind a match admitting only the probe identity, and a probe the new rule must reject has to be observed rejected before the match widens to real traffic. Attribution is sound because the witness runs on the **same route and policy attachment** that will carry production traffic, not a copy, and `Publishing` only widens a match rather than touching a policy. **A concern with no sound witness cannot be tightened online** — it goes through the revision path and is gated, rather than publishing on the absence of an error.
+- **A18 (2026-08-27) — allowlist entries carry endpoint identity, and the flat key is gone.** Codex r3 BLOCKER 4's remainder. A16's `provider:`-or-`host:` entry is refuted by the shipped v1.4.1 CRD: each provider arm carries its own **instance** fields (`azureopenai`: `endpoint`/`deploymentName`/`apiVersion`; `vertexai`: `projectId`/`region`; `bedrock`: `region`/`guardrail`), so two Azure OpenAI resources share one arm, differ in endpoint and deployment, and may differ in BAA status — an arm-level entry must reject a valid endpoint or permit both. A host-only entry carries no port, so two services on one host are indistinguishable. Entries are now `{arm, instance fields}` plus optional `models`, and `egressEnumerated` compares **resolved tuples, not hostnames**. `models` turns out to be genuinely enforceable rather than decorative: every arm carries its own `model` field, so a narrowed set compiles into the emitted provider block, and a model the arm cannot express is a compile error. §3.5's flat pricing key and its longest-prefix rule are deleted with the string they resolved — design 02 A24 types `providers` and `fallback` to the same identity, which also closes Codex r3 MAJOR 4's non-injective join. **Owed**: the pricing ConfigMap is still keyed on the flat string.

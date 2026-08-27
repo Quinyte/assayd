@@ -47,11 +47,13 @@ spec:
                                                   # is needed — and none may be cross-namespace
       requiresApproval: false                     # true ⇒ approval interceptor (design 22)
   llm:                                            # designs 03/20/25 compile against this
-    providers: [openai/gpt-x, internal/pa-classifier]
-    egressAllowlist:                              # typed entries (A22); compliance profiles may pin (ADR-0014)
-    - {provider: anthropic}
-    - {provider: openai, models: [gpt-4o]}
-    fallback: {provider: internal, model: pa-classifier}   # ModelDrifted target (design 20)
+    providers:                                    # typed since A24; see below
+    - {arm: openai, model: gpt-x}
+    - {arm: custom, model: pa-classifier, endpoint: {host: pa.svc, port: 8000}}
+    egressAllowlist:                              # typed entries (A22/A24); profiles may pin (ADR-0014)
+    - {arm: anthropic}
+    - {arm: openai, models: [gpt-4o]}
+    fallback: {arm: custom, model: pa-classifier, endpoint: {host: pa.svc, port: 8000}}  # design 20
   budget: {tokensPerDay: 2000000, usdPerDay: "40.00", taskTimeout: 10m, maxHops: 8}
                                                   # per-day windows reset 00:00 UTC; remaining in status
                                                   # usdPerDay is a decimal STRING: ^[0-9]{1,6}(\.[0-9]{1,6})?$ (A15, six digits per A18)
@@ -406,3 +408,13 @@ A23 (2026-08-27, from `reviews/03-codex-review-b3.md`; decided by the user, then
 - **Deleting the admission binding immediately reopened the bypass.** The Policy and Binding are **trust boundary**, not drift to be healed afterwards: the chart protects them, and the operator withholds new revisions and raises `EnvSourceProtectionUnavailable` when either is absent or skewed, verified at startup and every reconcile. The finalizer is not redundant — it covers exactly that window.
 
 **Owed, and not drafted**: the typed credential binding (so genuine credentials rotate without an eval, which sealing alone does not give); refcounting when two Agents share a source, and lock release when the last retained revision drops it; and the node-drain assertion, which needs a kubelet and is e2e-only. Snapshots remain the stated fallback if the refcount transaction cannot be made race-free.
+
+A24 (2026-08-27, from design 03 A18; supersedes A22's shape) — **`llm.providers` and `llm.fallback` become the same typed endpoint identity, which closes the non-injective key too.** A22 typed only `egressAllowlist`, leaving `providers[]` a flat `[]string` and `fallback` a `{provider, model}` object. That left two defects:
+
+**The join is not injective** (Codex r3 MAJOR 4). `{provider: azure, model: openai/gpt-4}` and `{provider: azure/openai, model: gpt-4}` both canonicalize to `azure/openai/gpt-4`, so they select the same pricing row and the same egress decision while being different endpoints. `internal/revision/revision.go:66` already records this hazard in the other direction; typing both ends removes the join entirely rather than defining a split rule that a slash in a model name defeats.
+
+**An arm is not an endpoint.** The shipped v1.4.1 CRD gives each provider arm its own instance fields — `azureopenai` carries `endpoint`/`deploymentName`/`apiVersion`, `vertexai` carries `projectId`/`region`, `bedrock` carries `region`/`guardrail`. Two Azure OpenAI resources share one arm, differ in endpoint and deployment, and may differ in BAA status. A flat string cannot select between them, so neither a request nor a permission could be expressed precisely enough for design 03's `egressEnumerated` predicate to mean anything.
+
+Both fields therefore carry `{arm, instance fields, model}`, and `egressAllowlist` entries carry the same identity minus the model plus optional `models`. `providers`, `fallback` and the allowlist now share one type, compare as tuples, and need no canonical string at all.
+
+**Breaking, and correct now**: this changes `llm` for every existing manifest, touches A12's projection (the field stays behaviour surface and symmetric), and invalidates the flat examples throughout this design — all of which is cheaper before v1beta1 than after. **Owed**: the pricing table (design 03 §3.5) is still keyed by the flat string it was given; keying it on the same tuple is the obvious follow-through and is not drafted here.
