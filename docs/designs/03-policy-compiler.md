@@ -1,6 +1,6 @@
 # Design 03: Policy compiler (PolicyIntent → agentgateway v1.4.1 resources)
 
-- **Status**: **approved** — critique PASS at r2 (reviews/03-review.md; residuals R2-a/R2-b folded in) · **ADR-0028** (supersedes ADR-0020). **Amendments A1–A10 (2026-08-25/26), folded into §§3–8. Four independent critiques: REVISE 4/8/7, 4/12/6, 5/10/10, then 0/5/6 — "the substance has converged". Every finding is addressed and `reviews/03-amendments-review.md` carries all four. No pass has returned PASS — not yet critique-passed** (§11)
+- **Status**: **RE-OPENED, do not implement** — `ADR-0028` (supersedes ADR-0020) after the research note was found to name a release that does not exist. **Amendments A1–A16 (2026-08-25/27)**, folded into §§3–8: four Claude critiques and two Codex cross-family reviews, all REVISE, then §§3.3/3.4/3.5 rebuilt against agentgateway **v1.4.1** and against an execution spike that measured seven previously-argued behaviours (`research/agentgateway-v1.4.1-spike.md`). **No pass has returned PASS**; Codex r2's twelve majors are open (`reviews/03-codex-review-r2.md`) (§11)
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0003, 0014, 0019 · interfaces: designs 02 (caller; amendments recorded there §11), 04 (spend aggregation owner), 22 (loop governance)
 - **Research**: `docs/research/agentgateway-v1.4.1-2026-08.md` (primary-source verified 2026-08-27; re-verify by 2026-10-15). The former note is **superseded and must not be cited** — it named a release that does not exist

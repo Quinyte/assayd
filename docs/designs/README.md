@@ -6,7 +6,7 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 |---|---|---|---|---|
 | 1 | KnowledgeGraphProvider contract (6-tool MCP surface + ontology schema + probe format + conformance) | P2 | M | **approved** (`01-…`, ADR-0017/0018, review PASS) |
 | 2 | Agent CRD + agent-operator | P1 | L | **approved** (`02-…`, ADR-0019, review PASS); amendments A15–A21 (2026-08-26) — four REVISE rounds addressed (last: 0 blockers); A20–A21 uncritiqued |
-| 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | **re-opened 2026-08-27** — **ADR-0028** supersedes ADR-0020 after the research note was found to name a release that does not exist. §3.3/§3.5 redesigned (A10); a Codex cross-family review (`reviews/03-codex-review.md`) stands at 7 BLOCKER. **Do not implement** |
+| 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | **re-opened 2026-08-27** — **ADR-0028** supersedes ADR-0020 after the research note was found to name a release that does not exist. §§3.3/3.4/3.5 rebuilt on v1.4.1 plus an execution spike; amendments A1–A16. Codex r2's blockers are closed or measured, twelve majors open. **Do not implement** |
 | 4 | Receipt tap + receipt envelope schema | P1 | M | r2 — critique **PASS** (`04-…`, `reviews/04-review.md`; awaiting user approval + ADR-0021) |
 | 5 | Agent directory (OASF on JetStream KV) | P1 | S | r2 — critique **PASS** (`05-…`, `reviews/05-review.md`; awaiting user approval, ADR-0022) |
 | 6 | Identity glue | P1 | M | r2 — critique **PASS** (`06-…`, `reviews/06-review.md`; awaiting user approval, ADR-0022) |
