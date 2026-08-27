@@ -121,6 +121,39 @@ What had not converged was still **reach**, now narrower: five of the eleven fin
 | 5 | MAJOR | `NOTES.txt` and `gateway.enabled` asserted as existing chart mechanisms; neither exists and no design owned either. The review file recorded `NOTES.txt` "fixed" while the same commit's NOT DONE said it does not exist | Fixed — design 07 §3 now owes both; this file's row corrected |
 | — | MINOR ×6 | owed-list short by one condition; `GovernanceSkipped` unclassified normal/abnormal-true; the 57-leaf figure does not reproduce; the `(enabled × CRDs)` table called total but silent on transitions; README's design 02 row unopened; a miscount in this file | All fixed |
 
+## Codex cross-family review (2026-08-27) — REVISE: 7 BLOCKER, 7 MAJOR
+
+`reviews/03-codex-review.md`, commit `dd6f10c`. Reviewed at snapshot `bcc7a98`; design 02 A20–A21 landed while it ran and were deliberately excluded rather than allowed to move the target.
+
+**It found seven blockers where four same-family rounds had converged to zero, and the reason is structural, not diligence.** The Claude rounds checked the amendments against themselves — internal consistency, propagation, claims-vs-diff. Codex checked them against **pinned upstream agentgateway source and the published 2.2 API**. Round 4's "the substance has converged" was true about internal coherence and silent about whether the external contract holds. This is the cross-family independence `agent-protocol.md` exists to buy, and it paid for itself in one pass.
+
+### Independently verified from primary sources by the implementer
+
+Not accepted on the reviewer's word. Each checked against the pinned commit `53f3952` or the published docs:
+
+| Claim | Verdict | Primary evidence |
+|---|---|---|
+| A policy targeting an absent route reports `Accepted=True` | **CONFIRMED** | Fixture `http-route-missing-not-attached.yaml` returns `output: []` — **no policy emitted at all** — with `Accepted: True / reason: Valid / "Policy accepted"` beside `Attached: False / reason: Pending / "Policy is not attached: HTTPRoute default/missing not found"` |
+| The token limiter cannot stop the crossing request | **CONFIRMED, in the CRD's own doc comment** | `LocalRateLimit.Tokens`: *"token counts are not known until the request completes. As a result, token-based rate limits will apply to future requests only."* The standalone docs restate it: *"the response is still returned to the user. Only subsequent requests are rate limited."* |
+| `tokens`/`burst` are `int32`, and `burst` is additive above the base | **CONFIRMED** | `Requests`, `Tokens`, `Burst` are all `*int32`. `Burst` is *"Allowance of requests above the request-per-unit"* |
+| Design-admissible inputs overflow the emitted field | **CONFIRMED BY EXECUTION** | Max six-digit budget at the cheapest admissible price → `rate = 11,111,111,111,100` and `burst = 39,999,999,999,960,000`; int32 max is 2,147,483,647. The largest representable `tokensPerDay` is ~1.93×10¹⁴ |
+
+**BLOCKER 1 is the deepest and is structural.** §3.3 waits for `Accepted=True`, and the design *deliberately creates routes last* — so the policy's target is guaranteed absent when the barrier runs, and the fixture shows exactly that state satisfying the barrier while emitting nothing. The fail-closed apply protocol proves a policy **parsed**, never that it **attached**. `Accepted=True/programmed` in the design text: the slash concealed a missing contract.
+
+### One constraint the review did not name
+
+`LocalRateLimit` carries `+kubebuilder:validation:ExactlyOneOf=requests;tokens`, and `Unit` is `+required` (`Seconds|Minutes|Hours`). A single policy cannot express a request limit and a token limit together, which §3.5's "one `-ratelimit` policy at the minimum of the two derived rates" happens to survive (both are token rates) but which the emitted-shape mapping must state.
+
+### Consequences beyond a fix pass
+
+- **ADR-0020 decision (4) is false as written.** Two-tier budgets rest on the gateway being a conservative tier that "cuts early, never late"; the pinned API says it cannot. AGENTS.md requires a **superseding ADR**, not an amendment. A path exists — the gateway's `tokenize: true` estimates tokens pre-dispatch and admits only if the estimate fits — but that is a different mechanism with a different guarantee, and it must be verified before it is promised.
+- **BLOCKER 5 crosses into design 04.** The "exact" tier prices from the same ConfigMap as the approximation, and design 04 already names the field `usd_est`. A common mutable estimate cannot be the backstop for itself.
+- **Design 03 should not be implemented from A1–A9.** The reviewer's instruction, and it is right.
+
+### Process finding, recorded because it is the reusable one
+
+`docs/research/agentgateway-2.2-2026-08.md` opens with **"re-verify before implementation"**. The implementer flagged that in the first message of the session and never ran `/research-latest`. Four internal rounds followed, each finding real defects, none able to find these — because none looked outside the corpus. At least three of the seven blockers turn on facts about a dependency that the corpus asserted from a note explicitly telling the reader to re-check it.
+
 ## Standing disagreement, unresolved by design
 
 Round 1 MAJOR 6 (do not withhold `Ready`) versus Codex MAJOR 1 (make `Ready`
