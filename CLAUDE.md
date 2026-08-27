@@ -6,7 +6,7 @@ plume ("graphene" in early drafts) is a lightweight, Kubernetes-native agent pla
 
 ## Skills — use them, do not paraphrase them
 
-Eight skills live in `.claude/skills/`. They load automatically **only when the session's working directory is this repo** — start with `cd ~/Developer/plume`. If `/implement-feature` returns "Unknown skill", the session was started elsewhere: say so rather than quietly following the skill from memory, because a loop enforced by discipline is the failure mode the skills exist to prevent.
+Nine skills live in `.claude/skills/`. **A skill with a `paths:` key does not resolve until a matching file has been read in the session** — so `/implement-feature` returns "Unknown skill" on a cold start even in the right directory, and `/write-spec`, `/adr`, `/design-component` and `/audit-docs` behave the same way. That is a property of `paths`, not a broken session. `/verify-change`, `/review-code`, `/critique-design` and `/research-latest` carry no `paths` and always resolve.
 
 | Skill | Use when |
 |---|---|
@@ -16,6 +16,7 @@ Eight skills live in `.claude/skills/`. They load automatically **only when the 
 | `write-spec` | writing a design, an ADR, a CRD type, or any user-facing string |
 | `research-latest` | any landscape, library or standard question — never answer from memory |
 | `design-component` · `adr` · `audit-docs` | designing, recording a decision, checking doc consistency |
+| `verify-change` | **after any amendment or fix** — the loop that closes it: gate → independent critique → cross-family critique → spike the unmeasured claim |
 
 ## Everything else lives in AGENTS.md
 

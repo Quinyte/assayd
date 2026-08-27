@@ -97,19 +97,19 @@ var rules = []rule{
 	},
 	{
 		name:    "overshoot-bound",
-		banned:  regexp.MustCompile(`(?i)overshoot bound|measured overshoot|excess is bounded`),
+		banned:  regexp.MustCompile(`(?i)overshoot[- ]bounds?|measured overshoot|excess is bounded`),
 		allowed: regexp.MustCompile(`(?i)withdraw|retract|no bound|unbounded|refuted|is false|supersed`),
 		why:     "the spike measured 100x a one-replica budget under concurrency; no bound is published (design 03 A13)",
 	},
 	{
 		name:    "pricing-damage-bounded",
-		banned:  regexp.MustCompile(`(?i)backstop bounds|bounds the damage|damage is bounded`),
+		banned:  regexp.MustCompile(`(?i)backstop bounds?|bounds? the damage|damage is bounded`),
 		allowed: regexp.MustCompile(`(?i)withdraw|retract|not exact|no longer|supersed`),
 		why:     "the receipt tier prices from the same table it is meant to backstop; it bounds nothing (ADR-0028)",
 	},
 	{
 		name:    "in-worker-poll",
-		banned:  regexp.MustCompile("(?i)acceptance poll|poll each resource|bounded: 30s|on the reconcile worker"),
+		banned:  regexp.MustCompile("(?i)acceptance poll(s|ing)?|poll(s|ing)? each resource|bounded: ?30 ?s|on the reconcile worker"),
 		allowed: regexp.MustCompile(`(?i)earlier draft|supersed|no longer|replaced|state machine`),
 		why:     "A15 replaced the blocking poll with an event-driven staged reconcile; a worker that sleeps starves the fleet",
 	},
@@ -178,6 +178,22 @@ func isFrozen(content string) bool {
 	return frozenMarker.MatchString(head)
 }
 
+// markdownNoise is inline formatting that must not let a superseded phrase
+// through. A Codex review found the gate passing on "the acceptance **poll**"
+// because the rule expected a contiguous "acceptance poll": emphasis inside the
+// phrase defeated it. A lexical tripwire pretending to be a semantic guarantee.
+var markdownNoise = regexp.MustCompile("[*`_~]+")
+
+// collapseSpace folds newlines too, so a phrase broken across a wrapped line is
+// still matched.
+var collapseSpace = regexp.MustCompile(`\s+`)
+
+// normalize strips inline markdown and collapses whitespace so rules match what
+// a reader sees rather than what the source bytes happen to be.
+func normalize(s string) string {
+	return collapseSpace.ReplaceAllString(markdownNoise.ReplaceAllString(s, ""), " ")
+}
+
 // amendmentHeading marks where a design's authoritative body ends.
 var amendmentHeading = regexp.MustCompile(`(?m)^## \d+\. Amendment`)
 
@@ -229,7 +245,8 @@ func scanned(t *testing.T) map[string]string {
 // TestNoSupersededGuaranteeInAnAuthoritativeBody is the gate BLOCKER 8 asked for.
 func TestNoSupersededGuaranteeInAnAuthoritativeBody(t *testing.T) {
 	for path, text := range scanned(t) {
-		for _, line := range strings.Split(text, "\n") {
+		for _, raw := range strings.Split(text, "\n") {
+			line := normalize(raw)
 			for _, r := range rules {
 				if r.onlyIn != "" && filepath.Base(path) != r.onlyIn {
 					continue
@@ -272,6 +289,34 @@ var ruleFixtures = map[string]string{
 	"in-worker-poll":            "The acceptance poll runs on the reconcile worker for up to 30s.",
 	"allowlist-equality":        "The emitted Backend's provider set equals the allowlist.",
 	"spec-only-hash":            "The revision digest is computed from spec alone.",
+}
+
+// evasionFixtures pin the NORMALISATION: real phrasings the raw byte match
+// missed — emphasis inside the phrase, a singular where the rule wrote a plural,
+// a line wrap. Written against what a reader sees.
+var evasionFixtures = map[string]string{
+	"in-worker-poll":         "the acceptance **poll** runs for up to 30s",
+	"pricing-damage-bounded": "the receipt `backstop bound` covers a tampered table",
+	"overshoot-bound":        "status publishes the measured *overshoot* bound",
+	"cuts-early-guarantee":   "the gateway\ncuts early, never late",
+}
+
+// TestNormalisationDefeatsFormattingEvasion is the half MAJOR 19 said was missing.
+func TestNormalisationDefeatsFormattingEvasion(t *testing.T) {
+	byName := map[string]rule{}
+	for _, r := range rules {
+		byName[r.name] = r
+	}
+	for name, evasion := range evasionFixtures {
+		r, ok := byName[name]
+		if !ok {
+			t.Errorf("evasion fixture %q has no rule", name)
+			continue
+		}
+		if !r.banned.MatchString(normalize(evasion)) {
+			t.Errorf("rule %q misses a formatted phrasing even after normalisation:\n    %q", name, evasion)
+		}
+	}
 }
 
 // TestEveryRuleIsPinnedByAnIndependentFixture kills the mutation that deleting a

@@ -392,7 +392,7 @@ Two edges the arithmetic forces, both previously unstated:
 
 ## 6. Security
 
-Emitted policies are the only capability-change path (admission denies non-operator writes on plume-labeled gateway resources). Fail-closed apply ordering (§3.3) removes the unauthenticated/unbudgeted windows. Scope header is added by the gateway *after* authn and cannot be supplied by clients (transform strips inbound occurrences). Pricing ConfigMap RBAC + backstop bound (§3.5).
+Emitted policies are the only capability-change path (admission denies non-operator writes on plume-labeled gateway resources). Fail-closed apply ordering (§3.3) removes the unauthenticated/unbudgeted windows **on the create path**; it does not remove them on a change to a serving route, which is why A19 withdrew in-place tightening entirely and routes tightening through the revision gate instead. Scope header is added by the gateway *after* authn and cannot be supplied by clients (transform strips inbound occurrences). Pricing ConfigMap RBAC (§3.5) — and **no backstop**: both tiers price from that table, so tampering skews them together (ADR-0028).
 
 ## 7. Observability
 
@@ -409,7 +409,7 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
 | Layer | Ships with this design | Why it can |
 |---|---|---|
 | unit | `Compile` in full — golden files, name truncation at 63 chars, the §3.5 arithmetic incl. both edge rules, field-disjointness, route-class classification | `Compile` is pure; it needs no cluster |
-| envtest | `Apply` ordering, SSA ownership and re-assert, the acceptance **poll**, the withhold-on-not-accepted path, ordered removal, and the §3.3's wait bound | What this layer uniquely proves is that **the status field path the operator polls exists in the real published CRD schema** — the only defence against a suite that passes against an invented status shape. (That CRDs install without their controller is true of any CRD and proves nothing.) There is no controller to write policy status, so the test writes it: what is under test is the operator's *reaction* to a status, not the gateway's production of one |
+| envtest | `Apply` ordering, SSA ownership and re-assert, the **staged-reconcile transitions** of §3.3 (each stage advances only on its watch, stale digest or generation restarts the machine), the withhold-on-not-converged path, ordered removal | What this layer uniquely proves is that **the status field path the operator polls exists in the real published CRD schema** — the only defence against a suite that passes against an invented status shape. (That CRDs install without their controller is true of any CRD and proves nothing.) There is no controller to write policy status, so the test writes it: what is under test is the operator's *reaction* to a status, not the gateway's production of one |
 | e2e | nothing | needs a data plane |
 
 **Deferred, and named so it is not mistaken for done**: everything traffic-level (429, tool filter, SVID rejection, OAuth on public expose), the synthetic-receipt backstop drive, and R1's same-level/same-field overlap test — all of which land with the agentgateway subchart (design 07). **Until then design 03 has no e2e coverage at all.** The one-concern-per-policy rule stands on diffability alone until R1 runs, exactly as §3.2 and D2 already say.
