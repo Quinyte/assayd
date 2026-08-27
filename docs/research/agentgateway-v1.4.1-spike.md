@@ -208,3 +208,69 @@ publication) or accept that a silent NACK leaves the old rule serving.
 **Reproduce**: `k3d cluster create plume-spike`, Gateway API v1.6.0 standard-install,
 `helm install` both 1.4.1 charts into `agentgateway-system`. **Tear down**:
 `k3d cluster delete plume-spike`. It is separate from `plume-local`, so `make e2e` is unaffected.
+
+---
+
+## 4. Second spike (2026-08-27) — the env-source seal, for design 02 A20
+
+Not agentgateway. Recorded here because it is the same practice: a proposed Kubernetes
+transaction measured before it becomes design. Codex's B3 review prescribed sealing generic env
+sources in place rather than snapshotting them, and attached its own caveat — *"a proposed
+Kubernetes transaction, not yet measured in plume. It must be spiked before becoming the
+design."* This is that spike. k3d, Kubernetes v1.33, `ValidatingAdmissionPolicy` (stable v1.30+).
+
+**Setup.** A ConfigMap carrying `plume.dev/env-source-protection: held` and a matching
+finalizer; a `ValidatingAdmissionPolicy` with `failurePolicy: Fail` denying `UPDATE`/`DELETE`
+unless the requester is the operator ServiceAccount; a second ServiceAccount with **full
+configmap rights**, standing in for the threat actor B3 describes — someone who cannot edit the
+Agent but can edit what it references.
+
+| Attempt, as the source editor | Result |
+|---|---|
+| change `data` | **denied** |
+| remove the protection label | **denied** |
+| remove the finalizer | **denied** |
+| delete the object | **denied** |
+| *as the operator*: change `data` | allowed |
+
+So the seal holds against the exact bypass, and does not lock the operator out of its own
+material. **No bytes are copied**, which is the property that makes this preferable to
+snapshots.
+
+### 4.1 The naive match is bypassable — measured, and it was my first instinct
+
+Codex warned that the policy's match must inspect **both** old and new state, *"so removing the
+protection label cannot opt the request out."* A second policy matching only the **new** object
+was built to test that:
+
+```
+label removal    ALLOWED   <-- the seal opted itself out
+then data change ALLOWED   <-- bypass complete
+```
+
+The `oldObject`-or-`object` match condition is therefore **load-bearing, not defensive**. A
+reasonable implementer writing the obvious version ships a seal that any holder of `update` can
+remove in one request.
+
+### 4.2 The admission objects are part of the trust boundary — measured
+
+Deleting the `ValidatingAdmissionPolicyBinding` immediately restored the editor's ability to
+change the sealed ConfigMap. This confirms Codex's point that there is no race-free controller
+reaction to an authorized deletion of the guard itself: the Policy and Binding are **trust
+boundary**, not drift the operator can heal afterwards. The chart must protect them, and the
+operator must withhold new revisions and raise `EnvSourceProtectionUnavailable` when either is
+absent or skewed — verifying at startup and on every reconcile, not reacting after the fact.
+
+**The finalizer is not redundant.** The Policy denies `DELETE` outright, so the finalizer never
+gates a normal request; it exists for the window in which the Policy is absent, which §4.2 shows
+is a real state.
+
+### 4.3 What this spike did not settle
+
+- **Refcounting across Agents.** Two Agents sharing one source, and lock release when the last
+  retained revision drops it, are operator logic rather than a Kubernetes mechanism. Unmeasured.
+- **Node drain end to end** — that a replacement Pod reads the sealed content under the old
+  revision — needs the operator and a kubelet. Envtest has no kubelet; this is e2e-only.
+- **Whether sealing beats snapshots operationally** when a source is legitimately retired while
+  a revision still holds it. The lock is correct and will be *unpopular*; that is a product
+  question, not a correctness one.
