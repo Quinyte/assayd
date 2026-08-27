@@ -1,6 +1,6 @@
 # agentgateway v1.4.1 execution spike — measured, not read
 
-**Status**: 2026-08-27. Offline phase complete; cluster phase complete for six of seven questions. Two remain, named in §3.
+**Status**: 2026-08-27. Offline phase complete; cluster phase complete for seven of eight questions. One remains, named in §3.
 
 Why this exists: six review rounds found real defects in design 03's prose, and the
 three that mattered most turned on *behaviour of a dependency nobody had run*.
@@ -146,11 +146,63 @@ excess is unbounded at v1.4.1 and the receipt tier is the only real limit. That 
 budget guarantee this design has had to retract, and the first one retracted by measurement
 rather than by review.
 
+### 2.8 A NACK'd tightening silently does not apply, while every condition says converged
+
+The hardest question, and the lever was a config the control plane accepts and the dataplane
+does not: `burst: -1`, which §2.3 showed is admitted by both the API server and the controller.
+
+**Sequence.** A healthy policy at `requests: 1000, unit: Hours` serving `200`s. Patch it to
+`requests: 1, burst: -1` — a *tightening* update carrying the poison in the same edit.
+
+**What Kubernetes reports:**
+
+```
+policy p: Accepted=True(Valid)  Attached=True(Attached)
+          generation=4          observedGeneration=4
+```
+
+Every element of §3.3.2's convergence tuple is satisfied, at the current generation.
+
+**What actually happened:**
+
+```
+agent_xds::client  type=Nack  error="invalid rate limit: max tokens cannot be less than the refill amount"
+krtxds            "ADS: ACK ERROR"  code=OK
+Event  Warning  AgentGatewayNackError  gateway/gw
+  [{"key":"policy/traffic/default/p:rl-local:default/llm-route",
+    "error":"error: invalid rate limit: max tokens cannot be less than the refill amount"}]
+```
+
+**And the traffic:** eight consecutive requests under a limit that should permit one all
+returned **HTTP 200**. The tightening never applied; the previous permissive configuration
+kept serving.
+
+Three findings, each load-bearing for design 03:
+
+1. **A NACK'd policy RETAINS the previous config — it does not fail closed.** Research §9 left
+   this open and it is the branch that matters: on a tightening update, the *old permissive*
+   rule keeps serving indefinitely while the CR reports converged. That is Codex r2 BLOCKER 2,
+   reproduced end to end.
+2. **The Event is the only observable, and it is a Gateway-scoped Warning.** No condition on
+   the policy, the route or the Backend changes. §3.3.2's requirement to watch
+   `AgentGatewayNackError` is therefore **mandatory**, not belt-and-braces.
+3. **Correlation is partial — better than "uncorrelated", worse than sufficient.** The event key
+   `policy/traffic/default/p:rl-local:default/llm-route` names the **policy** (`default/p`) and
+   the **route** (`default/llm-route`), so plume can attribute a NACK to a resource it emitted.
+   It carries **no generation and no UID**, so an old NACK cannot be distinguished from a new
+   one, and absence of an Event cannot be read as success. A bounded wait plus resource
+   attribution is workable for *raising* degradation; it is not a success barrier.
+
+**Consequence for §3.3.2.** The convergence tuple is necessary and not sufficient, and this is
+now measured rather than argued. Until a positive dataplane acknowledgement exists upstream,
+design 03 may claim only control-plane convergence — and a tightening transaction must either
+verify by observation (a generation-correlated synthetic request that must be denied before
+publication) or accept that a silent NACK leaves the old rule serving.
+
 ## 3. Still open — not settled in this pass
 
 | Question | Blocks | Why it resisted |
 |---|---|---|
-| What does the proxy do with a NACK'd policy — retain the previous config, or fail closed? | Codex r2 BLOCKER 1/2 | Requires forcing a dataplane rejection the control plane still accepts; no manifest reaches that state directly |
 | What is the real evaluation order (authn → rate limit → guards)? | design 03 §3.4 asserts an order inherited from a blog | Needs a policy set that can observe which stage rejected first |
 
 **Reproduce**: `k3d cluster create plume-spike`, Gateway API v1.6.0 standard-install,
