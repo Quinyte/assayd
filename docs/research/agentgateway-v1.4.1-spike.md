@@ -1,6 +1,6 @@
 # agentgateway v1.4.1 execution spike — measured, not read
 
-**Status**: 2026-08-27. Offline phase complete; cluster phase partly complete — three questions remain and are named in §3.
+**Status**: 2026-08-27. Offline phase complete; cluster phase complete for six of seven questions. Two remain, named in §3.
 
 Why this exists: six review rounds found real defects in design 03's prose, and the
 three that mattered most turned on *behaviour of a dependency nobody had run*.
@@ -112,12 +112,45 @@ the previous configuration. §3.3.2 must state that trade rather than implying a
 correctness here costs availability, and an operator who is not told will read the 500s as an
 outage.
 
+### 2.7 The token budget is unbounded under concurrency — measured
+
+A mock LLM returning `usage.total_tokens: 1000` per call, behind an `AgentgatewayBackend`
+with a `custom` provider, under `rateLimit.local: [{tokens: 1000, unit: Hours}]`. Each
+request therefore consumes the **entire hourly budget**. The mock sleeps 2s so requests
+overlap.
+
+| Test | Result |
+|---|---|
+| Serial, budget already spent | `429`, `429` — the limiter works |
+| **20 concurrent** | **20 × HTTP 200** = 20,000 tokens against a 1,000-token budget |
+| **100 concurrent** | **100 × HTTP 200** = 100,000 tokens against a 1,000-token budget |
+
+One gateway replica throughout. The overshoot tracked **concurrency exactly** and never
+touched replica count.
+
+This is decisive for design 03. The bound ADR-0028 published — `gatewayReplicas ×
+maxOutputTokens(model)`, on the reasoning that one crossing request per replica can be in
+flight — predicts 1,000 tokens of excess here. The measurement is **100,000**. The formula is
+wrong by the concurrency factor, and since nothing in `PolicyIntent` or the emitted policy
+limits concurrency, **the excess is unbounded**.
+
+The mechanism is visible in the numbers: enforcement is a read-only availability check before
+dispatch and a decrement after the response, so every request that starts while the bucket is
+positive is admitted. Serial traffic is limited correctly; concurrent traffic is not limited
+at all until the first response lands.
+
+**Consequence**: design 03 may not publish an overshoot figure. Either plume enforces a
+per-replica concurrency cap and a request-size maximum — neither of which exists in the CRD
+surface, so both would have to be plume-side — or the honest statement is that gateway-tier
+excess is unbounded at v1.4.1 and the receipt tier is the only real limit. That is the third
+budget guarantee this design has had to retract, and the first one retracted by measurement
+rather than by review.
+
 ## 3. Still open — not settled in this pass
 
 | Question | Blocks | Why it resisted |
 |---|---|---|
 | What does the proxy do with a NACK'd policy — retain the previous config, or fail closed? | Codex r2 BLOCKER 1/2 | Requires forcing a dataplane rejection the control plane still accepts; no manifest reaches that state directly |
-| How far over budget do N concurrent requests go? | Codex r2 BLOCKER 3 | Needs a real or mocked LLM backend plus a load generator. The read-only `available_refill()` check means the answer is a measurement, not a formula |
 | What is the real evaluation order (authn → rate limit → guards)? | design 03 §3.4 asserts an order inherited from a blog | Needs a policy set that can observe which stage rejected first |
 
 **Reproduce**: `k3d cluster create plume-spike`, Gateway API v1.6.0 standard-install,
