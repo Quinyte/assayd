@@ -52,7 +52,15 @@ PolicyIntent {
 | `expose[].consumerBudgets` | design 26 `TenantPolicyIntent` — **not** an `AgentSpec` field | no |
 | `gatewayReplicas` | chart value `gateway.replicas` → operator flag `--gateway-replicas`, default `1` | yes |
 
-A field whose source does not exist yet is **absent**, and absence is governed by §3.3.1 — it is never silently defaulted.
+**Every binding carries its resolution state, because an empty slice meant two things (A24).** A resolved `tools: []` represented both *"requested no tools"* and *"requested a tool whose producer could not resolve it"* — opposite required outcomes, identical to a pure function, so an Agent asking for a tool it never got could compile as one asking for none and report `Ready`. Each binding now arrives as `{requested, resolved?, state}`:
+
+| `state` | Meaning | Compiler |
+|---|---|---|
+| `Resolved` | the producer returned an endpoint | emit the route class |
+| `ProducerAbsent` | the producing design is not installed (11 for tools, 01/13 for KG) | **do not emit**; no per-Agent condition — the tier gap is reported once at operator level (§5) |
+| `Unresolvable` | the producer exists and the name does not resolve | `PolicyCompileFailed` naming the binding — the Agent asked for something real and did not get it |
+
+`Compile` never sees an ambiguous empty list, and the three states are pinned independently. A field whose source does not exist yet is **absent**, and absence is governed by §3.3.1 — it is never silently defaulted.
 
 **Absent input and unbuilt producer are different things, and conflating them makes P1 uncompilable.** Read literally, the two rules above plus §3.3.1 say: `identity` is unavailable at P1 → the candidate route's `-auth` is mandatory with no opt-out → every Agent fails to compile, in the phase being implemented now. That is not the intent. The rule is:
 
@@ -206,7 +214,31 @@ Two transaction kinds remain:
 | `Create` | a revision's routes do not exist yet — a new Agent, or a gated candidate | `PreparingRoute` → Backends → Policies → `Converging` → `Publishing` |
 | `Loosen` | the new set is **provably** no stricter than the applied one | Backends → Policies → `Converging` → `Publishing`, route stays live |
 
-**`Loosen` still needs the classification, and it is still fail-closed**: a set is `Loosen` only when every mandatory concern's admitted set is a superset of the applied one and no concern is newly required. Anything else — including anything the compiler cannot classify — is not applied in place; it is a spec change that mints a revision. Being wrong toward `Create` costs a gate cycle. Being wrong toward `Loosen` is the bypass this section exists to remove.
+**`Loosen` needs a comparator, and "admitted set" is not one (A24).** Rate limits are stateful quantities, transforms are functions, timeouts are neither, so "every concern's admitted set is a superset" is not implementable and two reasonable implementations classify the same edit differently. The comparator is a **closed registry, one entry per concern**:
+
+| Concern | Ordering | `Loosen` when |
+|---|---|---|
+| `-auth` | `none` < `oauth` | auth is removed or weakened |
+| `-ratelimit` | numeric on the derived rate | the new rate is **≥** the applied one |
+| `-toolfilter` | set inclusion on tool names | the new set is a **superset** |
+| `egressEnumerated` | set inclusion on endpoint identities | the new set is a **superset** |
+| `taskTimeout` | numeric | the new timeout is **≥** the applied one |
+| `-transform`, `-guard` | **no ordering exists** | never — functions, not sets |
+
+**Unknown maps to `Tighten`.** A concern absent from the registry, a comparison it cannot make, and a first application with nothing to compare against all classify as `Tighten`, so adding a concern without a comparator entry fails safe rather than silently qualifying for the in-place path. Property-tested for reflexivity and transitivity, plus every boundary: a rate unchanged, a set unchanged, a default appearing or disappearing, and `nil` against a value.
+
+**But `Tighten` means "mint a revision", and not every producer can (A25).** §3.1's provenance table lists inputs that are **not Agent spec**: a tool server's advertised set (11), a resolved KG endpoint (01/13), tenant consumer budgets (26), and `status.llmFallbackActive`, which design 20 sets deliberately. Telling those producers to mint a revision points at a mechanism they do not have — so a tool server withdrawing a tool would narrow a mandatory filter with no path at all.
+
+| Producer | Path |
+|---|---|
+| Agent spec, behaviour surface | mints a revision; gated (design 02 §3.3) |
+| Agent spec, policy surface, provable `Loosen` | in place |
+| **Non-spec producer, tightening** | **policy-input revision** — a content-addressed candidate keyed on the *input*, gated like any other, because the Agent's spec did not change and cannot carry it |
+| **`status.llmFallbackActive`** | **the stated ADR exception**, below |
+
+**`llmFallbackActive` is not covered by this machinery, and saying so is the point.** Design 20 flips status and recompiles the serving Backend precisely so an incident is not delayed by an eval cycle — the exemption design 02 A12 already records as making the answering model changeable ungated. Claiming A19's isolation covers it would assert protection the path does not have. What it owes instead is **pre-provisioning**: the fallback's Backend is emitted and converged *before* drift is detected, so activation is a weight shift over already-converged material rather than a live recompile that can NACK and leave the drifted primary serving while status records a remediation.
+
+Being wrong toward `Create` costs a gate cycle. Being wrong toward `Loosen` is the bypass this section exists to remove.
 
 **A NACK during `Loosen` is bounded by what a loosening can do.** It leaves the *stricter* old configuration serving — a failure toward denial, which is the direction §3.3's ordering has always preferred. It still raises `PolicyApplyIncomplete` (§3.3.2), because a loosening that silently did not apply is a stale guarantee even when it is a safe one.
 
@@ -311,6 +343,16 @@ Three rules the emission must follow:
 - **`action: Allow`, never `Deny`.** Once any allow rule exists the policy is default-deny, which is the shape a tool allowlist needs. Upstream warns that *"`Deny` is not recommended because expression failures fail to deny"* — a CEL error under `Deny` fails **open**, which is the one failure mode this design cannot accept.
 - **Auth moves to `traffic.jwtAuthentication.mcp`.** `backend.mcp.authentication` is deprecated in favour of it *"which ensures authentication runs before other policies such as transformation and rate limiting"* — directly the ordering §3.3.1 needs for `-auth` before `-toolfilter`. The two may not appear in the same policy, which one-concern-per-policy already prevents.
 - **Targeting constraints**: `backend.mcp` may not target a `Service`, and may not target an `AgentgatewayBackend` `sectionName`. Both are compile-time checks.
+
+**Emission is total at the CRD's bounds** — `minItems: 1`, `maxItems: 256`, `maxLength: 16384` per expression, verified in the shipped chart and pinned by `test/conformance`. Three cases an earlier draft left undefined, each with a wrong-but-plausible answer:
+
+| Case | Emission |
+|---|---|
+| **no tools allowed** | one expression `false`. **Not an empty list** — `minItems: 1` rejects it — and **not an omitted policy**, which restores upstream's default-allow and turns "no tools" into *every* tool |
+| **more than 256 tools** | `PolicyCompileFailed` naming the count; truncating would silently deny the remainder while reporting success |
+| **a name with a quote, backslash or newline** | a real CEL string encoder, never concatenation. A broken expression under `action: Allow` denies everything — a self-inflicted outage — and under `Deny` fails **open**, which is why §3.4.2 forbids `Deny` |
+
+Golden fixtures pin 0, 1, 256 and 257 tools, and names carrying quotes, backslashes, slashes and non-ASCII.
 
 ### 3.4.3 Evaluation order is not known, and is not asserted (A20)
 

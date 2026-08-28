@@ -459,7 +459,7 @@ The correction distinguishes *possible* from *realised* compromise, because the 
 
 | State | Response |
 |---|---|
-| Guard absent or skewed, every sealed source still matches its retained `{uid, digest}` | `EnvSourceProtectionUnavailable`; **no new revisions**; serving continues. The exposure is prospective, and taking a healthy fleet down for a routine upgrade window would be its own outage |
+| Guard absent or skewed, every sealed source still matches its retained `{uid, digest}` | `EnvSourceProtectionUnavailable`; **no new revisions**; serving continues **only under a planned, overlap-only guard transition** (below). Outside one this row does not apply — the race does |
 | Guard absent **and** any sealed source diverges from its retained digest or UID | **`RevisionMaterialChanged`, weight 0 for every revision referencing it**, `phase: Degraded`. The bypass has occurred, so the affected revisions stop serving — via the existing rollout weight machinery, not a new route mutation (A19 removed those) |
 | Guard restored | Re-verify every retained source against its recorded material **before** republishing. Divergence found on restoration is treated as the row above, never repaired in place |
 
@@ -474,6 +474,12 @@ The correction distinguishes *possible* from *realised* compromise, because the 
 | restored and verified | all match | absent | unaffected | unaffected | — |
 
 Abnormal-true, so it is **dropped** when it stops applying rather than set `False` — its absence is the signal (A13). `phase` is unchanged by it alone; only the divergence row moves phase, via `Degraded`. The CLI treats it as a warning and **not** terminal for `deploy`, because a healthy fleet with a missing guard is still serving; design 10 alerts on it as a ticket, and on `RevisionMaterialChanged` as a page.
+
+**"The exposure is prospective" was false (A28).** The spike measured that removing the Binding makes `data` updates immediately admissible, and the finalizer stops a *delete*, not a write. So: Binding gone, an editor who is legitimately allowed to edit the ConfigMap changes a prompt, and a node drain or Pod deletion replaces an R1 Pod — all before the operator processes the source watch. The replacement Pod serves changed content under R1's gated hash, and the divergence check sets weight 0 **after requests have been served**. Detection is a controller reaction racing an admission gap, and a reaction cannot be fail-closed against one.
+
+- **Planned guard changes are overlap-only**: establish and verify the replacement Policy and Binding **before** removing the old ones, so no window exists in which no guard is installed. That is the only case the table's first row covers.
+- **Unplanned guard loss cannot be handled by reacting.** Absent an invariant that blocks Pod admission on unverified content, the honest options are **immutable revision snapshots** for behaviour-bearing material — the Pod references frozen material an editor cannot reach — or denying workload admission for affected Agents through a separately protected control. **A23's snapshot fallback is therefore not only a contingency for the refcount; it is what closes this race.**
+- **Not claimed until measured**: the seal is not described as fail-closed against unplanned guard loss until the Binding-removal + edit + Pod-replacement sequence runs with a kubelet. Envtest has none; `make conformance-cluster` is where it belongs.
 
 **The residual, stated because it is the honest part.** Detection rides the source watch, so a change that is applied and reverted between watch events is not observed, and a running Pod that already read the changed value keeps it. The seal is what makes that window small; it is not zero, and no arrangement of conditions makes it zero while the guard is absent.
 

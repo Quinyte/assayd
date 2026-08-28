@@ -177,13 +177,88 @@ spec:
 	}
 }
 
-// TestNackIsOnlyAnEventAndRetainsOldConfig is the measurement A19 rests on: a
-// dataplane rejection reports nowhere in status, and the old rule keeps serving.
+// trafficFrom returns a func that sends one request to the gateway from INSIDE
+// the cluster and returns its HTTP code.
 //
-// The poisoned policy must target a route the dataplane actually programs, or
-// nothing is pushed and no NACK is produced. A backendRef-less route is not
-// enough — that is the same distinction §3.3 uses for its inert stage.
-func TestNackIsOnlyAnEventAndRetainsOldConfig(t *testing.T) {
+// An earlier version port-forwarded from the test process. That added three
+// failure modes unrelated to what is being measured — a tunnel that is not up
+// yet, a gateway Pod still ContainerCreating, and a local port bind — and each
+// surfaced as a connection error that reads exactly like a policy result. The
+// first version of this test read one as a policy result.
+func trafficFrom(t *testing.T) func(path string) int {
+	t.Helper()
+	// The gateway's Service is created by the controller alongside its Deployment.
+	var svc string
+	for i := 0; i < 60; i++ {
+		out, err := kubectl(t, "get", "svc", "-n", "default",
+			"-l", "gateway.networking.k8s.io/gateway-name=conf-gw", "-o", "jsonpath={.items[0].metadata.name}")
+		if err == nil && strings.TrimSpace(out) != "" {
+			svc = strings.TrimSpace(out)
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if svc == "" {
+		t.Fatal("the Gateway never produced a Service; traffic assertions need one")
+	}
+	_ = apply(t, `
+apiVersion: v1
+kind: Pod
+metadata: {name: conf-curl, namespace: default}
+spec:
+  restartPolicy: Never
+  containers:
+  - name: c
+    image: curlimages/curl:8.11.1
+    command: ["sleep", "3600"]`)
+	if out, err := kubectl(t, "wait", "--for=condition=Ready", "pod/conf-curl", "-n", "default", "--timeout=180s"); err != nil {
+		t.Fatalf("curl pod never became Ready: %s", out)
+	}
+
+	url := "http://" + svc + ":8080"
+	send := func(path string) int {
+		out, err := kubectl(t, "exec", "conf-curl", "-n", "default", "--",
+			"curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10", url+path)
+		if err != nil {
+			return -1
+		}
+		code := 0
+		fmt.Sscanf(strings.TrimSpace(out), "%d", &code)
+		return code
+	}
+	// Wait until the data plane answers at all, so a not-yet-programmed gateway is
+	// never mistaken for a policy decision.
+	for i := 0; i < 60; i++ {
+		if c := send("/"); c > 0 {
+			return send
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatal("the gateway never answered from inside the cluster")
+	return send
+}
+
+// TestNackRetainsTheOldConfigAndReportsConverged is the measurement A19 rests
+// on, and it must observe TRAFFIC, not only an Event.
+//
+// STATUS: the traffic half of this test has NOT been observed passing. Repeated
+// runs on this machine failed provisioning — `agw-agentgateway` did not become
+// Ready within 120s — which is an environment limit, not a result. The behaviour
+// it asserts WAS measured by hand and is recorded in
+// docs/research/agentgateway-v1.4.1-spike.md §2.8, but a hand measurement is not
+// a regression test. Until this is seen green, A19's retention claim rests on the
+// spike alone, and this comment is the honest record of that.
+//
+// An earlier version of this test was named RetainsOldConfig and never
+// established old config nor sent a request — it asserted only that an Event
+// appeared. It would have passed against a gateway that dropped the old rule
+// entirely, which is the opposite of the behaviour A19 depends on.
+//
+// The sequence: install a STRICT limit and prove it enforces; then patch to a
+// LOOSER limit carrying a dataplane-invalid value. If the NACK retains the old
+// config the strict rule keeps rejecting; if it were dropped, the loosened rule
+// would let traffic through.
+func TestNackRetainsTheOldConfigAndReportsConverged(t *testing.T) {
 	if err := apply(t, `
 apiVersion: v1
 kind: Service
@@ -202,7 +277,24 @@ kind: AgentgatewayPolicy
 metadata: {name: conf-poison, namespace: default}
 spec:
   targetRefs: [{kind: HTTPRoute, name: conf-served, group: gateway.networking.k8s.io}]
-  traffic: {rateLimit: {local: [{requests: 100, unit: Hours, burst: -1}]}}`); err != nil {
+  traffic: {rateLimit: {local: [{requests: 1, unit: Hours}]}}`); err != nil {
+		t.Fatal(err)
+	}
+	if cs, _ := conds(t, "agentgatewaypolicy", "conf-poison"); cs["Attached"] != "True" {
+		t.Fatalf("strict policy did not attach: %v", cs)
+	}
+	send := trafficFrom(t)
+
+	// Prove the STRICT limit actually enforces before relying on its retention.
+	first, second := send("/nack"), send("/nack")
+	if second != 429 {
+		t.Fatalf("the strict 1/hour limit did not enforce (got %d then %d); "+
+			"without an enforcing baseline this test cannot distinguish retention from a dropped rule", first, second)
+	}
+
+	// Now LOOSEN it, carrying a dataplane-invalid burst in the same edit.
+	if _, err := kubectl(t, "patch", "agentgatewaypolicy", "conf-poison", "-n", "default", "--type=merge",
+		"-p", `{"spec":{"traffic":{"rateLimit":{"local":[{"requests":1000,"unit":"Hours","burst":-1}]}}}}`); err != nil {
 		t.Fatal(err)
 	}
 	cs, _ := conds(t, "agentgatewaypolicy", "conf-poison")
@@ -211,7 +303,7 @@ spec:
 	}
 
 	var events string
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 60; i++ {
 		events, _ = kubectl(t, "get", "events", "-n", "default", "--field-selector", "type=Warning", "-o", "json")
 		if strings.Contains(events, "AgentGatewayNackError") {
 			break
@@ -219,13 +311,15 @@ spec:
 		time.Sleep(time.Second)
 	}
 	if !strings.Contains(events, "AgentGatewayNackError") {
-		t.Fatal("no AgentGatewayNackError Event for a dataplane-invalid policy; §3.3's NACK watch is the ONLY observable of a rejection and A19 rests on it")
+		t.Fatal("no AgentGatewayNackError Event; §3.3's NACK watch is the ONLY observable of a rejection and A19 rests on it")
 	}
 	if !strings.Contains(events, "default/conf-poison") {
-		t.Error("the NACK Event no longer names the offending policy; §3.3.2 attributes a NACK to an emitted resource by that key, and without it absence and attribution are both unusable")
+		t.Error("the NACK Event no longer names the offending policy; §3.3.2 attributes a NACK by that key")
 	}
-	// The whole point: status said converged while the dataplane did not.
-	if cs["Accepted"] != "True" {
-		t.Error("status now reflects the rejection; §3.3.2's 'convergence is not enforcement' may be over-cautious")
+
+	// The load-bearing assertion: the OLD strict rule is still rejecting.
+	if got := send("/nack"); got != 429 {
+		t.Errorf("after the NACK the loosened limit is serving (HTTP %d, expected 429); "+
+			"A19 and §3.3.2 rest on a NACK'd policy RETAINING the previous configuration", got)
 	}
 }
