@@ -20,9 +20,9 @@ The single translation layer between plume's declarative intent (Agent/Workflow/
 ### 3.1 Input: `PolicyIntent` (internal, versioned)
 
 ```
-PolicyIntent {
+PolicyIntent {                      // ONE revision's material — see below (A26)
   target:      {kind, ns, name}
-  revisions:   [{hash, weight, candidate: bool}]
+  revision:    {hash, weight, candidate: bool}
   identity:    {spiffeID | oauthClientID}
   tools:       [{backendRef, toolAllowlist?, requiresApproval}]
   knowledge:   [{endpoint, scope: {entityTypes}}]        // `bundles?` dropped (r1 f7)
@@ -34,6 +34,13 @@ PolicyIntent {
   gatewayReplicas: int          // declared, never discovered — see "Field provenance" below (A3)
 }
 ```
+
+**One `PolicyIntent` per revision, not one per Agent (A26).** An earlier shape carried `revisions[]` alongside a **single** `budget`, `expose`, `tools` and `llm` at Agent scope. That cannot express what A25 requires: with `budget` and `expose` on the behaviour surface, a change mints a candidate whose policy differs from the active revision's, and the active revision must keep serving its own until the candidate passes its gate. One global value cannot describe both at once — so a pure compile either rewrote R1's serving policy before R2 was gated, letting a widening reach production ungated, or preserved R1 and could not compile R2 at all.
+
+So the operator constructs **one intent per live revision** — the active one, and the candidate if any — and `Compile` returns that revision's `ResourceSet`. Two further rules follow, and both are contract:
+
+- **The applied `ResourceSet` is persisted under its revision hash**, and an active revision's resources are **never reconstructed from current Agent spec**. Reconstruction is how a spec edit silently rewrites what a gated revision is serving; the retained material is the record of what passed the gate.
+- **The receipt backstop reads the *active* revision's budget**, not the current spec's. Otherwise raising a held candidate's budget from \$10 to \$100 would clear the active revision's `BudgetExhausted` hold before the candidate was ever promoted — the spend never moved, only an ungated field did.
 
 **Field provenance (A3).** `PolicyIntent` is an internal type filled by the operator from several sources, not a projection of `AgentSpec`. Naming the source of each field is part of this contract, because a field with no producer compiles to a default nobody chose:
 
@@ -123,7 +130,9 @@ So the operator **applies once and returns**, and progress is driven by watches:
 
 **`PreparingRoute` exists because the policy barrier cannot be met without it.** An earlier draft ordered Backends → Policies → converge → *then* create the route. The spike measured that a policy whose target route does not exist reports `Attached=False` (§2.1), so a cold create reached `Converging` and could **never** leave: the stage that creates the route sat behind the barrier that needed it. The route is therefore created first, in the shape §2.6 measured as attachable-but-not-serving. Controller-runtime's per-key serialization is untouched, because each reconcile still returns before the next begins — what is removed is the sleeping.
 
-**Stale state is discarded before anything advances.** On every reconcile, if `status.apply.digest` is not the digest of the currently desired resource set, or its `generation` is not the CR's current generation, the record is dropped and the machine restarts at `ApplyingBackends`. Without that rule, reconcile N's recorded stage would let reconcile N+1 publish a route whose policies belong to the previous generation — which is the fail-open the blocking poll existed to prevent, arriving through the status field instead.
+**Stale state is discarded, and recovery re-enters the transaction's FIRST stage (A26).** On every reconcile, if `status.apply.digest` is not the digest of the currently desired resource set, or its `generation` is not the CR's current generation, the record is dropped — and the transaction is **recomputed against the currently serving applied set**, then entered at *its own* first stage: `PreparingRoute` for a `Create`, `ApplyingBackends` only for a proven `Loosen`.
+
+An earlier draft restarted unconditionally at `ApplyingBackends`. A19 removed the `Tighten` transaction and I recorded that as dissolving this finding; **that was wrong, and stated here because the retraction matters more than the fix**. Removing `Tighten` did not remove `Create`'s first stage. A superseding generation naming a new candidate route would drop the old record, start at `ApplyingBackends`, and attach policies to a route that had never been created — which the spike measured as `Attached=False` (§2.1), deadlocking on exactly the cold-create barrier A17 was written to fix. The route identity the transaction uses is persisted with the stage, so recovery knows which route it must prepare. Without that rule, reconcile N's recorded stage would let reconcile N+1 publish a route whose policies belong to the previous generation — which is the fail-open the blocking poll existed to prevent, arriving through the status field instead.
 
 **The deadline is a condition, not a timeout.** Exceeding it sets `PolicyApplyIncomplete` naming the resource and its unmet condition, and the machine stays in its stage; it does not abandon or roll back. Withheld routes stay withheld, which is the fail-closed direction.
 
@@ -590,3 +599,8 @@ Folded into §§3–8 rather than left as patches, following the integration pas
   **`captureLevel` was per-Agent and unrepresentable** (MAJOR 14). Frontend tracing attaches only to a Gateway at v1.4.1, so two reconcilers would last-writer-win one policy — a per-Agent field silently deciding a cluster-wide setting. It leaves `PolicyIntent`; tracing is emitted once per Gateway from a chart value.
 
   **Virtual models were the mandatory shift path** (MAJOR 15). ADR-0028 records `AgentgatewayModel` as experimental and **off by default**, yet design 03's mapping table and ADR-0026 required it for weighted shifting — an opt-in API as a core rollout mechanism, absent from a default install. Now Gateway API `backendRefs` weights, which design 02 §3.3 already uses for revision weights; virtual models are an opt-in enhancement (design 25 A2).
+- **A26 (2026-08-28) — the intent is per-revision, and stale recovery re-enters the transaction's first stage.** Codex r5 BLOCKER 1 and 2.
+
+  **A25 was not representable by the compiler input.** `PolicyIntent` carried `revisions[]` beside a **single** `budget`, `expose`, `tools` and `llm` at Agent scope — so once A25 put `budget` and `expose` on the behaviour surface, the one thing the intent could not express was the state A25 exists to create: an active revision serving its own policy while a candidate is built with a different one. A pure compile either rewrote R1's serving policy before R2 was gated, letting a widening reach production **ungated**, or preserved R1 and could not compile R2. The fix that closed the tightening hole could not run. The intent is now **one per revision**, the applied `ResourceSet` is persisted under its revision hash, an active revision's resources are **never reconstructed from current spec**, and the receipt backstop reads the *active* revision's budget — otherwise raising a held candidate's budget would clear the active revision's `BudgetExhausted` hold while the spend had not moved.
+
+  **A19's claim that r4 BLOCKER 3 "dissolved" was false, and the retraction matters more than the fix.** Removing `Tighten` removed a transaction; it did not remove `Create`'s first stage. Stale recovery still restarted unconditionally at `ApplyingBackends`, so a superseding generation naming a new candidate route would attach policies to a route that had never been created — `Attached=False`, the cold-create deadlock A17 was written to fix, reached by another path. Recovery now recomputes the transaction against the currently serving applied set and enters *its* first stage, with the route identity persisted alongside the stage. I asserted a finding was dissolved without checking; the review found it, twice in a row, in the same section.
