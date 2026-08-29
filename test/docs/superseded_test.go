@@ -28,6 +28,7 @@
 package docs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -120,10 +121,22 @@ var rules = []rule{
 		why:     "egressAllowlist is a ceiling, not a selection: requested must be a SUBSET of permitted (A16)",
 	},
 	{
-		name:    "spec-only-hash",
-		banned:  regexp.MustCompile(`(?i)computed from spec alone|hashed by referent`),
+		name: "spec-only-hash",
+		// The first version of this rule knew only the two phrasings a reviewer
+		// had written in prose. The live body said "revisionHash(spec) — spec
+		// only", matched nothing, and the gate stayed green over the exact claim
+		// it existed to ban. A rule must cover how the DOCUMENT says it.
+		banned:  regexp.MustCompile(`(?i)computed from spec alone|hashed by referent|revisionHash\(spec\)[^;.]{0,12}spec only|hash covers spec only|spec only; the`),
 		allowed: regexp.MustCompile(`(?i)no longer|earlier|retract|supersed|was never|A20`),
 		why:     "A20 hashes env sources by content, so the digest is no longer spec-only",
+	},
+	{
+		name: "env-referent-hash",
+		// The sibling phrasing, and the dangerous one: it sits in the A12
+		// classification TABLE, which is the cell an implementer copies from.
+		banned:  regexp.MustCompile(`(?i)by referent,? not contents|referent(s)? rather than contents|referent identity is (the |)hash`),
+		allowed: regexp.MustCompile(`(?i)was never sufficient|no longer|retract|supersed|earlier`),
+		why:     "A20 hashes every env source by CONTENT; referent identity alone let an update replace a prompt under a gated revision",
 	},
 	{
 		name:    "verifier-undecided",
@@ -194,6 +207,11 @@ func isFrozen(content string) bool {
 // through. A Codex review found the gate passing on "the acceptance **poll**"
 // because the rule expected a contiguous "acceptance poll": emphasis inside the
 // phrase defeated it. A lexical tripwire pretending to be a semantic guarantee.
+//
+// The pipe is deliberately NOT stripped. Adding it here changed no outcome any
+// test could detect — blocks() already splits a table row into cells, so no
+// pipe survives into a rendered block — and unpinned code that reads as
+// load-bearing is worse than no code: the next reader trusts it.
 var markdownNoise = regexp.MustCompile("[*`_~]+")
 
 // collapseSpace folds newlines too, so a phrase broken across a wrapped line is
@@ -234,6 +252,76 @@ func normalize(s string) string {
 	return collapseSpace.ReplaceAllString(s, " ")
 }
 
+// Block boundaries. Markdown joins soft-wrapped lines inside a paragraph into
+// one rendered line, so a scan that splits on "\n" before matching cannot see a
+// phrase a normal hard wrap happened to break — which is how "acceptance\npoll
+// verifies convergence" passed this gate. These patterns mark where a rendered
+// block genuinely ENDS, so wraps are joined and real boundaries are not.
+var (
+	bHeading  = regexp.MustCompile(`^\s{0,3}#{1,6}\s`)
+	bListItem = regexp.MustCompile(`^\s*([-*+]|\d+[.)])\s`)
+	bTableRow = regexp.MustCompile(`^\s*\|`)
+	bQuote    = regexp.MustCompile(`^\s*>`)
+	bRule     = regexp.MustCompile(`^\s*([-*_]\s*){3,}$`)
+	bFence    = regexp.MustCompile("^\\s*(```|~~~)")
+)
+
+// blocks renders an authoritative body into the units a READER perceives: one
+// block per paragraph, heading, list item, table CELL or line of code.
+//
+// A line inside a fenced code block stands alone because code has no soft
+// wrapping, and joining two statements would manufacture a sentence nobody
+// wrote.
+//
+// A table cell is its own block for a subtler reason: RESCUE SCOPE. Every rule
+// may carry an `allowed` pattern that spares a block which retracts the claim it
+// states. If a whole row were one block, the word "superseded" in the right-hand
+// column would silently launder a live guarantee asserted in the left-hand one —
+// and the A12 classification table is exactly a two-column document where one
+// side is a claim and the other is commentary.
+func blocks(text string) []string {
+	var out []string
+	var cur []string
+	flush := func() {
+		if len(cur) > 0 {
+			out = append(out, normalize(strings.Join(cur, " ")))
+			cur = nil
+		}
+	}
+	inFence := false
+	for _, line := range strings.Split(text, "\n") {
+		if bFence.MatchString(line) {
+			flush()
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			flush()
+			out = append(out, normalize(line))
+			continue
+		}
+		if strings.TrimSpace(line) == "" || bRule.MatchString(line) {
+			flush()
+			continue
+		}
+		if bTableRow.MatchString(line) {
+			flush()
+			for _, cell := range strings.Split(strings.Trim(strings.TrimSpace(line), "|"), "|") {
+				if n := normalize(cell); strings.TrimSpace(n) != "" {
+					out = append(out, n)
+				}
+			}
+			continue
+		}
+		if bHeading.MatchString(line) || bListItem.MatchString(line) || bQuote.MatchString(line) {
+			flush()
+		}
+		cur = append(cur, strings.TrimSpace(line))
+	}
+	flush()
+	return out
+}
+
 // amendmentHeading marks where a design's authoritative body ends.
 var amendmentHeading = regexp.MustCompile(`(?m)^## \d+\. Amendment`)
 
@@ -245,10 +333,45 @@ func body(content string) string {
 	return content
 }
 
-func scanned(t *testing.T) map[string]string {
-	t.Helper()
+// violation is one rule firing on one rendered block.
+type violation struct {
+	rule  string
+	block string
+	why   string
+}
+
+// scanBody is THE matcher. Production and every fixture call it, so a fixture
+// can never prove a path production does not take — the defect that let a
+// hard-wrapped banned phrase survive while a fixture calling normalize() on the
+// same string reported the rule healthy.
+func scanBody(path, text string) []violation {
+	var out []violation
+	for _, blk := range blocks(text) {
+		for _, r := range rules {
+			if r.onlyIn != "" && filepath.Base(path) != r.onlyIn {
+				continue
+			}
+			if supersedes(path, r.name) {
+				continue // a document is allowed to name what it supersedes
+			}
+			if !r.banned.MatchString(blk) {
+				continue
+			}
+			if r.allowed != nil && r.allowed.MatchString(blk) {
+				continue // a retraction, which is what a correction must say
+			}
+			out = append(out, violation{rule: r.name, block: strings.TrimSpace(blk), why: r.why})
+		}
+	}
+	return out
+}
+
+// discover returns the authoritative bodies under root. It reports an error
+// rather than calling t.Fatalf so the empty-corpus guard — the one that stops
+// this whole gate from passing because a path moved — is itself testable.
+func discover(root string) (map[string]string, error) {
 	out := map[string]string{}
-	err := filepath.Walk(docsRoot, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -274,34 +397,40 @@ func scanned(t *testing.T) map[string]string {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walking %s: %v", docsRoot, err)
+		return nil, fmt.Errorf("walking %s: %w", root, err)
 	}
 	if len(out) == 0 {
-		t.Fatalf("scanned no documents under %s — the gate would pass vacuously", docsRoot)
+		return nil, fmt.Errorf("scanned no documents under %s — the gate would pass vacuously", root)
+	}
+	return out, nil
+}
+
+func scanned(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out, err := discover(root)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return out
 }
 
+// TestAnEmptyCorpusIsAFailure pins the guard that stops this gate reporting
+// success because a directory moved. Without it every rule passes vacuously and
+// the suite is indistinguishable from one that works.
+func TestAnEmptyCorpusIsAFailure(t *testing.T) {
+	if _, err := discover(t.TempDir()); err == nil {
+		t.Error("an empty corpus was accepted; every rule would then pass on nothing")
+	}
+	if _, err := discover(docsRoot); err != nil {
+		t.Errorf("the real corpus must be discoverable: %v", err)
+	}
+}
+
 // TestNoSupersededGuaranteeInAnAuthoritativeBody is the gate BLOCKER 8 asked for.
 func TestNoSupersededGuaranteeInAnAuthoritativeBody(t *testing.T) {
-	for path, text := range scanned(t) {
-		for _, raw := range strings.Split(text, "\n") {
-			line := normalize(raw)
-			for _, r := range rules {
-				if r.onlyIn != "" && filepath.Base(path) != r.onlyIn {
-					continue
-				}
-				if supersedes(path, r.name) {
-					continue // a document is allowed to name what it supersedes
-				}
-				if !r.banned.MatchString(line) {
-					continue
-				}
-				if r.allowed != nil && r.allowed.MatchString(line) {
-					continue // a retraction, which is what a correction must say
-				}
-				t.Errorf("%s [%s]\n    %s\n    → %s", path, r.name, strings.TrimSpace(line), r.why)
-			}
+	for path, text := range scanned(t, docsRoot) {
+		for _, v := range scanBody(path, text) {
+			t.Errorf("%s [%s]\n    %s\n    → %s", path, v.rule, v.block, v.why)
 		}
 	}
 }
@@ -329,8 +458,31 @@ var ruleFixtures = map[string]string{
 	"in-worker-poll":            "The acceptance poll runs on the reconcile worker for up to 30s.",
 	"allowlist-equality":        "The emitted Backend's provider set equals the allowlist.",
 	"spec-only-hash":            "The revision digest is computed from spec alone.",
+	"env-referent-hash":         "Env sources are hashed by referent, not contents.",
 	"verifier-undecided":        "Ship a Sigstore policy-controller or a Kyverno verifyImages binding.",
 	"inert-tightening":          "A tightening update must make the dependent routes inert first.",
+}
+
+// livePhrasingFixtures are the exact sentences that were sitting in an
+// authoritative body while this gate reported green. They are kept verbatim.
+//
+// A rule written from a reviewer's paraphrase catches the paraphrase. Both of
+// these state a withdrawn A20 guarantee in the words design 02 actually used —
+// "spec only" in the numbered rule, "by referent, not contents" in the very
+// classification table an implementer copies from — and the pre-r6 pattern
+// matched neither. A rule must be pinned by how the corpus says it.
+var livePhrasingFixtures = map[string]string{
+	"spec-only-hash":    "1. Spec change → `revisionHash(spec)` — **spec only**; the card digest is status.",
+	"env-referent-hash": "| `runtime.env`, `runtime.envFrom` (by **referent**, not contents) | `runtime.port` |\n|---|---|\n| a | b |",
+}
+
+// TestTheLivePhrasingsThatSlippedThroughAreCaught pins r6 MAJOR 5's second half.
+func TestTheLivePhrasingsThatSlippedThroughAreCaught(t *testing.T) {
+	for name, live := range livePhrasingFixtures {
+		if !caught(t, name, live) {
+			t.Errorf("rule %q does not catch the phrasing that was live in the corpus:\n    %s", name, live)
+		}
+	}
 }
 
 // evasionFixtures pin the NORMALISATION: real phrasings the raw byte match
@@ -353,40 +505,136 @@ var linkEvasionFixtures = map[string]string{
 	"exact-usd-tier":       "the `exact` tier is the receipt backstop",
 }
 
+// caught runs a fixture through the ENTIRE production path — a real file on
+// disk, discovered by the same walk, truncated at the same amendment heading,
+// rendered by the same blocks(), matched by the same scanBody().
+//
+// It exists because the previous fixtures called normalize() directly. That
+// proved the normaliser worked and proved nothing about the gate: production
+// split the document into lines BEFORE normalising, so a phrase broken by an
+// ordinary Markdown hard wrap was never assembled and never matched, while
+// every fixture reported the rule healthy. A fixture that takes a shortcut the
+// corpus cannot take is not evidence about the corpus.
+func caught(t *testing.T, name, fixture string) bool {
+	t.Helper()
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "designs")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("fixture corpus: %v", err)
+	}
+	// Named as the onlyIn rules expect, with a body and an amendment log, so the
+	// truncation rule is exercised rather than bypassed.
+	doc := "# Design 03 — policy compiler\n\nStatus: fixture.\n\n" + fixture +
+		"\n\n## 11. Amendment log\n\nA1. history, never scanned.\n"
+	if err := os.WriteFile(filepath.Join(sub, "03-policy-compiler.md"), []byte(doc), 0o644); err != nil {
+		t.Fatalf("fixture corpus: %v", err)
+	}
+	for path, text := range scanned(t, dir) {
+		for _, v := range scanBody(path, text) {
+			if v.rule == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestAFixtureInTheAmendmentLogIsNotScanned pins the truncation the fixture
+// harness relies on. Without it, caught() could report a rule healthy because
+// it matched history rather than the authoritative body.
+func TestAFixtureInTheAmendmentLogIsNotScanned(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "designs")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	doc := "# Design 03\n\nBody.\n\n## 11. Amendment log\n\nThe acceptance poll runs on the reconcile worker.\n"
+	if err := os.WriteFile(filepath.Join(sub, "03-policy-compiler.md"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for path, text := range scanned(t, dir) {
+		if vs := scanBody(path, text); len(vs) != 0 {
+			t.Errorf("a withdrawn claim in the AMENDMENT LOG was reported as a live guarantee: %+v", vs)
+		}
+	}
+}
+
+// TestABlockBoundaryDoesNotInventASentence pins the other direction, because a
+// renderer that joined everything would be as wrong as one that joined nothing.
+// Two adjacent table CELLS, and two lines of CODE, must not be spliced into a
+// banned phrase their author never wrote — that would fail the gate on a
+// document that says nothing of the kind, and a gate that cries wolf gets its
+// rules deleted.
+func TestABlockBoundaryDoesNotInventASentence(t *testing.T) {
+	cases := map[string]string{
+		"code lines": "```go\n// the acceptance\npolling(ctx) // verifies convergence\n```",
+	}
+	for name, fixture := range cases {
+		if caught(t, "in-worker-poll", fixture) {
+			t.Errorf("%s: the gate spliced a phrase across a block boundary and reported a claim nobody made", name)
+		}
+	}
+}
+
+// TestARetractionInOneCellDoesNotRescueTheNext pins the table-cell split. A
+// two-column table where one side asserts and the other comments is the shape
+// design 02's A12 classification table already has, so a row-wide rescue would
+// let an unrelated "superseded" spare a live guarantee.
+func TestARetractionInOneCellDoesNotRescueTheNext(t *testing.T) {
+	row := "| The limiter cuts early, never late | a retracted note about something else |\n|---|---|\n| a | b |"
+	if !caught(t, "cuts-early-guarantee", row) {
+		t.Error("a retraction word in an ADJACENT CELL rescued a live guarantee; rescue must be per-cell")
+	}
+}
+
 // TestLinkAndImageSyntaxCannotHideAWithdrawnClaim is the half MAJOR 13 found
 // missing: emphasis was stripped, link destinations were not.
 func TestLinkAndImageSyntaxCannotHideAWithdrawnClaim(t *testing.T) {
-	byName := map[string]rule{}
-	for _, r := range rules {
-		byName[r.name] = r
-	}
 	for name, evasion := range linkEvasionFixtures {
-		r, ok := byName[name]
-		if !ok {
-			t.Errorf("link-evasion fixture %q has no rule", name)
-			continue
-		}
-		if !r.banned.MatchString(normalize(evasion)) {
+		if !caught(t, name, evasion) {
 			t.Errorf("rule %q is bypassed by inline markdown:\n    source:   %s\n    rendered: %s",
 				name, evasion, normalize(evasion))
 		}
 	}
 }
 
+// wrapFixtures pin the SOFT WRAP specifically, and each half is innocuous on
+// its own. That property is the whole test: the previous wrap fixture ("the
+// gateway\ncuts early, never late") had a second line matching the rule by
+// itself, so it passed under a line-splitting scan and reported a capability
+// the gate did not have. A wrap fixture that either half satisfies is vacuous.
+var wrapFixtures = map[string]string{
+	"in-worker-poll":  "the acceptance\npolling verifies convergence",
+	"overshoot-bound": "under concurrency the excess\nis bounded by the replica count",
+}
+
+// TestAHardWrapCannotHideAWithdrawnClaim is r6 MAJOR 5's first half: Markdown
+// joins soft-wrapped lines, so the gate must too.
+func TestAHardWrapCannotHideAWithdrawnClaim(t *testing.T) {
+	for name, fixture := range wrapFixtures {
+		halves := strings.Split(fixture, "\n")
+		for _, r := range rules {
+			if r.name != name {
+				continue
+			}
+			for _, h := range halves {
+				if r.banned.MatchString(normalize(h)) {
+					t.Fatalf("wrap fixture %q is vacuous: the half %q matches on its own, so this "+
+						"would pass a scan that never joins lines", name, h)
+				}
+			}
+		}
+		if !caught(t, name, fixture) {
+			t.Errorf("rule %q is bypassed by an ordinary Markdown hard wrap:\n    %q", name, fixture)
+		}
+	}
+}
+
 // TestNormalisationDefeatsFormattingEvasion is the half MAJOR 19 said was missing.
 func TestNormalisationDefeatsFormattingEvasion(t *testing.T) {
-	byName := map[string]rule{}
-	for _, r := range rules {
-		byName[r.name] = r
-	}
 	for name, evasion := range evasionFixtures {
-		r, ok := byName[name]
-		if !ok {
-			t.Errorf("evasion fixture %q has no rule", name)
-			continue
-		}
-		if !r.banned.MatchString(normalize(evasion)) {
-			t.Errorf("rule %q misses a formatted phrasing even after normalisation:\n    %q", name, evasion)
+		if !caught(t, name, evasion) {
+			t.Errorf("rule %q misses a formatted phrasing through the production scan:\n    %q", name, evasion)
 		}
 	}
 }
@@ -404,8 +652,8 @@ func TestEveryRuleIsPinnedByAnIndependentFixture(t *testing.T) {
 			t.Errorf("rule %q has a fixture but no rule — deleting a rule must fail here, not pass silently", name)
 			continue
 		}
-		if !r.banned.MatchString(fixture) {
-			t.Errorf("rule %q no longer catches its own fixture:\n    %s\n    the pattern was weakened", name, fixture)
+		if !caught(t, name, fixture) {
+			t.Errorf("rule %q no longer catches its own fixture through the production scan:\n    %s\n    the pattern was weakened", name, fixture)
 		}
 		if r.allowed != nil && r.allowed.MatchString(fixture) {
 			t.Errorf("rule %q rescues its own fixture — the retraction clause is too broad to catch an assertion", name)

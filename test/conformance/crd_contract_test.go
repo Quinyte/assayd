@@ -224,8 +224,12 @@ func TestLocalRateLimitShape(t *testing.T) {
 		rm, _ := r.(map[string]any)
 		expr, _ := rm["rule"].(string)
 		norm := collapseWS.ReplaceAllString(expr, "")
-		if strings.Contains(norm, "has(self.requests)") && strings.Contains(norm, "has(self.tokens)") &&
-			strings.Contains(norm, "filter(x,x==true).size()==1") {
+		// EXACT, not contains. A substring match still passes an expression that
+		// merely includes these fragments among others — it is lexical, not
+		// semantic. The canonical form is compared whole; a genuine upstream
+		// reformatting will fail here and should, because this test's job is to
+		// notice that the constraint changed at all.
+		if norm == "[has(self.requests),has(self.tokens)].filter(x,x==true).size()==1" {
 			exactlyOne = true
 		}
 	}

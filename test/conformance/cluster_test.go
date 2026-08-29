@@ -67,15 +67,16 @@ func conds(t *testing.T, kind, name string) (map[string]string, map[string]strin
 						}
 					}
 					cs := map[string]string{}
-					current := true
+					var raw []map[string]any
 					for _, c := range a["conditions"].([]any) {
 						cm := c.(map[string]any)
 						cs[cm["type"].(string)] = cm["status"].(string)
-						if og, ok := cm["observedGeneration"].(float64); ok && og != gen {
-							current = false
-						}
+						raw = append(raw, cm)
 					}
-					if !current {
+					// statusIsCurrent (status.go) owns this decision and is unit-tested
+					// there, so the staleness rule is pinned by `make test` rather than
+					// only by a run that happens to have a cluster.
+					if !statusIsCurrent(raw, int64(gen)) {
 						time.Sleep(time.Second)
 						continue
 					}
@@ -198,6 +199,25 @@ spec:
 		t.Errorf("the inert route answered HTTP %d, expected 500; §3.3.3 documents that a "+
 			"tightening takes the route DOWN for its convergence window rather than serving the old rule, "+
 			"and that cost is only real if the inert shape errors", got)
+	}
+}
+
+// TestExactlyOneOfIsEnforcedByAdmission is the SEMANTIC half of the hermetic
+// ExactlyOneOf assertion. Reading the CEL expression proves the rule is written;
+// only the API server proves it is enforced, and §3.5 relies on enforcement when
+// it says one policy cannot carry both limits.
+func TestExactlyOneOfIsEnforcedByAdmission(t *testing.T) {
+	ensureGateway(t)
+	err := apply(t, `
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: {name: conf-bothlimits, namespace: default}
+spec:
+  targetRefs: [{kind: HTTPRoute, name: conf-route, group: gateway.networking.k8s.io}]
+  traffic: {rateLimit: {local: [{requests: 10, tokens: 100, unit: Hours}]}}`)
+	if err == nil {
+		t.Error("a policy setting BOTH requests and tokens was admitted; §3.5 says one policy cannot " +
+			"carry both, and emits a single -ratelimit at the minimum of the two derived rates on that basis")
 	}
 }
 
@@ -405,10 +425,13 @@ spec:
 
 	switch {
 	case control == 429:
-		t.Skipf("INCONCLUSIVE, not a pass: a cleanly-applied loosening still returns 429, so a policy "+
-			"update does not reset the bucket and a 429 after the NACK (got %d) cannot distinguish "+
-			"retention from a stale bucket. A19's retention claim rests on the hand measurement in "+
-			"spike §2.8 until a discriminating observable exists.", afterNack)
+		// FAIL, not Skip. `go test` reports a skip as success, so the gate would
+		// exit zero while the claim this test exists to protect went unverified —
+		// which is how an inconclusive result becomes an implicit pass.
+		t.Fatalf("INCONCLUSIVE: a cleanly-applied loosening still returns 429, so a policy update does "+
+			"not reset the bucket and the 429 after the NACK (got %d) cannot distinguish retention from "+
+			"a stale bucket. A19's retention claim then rests on the hand measurement in spike §2.8 "+
+			"alone, and this gate must go RED so that is noticed rather than assumed.", afterNack)
 	case afterNack != 429:
 		t.Errorf("after the NACK the loosened limit was serving (HTTP %d) while the control shows a "+
 			"clean loosening takes effect (HTTP %d); A19 and §3.3.2 rest on a NACK'd policy RETAINING "+

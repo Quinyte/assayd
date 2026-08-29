@@ -50,4 +50,18 @@ set -o pipefail
 go test -tags cluster ./test/conformance/... -count=1 -v 2>&1 | tee /tmp/conformance.log
 status=${PIPESTATUS[0]}
 set +o pipefail
+
+# A SKIP is not a PASS. `go test` exits 0 for a skipped test, so a suite whose
+# load-bearing test went inconclusive would report success and the claim it
+# guards would go unverified while CI stayed green. Every test here is a
+# contract test against a live agentgateway: if one could not reach a verdict,
+# this run proved less than it claims to have proved, and must go red.
+if grep -q -- '--- SKIP' /tmp/conformance.log; then
+  echo
+  echo "FAIL: the cluster suite skipped a test. This gate makes claims about a"
+  echo "running dataplane; a skipped test makes none of them. Skipped:"
+  grep -- '--- SKIP' /tmp/conformance.log
+  status=1
+fi
+
 exit "$status"

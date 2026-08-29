@@ -100,7 +100,7 @@ status:
 
 k8s rolling update mixes old/new traffic and would defeat eval gating, so the operator owns revisions:
 
-1. Spec change → `revisionHash(spec)` — **spec only**; the card digest is status, and card drift triggers re-registration, never a new revision → creates a parallel workload `<name>-<hash>`.
+1. Spec change → `revisionHash(projection)` — a projection of the behaviour surface **plus the resolved contents of every env source it references** (A20); the card digest is status, and card drift triggers re-registration, never a new revision → creates a parallel workload `<name>-<hash>`.
 
    **The hash covers a projection of spec, not all of it (A12, r2).** Two surfaces share one CR:
 
@@ -114,7 +114,7 @@ k8s rolling update mixes old/new traffic and would defeat eval gating, so the op
    | Behaviour surface — **mints a revision** | Policy surface — **applied in place** |
    |---|---|
    | `runtime.image` | `runtime.replicas` — a scale operation |
-   | `runtime.env`, `runtime.envFrom` (by **referent**, not contents) | `runtime.port` — wiring; the operator dials it |
+   | `runtime.env`, `runtime.envFrom` — **by resolved content** (A20) | `runtime.port` — wiring; the operator dials it |
    | `runtime.sandbox.profile` | `runtime.resources` — see the note below |
    | `knowledge[].name`, `.version`, `.scope` | `card.path` — a path change is re-registration, exactly as card drift is |
    | `tools[].name` — a capability grant | `tools[].requiresApproval` — approval policy |
