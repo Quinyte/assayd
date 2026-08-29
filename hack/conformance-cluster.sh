@@ -42,5 +42,12 @@ helm install agw "oci://ghcr.io/agentgateway/charts/agentgateway" --version "$AG
 kubectl -n agentgateway-system rollout status deploy/agw-agentgateway --timeout=120s >/dev/null
 
 echo "==> conformance"
-go test -tags cluster ./test/conformance/... -count=1 -v 2>&1 | grep -E '^(=== RUN|--- (PASS|FAIL|SKIP)|ok|FAIL|    )' || true
-go test -tags cluster ./test/conformance/... -count=1
+# ONCE, with the exit code preserved. An earlier version piped a first run
+# through grep (discarding its status) and then ran the whole suite AGAIN against
+# the resources and Events the first run had left behind — so a stale
+# AgentGatewayNackError from run one could satisfy run two.
+set -o pipefail
+go test -tags cluster ./test/conformance/... -count=1 -v 2>&1 | tee /tmp/conformance.log
+status=${PIPESTATUS[0]}
+set +o pipefail
+exit "$status"

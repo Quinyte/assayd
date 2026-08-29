@@ -38,13 +38,24 @@ func apply(t *testing.T, manifest string) error {
 
 // conds reads an ancestor-shaped policy status into {type: status} plus the
 // ancestor's group/kind/name, which is the discriminator §3.3.2 depends on.
+//
+// It requires observedGeneration == metadata.generation. Without that it returns
+// the PREVIOUS generation's status immediately after a patch — the exact
+// stale-true trap §3.3.2 documents, which made a NACK test that should take a
+// minute pass in 0.66s by reading a pre-patch converged status.
 func conds(t *testing.T, kind, name string) (map[string]string, map[string]string) {
 	t.Helper()
 	var got map[string]any
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 90; i++ {
 		out, err := kubectl(t, "get", kind, name, "-n", "default", "-o", "json")
 		if err == nil {
 			_ = json.Unmarshal([]byte(out), &got)
+			gen := float64(-1)
+			if md, ok := got["metadata"].(map[string]any); ok {
+				if g, ok := md["generation"].(float64); ok {
+					gen = g
+				}
+			}
 			if st, ok := got["status"].(map[string]any); ok {
 				if anc, ok := st["ancestors"].([]any); ok && len(anc) > 0 {
 					a := anc[0].(map[string]any)
@@ -56,9 +67,17 @@ func conds(t *testing.T, kind, name string) (map[string]string, map[string]strin
 						}
 					}
 					cs := map[string]string{}
+					current := true
 					for _, c := range a["conditions"].([]any) {
 						cm := c.(map[string]any)
 						cs[cm["type"].(string)] = cm["status"].(string)
+						if og, ok := cm["observedGeneration"].(float64); ok && og != gen {
+							current = false
+						}
+					}
+					if !current {
+						time.Sleep(time.Second)
+						continue
 					}
 					return cs, refs
 				}
@@ -68,6 +87,29 @@ func conds(t *testing.T, kind, name string) (map[string]string, map[string]strin
 	}
 	t.Fatalf("%s/%s never published an ancestor status", kind, name)
 	return nil, nil
+}
+
+// ensureGateway applies the shared Gateway and its backendRef-less route
+// idempotently. Tests called it explicitly rather than depending on execution
+// order, so `-run` on a single test still establishes its own preconditions.
+func ensureGateway(t *testing.T) {
+	t.Helper()
+	if err := apply(t, `
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: {name: conf-gw, namespace: default}
+spec:
+  gatewayClassName: agentgateway
+  listeners: [{name: http, port: 8080, protocol: HTTP, allowedRoutes: {namespaces: {from: Same}}}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: conf-route, namespace: default}
+spec:
+  parentRefs: [{name: conf-gw}]
+  rules: [{matches: [{path: {type: PathPrefix, value: /}}]}]`); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestPolicyOnAbsentRouteIsAcceptedButNotAttached is the measurement that
@@ -98,21 +140,8 @@ spec:
 // TestAttachedPolicyReportsTheRealGatewayAncestor pins the other half: success
 // and failure differ in the ANCESTOR, not only the condition.
 func TestAttachedPolicyReportsTheRealGatewayAncestor(t *testing.T) {
+	ensureGateway(t)
 	if err := apply(t, `
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata: {name: conf-gw, namespace: default}
-spec:
-  gatewayClassName: agentgateway
-  listeners: [{name: http, port: 8080, protocol: HTTP, allowedRoutes: {namespaces: {from: Same}}}]
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata: {name: conf-route, namespace: default}
-spec:
-  parentRefs: [{name: conf-gw}]
-  rules: [{matches: [{path: {type: PathPrefix, value: /}}]}]
----
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata: {name: conf-attached, namespace: default}
@@ -132,22 +161,50 @@ spec:
 
 // TestInertRouteIsAttachableAndAnswers500 pins the shape §3.3's PreparingRoute
 // stage uses, and the availability cost §3.3.3 documents.
+//
+// An earlier version asserted only route STATUS and never sent a request, while
+// its name claimed the 500. It would have passed against a gateway that served
+// the inert route, which is the opposite of what §3.3.3 documents as the cost of
+// a tightening. It owns its own route so filtered execution still establishes
+// its preconditions.
 func TestInertRouteIsAttachableAndAnswers500(t *testing.T) {
-	out, err := kubectl(t, "get", "httproute", "conf-route", "-n", "default",
-		"-o", "jsonpath={range .status.parents[0].conditions[*]}{.type}={.status} {end}")
-	if err != nil {
-		t.Fatal(out)
+	ensureGateway(t)
+	if err := apply(t, `
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: conf-inert, namespace: default}
+spec:
+  parentRefs: [{name: conf-gw}]
+  rules: [{matches: [{path: {type: PathPrefix, value: /inert}}]}]`); err != nil {
+		t.Fatal(err)
+	}
+	var out string
+	for i := 0; i < 30; i++ {
+		out, _ = kubectl(t, "get", "httproute", "conf-inert", "-n", "default",
+			"-o", "jsonpath={range .status.parents[0].conditions[*]}{.type}={.status} {end}")
+		if strings.Contains(out, "Accepted=True") {
+			break
+		}
+		time.Sleep(time.Second)
 	}
 	for _, want := range []string{"Accepted=True", "ResolvedRefs=True"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("backendRef-less route status %q lacks %s; §3.3 needs it attachable", out, want)
 		}
 	}
+	// The half the name claimed and the test never checked.
+	send := trafficFrom(t)
+	if got := send("/inert"); got != 500 {
+		t.Errorf("the inert route answered HTTP %d, expected 500; §3.3.3 documents that a "+
+			"tightening takes the route DOWN for its convergence window rather than serving the old rule, "+
+			"and that cost is only real if the inert shape errors", got)
+	}
 }
 
 // TestNegativeBurstIsAcceptedEverywhere is why plume validates burst >= 0
 // itself: neither the API server nor the controller rejects it.
 func TestNegativeBurstIsAcceptedEverywhere(t *testing.T) {
+	ensureGateway(t)
 	if err := apply(t, `
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
@@ -165,6 +222,7 @@ spec:
 
 // TestDailyUnitIsRejected is why §3.5 emits an hourly window.
 func TestDailyUnitIsRejected(t *testing.T) {
+	ensureGateway(t)
 	err := apply(t, `
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
@@ -241,13 +299,12 @@ spec:
 // TestNackRetainsTheOldConfigAndReportsConverged is the measurement A19 rests
 // on, and it must observe TRAFFIC, not only an Event.
 //
-// STATUS: the traffic half of this test has NOT been observed passing. Repeated
-// runs on this machine failed provisioning — `agw-agentgateway` did not become
-// Ready within 120s — which is an environment limit, not a result. The behaviour
-// it asserts WAS measured by hand and is recorded in
-// docs/research/agentgateway-v1.4.1-spike.md §2.8, but a hand measurement is not
-// a regression test. Until this is seen green, A19's retention claim rests on the
-// spike alone, and this comment is the honest record of that.
+// STATUS (2026-08-29): observed green. NACK'd loosening -> 429 (still
+// rate-limited by the old strict rule); the same loosening applied cleanly ->
+// 503 (passed the limiter, no backend endpoints). The control is what makes the
+// 429 evidence rather than a coincidence, because a spent bucket predicts 429
+// under either hypothesis. If the control ever returns 429 too, this test SKIPS
+// as INCONCLUSIVE rather than passing.
 //
 // An earlier version of this test was named RetainsOldConfig and never
 // established old config nor sent a request — it asserted only that an Event
@@ -318,8 +375,45 @@ spec:
 	}
 
 	// The load-bearing assertion: the OLD strict rule is still rejecting.
-	if got := send("/nack"); got != 429 {
-		t.Errorf("after the NACK the loosened limit is serving (HTTP %d, expected 429); "+
-			"A19 and §3.3.2 rest on a NACK'd policy RETAINING the previous configuration", got)
+	afterNack := send("/nack")
+
+	// A 429 alone does NOT prove retention. It is equally predicted by "the
+	// loosened policy applied but the token bucket was not reset", so without a
+	// control this assertion cannot distinguish the two — and an earlier version
+	// of this test asserted it anyway.
+	//
+	// The control: apply the same loosening WITHOUT the poison. If a
+	// successfully-applied loosening changes observed behaviour, then the
+	// poisoned run's 429 means the poisoned policy did not take effect. If the
+	// control also stays 429, a policy update does not reset the bucket, the
+	// discriminator does not exist at this layer, and the test says so rather
+	// than claiming a result.
+	if _, err := kubectl(t, "patch", "agentgatewaypolicy", "conf-poison", "-n", "default", "--type=merge",
+		"-p", `{"spec":{"traffic":{"rateLimit":{"local":[{"requests":1000,"unit":"Hours"}]}}}}`); err != nil {
+		t.Fatal(err)
+	}
+	if cs, _ := conds(t, "agentgatewaypolicy", "conf-poison"); cs["Attached"] != "True" {
+		t.Fatalf("clean loosening did not attach: %v", cs)
+	}
+	var control int
+	for i := 0; i < 30; i++ {
+		if control = send("/nack"); control != 429 {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+
+	switch {
+	case control == 429:
+		t.Skipf("INCONCLUSIVE, not a pass: a cleanly-applied loosening still returns 429, so a policy "+
+			"update does not reset the bucket and a 429 after the NACK (got %d) cannot distinguish "+
+			"retention from a stale bucket. A19's retention claim rests on the hand measurement in "+
+			"spike §2.8 until a discriminating observable exists.", afterNack)
+	case afterNack != 429:
+		t.Errorf("after the NACK the loosened limit was serving (HTTP %d) while the control shows a "+
+			"clean loosening takes effect (HTTP %d); A19 and §3.3.2 rest on a NACK'd policy RETAINING "+
+			"the previous configuration", afterNack, control)
+	default:
+		t.Logf("VERIFIED: NACK'd loosening kept rejecting (429) while a clean loosening served (HTTP %d)", control)
 	}
 }

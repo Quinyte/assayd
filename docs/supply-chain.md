@@ -63,7 +63,7 @@ Stated plainly, because a supply-chain page that overclaims is worse than none:
 - **The chart was not published at v0.1.0.** The release run failed at SLSA provenance *after* pushing and signing the image, and the chart job depends on the image job, so it never ran. The image is real and signed; the chart is not yet in the registry. Fixed for the next tag.
 - **There is no SLSA build provenance, and there cannot be one yet.** GitHub's attestation API refuses user-owned **private** repositories outright ("Feature not available for user-owned private repositories"). The step is now conditional on the repo being public, so provenance starts existing the day this repo goes public or moves to an organization — and until then the honest statement is that plume ships a signed image with a verifiable SBOM and *no* build provenance.
 - **The chart's default `digest` is empty.** Until a release publishes a chart, `helm install` at defaults resolves by tag. Set the digest explicitly.
-- **No `.sig` verification at install time.** Nothing forces a cluster to reject an unsigned plume chart; that is a policy-controller job (Kyverno, or sigstore-policy-controller) and plume does not ship one for itself yet — while it *does* enforce exactly this for agent images.
+- **No `.sig` verification at install time.** Nothing forces a cluster to reject an unsigned plume chart; that is the Sigstore policy-controller's job (design 07 A2 chose it; A3 defines its enforcement contract) and plume does not ship one for itself yet — while it *does* enforce exactly this for agent images.
 - **No release has been published.** Everything above describes a workflow that exists and has not run.
 
 ## For reviewers

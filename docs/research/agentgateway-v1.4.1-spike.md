@@ -300,3 +300,39 @@ bypass A23 exists to close, reintroduced by its own refcount.
 
 A26 now states the retry loop as a contract and names the lossy variant so it lands in the
 mutation battery rather than being discovered.
+
+---
+
+## 6. NACK retention, now measured by the suite rather than by hand (2026-08-29)
+
+§2.8 established by hand that a NACK'd policy retains the previous configuration. That was a
+one-off observation; `make conformance-cluster` now reproduces it, and getting there required
+two corrections worth recording because both were failures of the *test*, not of the gateway.
+
+**The first version asserted nothing.** It was named `RetainsOldConfig`, checked only that an
+`AgentGatewayNackError` Event appeared, and never established old config or sent a request. It
+would have passed against a gateway that dropped the old rule entirely — the opposite of the
+behaviour it was named for.
+
+**The second version could not discriminate.** With a strict `requests: 1` limit spent and then
+loosened-plus-poisoned, the expected `429` is predicted by *two* hypotheses: the loosening was
+NACK'd and the old rule is retained, or the loosening applied and the token bucket simply never
+reset. A single observation cannot separate them.
+
+**The control is what makes it evidence.** After the poisoned patch, the same loosening is
+applied **without** the poison:
+
+```
+NACK'd loosening   -> HTTP 429   (rate-limited: the old strict rule is still in force)
+clean loosening    -> HTTP 503   (passed the limiter, reached a backend with no endpoints)
+```
+
+A cleanly-applied loosening changes the observed code, so the `429` after the NACK means the
+poisoned policy did not take effect. **A19's retention claim is verified by the suite.** Had the
+control also returned 429, the test skips with `INCONCLUSIVE` and says the claim rests on §2.8
+alone — the discriminator is asserted, not assumed.
+
+One further test bug found on the way: the status helper did not require
+`observedGeneration == metadata.generation`, so immediately after a patch it returned the
+*previous* generation's converged status. That is the stale-true trap §3.3.2 documents, in the
+harness written to measure it.

@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -70,6 +72,9 @@ func load(t *testing.T) map[string]map[string]any {
 }
 
 func sha256Sum(b []byte) []byte { s := sha256.Sum256(b); return s[:] }
+
+// collapseWS strips whitespace so a reformatted CEL expression still compares.
+var collapseWS = regexp.MustCompile(`\s+`)
 
 // dig walks a nested schema by key, returning nil if any hop is absent.
 func dig(node any, path ...string) any {
@@ -177,19 +182,29 @@ func TestLocalRateLimitShape(t *testing.T) {
 	if _, has := dig(props, "burst").(map[string]any)["minimum"]; has {
 		t.Error("burst now has a minimum at " + pinnedTag + "; A10 says plume validates burst >= 0 because the CRD does not")
 	}
+	// EXACT minimums, not presence: §3.5's "rate < 1 is a compile error" assumes
+	// the API rejects 0, which minimum: 1 states and minimum: 0 would not.
 	for _, f := range []string{"requests", "tokens"} {
-		if dig(props, f, "minimum") == nil {
+		got := dig(props, f, "minimum")
+		if got == nil {
 			t.Errorf("%s lost its minimum; §3.5's rate < 1 compile error assumes the API also rejects 0", f)
+		} else if v, ok := got.(float64); !ok || v != 1 {
+			t.Errorf("%s minimum is %v, expected exactly 1; §3.5 relies on the API rejecting 0", f, got)
 		}
 	}
-	// unit offers no Days, which is why a daily budget is emitted hourly.
+	// The EXACT enum set. A previous version asserted only "length 3 and no Day",
+	// which a chart renaming Hours to Weeks passed — a compiled, valid mutation
+	// that SURVIVED. §3.5 emits unit: Hours, so Hours must be present, and the
+	// set must be exactly these three or the emitted window is not what the
+	// design says it is.
 	enum, _ := dig(props, "unit", "enum").([]any)
 	var units []string
 	for _, u := range enum {
 		units = append(units, u.(string))
 	}
-	if len(units) != 3 || strings.Contains(strings.Join(units, ","), "Day") {
-		t.Errorf("unit enum is %v; §3.5 emits unit: Hours because a daily window is not expressible", units)
+	sort.Strings(units)
+	if got, want := strings.Join(units, ","), "Hours,Minutes,Seconds"; got != want {
+		t.Errorf("unit enum is [%s], expected exactly [%s]; §3.5 emits unit: Hours and a daily window is not expressible", got, want)
 	}
 	req, _ := lrl["required"].([]any)
 	if len(req) != 1 || req[0] != "unit" {
@@ -199,9 +214,24 @@ func TestLocalRateLimitShape(t *testing.T) {
 	if d, _ := dig(props, "tokens", "description").(string); !strings.Contains(d, "future requests only") {
 		t.Error("tokens no longer documents 'future requests only'; ADR-0028 withdrew 'cuts early, never late' on that sentence")
 	}
-	blob, _ := json.Marshal(lrl["x-kubernetes-validations"])
-	if !strings.Contains(string(blob), "requests") || !strings.Contains(string(blob), "tokens") {
-		t.Error("ExactlyOneOf(requests, tokens) is gone; §3.5 says one policy cannot carry both")
+	// The exact CEL SEMANTIC, not the words. Searching for "requests" and
+	// "tokens" passed a chart whose rule had been weakened from size() == 1 to
+	// size() >= 1 — which permits both fields at once, the thing §3.5 says is
+	// impossible. Another compiled, valid mutation that SURVIVED.
+	rules, _ := lrl["x-kubernetes-validations"].([]any)
+	var exactlyOne bool
+	for _, r := range rules {
+		rm, _ := r.(map[string]any)
+		expr, _ := rm["rule"].(string)
+		norm := collapseWS.ReplaceAllString(expr, "")
+		if strings.Contains(norm, "has(self.requests)") && strings.Contains(norm, "has(self.tokens)") &&
+			strings.Contains(norm, "filter(x,x==true).size()==1") {
+			exactlyOne = true
+		}
+	}
+	if !exactlyOne {
+		t.Errorf("no ExactlyOneOf(requests, tokens) rule asserting size() == 1; rules were %v.\n"+
+			"§3.5 says one policy cannot carry both — a weakened >= 1 would permit it", rules)
 	}
 }
 

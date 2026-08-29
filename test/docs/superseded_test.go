@@ -126,6 +126,18 @@ var rules = []rule{
 		why:     "A20 hashes env sources by content, so the digest is no longer spec-only",
 	},
 	{
+		name:    "verifier-undecided",
+		banned:  regexp.MustCompile(`(?i)Sigstore[^.]{0,40}or[^.]{0,10}Kyverno|Kyverno[^.]{0,40}or[^.]{0,10}Sigstore`),
+		allowed: regexp.MustCompile(`(?i)not a design|earlier|supersed|chose|decided`),
+		why:     "design 07 A2 chose Sigstore policy-controller; \"or Kyverno\" names two controllers, not a contract",
+	},
+	{
+		name:    "inert-tightening",
+		banned:  regexp.MustCompile(`(?i)make (the |every |its )?(dependent )?routes? inert|quiesc`),
+		allowed: regexp.MustCompile(`(?i)withdraw|retract|earlier draft|no longer|supersed|A19`),
+		why:     "A19 withdrew in-place tightening; a serving route is never made inert (design 03 §3.3.3)",
+	},
+	{
 		// Scoped: routing, metering and budgeting on Mcp-Name is still valid at
 		// v1.4.1 (SEP-2243), and designs 01/24 use it that way. Only design 03
 		// claimed it as the TOOL FILTER, which is what backend.mcp.authorization
@@ -188,10 +200,38 @@ var markdownNoise = regexp.MustCompile("[*`_~]+")
 // still matched.
 var collapseSpace = regexp.MustCompile(`\s+`)
 
-// normalize strips inline markdown and collapses whitespace so rules match what
-// a reader sees rather than what the source bytes happen to be.
+// Inline constructs whose SOURCE differs from what a reader sees. A growing
+// punctuation regex is not enough: the emphasis fix still let
+// "the acceptance [poll](https://x) verifies" through, because the link
+// destination sat inside the banned phrase. These reduce each construct to its
+// rendered text before matching.
+var (
+	// ![alt](url) and [text](url) -> alt / text. Images first, or the leading
+	// "!" is left behind on the rendered text.
+	mdImage = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
+	mdLink  = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+	// [text][ref] and [text][] -> text
+	mdRefLink = regexp.MustCompile(`\[([^\]]*)\]\[[^\]]*\]`)
+	// <https://…> -> the bare URL, so an autolink cannot split a phrase.
+	mdAutolink = regexp.MustCompile(`<(https?://[^>]*)>`)
+)
+
+// normalize reduces a line to the text a reader sees, so rules match meaning
+// rather than source bytes.
+//
+// SCOPE, stated because the limit is the point: this handles INLINE constructs —
+// images, links, reference links, autolinks, emphasis and code spans. It is not
+// a full CommonMark renderer, so a banned phrase split across a block construct
+// (a table cell boundary, a list item, an HTML comment) is not normalised. Each
+// construct handled here is pinned by an independent fixture below; a construct
+// that is not pinned is not claimed.
 func normalize(s string) string {
-	return collapseSpace.ReplaceAllString(markdownNoise.ReplaceAllString(s, ""), " ")
+	s = mdImage.ReplaceAllString(s, "$1")
+	s = mdLink.ReplaceAllString(s, "$1")
+	s = mdRefLink.ReplaceAllString(s, "$1")
+	s = mdAutolink.ReplaceAllString(s, "$1")
+	s = markdownNoise.ReplaceAllString(s, "")
+	return collapseSpace.ReplaceAllString(s, " ")
 }
 
 // amendmentHeading marks where a design's authoritative body ends.
@@ -289,6 +329,8 @@ var ruleFixtures = map[string]string{
 	"in-worker-poll":            "The acceptance poll runs on the reconcile worker for up to 30s.",
 	"allowlist-equality":        "The emitted Backend's provider set equals the allowlist.",
 	"spec-only-hash":            "The revision digest is computed from spec alone.",
+	"verifier-undecided":        "Ship a Sigstore policy-controller or a Kyverno verifyImages binding.",
+	"inert-tightening":          "A tightening update must make the dependent routes inert first.",
 }
 
 // evasionFixtures pin the NORMALISATION: real phrasings the raw byte match
@@ -299,6 +341,36 @@ var evasionFixtures = map[string]string{
 	"pricing-damage-bounded": "the receipt `backstop bound` covers a tampered table",
 	"overshoot-bound":        "status publishes the measured *overshoot* bound",
 	"cuts-early-guarantee":   "the gateway\ncuts early, never late",
+}
+
+// linkEvasionFixtures pin the constructs a punctuation regex cannot reach. Each
+// is a sentence whose RENDERED text states a withdrawn design while its source
+// bytes do not contain the banned phrase contiguously.
+var linkEvasionFixtures = map[string]string{
+	"in-worker-poll":       "the acceptance [poll](https://agentgateway.dev/x) verifies each emitted resource",
+	"overshoot-bound":      "status publishes a measured ![overshoot](img.png) bound per replica",
+	"cuts-early-guarantee": "the limiter [cuts early][ref], never late",
+	"exact-usd-tier":       "the `exact` tier is the receipt backstop",
+}
+
+// TestLinkAndImageSyntaxCannotHideAWithdrawnClaim is the half MAJOR 13 found
+// missing: emphasis was stripped, link destinations were not.
+func TestLinkAndImageSyntaxCannotHideAWithdrawnClaim(t *testing.T) {
+	byName := map[string]rule{}
+	for _, r := range rules {
+		byName[r.name] = r
+	}
+	for name, evasion := range linkEvasionFixtures {
+		r, ok := byName[name]
+		if !ok {
+			t.Errorf("link-evasion fixture %q has no rule", name)
+			continue
+		}
+		if !r.banned.MatchString(normalize(evasion)) {
+			t.Errorf("rule %q is bypassed by inline markdown:\n    source:   %s\n    rendered: %s",
+				name, evasion, normalize(evasion))
+		}
+	}
 }
 
 // TestNormalisationDefeatsFormattingEvasion is the half MAJOR 19 said was missing.

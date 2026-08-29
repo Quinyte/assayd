@@ -24,9 +24,12 @@ PolicyIntent {                      // ONE revision's material — see below (A2
   target:      {kind, ns, name}
   revision:    {hash, weight, candidate: bool}
   identity:    {spiffeID | oauthClientID}
-  tools:       [{backendRef, toolAllowlist?, requiresApproval}]
-  knowledge:   [{endpoint, scope: {entityTypes}}]        // `bundles?` dropped (r1 f7)
-  llm:         {providers[]: EndpointID, egressAllowlist?: [AllowEntry], fallback?: EndpointID, fallbackActive: bool}
+  tools:       [Binding<{backendRef, toolAllowlist?, requiresApproval}>]
+  knowledge:   [Binding<{endpoint, scope: {entityTypes}}>]
+  llm:         {providers[]: Binding<EndpointID>, egressAllowlist?: [AllowEntry],
+                fallback?: Binding<EndpointID>, fallbackActive: bool}
+  // Binding<T> = {requested: string, resolved?: T, state: Resolved|ProducerAbsent|Unresolvable}
+  //   an empty slice means "requested none"; it can no longer mean "resolution failed" (A26)
   // EndpointID  = {arm, <arm's instance fields>, model?}   — design 02 A24, §3.4.1.1
   // AllowEntry  = EndpointID minus model, plus optional models[]
   budget:      {tokensPerDay, usdPerDay, taskTimeout, maxHops}
@@ -148,13 +151,33 @@ An earlier draft restarted unconditionally at `ApplyingBackends`. A19 removed th
 
 **The rule.** Every route class names the concerns that must be present and `Accepted=True` before that route may be created. A mandatory concern whose input is absent is a **compile error** (`PolicyCompileFailed`, naming the missing input), never an omitted policy.
 
-**Routes are required or optional, and the Agent aggregates them (A24).** §3.3.1's classes split in two: the **serving-required** set — the A2A route, and the card route where `expose.a2a` is set — whose failure means the Agent is not serving what it advertises; and the **optional** set — tool, KG and LLM egress routes — whose failure removes a capability while the agent still answers.
+**Requiredness is a property of the binding, not of the route class (A27).** An earlier draft made every tool, KG and LLM route *optional*, so an Agent whose sole knowledge source was unreachable reported `Ready=True`. That contradicts two canonical documents: architecture §04 says an Agent bound to a non-Ready graph gets no traffic, and design 02 §5 says an invalid **sole** knowledge source means no traffic (`KnowledgeBound=False` → `Degraded`). Answering HTTP while every declared capability is gone is not semantic readiness — it is the loud-and-wrong of rule 8, reported as health.
+
+So each declared binding carries its own requiredness, and the Agent aggregates over its **actual contract**:
+
+| Route | Required when |
+|---|---|
+| A2A serving, card | always, where `expose.a2a` is set |
+| KG | **the binding is the Agent's sole knowledge source** (design 01 A5), or is marked required |
+| LLM egress | the Agent declares `llm.providers` at all — an agent that cannot reach a model cannot answer |
+| Tool | the binding is marked required; an Agent declaring several tools degrades on one, and fails on all |
+
+An Agent with no declared capability of a kind has nothing required of that kind. The failing set is then split into required and optional, and aggregated as:
 
 | Failing | `Ready` | `phase` | CLI |
 |---|---|---|---|
-| any serving-required route | `False`, reason `PolicyApplyIncomplete` | `Pending` (create) or `Degraded` (was serving) | terminal for `deploy` |
+| any serving-required route | `False`, reason **by cause** (below) | `Pending` (create) or `Degraded` (was serving) | terminal for `deploy` |
 | optional routes only | stays `True` | `Degraded` | reported, **not** terminal |
 | none | `True` | `Ready` | — |
+
+**Conditions aggregate by cause, not by route (A27).** An earlier draft gave every serving-required failure the reason `PolicyApplyIncomplete`, which would have named a cause that was never checked when the real one was a compile error. The two conditions are separate and both may be set:
+
+| Cause | Condition |
+|---|---|
+| unresolved input, missing mandatory input, arithmetic, unresolvable identity | `PolicyCompileFailed` |
+| not converged at the deadline, `Accepted`/`Attached` false, a NACK Event | `PolicyApplyIncomplete` |
+
+`Ready`'s reason names the **winning** cause under a fixed precedence — `PolicyCompileFailed` outranks `PolicyApplyIncomplete`, because nothing was applied to fail — so a consumer reading one reason is never told the wrong one.
 
 **One condition instance carries every failing path, and clears only when none remain.** A condition is one per type, so concurrent failures would otherwise overwrite each other's message and recovering one would hide the other. The message lists the failing resources in a **stable order** (route class, then name), so a second failure appends rather than replacing, and `PolicyApplyIncomplete` is cleared only when the set is empty — not when the most recent one recovers.
 
@@ -184,7 +207,9 @@ An earlier draft answered that with "for every registered class, one test per ma
 
 So the security cases are a **static catalog**, written independently of the registry and reviewable as a list: *tool route without `-auth` is withheld*, *LLM egress route without `egressEnumerated` is withheld*, and one line per mandatory entry in the table. A class present in the registry with no case in the catalog fails; a case naming an entry the registry no longer has fails. Both directions, or deleting an entry and its case together passes again.
 
-`test/docs/superseded_test.go`'s `ruleFixtures` is the working precedent in this repo — independent fixtures that fail on deletion, on a weakened matcher, and on an over-broad exemption. The mutation harness deletes each production mandatory entry with the catalog untouched and requires a **compiled test failure**; a build error is INVALID, not KILLED (AGENTS.md rule 3). An earlier draft claimed "deleting from both fails the exhaustive switch over `RouteClass` in Go": Go has no exhaustive switch checking, this repo runs `go vet` with no `.golangci.yml`, and an exhaustive switch would prove only that every class is *handled*, never that its mandatory set is *right*.
+`test/docs/superseded_test.go`'s `ruleFixtures` is the working precedent in this repo — independent fixtures that fail on deletion, on a weakened matcher, and on an over-broad exemption. The mutation harness deletes each production mandatory entry with the catalog untouched and requires a **compiled test failure**; a build error is INVALID, not KILLED (AGENTS.md rule 3).
+
+**Every profile ships its own catalog, because the base one cannot pin what a profile adds (A27).** Compliance profiles extend the mandatory sets *dynamically* (§3.3.1, design 27) and are deliberately absent from the base table — so deleting the `hipaa` profile's `-guard` extension leaves every base case green and the profile silently stops requiring PHI redaction. A profile or pack that adds a mandatory entry therefore ships a security catalog **for its own additions**, and the mutation harness deletes each profile-added entry with that catalog untouched. A profile whose additions have no catalog fails to install rather than shipping unpinned. An earlier draft claimed "deleting from both fails the exhaustive switch over `RouteClass` in Go": Go has no exhaustive switch checking, this repo runs `go vet` with no `.golangci.yml`, and an exhaustive switch would prove only that every class is *handled*, never that its mandatory set is *right*.
 
 **Compliance profiles extend the mandatory sets; they do not appear here.** `-guard` is absent from every row above, which is right for P1 and wrong for ADR-0014: the `hipaa` profile makes PHI redaction mandatory at the gateway, and "compliance is a profile you enable, not an integration you build" has to stay literally true. The credential-scrub `-transform` on the LLM row is a different concern and does not cover it. The table therefore has no profile dimension by design — a profile contributes additional mandatory **entries** per route class through the same registry (design 27), which is expressible now that entries range over resources: the `hipaa` profile adds `AgentgatewayPolicy(-guard)` to the LLM egress row, on top of the `egressEnumerated` entry the base profile already carries. Admission (design 27 §3) rejects a non-conforming Agent CR, and this registry stops a conforming CR from compiling an unrestricted route; the two are different seams and both are needed.
 
@@ -204,7 +229,7 @@ So the security cases are a **static catalog**, written independently of the reg
 
 So the operator **must** watch that Event for its emitted resources and raise `PolicyApplyIncomplete` on it — mandatory, not defensive. The event key (`policy/traffic/<ns>/<name>:<section>:<ns>/<route>`) names the policy and the route, so a NACK **can** be attributed to a resource plume emitted; it carries **no generation and no UID**, so an old NACK cannot be told from a new one and **absence of an Event is not success**. That makes the Event sufficient to raise degradation and insufficient as a success barrier. Until upstream publishes a positive dataplane acknowledgement, this design claims control-plane convergence only — and **no transaction tightens a serving route in place** (§3.3.3, A19). An earlier draft offered "or accept that a silent NACK leaves the old rule serving", which was a measured fail-open rather than an option; its replacement, a witness probe, could not attribute its own result. Both are withdrawn. A tightening is a spec change that mints a revision and is gated on a candidate route, so the serving path is never the thing being converged. Two-phase publication — create the route inert, converge its policies, then attach — is what the ordering in §3.3 becomes; the alternative is a barrier that passes on an unattached policy.
 
-**Update ordering is part of the contract too**, not only create and remove. A tightening change (`auth: none → oauth`, a narrowed tool filter) must make dependent routes inert *before* the change is applied, converge, then republish. Applying the policy under a live route leaves the old permissive configuration serving for the whole convergence window.
+**Update ordering was part of the contract, and A19 removed the case it governed.** An earlier draft required a tightening change (`auth: none → oauth`, a narrowed tool filter) to withdraw its dependent routes before applying, converge, then republish. There is no such transaction now: tightening is a gated spec change on a candidate route (§3.3.3), so a serving route is never the thing being converged and never made inert. What remains is `Create` and `Loosen`, and a `Loosen` that NACKs leaves the *stricter* old rule serving — a failure toward denial.
 
 ### 3.3.3 There is no in-place tightening (A19)
 
@@ -234,7 +259,9 @@ Two transaction kinds remain:
 | `taskTimeout` | numeric | the new timeout is **≥** the applied one |
 | `-transform`, `-guard` | **no ordering exists** | never — functions, not sets |
 
-**Unknown maps to `Tighten`.** A concern absent from the registry, a comparison it cannot make, and a first application with nothing to compare against all classify as `Tighten`, so adding a concern without a comparator entry fails safe rather than silently qualifying for the in-place path. Property-tested for reflexivity and transitivity, plus every boundary: a rate unchanged, a set unchanged, a default appearing or disappearing, and `nil` against a value.
+**Normalization is part of each comparator, because a default is not an absence.** Before comparing, both sides are normalized to their **effective** value: an unset `expose.a2a.auth` is `oauth` (the schema default), an unset `budget` field is *no limit*, an unset `taskTimeout` is the gateway's own default. Comparing raw presence instead would read a field gaining its default as a change, and a field losing an explicit value equal to the default as a loosening.
+
+**Unknown maps to `Tighten`.** A concern absent from the registry, a comparison it cannot make, and a **first application** — where there is no applied set to compare against — all classify as `Tighten`, so adding a concern without a comparator entry fails safe rather than silently qualifying for the in-place path. Property-tested for reflexivity and transitivity, plus every boundary: a rate unchanged, a set unchanged, a default appearing or disappearing, and `nil` against a value.
 
 **But `Tighten` means "mint a revision", and not every producer can (A25).** §3.1's provenance table lists inputs that are **not Agent spec**: a tool server's advertised set (11), a resolved KG endpoint (01/13), tenant consumer budgets (26), and `status.llmFallbackActive`, which design 20 sets deliberately. Telling those producers to mint a revision points at a mechanism they do not have — so a tool server withdrawing a tool would narrow a mandatory filter with no path at all.
 
@@ -383,7 +410,7 @@ Until that runs, no row in §3.4 states an order, and no design sentence may dep
 
 ### 3.5 Pricing table and the usd→token computation (A4)
 
-`ConfigMap plume-model-pricing` (chart-shipped, versioned). Used for usd→token compilation and receipt cost annotation.
+**Two ConfigMaps** (A21; see "Two ConfigMaps" below for why one cannot work): `plume-model-pricing`, chart-owned and versioned, carrying external endpoints and the single `updated` timestamp; and `plume-model-pricing-internal`, operator-owned, carrying in-cluster endpoints. Both are read and merged for usd→token compilation and receipt cost annotation.
 
 **Shape (A21).** One row per **endpoint identity** — the same `{arm, instance fields, model}` tuple `providers[]`, `fallback` and the allowlist use (design 02 A24) — carrying two prices in **USD per 1,000,000 tokens**, the unit vendors publish, chosen so no price is written as `0.000003` and rounded into nothing.
 
@@ -413,7 +440,7 @@ The `usdPerDay` half belongs on the CRD as CEL and is landed by design 02 A15, s
 
 **Resolution is by endpoint identity, and no string is ever joined or split (A18).** Design 02 A24 makes `providers[]`, `fallback` and every allowlist entry the same tuple — `{arm, instance fields, model}` — so the flat-string key an earlier draft resolved by longest prefix no longer exists. That draft canonicalized `{provider, model}` with a `/`, which `internal/revision/revision.go:66` already records as non-injective: `{azure, openai/gpt-4}` and `{azure/openai, gpt-4}` collided on one row while being different endpoints, and a golden fixture pinning "a slash-containing model in both forms" could not have detected it, because production had already collapsed them.
 
-Lookup matches on the tuple. An entry matching nothing is `PolicyCompileFailed` naming it; a wildcard is expressed as an entry that omits `model`, not as a string suffix. **Owed**: the pricing ConfigMap is still keyed by the flat string it was given, and keying it on the same tuple is the obvious follow-through (design 02 A24).
+Lookup matches on the tuple. An entry matching nothing is `PolicyCompileFailed` naming it; a wildcard is expressed as an entry that omits `model`, not as a string suffix. The pricing rows are keyed on that same tuple — an earlier draft carried a "still owed" note here, which A21's schema above discharges.
 
 A model that resolves to nothing is `PolicyCompileFailed` naming the offending `spec.llm.providers[i]` (or `spec.llm.fallback`) — never a default price, because a guessed price is a guessed budget.
 
@@ -421,7 +448,7 @@ A model that resolves to nothing is `PolicyCompileFailed` naming the offending `
 
 **What staleness can honestly claim.** The table is chart-shipped with `updated` baked in and **nothing refreshes it automatically**, so `updated > 30d` becomes permanently true on every install of a chart older than a month — an alarm that is always on for everyone, which trains operators to ignore the one signal that matters when prices actually move. Three narrowings make it mean something:
 
-- It is raised only for agents whose usd budget resolves to an **externally-priced** model. `internal/<model>` rows are upserted by the model-operator at serve time (design 25 §5) and are never stale by this measure. **`updated` is chart-owned**: the model-operator writes `internal/*` rows and must not touch it. Two writers on one timestamp would otherwise mean an unrelated in-cluster model going live silently clears the only alarm that fires when vendor prices move.
+- It is raised only for agents whose usd budget resolves to an **externally-priced** model. In-cluster endpoints are upserted by the model-operator at serve time (design 25 §5) into its **own** ConfigMap and are never stale by this measure. `updated` lives in the chart-owned map alone, so an in-cluster model going live cannot clear the alarm that fires when vendor prices move.
 - Refreshing is a **documented human action** — `helm upgrade`, or editing the operator-writable ConfigMap directly. The condition's message names it. Nothing auto-refreshes external vendor prices, and this design does not pretend otherwise.
 - The condition is **advisory**: it never withholds traffic or fails a compile. A stale table skews the gateway tier's approximation — and the receipt tier does **not** bound that, because it prices from the same table (ADR-0028). A stale or tampered table skews both tiers identically.
 
@@ -604,3 +631,4 @@ Folded into §§3–8 rather than left as patches, following the integration pas
   **A25 was not representable by the compiler input.** `PolicyIntent` carried `revisions[]` beside a **single** `budget`, `expose`, `tools` and `llm` at Agent scope — so once A25 put `budget` and `expose` on the behaviour surface, the one thing the intent could not express was the state A25 exists to create: an active revision serving its own policy while a candidate is built with a different one. A pure compile either rewrote R1's serving policy before R2 was gated, letting a widening reach production **ungated**, or preserved R1 and could not compile R2. The fix that closed the tightening hole could not run. The intent is now **one per revision**, the applied `ResourceSet` is persisted under its revision hash, an active revision's resources are **never reconstructed from current spec**, and the receipt backstop reads the *active* revision's budget — otherwise raising a held candidate's budget would clear the active revision's `BudgetExhausted` hold while the spend had not moved.
 
   **A19's claim that r4 BLOCKER 3 "dissolved" was false, and the retraction matters more than the fix.** Removing `Tighten` removed a transaction; it did not remove `Create`'s first stage. Stale recovery still restarted unconditionally at `ApplyingBackends`, so a superseding generation naming a new candidate route would attach policies to a route that had never been created — `Attached=False`, the cold-create deadlock A17 was written to fix, reached by another path. Recovery now recomputes the transaction against the currently serving applied set and enters *its* first stage, with the route identity persisted alongside the stage. I asserted a finding was dissolved without checking; the review found it, twice in a row, in the same section.
+- **A27 (2026-08-29) — r5 majors 1–4, 8 and 10, in the body rather than the log.** MAJOR 1: the resolution state A26 described in prose was **absent from the type** — `PolicyIntent` still carried bare resolved slices, so an implementer reading the authoritative input still could not tell "requested none" from "resolution failed". Bindings are now `Binding<T> = {requested, resolved?, state}` in the type itself. MAJOR 2: the comparator registry promised an ordering per concern and enumerated none; each is now listed, with **normalization to effective values** so a field gaining its schema default is not read as a change, and first application stated as `Tighten`. MAJOR 3: classifying **every** tool, KG and LLM route as optional reported `Ready=True` for an Agent whose sole knowledge source was gone — contradicting architecture §04 and design 02 §5, both of which say that agent gets no traffic. Requiredness is now a property of the binding, aggregated over the Agent's actual contract. MAJOR 4: every serving-required failure was reported as `PolicyApplyIncomplete`, naming an apply failure when the cause was a compile error; conditions now aggregate **by cause** with a stated precedence. MAJOR 8: the static security catalog pinned the base registry only, so deleting a compliance profile's `-guard` extension left every base case green — each profile now ships its own catalog and fails to install without one. MAJOR 10: §3.5 opened with one ConfigMap, called tuple-keying "owed", and had the model-operator writing into the chart-owned map — the three defects A21 claimed to close, still in the section A21 amended.
