@@ -10,10 +10,17 @@
 //
 // Three properties are load-bearing:
 //
-//   - The hash is computed from spec ALONE. An earlier draft mixed in the card
-//     digest, which is knowable only after the revision's workload runs, so the
-//     hash would have changed after deploy and orphaned the workload it named
-//     (02-review, blocker).
+//   - The hash is computed from the spec projection alone — never from the card
+//     digest, which is knowable only after the revision's workload runs, so
+//     mixing it in would change the hash after deploy and orphan the workload it
+//     named (02-review, blocker).
+//
+//     NOT YET TRUE, and stated so rather than implied: design 02 A20 extends the
+//     projection with a digest of the RESOLVED CONTENTS of every ConfigMap and
+//     Secret reachable through envFrom or env[].valueFrom. Referent identity
+//     alone lets anyone with update on a referenced object replace a system
+//     prompt and have it serve under the old revision's gate result. This code
+//     still hashes the referent only; the content extension is unimplemented.
 //
 //   - Unrecognized inputs OVER-gate rather than collapse. Any arm of a k8s union
 //     type this code does not name explicitly is hashed by its marshalled form,
@@ -57,7 +64,9 @@ type behaviour struct {
 	EnvFrom   []envFromSource `json:"envFrom,omitempty"`
 	Sandbox   string          `json:"sandbox,omitempty"`
 	Knowledge []knowledgeBind `json:"knowledge,omitempty"`
-	Tools     []string        `json:"tools,omitempty"`
+	Tools     []toolBind      `json:"tools,omitempty"`
+	Budget    *budget         `json:"budget,omitempty"`
+	Expose    *expose         `json:"expose,omitempty"`
 	LLM       *llm            `json:"llm,omitempty"`
 	External  *external       `json:"external,omitempty"`
 }
@@ -108,6 +117,40 @@ type kgScope struct {
 type llm struct {
 	Providers []string  `json:"providers,omitempty"`
 	Fallback  *modelRef `json:"fallback,omitempty"`
+}
+
+// toolBind carries RequiresApproval because design 02 A30 moved it to the
+// behaviour surface. It was policy-surface, and design 03's closed comparator
+// registry has no approval concern — so turning approval ON classified as an
+// unknown tightening, which on the policy surface has no revision to mint and
+// therefore no safe transaction at all. Both directions gate now: turning it off
+// is a widening that must not reach production ungated either.
+type toolBind struct {
+	Name             string `json:"name"`
+	RequiresApproval bool   `json:"requiresApproval,omitempty"`
+}
+
+// budget and expose are behaviour, per A25. They were classified policy-surface
+// on the reasoning that they change "how much" and "who may call" rather than
+// what the agent does — but a budget is what stops a runaway loop and expose
+// decides who may reach the agent at all, so widening either without a gate is
+// the ungated-widening this projection exists to prevent.
+type budget struct {
+	TokensPerDay *int64  `json:"tokensPerDay,omitempty"`
+	USDPerDay    *string `json:"usdPerDay,omitempty"`
+	TaskTimeout  string  `json:"taskTimeout,omitempty"`
+	MaxHops      *int32  `json:"maxHops,omitempty"`
+}
+
+type expose struct {
+	// A2A is a pointer so absent and present-but-defaulted stay distinguishable:
+	// no expose at all is not the same grant as expose with schema defaults.
+	A2A *exposeProtocol `json:"a2a,omitempty"`
+}
+
+type exposeProtocol struct {
+	Visibility string `json:"visibility,omitempty"`
+	Auth       string `json:"auth,omitempty"`
 }
 
 type modelRef struct {
@@ -177,9 +220,23 @@ func project(spec plumev1alpha1.AgentSpec) behaviour {
 	}
 
 	for _, t := range spec.Tools {
-		// Name only: RequiresApproval is approval policy the gateway enforces, not
-		// a change in what the agent can reach.
-		b.Tools = append(b.Tools, t.Name)
+		b.Tools = append(b.Tools, toolBind{Name: t.Name, RequiresApproval: t.RequiresApproval})
+	}
+
+	if bs := spec.Budget; bs != nil {
+		nb := &budget{TokensPerDay: bs.TokensPerDay, USDPerDay: bs.USDPerDay, MaxHops: bs.MaxHops}
+		if bs.TaskTimeout != nil {
+			nb.TaskTimeout = bs.TaskTimeout.Duration.String()
+		}
+		b.Budget = nb
+	}
+
+	if e := spec.Expose; e != nil {
+		ne := &expose{}
+		if e.A2A != nil {
+			ne.A2A = &exposeProtocol{Visibility: e.A2A.Visibility, Auth: e.A2A.Auth}
+		}
+		b.Expose = ne
 	}
 
 	if l := spec.LLM; l != nil {
@@ -195,7 +252,7 @@ func project(spec plumev1alpha1.AgentSpec) behaviour {
 	// commutative max-price computation, knowledge to one route per binding. But
 	// kustomize, helm and kubectl round-trips all re-serialize lists, so hashing
 	// their order would re-gate on a no-op diff.
-	sort.Strings(b.Tools)
+	sort.Slice(b.Tools, func(i, j int) bool { return b.Tools[i].Name < b.Tools[j].Name })
 	sort.Strings(b.LLM.providersOrNil())
 	sort.Slice(b.Knowledge, func(i, j int) bool {
 		if b.Knowledge[i].Name != b.Knowledge[j].Name {

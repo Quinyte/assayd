@@ -54,7 +54,18 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 // edit: either revert the change, or ship a migration that carries existing
 // revisions forward. Updating the constant to make the test pass is how a
 // cluster-wide rollout storm gets released.
-const goldenDigest = "097ef5eedf"
+// MIGRATION 1 (2026-08-29, design 02 A25 + A30). The constant moved from
+// "097ef5eedf" to the value below because three fields entered the projection:
+// tools[].requiresApproval, budget and expose. This is the rollout storm the
+// comment above describes — every existing Agent's hash changes, so every Agent
+// mints a candidate and every active workload is orphaned by name.
+//
+// It is being taken deliberately and now because plume has no production
+// clusters: P1 is unshipped, so the set of affected revisions is empty and the
+// migration costs nothing today. Taken after the first install it would need a
+// carry-forward that maps old hashes to new ones. Design 02 §3.3 records the
+// same thing so an implementer does not rediscover it from this file.
+const goldenDigest = "ce2c25cdad"
 
 func TestGoldenDigest(t *testing.T) {
 	if got := Hash(goldenSpec()); got != goldenDigest {

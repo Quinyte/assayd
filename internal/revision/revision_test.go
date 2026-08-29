@@ -74,6 +74,40 @@ func TestBehaviourSurfaceMintsARevision(t *testing.T) {
 			s.Runtime.Image = "ghcr.io/acme/agent:2.0.0"
 		}, why: "different code"},
 
+		// A30. Both sides carry the tool so tools[].name is constant and only
+		// requiresApproval varies — otherwise this would pass on the tool
+		// appearing and prove nothing about the field.
+		{field: "tools.requiresApproval",
+			base: func(s *plumev1alpha1.AgentSpec) {
+				s.Tools = []plumev1alpha1.ToolBinding{{Name: "claims-db"}}
+			},
+			mutate: func(s *plumev1alpha1.AgentSpec) {
+				s.Tools = []plumev1alpha1.ToolBinding{{Name: "claims-db", RequiresApproval: true}}
+			},
+			why: "turning approval ON had no safe transaction while it was policy-surface: " +
+				"an unknown tightening with no revision to mint (design 03 A31)"},
+
+		// The same discipline in the other direction: turning approval OFF is a
+		// widening, and a widening that reaches production ungated is the whole
+		// failure this surface exists to prevent.
+		{field: "tools.requiresApproval (off)",
+			base: func(s *plumev1alpha1.AgentSpec) {
+				s.Tools = []plumev1alpha1.ToolBinding{{Name: "claims-db", RequiresApproval: true}}
+			},
+			mutate: func(s *plumev1alpha1.AgentSpec) {
+				s.Tools = []plumev1alpha1.ToolBinding{{Name: "claims-db"}}
+			},
+			why: "removing an approval requirement is a widening; both directions gate"},
+
+		{field: "budget", mutate: func(s *plumev1alpha1.AgentSpec) {
+			tokens := int64(2000000)
+			s.Budget = &plumev1alpha1.BudgetSpec{TokensPerDay: &tokens}
+		}, why: "A25: a budget is what stops a runaway loop"},
+
+		{field: "expose", mutate: func(s *plumev1alpha1.AgentSpec) {
+			s.Expose = &plumev1alpha1.ExposeSpec{A2A: &plumev1alpha1.ExposeProtocol{Visibility: "org"}}
+		}, why: "A25: who may reach the agent at all"},
+
 		{field: "runtime.env",
 			base:   func(s *plumev1alpha1.AgentSpec) { s.Runtime.Env = []corev1.EnvVar{{Name: "MODE", Value: "lax"}} },
 			mutate: func(s *plumev1alpha1.AgentSpec) { s.Runtime.Env = []corev1.EnvVar{{Name: "MODE", Value: "strict"}} },
@@ -174,7 +208,6 @@ func TestBehaviourSurfaceMintsARevision(t *testing.T) {
 // each is compiled to gateway config (§3.6) and applied in place. Minting one
 // would make routine operations pay for an eval-and-canary cycle.
 func TestPolicySurfaceDoesNotMintARevision(t *testing.T) {
-	tokens := int64(2000000)
 	for _, tc := range []struct {
 		field  string
 		mutate func(*plumev1alpha1.AgentSpec)
@@ -190,21 +223,9 @@ func TestPolicySurfaceDoesNotMintARevision(t *testing.T) {
 			}
 		}, "capacity regressions surface through design 20's behavioural drift path, and gating them would block incident response"},
 
-		{"budget", func(s *plumev1alpha1.AgentSpec) {
-			s.Budget = &plumev1alpha1.BudgetSpec{TokensPerDay: &tokens}
-		}, "a policy knob, enforced live at the gateway"},
-
 		{"gates", func(s *plumev1alpha1.AgentSpec) {
 			s.Gates = []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
 		}, "a gate that re-gated itself on edit could not converge"},
-
-		{"expose", func(s *plumev1alpha1.AgentSpec) {
-			s.Expose = &plumev1alpha1.ExposeSpec{A2A: &plumev1alpha1.ExposeProtocol{Visibility: "org"}}
-		}, "gateway visibility"},
-
-		{"tools.requiresApproval", func(s *plumev1alpha1.AgentSpec) {
-			s.Tools = []plumev1alpha1.ToolBinding{{Name: "claims-db", RequiresApproval: true}}
-		}, "approval policy, not a capability change"},
 
 		{"card.path", func(s *plumev1alpha1.AgentSpec) {
 			s.Card.Path = "/custom-card.json"
@@ -215,16 +236,7 @@ func TestPolicySurfaceDoesNotMintARevision(t *testing.T) {
 		}, "lineage governance, enforced at the gateway"},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
-			// Both sides carry the tool so tools[].name is constant and only
-			// requiresApproval varies — otherwise this would test the wrong field.
-			before := baseSpec()
-			if tc.field == "tools.requiresApproval" {
-				before.Tools = []plumev1alpha1.ToolBinding{{Name: "claims-db"}}
-			}
-			after := baseSpec()
-			if tc.field == "tools.requiresApproval" {
-				after.Tools = []plumev1alpha1.ToolBinding{{Name: "claims-db"}}
-			}
+			before, after := baseSpec(), baseSpec()
 			tc.mutate(&after)
 			if Hash(before) != Hash(after) {
 				t.Errorf("changing %s minted a revision, so a routine operation now pays for "+

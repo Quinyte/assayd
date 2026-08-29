@@ -31,6 +31,8 @@ var behaviourFields = map[string]string{
 	"LLM":                     "the model that answers, and its drift fallback",
 	"External.Endpoint":       "a different agent entirely",
 	"External.OAuthClientRef": "the identity design 24 keys authorization on",
+	"Budget":                  "A25: a budget is what stops a runaway loop; widening it ungated is the hole the gate exists to close",
+	"Expose":                  "A25: who may reach the agent at all",
 }
 
 var policyFields = map[string]string{
@@ -39,10 +41,10 @@ var policyFields = map[string]string{
 	"Runtime.Resources":   "capacity regressions are caught by design 20's behavioural drift path, and gating them would block incident response",
 	"External.InlineCard": "a description, not a grant: §3.3's card-drift rule adjudicates card CONTENT, and a card advertising a skill the CR does not grant fails registration rather than reaching production",
 	"Card":                "a path change is re-registration, exactly as card drift is",
-	"Budget":              "how much, not what",
-	"Gates":               "a gate that re-gated itself on edit could not converge",
-	"Expose":              "who may call",
-	"Loop":                "lineage governance, enforced at the gateway",
+
+	"Gates": "a gate that re-gated itself on edit could not converge",
+
+	"Loop": "lineage governance, enforced at the gateway",
 }
 
 // Fields whose sub-fields are classified individually rather than as a whole.
@@ -143,6 +145,11 @@ func mutateField(t *testing.T, path string) plumev1alpha1.AgentSpec {
 		s.Tools = []plumev1alpha1.ToolBinding{{Name: "db"}}
 	case "LLM":
 		s.LLM = &plumev1alpha1.LLMSpec{Providers: []string{"openai/gpt-x"}}
+	case "Budget":
+		tokens := int64(2000000)
+		s.Budget = &plumev1alpha1.BudgetSpec{TokensPerDay: &tokens}
+	case "Expose":
+		s.Expose = &plumev1alpha1.ExposeSpec{A2A: &plumev1alpha1.ExposeProtocol{Visibility: "org"}}
 	case "External.Endpoint":
 		s = baseFor(path)
 		s.External.Endpoint = "https://other.example.com"
