@@ -216,8 +216,15 @@ spec:
   targetRefs: [{kind: HTTPRoute, name: conf-route, group: gateway.networking.k8s.io}]
   traffic: {rateLimit: {local: [{requests: 10, tokens: 100, unit: Hours}]}}`)
 	if err == nil {
-		t.Error("a policy setting BOTH requests and tokens was admitted; §3.5 says one policy cannot " +
+		t.Fatal("a policy setting BOTH requests and tokens was admitted; §3.5 says one policy cannot " +
 			"carry both, and emits a single -ratelimit at the minimum of the two derived rates on that basis")
+	}
+	// WHICH error matters. "apply failed" is satisfied by a typo, a missing
+	// route, an unreachable API server or a webhook outage, so asserting only
+	// that err != nil would keep passing after the constraint was removed.
+	if !strings.Contains(err.Error(), "exactly one of the fields in [requests tokens]") {
+		t.Errorf("the apply was rejected, but not by the ExactlyOneOf rule this test exists to "+
+			"exercise — so it proves nothing about the constraint:\n%v", err)
 	}
 }
 
