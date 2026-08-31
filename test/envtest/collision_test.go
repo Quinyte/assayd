@@ -352,21 +352,29 @@ func TestTheDigestIsStampedOnCreation(t *testing.T) {
 	}
 }
 
-// An absent annotation is not a collision. A workload created before the digest
-// field existed carries none, and treating unknown as a collision would wedge
-// every cluster on upgrade — a fail-closed that fails the wrong thing.
-func TestAWorkloadWithNoRecordedDigestIsAdoptedAndStamped(t *testing.T) {
+// A workload carrying no stamp is REFUSED, not adopted.
+//
+// An earlier version adopted and stamped it, reasoning that a workload predating
+// the field would otherwise wedge an upgraded cluster — and this test pinned
+// that. There is no such workload: plume is unreleased, so the migration had
+// nothing to migrate and was purely an attack surface. Codex reproduced it:
+// strip the annotation, update the Agent to a colliding spec, and the operator
+// rewrites the pod template from the CURRENT spec and stamps the result as
+// legitimate. Legacy identity reconstructed from current spec is the collision
+// payload with an extra step.
+func TestAWorkloadWithNoRecordedDigestIsRefused(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "legacy", nil)
+	a := mustCreateAgent(t, ns, "unstamped", nil)
 	r := newReconciler(false)
 	settle(t, r, a)
 
-	name := controller.WorkloadName("legacy", revision.Hash(a.Spec))
+	name := controller.WorkloadName("unstamped", revision.Hash(a.Spec))
 	key := types.NamespacedName{Namespace: ns, Name: name}
 	var d appsv1.Deployment
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get workload: %v", err)
 	}
+	before := d.Spec.Template.Spec.Containers[0].Image
 	delete(d.Annotations, controller.RevisionDigestAnnotation)
 	if err := k8s.Update(context.Background(), &d); err != nil {
 		t.Fatalf("strip the digest annotation: %v", err)
@@ -374,17 +382,64 @@ func TestAWorkloadWithNoRecordedDigestIsAdoptedAndStamped(t *testing.T) {
 
 	reconcileOnce(t, r, a)
 
-	if err := k8s.Get(context.Background(), key, &d); err != nil {
-		t.Fatalf("get workload: %v", err)
-	}
-	if got := d.Annotations[controller.RevisionDigestAnnotation]; got != revision.Digest(a.Spec) {
-		t.Errorf("an un-stamped workload was not adopted and stamped; annotation is %q", got)
-	}
 	var after plumev1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
-	if c := condition(&after, plumev1alpha1.CondRevisionHashCollision); c != nil && c.Status == metav1.ConditionTrue {
-		t.Error("a missing annotation was reported as a collision; every upgraded cluster would wedge")
+	if c := condition(&after, plumev1alpha1.CondRevisionHashCollision); c == nil ||
+		c.Status != metav1.ConditionTrue {
+		t.Error("an unstamped workload was adopted rather than refused")
+	}
+	if err := k8s.Get(context.Background(), key, &d); err != nil {
+		t.Fatalf("get workload: %v", err)
+	}
+	if got := d.Spec.Template.Spec.Containers[0].Image; got != before {
+		t.Errorf("the pod template was rewritten from current spec on an object whose provenance "+
+			"the operator could not establish: image went %q -> %q", before, got)
+	}
+}
+
+// Availability authorizes PROMOTION, so it must answer "available workload of
+// WHICH revision?". A same-named Deployment created by anyone with
+// deployments/create is Available too, and promoting on replicas alone made the
+// attacker's object the operator's evidence.
+func TestAnUnstampedAvailableWorkloadDoesNotPromote(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "notmine", nil)
+	r := newReconciler(false)
+	settle(t, r, a)
+	name := controller.WorkloadName("notmine", revision.Hash(a.Spec))
+	markAvailable(t, ns, name, 1)
+
+	// Strip the operator's mark, keeping the object Available.
+	var d appsv1.Deployment
+	key := types.NamespacedName{Namespace: ns, Name: name}
+	if err := k8s.Get(context.Background(), key, &d); err != nil {
+		t.Fatalf("get workload: %v", err)
+	}
+	delete(d.Annotations, controller.RevisionDigestAnnotation)
+	if err := k8s.Update(context.Background(), &d); err != nil {
+		t.Fatalf("strip annotation: %v", err)
+	}
+	markAvailable(t, ns, name, 1)
+
+	var live plumev1alpha1.Agent
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	live.Status.ActiveRevision, live.Status.ActiveRevisionDigest = "", ""
+	live.Status.CandidateRevision, live.Status.CandidateRevisionDigest = "", ""
+	if err := k8s.Status().Update(context.Background(), &live); err != nil {
+		t.Fatalf("wipe status: %v", err)
+	}
+	reconcileOnce(t, r, a)
+
+	var after plumev1alpha1.Agent
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	if after.Status.ActiveRevision != "" {
+		t.Errorf("an unstamped but Available workload promoted revision %q; its own status was "+
+			"the only evidence the operator consulted", after.Status.ActiveRevision)
 	}
 }

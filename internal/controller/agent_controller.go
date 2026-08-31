@@ -216,14 +216,14 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
-	ready, err := r.workloadAvailable(ctx, &agent, desired)
+	ready, err := r.workloadAvailable(ctx, &agent, desired, desiredDigest)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	switch {
 	case !ready && status.ActiveRevision != "" && status.ActiveRevisionDigest != desiredDigest &&
-		r.revisionAvailable(ctx, &agent, status.ActiveRevision):
+		r.revisionAvailable(ctx, &agent, status.ActiveRevision, status.ActiveRevisionDigest):
 		// A genuine rollout: an earlier revision still holds all traffic and is
 		// healthy while its successor comes up. Reporting Ready=False here would
 		// trip every alert keyed on the canonical condition on any routine spec
@@ -426,8 +426,8 @@ func (r *AgentReconciler) reportCollision(ctx context.Context, agent *plumev1alp
 // as opposed to workloadAvailable, which only ever answers for the desired one.
 // An error is reported as unavailable: claiming a revision is serving because
 // the API server did not answer is the loud-and-wrong of rule 8.
-func (r *AgentReconciler) revisionAvailable(ctx context.Context, agent *plumev1alpha1.Agent, rev string) bool {
-	ok, err := r.workloadAvailable(ctx, agent, rev)
+func (r *AgentReconciler) revisionAvailable(ctx context.Context, agent *plumev1alpha1.Agent, rev, digest string) bool {
+	ok, err := r.workloadAvailable(ctx, agent, rev, digest)
 	return err == nil && ok
 }
 
@@ -446,7 +446,18 @@ func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alph
 	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
 	switch {
 	case apierrors.IsNotFound(err):
-		if err := r.Create(ctx, desired); err != nil && !apierrors.IsAlreadyExists(err) {
+		err := r.Create(ctx, desired)
+		if apierrors.IsAlreadyExists(err) {
+			// NOT success. Something created this name between the Get above and
+			// this Create — either another reconcile of ours, or a principal with
+			// deployments/create who guessed the name, which is derived from the
+			// Agent name and a public digest. Treating it as success accepted an
+			// object nobody validated, and the availability check then promoted it
+			// on AvailableReplicas alone. Re-read and apply the same invariant as
+			// an existing workload; the next pass converges or reports a collision.
+			return r.ensureWorkload(ctx, agent, rev, digest, status)
+		}
+		if err != nil {
 			return fmt.Errorf("create workload %s: %w", desired.Name, err)
 		}
 		return nil
@@ -466,18 +477,22 @@ func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alph
 	// field existed carries no digest, and treating unknown as collision would
 	// wedge every upgraded cluster. It is adopted and stamped on the next
 	// converge.
-	// Corroboration only — status was checked first, above. An ABSENT annotation
-	// is adopted, but only when status records no digest for this name either:
-	// otherwise deleting the annotation is a one-step bypass, since the adoption
-	// rule would bless exactly the object an attacker just stripped.
+	// Corroboration — status was checked first, above. A workload carrying no
+	// stamp is REFUSED, not adopted.
+	//
+	// An earlier version adopted it and stamped it from the current spec, on the
+	// reasoning that a workload predating the field would otherwise wedge an
+	// upgraded cluster. There is no such workload: plume is unreleased, so the
+	// migration had nothing to migrate and was purely an attack surface —
+	// stripping the annotation made the operator rewrite the pod template from
+	// whatever spec was current and stamp the result as legitimate. Legacy
+	// identity must never be reconstructed from current spec; that is the
+	// collision payload with an extra step.
 	existingDigest, stamped := existing.Annotations[RevisionDigestAnnotation]
-	switch {
-	case stamped && existingDigest != digest:
+	if !stamped || existingDigest != digest {
 		return &revisionCollisionError{name: existing.Name, existing: existingDigest, desired: digest}
-	case !stamped && status.ActiveRevision == rev && status.ActiveRevisionDigest != "" &&
-		status.ActiveRevisionDigest != digest:
-		return &revisionCollisionError{name: existing.Name, existing: status.ActiveRevisionDigest, desired: digest}
 	}
+	_ = status
 
 	// Reconcile the WHOLE template, not just replicas. Two reasons, and the
 	// second is the important one:
@@ -642,7 +657,7 @@ func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, rev string) 
 // replica. Availability, not readiness of a single pod: a Deployment reporting
 // availableReplicas is the closest signal the operator has to "this revision can
 // serve" before the card fetch of §3.4 exists.
-func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *plumev1alpha1.Agent, rev string) (bool, error) {
+func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *plumev1alpha1.Agent, rev, digest string) (bool, error) {
 	var d appsv1.Deployment
 	key := types.NamespacedName{Namespace: agent.Namespace, Name: WorkloadName(agent.Name, rev)}
 	if err := r.Get(ctx, key, &d); err != nil {
@@ -650,6 +665,14 @@ func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *plumev1a
 			return false, nil
 		}
 		return false, fmt.Errorf("get workload %s: %w", key, err)
+	}
+	// Availability is necessary and not sufficient. This result authorizes
+	// PROMOTION, so it must also answer "available workload of WHICH revision?" —
+	// a same-named object created by anyone with deployments/create is Available
+	// too, and promoting on replicas alone made its status the operator's
+	// evidence. The digest stamp is the operator's own mark.
+	if d.Annotations[RevisionDigestAnnotation] != digest {
+		return false, nil
 	}
 	return d.Status.AvailableReplicas > 0, nil
 }
