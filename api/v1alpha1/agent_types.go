@@ -269,6 +269,28 @@ const (
 	// 03 exists — or as Ready=False on an agent that is serving normally, which
 	// trips every alert keyed on the canonical condition.
 	CondProgressing = "Progressing"
+
+	// Thirteen conditions design 02 §3.1 declares that had no constant here.
+	// Nine predate the round that added this comment; the vocabulary drifted
+	// unnoticed because the closure test asserted a hard-coded count and never
+	// compared a single name. Grouped by the design that raises each.
+	CondPolicyCompileFailed      = "PolicyCompileFailed"      // design 03 §5
+	CondPolicyApplyIncomplete    = "PolicyApplyIncomplete"    // design 03 §3.3.2
+	CondPolicyInputDrifted       = "PolicyInputDrifted"       // design 03 A29
+	CondCapabilityUnavailable    = "CapabilityUnavailable"    // design 03 A33
+	CondRevisionRecordUnreadable = "RevisionRecordUnreadable" // design 03 A28
+	CondLLMFallbackUnavailable   = "LLMFallbackUnavailable"   // design 03 A34 / design 20 A3
+	CondGatewayIncompatible      = "GatewayIncompatible"
+	CondModelDrifted             = "ModelDrifted" // design 20
+	CondGovernanceSkipped        = "GovernanceSkipped"
+	CondEnvSourceUnresolved      = "EnvSourceUnresolved"     // A20
+	CondRevisionMaterialChanged  = "RevisionMaterialChanged" // A20/A23
+	CondImageSignatureUnverified = "ImageSignatureUnverified"
+	// CondEnvSourceProtectionUnavailable is SUPERSEDED by A35, which replaced the
+	// seal with immutable revision-scoped copies. It is declared because §3.1
+	// still lists it and this list must match §3.1 exactly; both go together in
+	// A35's owed retirement sweep, not separately.
+	CondEnvSourceProtectionUnavailable = "EnvSourceProtectionUnavailable"
 )
 
 type AgentStatus struct {
@@ -423,5 +445,18 @@ func designConditions() []string {
 		CondReady,
 		CondDegraded,
 		CondProgressing,
+		CondPolicyCompileFailed,
+		CondPolicyApplyIncomplete,
+		CondPolicyInputDrifted,
+		CondCapabilityUnavailable,
+		CondRevisionRecordUnreadable,
+		CondLLMFallbackUnavailable,
+		CondGatewayIncompatible,
+		CondModelDrifted,
+		CondGovernanceSkipped,
+		CondEnvSourceUnresolved,
+		CondRevisionMaterialChanged,
+		CondImageSignatureUnverified,
+		CondEnvSourceProtectionUnavailable,
 	}
 }

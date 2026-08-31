@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -139,23 +140,91 @@ func TestPrinterColumnsMatchTheDesign(t *testing.T) {
 
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("printer columns are %v, design 02 §3.1 specifies %v.\n"+
-			"These columns are the whole reason 21 conditions is defensible: Eval and "+
-			"Cost/Day are exactly what a developer would otherwise read conditions for.", got, want)
+			"These columns are the whole reason a vocabulary this size is defensible: Eval "+
+			"and Cost/Day are exactly what a developer would otherwise read conditions for.\n"+
+			"No count is written here: it was 21 in this message while the design declared 34, "+
+			"and a literal nobody re-derives is a second place to be wrong.", got, want)
 	}
 }
 
 // The condition vocabulary is a flat []metav1.Condition, so the schema cannot
-// enforce it. This test is the enforcement.
+// enforce it. This test is the enforcement — and until this round it was not.
+//
+// What it used to do: assert len(designConditions()) == 21 and check for
+// duplicates. It compared no names to anything, so a critic renamed
+// CondPricingStale to TotallyWrongName and the test SURVIVED. The count was
+// also checked against the wrong number: §3.1 declared 34 while this file
+// declared 21, and thirteen conditions raised by designs 03 and 20 had no
+// constant at all. A test that pins a cardinality against a literal nobody
+// re-derives is a test that reports health while the thing it guards drifts.
+//
+// It now parses §3.1's list out of the design and compares NAMES, both
+// directions. The design is the source of truth: adding a condition to the CRD
+// without declaring it fails here, and so does declaring one the design never
+// approved.
 func TestConditionVocabularyIsClosed(t *testing.T) {
-	want := designConditions() // declared in agent_types.go beside the constants
-	if len(want) != 21 {
-		t.Fatalf("design 02 §3.1 declares 21 conditions (20 + Progressing per A13); the constant list has %d", len(want))
-	}
-	seen := map[string]bool{}
-	for _, c := range want {
-		if seen[c] {
-			t.Errorf("condition %q is declared twice", c)
+	design := conditionsDeclaredByDesign(t)
+	code := designConditions()
+
+	dupes := func(t *testing.T, where string, xs []string) map[string]bool {
+		t.Helper()
+		seen := map[string]bool{}
+		for _, x := range xs {
+			if seen[x] {
+				t.Errorf("%s declares %q twice", where, x)
+			}
+			seen[x] = true
 		}
-		seen[c] = true
+		return seen
 	}
+	inDesign := dupes(t, "design 02 §3.1", design)
+	inCode := dupes(t, "designConditions()", code)
+
+	for _, c := range design {
+		if !inCode[c] {
+			t.Errorf("design 02 §3.1 declares %q and no constant in this package does.\n"+
+				"A condition the code cannot name is one no controller can set, so NFR-8's "+
+				"promise that a degraded path is never silent does not hold for it.", c)
+		}
+	}
+	for _, c := range code {
+		if !inDesign[c] {
+			t.Errorf("this package declares %q and design 02 §3.1 does not.\n"+
+				"The vocabulary is closed: a condition reaches the API only through the design, "+
+				"or consumers are matching on a string no document defines.", c)
+		}
+	}
+}
+
+// conditionsDeclaredByDesign reads the vocabulary out of design 02 §3.1.
+//
+// Parsing a document from a unit test is unusual and is the point: the design
+// is the artifact that decides this list, so a copy of it in Go would be a
+// second place to be wrong — which is exactly how the count reached 21-vs-34.
+// A missing or unparseable design is a FAILURE, never a skip: a gate that
+// quietly stops running is worse than one that was never written, because it
+// still reports green.
+func conditionsDeclaredByDesign(t *testing.T) []string {
+	t.Helper()
+	const design = "../../docs/designs/02-agent-crd-operator.md"
+	b, err := os.ReadFile(design)
+	if err != nil {
+		t.Fatalf("cannot read %s: %v — this test cannot pass without it", design, err)
+	}
+	m := regexp.MustCompile(`(?s)\n\s*conditions: \[(.*?)\]`).FindStringSubmatch(string(b))
+	if m == nil {
+		t.Fatalf("no `conditions: [...]` block in %s §3.1; if the shape moved, move this "+
+			"parser with it rather than deleting the check", design)
+	}
+	var out []string
+	for _, raw := range strings.Split(m[1], ",") {
+		if name := strings.TrimSpace(raw); name != "" {
+			out = append(out, name)
+		}
+	}
+	if len(out) < 20 {
+		t.Fatalf("parsed only %d conditions from %s; a partial parse would let this test pass "+
+			"on the handful it happened to read", len(out), design)
+	}
+	return out
 }
