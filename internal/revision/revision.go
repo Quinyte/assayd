@@ -78,9 +78,24 @@ type behaviour struct {
 // the model that answers requests.
 type envVar struct {
 	Name string `json:"name"`
-	// Value is hashed; ValueFrom is represented by its REFERENT, since the
-	// referent's contents change without a spec edit. Rotating the value inside a
-	// Secret must not re-gate; repointing at a different Secret must.
+	// Value is hashed. ValueFrom is currently represented by its REFERENT ONLY,
+	// which is a KNOWN BYPASS, not a design choice.
+	//
+	// The sentence that stood here said "rotating the value inside a Secret must
+	// not re-gate; repointing at a different Secret must." That rule is
+	// WITHDRAWN. Design 02 A20 replaced it: anyone with update on a referenced
+	// object can swap a system prompt, the pod restarts, and the new behaviour
+	// serves under the old revision and the old gate result — with no permission
+	// to touch the Agent at all. Kubernetes never refreshed a process
+	// environment for envFrom/valueFrom anyway, so the no-re-gate property the
+	// old rule protected did not exist.
+	//
+	// What is owed here is A20 + A35 + A42 together, and none of it is in this
+	// package: the identity must be minted from RESOLVED CONTENT, the content
+	// copied into immutable revision-scoped material, and the workload pointed
+	// at the copy in an operator-owned namespace. Until then the referent is
+	// what this hashes, and design 02 §3.3's content-hashing rule describes
+	// something the code does not do.
 	Value     string     `json:"value,omitempty"`
 	ValueFrom *envSource `json:"valueFrom,omitempty"`
 }

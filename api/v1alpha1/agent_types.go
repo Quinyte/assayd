@@ -308,6 +308,11 @@ const (
 	// "written by a version I dropped" call for different human actions, and
 	// collapsing them tells the operator to go looking for the wrong thing.
 	CondRevisionRecordUnsupported = "RevisionRecordUnsupported"
+	// CondRevisionMaterialUnavailable reports a revision-scoped copy that is
+	// missing, or whose owner UID or digest disagrees with the record (A41). The
+	// revision's route goes to weight 0: losing availability is the right
+	// direction when the alternative is serving material nobody can vouch for.
+	CondRevisionMaterialUnavailable = "RevisionMaterialUnavailable"
 )
 
 type AgentStatus struct {
@@ -491,5 +496,6 @@ func designConditions() []string {
 		CondRevisionHashCollision,
 		CondRevisionMaterialCollision,
 		CondRevisionRecordUnsupported,
+		CondRevisionMaterialUnavailable,
 	}
 }
