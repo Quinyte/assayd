@@ -40,6 +40,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
@@ -84,20 +85,30 @@ type envVar struct {
 	ValueFrom *envSource `json:"valueFrom,omitempty"`
 }
 
+// envSource carries the COMPLETE upstream selector, canonically marshalled.
+//
+// It used to name four arms and copy two or three fields out of each, with a
+// raw fallback for arms it did not recognise. The fallback was the safe part;
+// the naming was the hole. Every named arm silently dropped leaves —
+// SecretKeyRef.Optional, ConfigMapKeyRef.Optional, FieldRef.APIVersion,
+// ResourceFieldRef.Divisor — so flipping `optional: false` to `true` on a
+// referenced prompt hashed identically, and a replacement Pod would then start
+// WITHOUT the prompt instead of failing, serving different behaviour under the
+// old gate result.
+//
+// Marshalling the whole struct is not a shortcut, it is the stronger property:
+// a leaf added upstream is covered the day it appears rather than the day
+// someone remembers to name it. A quantity written "1000m" and one written "1"
+// marshal differently and so over-gate, which is the direction this package has
+// always chosen when it cannot be sure.
 type envSource struct {
-	Kind string `json:"kind"`
-	Name string `json:"name,omitempty"`
-	Key  string `json:"key,omitempty"`
-	// Raw carries the marshalled union for any arm this code does not name, so an
-	// upstream addition over-gates rather than collapsing to a constant.
-	Raw string `json:"raw,omitempty"`
+	Selector string `json:"selector"`
 }
 
+// envFromSource is the complete upstream EnvFromSource, for the same reason as
+// envSource — and Prefix comes along with it rather than being copied out.
 type envFromSource struct {
-	ConfigMap string `json:"configMap,omitempty"`
-	Secret    string `json:"secret,omitempty"`
-	Prefix    string `json:"prefix,omitempty"`
-	Raw       string `json:"raw,omitempty"`
+	Selector string `json:"selector"`
 }
 
 type knowledgeBind struct {
@@ -115,8 +126,21 @@ type kgScope struct {
 }
 
 type llm struct {
-	Providers []string  `json:"providers,omitempty"`
-	Fallback  *modelRef `json:"fallback,omitempty"`
+	Providers []string `json:"providers,omitempty"`
+	// EgressAllowlist is the set of endpoints the agent may reach. Design 02 A16
+	// classified it as behaviour — symmetric, so any change mints — and A6
+	// recorded that design 03 consumes it. It was never added HERE, so widening
+	// a HIPAA agent from internal/* to an external provider hashed identically
+	// and reached the compiler with no eval result for the reachability change.
+	// Classified in one place, projected in none: the gap the aggregate `LLM`
+	// mutation test could not see, because mutating the whole block changes
+	// providers too.
+	// A POINTER, so "no allowlist" and "an empty allowlist" stay distinguishable.
+	// Nothing in the corpus defines whether an empty list means "no narrowing" or
+	// "reach nothing", and collapsing them would make one of those a silent,
+	// ungated grant change — the same reasoning kgScope records.
+	EgressAllowlist *[]string `json:"egressAllowlist,omitempty"`
+	Fallback        *modelRef `json:"fallback,omitempty"`
 }
 
 // toolBind carries RequiresApproval because design 02 A30 moved it to the
@@ -168,22 +192,50 @@ type external struct {
 	OAuthClientRef string `json:"oauthClientRef,omitempty"`
 }
 
-// Hash returns the revision identity of a spec: a DNS-safe, stable,
-// 10-character digest of A12's behaviour projection.
+// Digest returns the full SHA-256 of the behaviour projection — the SECURITY
+// identity of a revision, and the only value that may be compared to decide
+// whether two specs are the same revision.
+//
+// Hash below truncates to 40 bits, which is a NAME, not an identity. Forty bits
+// is not a security boundary against an attacker-controlled projection: a
+// chosen collision between a safe and a malicious image took **1.2 seconds** on
+// a laptop, and it is a total bypass of the eval gate — the safe member passes
+// evaluation as revision H, the malicious member computes the same H, the
+// controller sees activeRevision == desired, skips gating, and rewrites the
+// Deployment named H to the malicious image while status still names the
+// revision that passed. The old justification counted how many revisions
+// coexist, which answers an accidental-collision question nobody was asking.
+func Digest(spec plumev1alpha1.AgentSpec) string {
+	sum := sha256.Sum256(encode(spec))
+	return hex.EncodeToString(sum[:])
+}
+
+// Hash returns the revision NAME: a DNS-safe, stable, 10-character prefix of
+// Digest, used to name workloads and to render the ACTIVE column.
+//
+// It is display and naming only. Never branch on it. Two specs sharing a Hash
+// are not the same revision unless their Digests agree, and the controller
+// treats a same-name/different-digest pair as a terminal RevisionHashCollision
+// rather than as one revision.
 func Hash(spec plumev1alpha1.AgentSpec) string {
 	// json.Marshal emits struct fields in declaration order and map keys
 	// lexically; the projection contains no maps, so this is canonical without a
 	// separate canonicalizer. Lists that carry no order semantics are sorted in
 	// project().
+	return Digest(spec)[:HashLength]
+}
+
+// encode canonicalizes the projection. Both Digest and Hash go through it, so
+// they can never disagree about what was hashed.
+func encode(spec plumev1alpha1.AgentSpec) []byte {
 	encoded, err := json.Marshal(project(spec))
 	if err != nil {
-		// Unreachable: the projection is strings and slices of strings. Hashing the
-		// error text keeps the function total and distinct rather than collapsing
-		// every revision onto one constant.
-		encoded = []byte("revision-projection-marshal-error:" + err.Error())
+		// Unreachable: the projection is strings and slices of strings. Encoding the
+		// error keeps the function total and distinct rather than collapsing every
+		// failing revision onto one constant.
+		encoded = []byte(fmt.Sprintf("revision-projection-marshal-error:%v:%#v", err, spec))
 	}
-	sum := sha256.Sum256(encoded)
-	return hex.EncodeToString(sum[:])[:HashLength]
+	return encoded
 }
 
 // project maps a spec onto A12's behaviour surface. Every included field is
@@ -241,6 +293,11 @@ func project(spec plumev1alpha1.AgentSpec) behaviour {
 
 	if l := spec.LLM; l != nil {
 		x := &llm{Providers: append([]string(nil), l.Providers...)}
+		if l.EgressAllowlist != nil {
+			allow := append([]string(nil), l.EgressAllowlist...)
+			sort.Strings(allow) // a set; a re-serialized manifest must not re-gate
+			x.EgressAllowlist = &allow
+		}
 		if l.Fallback != nil {
 			x.Fallback = &modelRef{Provider: l.Fallback.Provider, Model: l.Fallback.Model}
 		}
@@ -279,38 +336,23 @@ func envSourceRef(v *corev1.EnvVarSource) *envSource {
 	if v == nil {
 		return nil
 	}
-	switch {
-	case v.SecretKeyRef != nil:
-		return &envSource{Kind: "secret", Name: v.SecretKeyRef.Name, Key: v.SecretKeyRef.Key}
-	case v.ConfigMapKeyRef != nil:
-		return &envSource{Kind: "configMap", Name: v.ConfigMapKeyRef.Name, Key: v.ConfigMapKeyRef.Key}
-	case v.FieldRef != nil:
-		return &envSource{Kind: "field", Key: v.FieldRef.FieldPath}
-	case v.ResourceFieldRef != nil:
-		return &envSource{Kind: "resource", Name: v.ResourceFieldRef.ContainerName, Key: v.ResourceFieldRef.Resource}
-	default:
-		return &envSource{Kind: "raw", Raw: marshalOrEmpty(v)}
-	}
+	return &envSource{Selector: marshalOrEmpty(v)}
 }
 
 // envFromRef names a whole-source import, with the same over-gate default.
 func envFromRef(f corev1.EnvFromSource) envFromSource {
-	out := envFromSource{Prefix: f.Prefix}
-	switch {
-	case f.ConfigMapRef != nil:
-		out.ConfigMap = f.ConfigMapRef.Name
-	case f.SecretRef != nil:
-		out.Secret = f.SecretRef.Name
-	default:
-		out.Raw = marshalOrEmpty(f)
-	}
-	return out
+	return envFromSource{Selector: marshalOrEmpty(f)}
 }
 
+// marshalOrEmpty is total. An earlier version returned the constant
+// "unmarshalable" on error, which is the collapse-to-a-constant defect this
+// package exists to avoid: two different unmarshalable values would have hashed
+// the same. The error text is included so distinct failures stay distinct, and
+// %#v so two values with the same error text still differ.
 func marshalOrEmpty(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return "unmarshalable"
+		return fmt.Sprintf("unmarshalable:%v:%#v", err, v)
 	}
 	return string(b)
 }

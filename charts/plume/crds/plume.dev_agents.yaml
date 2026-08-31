@@ -574,6 +574,18 @@ spec:
               activeRevision:
                 description: ActiveRevision serves traffic.
                 type: string
+              activeRevisionDigest:
+                description: |-
+                  ActiveRevisionDigest and CandidateRevisionDigest are the FULL SHA-256 of
+                  each revision's behaviour projection, and are the only values compared to
+                  decide revision identity (A37).
+
+                  The two fields above are 40-bit names. A chosen 40-bit collision against an
+                  attacker-controlled projection takes about a second, and comparing names
+                  let a malicious spec present itself as a revision that had already passed
+                  its gate. The names stay, because a workload needs one and the ACTIVE
+                  column needs to be readable; the decision moved to these.
+                type: string
               budget:
                 properties:
                   tokensRemaining:
@@ -594,6 +606,8 @@ spec:
                 description: |-
                   CandidateRevision is held at weight 0 until its gates pass. At most one is
                   ever in flight; a new generation supersedes it.
+                type: string
+              candidateRevisionDigest:
                 type: string
               cards:
                 description: Cards carries one entry per live revision — two coexist

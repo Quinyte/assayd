@@ -31,8 +31,9 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 			Scope: &plumev1alpha1.KGScope{EntityTypes: []string{"Procedure", "Policy"}}}},
 		Tools: []plumev1alpha1.ToolBinding{{Name: "claims-system", RequiresApproval: true}},
 		LLM: &plumev1alpha1.LLMSpec{
-			Providers: []string{"openai/gpt-x", "internal/pa"},
-			Fallback:  &plumev1alpha1.ModelRef{Provider: "internal", Model: "pa-classifier"},
+			Providers:       []string{"openai/gpt-x", "internal/pa"},
+			EgressAllowlist: []string{"openai/*", "internal/*"},
+			Fallback:        &plumev1alpha1.ModelRef{Provider: "internal", Model: "pa-classifier"},
 		},
 		Budget: &plumev1alpha1.BudgetSpec{TokensPerDay: &tokens},
 		Gates:  []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}},
@@ -54,6 +55,14 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 // edit: either revert the change, or ship a migration that carries existing
 // revisions forward. Updating the constant to make the test pass is how a
 // cluster-wide rollout storm gets released.
+// MIGRATION 2 (2026-08-31, design 02 A37). The constant moved again because
+// the projection changed three ways, each closing a reproduced bypass:
+// llm.egressAllowlist entered it at all, the env selectors are now canonically
+// marshalled in full rather than having four arms named and their leaves
+// dropped, and the golden spec gained an allowlist so it exercises what it
+// claims to. Same reasoning as MIGRATION 1 and the same reason it is free: P1
+// is unshipped, so the set of affected revisions is empty.
+//
 // MIGRATION 1 (2026-08-29, design 02 A25 + A30). The constant moved from
 // "097ef5eedf" to the value below because three fields entered the projection:
 // tools[].requiresApproval, budget and expose. This is the rollout storm the
@@ -65,7 +74,7 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 // migration costs nothing today. Taken after the first install it would need a
 // carry-forward that maps old hashes to new ones. Design 02 §3.3 records the
 // same thing so an implementer does not rediscover it from this file.
-const goldenDigest = "ce2c25cdad"
+const goldenDigest = "7d3d5d6fba"
 
 func TestGoldenDigest(t *testing.T) {
 	if got := Hash(goldenSpec()); got != goldenDigest {

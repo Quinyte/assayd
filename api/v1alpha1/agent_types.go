@@ -291,6 +291,11 @@ const (
 	// still lists it and this list must match §3.1 exactly; both go together in
 	// A35's owed retirement sweep, not separately.
 	CondEnvSourceProtectionUnavailable = "EnvSourceProtectionUnavailable"
+	// CondRevisionHashCollision reports two DIFFERENT projections sharing one
+	// 40-bit revision name (A37). It is terminal: the operator will not adopt or
+	// rewrite a workload whose recorded digest disagrees with the desired one,
+	// because doing so is exactly the gate bypass the collision buys.
+	CondRevisionHashCollision = "RevisionHashCollision"
 )
 
 type AgentStatus struct {
@@ -303,6 +308,19 @@ type AgentStatus struct {
 	// ever in flight; a new generation supersedes it.
 	// +optional
 	CandidateRevision string `json:"candidateRevision,omitempty"`
+	// ActiveRevisionDigest and CandidateRevisionDigest are the FULL SHA-256 of
+	// each revision's behaviour projection, and are the only values compared to
+	// decide revision identity (A37).
+	//
+	// The two fields above are 40-bit names. A chosen 40-bit collision against an
+	// attacker-controlled projection takes about a second, and comparing names
+	// let a malicious spec present itself as a revision that had already passed
+	// its gate. The names stay, because a workload needs one and the ACTIVE
+	// column needs to be readable; the decision moved to these.
+	// +optional
+	ActiveRevisionDigest string `json:"activeRevisionDigest,omitempty"`
+	// +optional
+	CandidateRevisionDigest string `json:"candidateRevisionDigest,omitempty"`
 	// SupersededCandidates records abandoned in-flight candidates so the
 	// transition is auditable rather than silent. It is capped: the audit trail
 	// belongs in events and receipts, which are durable, whereas an unbounded
@@ -458,5 +476,6 @@ func designConditions() []string {
 		CondRevisionMaterialChanged,
 		CondImageSignatureUnverified,
 		CondEnvSourceProtectionUnavailable,
+		CondRevisionHashCollision,
 	}
 }

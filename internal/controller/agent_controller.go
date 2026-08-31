@@ -12,6 +12,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -139,7 +140,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, r.reportUnreconcilable(ctx, &agent)
 	}
 
+	// `desired` NAMES the revision; `desiredDigest` IDENTIFIES it. Every equality
+	// test below is on the digest, because the name is 40 bits and a chosen
+	// collision against it takes about a second (A37).
 	desired := revision.Hash(agent.Spec)
+	desiredDigest := revision.Digest(agent.Spec)
 	logger = logger.WithValues("revision", desired)
 
 	owned, err := r.ownedWorkloads(ctx, &agent)
@@ -148,18 +153,30 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	status := agent.Status.DeepCopy()
+	conds := newConditionSet(agent.Generation)
 
 	// A new generation supersedes an in-flight candidate (§3.3). At most one
 	// candidate is ever in flight; the abandoned one is recorded so the
 	// transition is auditable rather than silent.
-	if status.CandidateRevision != "" && status.CandidateRevision != desired {
+	if status.CandidateRevision != "" && status.CandidateRevisionDigest != desiredDigest {
 		status.SupersededCandidates = appendSuperseded(status.SupersededCandidates, status.CandidateRevision)
 		logger.Info("superseding in-flight candidate",
 			"superseded", status.CandidateRevision, "candidate", desired)
-		status.CandidateRevision = ""
+		status.CandidateRevision, status.CandidateRevisionDigest = "", ""
 	}
 
-	if err := r.ensureWorkload(ctx, &agent, desired); err != nil {
+	if err := r.ensureWorkload(ctx, &agent, desired, desiredDigest); err != nil {
+		if collision := (*revisionCollisionError)(nil); errors.As(err, &collision) {
+			// Terminal, and deliberately does NOT converge the workload. Rewriting a
+			// Deployment whose recorded digest disagrees with this spec is precisely
+			// the gate bypass a 40-bit collision buys.
+			conds.set(plumev1alpha1.CondRevisionHashCollision, metav1.ConditionTrue, "DigestMismatch", collision.Error())
+			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "RevisionHashCollision", collision.Error())
+			status.Phase = plumev1alpha1.PhaseDegraded
+			status.Conditions = conds.merge(agent.Status.Conditions)
+			status.ObservedGeneration = agent.Generation
+			return ctrl.Result{}, r.writeStatus(ctx, &agent, status)
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -168,19 +185,18 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
-	conds := newConditionSet(agent.Generation)
 	r.assessGates(&agent, conds)
 	r.assessSandbox(&agent, conds)
 	r.assessTaskState(&agent, conds)
 
 	switch {
-	case !ready && status.ActiveRevision != "" && status.ActiveRevision != desired:
+	case !ready && status.ActiveRevision != "" && status.ActiveRevisionDigest != desiredDigest:
 		// A genuine rollout: an earlier revision still holds all traffic and is
 		// healthy while its successor comes up. Reporting Ready=False here would
 		// trip every alert keyed on the canonical condition on any routine spec
 		// edit; reporting Canary would claim a weighted shift that §3.3 defines
 		// and that no gateway is performing yet (A13).
-		status.CandidateRevision = desired
+		status.CandidateRevision, status.CandidateRevisionDigest = desired, desiredDigest
 		status.Phase = plumev1alpha1.PhaseReady
 		conds.set(plumev1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", status.ActiveRevision))
@@ -195,14 +211,23 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// an agent whose pods died would report "revision X is serving" about a
 		// workload serving nothing, and Progressing about a revision rolling out
 		// over itself.
-		status.CandidateRevision = desired
+		status.CandidateRevision, status.CandidateRevisionDigest = desired, desiredDigest
 		conds.set(plumev1alpha1.CondProgressing, metav1.ConditionFalse, "NoRolloutInFlight",
 			"no other revision is coming up")
-		if status.ActiveRevision == desired {
+		// EQUIVALENT to comparing names here, and the argument is worth writing
+		// down because a mutation shows this line is unpinned. This branch is
+		// reached only when the case above was false, which means either
+		// ActiveRevision is empty or the digests already match — and in both
+		// states the name test and the digest test agree. It is written on the
+		// digest anyway, so that every revision comparison in this function reads
+		// the same way and none has to be re-derived as safe. The premise is that
+		// the name and the digest are always written together, which
+		// TestNameAndDigestAreAlwaysWrittenTogether checks.
+		if status.ActiveRevisionDigest == desiredDigest {
 			// It was serving and is not any more. Say so; do not silently keep the
 			// promotion from a healthier moment.
 			status.Phase = plumev1alpha1.PhaseDegraded
-			status.CandidateRevision = ""
+			status.CandidateRevision, status.CandidateRevisionDigest = "", ""
 			// Assert Degraded, do not merely set the phase. CondDegraded is owned and
 			// non-sticky, so a path that sets the phase without the condition actively
 			// CLEARS it — and an alert keyed on the condition would miss the worst
@@ -217,7 +242,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadNotAvailable",
 			fmt.Sprintf("revision %s has no available replicas yet", desired))
 
-	case !r.gatesSatisfied(&agent) && status.ActiveRevision != desired:
+	case !r.gatesSatisfied(&agent) && status.ActiveRevisionDigest != desiredDigest:
 		// Gates are required and have not passed: hold the candidate at zero
 		// traffic (§3.3).
 		//
@@ -231,7 +256,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// serving, saying Ready=False would page the on-call for adding gates to a
 		// healthy agent, which is the same defect A13 fixed in the branch below.
 		status.Phase = plumev1alpha1.PhaseHeld
-		status.CandidateRevision = desired
+		status.CandidateRevision, status.CandidateRevisionDigest = desired, desiredDigest
 		// Progressing must be asserted here too: it is sticky, so a branch that
 		// stays silent leaves the previous reason in place — and "CandidateNotAvailable"
 		// is false once the candidate is available and merely held.
@@ -249,11 +274,15 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	default:
 		// Promote. Without the gateway there are no weights to shift, so this
 		// flips activeRevision only — the weight shift belongs to design 03.
-		if status.ActiveRevision != desired {
+		// LOG ONLY — the assignment below is unconditional, so this comparison
+		// decides nothing and no test pins it. Said explicitly because every other
+		// revision comparison in this function IS load-bearing and is pinned by a
+		// collision test; a reader should not have to work out which this is.
+		if status.ActiveRevisionDigest != desiredDigest {
 			logger.Info("promoting revision", "from", status.ActiveRevision, "to", desired)
 		}
-		status.ActiveRevision = desired
-		status.CandidateRevision = ""
+		status.ActiveRevision, status.ActiveRevisionDigest = desired, desiredDigest
+		status.CandidateRevision, status.CandidateRevisionDigest = "", ""
 		// Rolling A -> B -> A leaves A in the superseded list, where a revision
 		// that is currently serving reads as one that was abandoned.
 		status.SupersededCandidates = removeString(status.SupersededCandidates, desired)
@@ -304,8 +333,29 @@ func (r *AgentReconciler) reconcileExternal(ctx context.Context, agent *plumev1a
 }
 
 // ensureWorkload creates or updates the Deployment for one revision.
-func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alpha1.Agent, rev string) error {
+// RevisionDigestAnnotation records which projection a workload was rendered
+// from. The Deployment's NAME carries only 40 bits, so the name alone cannot
+// answer "is this the same revision?" — this can.
+const RevisionDigestAnnotation = "plume.dev/revision-digest"
+
+// revisionCollisionError reports two different projections claiming one
+// workload name. It is terminal by design: see ensureWorkload.
+type revisionCollisionError struct {
+	name, existing, desired string
+}
+
+func (e *revisionCollisionError) Error() string {
+	return fmt.Sprintf("workload %s was rendered from revision digest %s and this spec projects to %s: "+
+		"two different revisions share one 40-bit name. Refusing to converge, because rewriting it "+
+		"would serve this spec under the gate result the other revision earned", e.name, e.existing, e.desired)
+}
+
+func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alpha1.Agent, rev, digest string) error {
 	desired := r.deploymentFor(agent, rev)
+	if desired.Annotations == nil {
+		desired.Annotations = map[string]string{}
+	}
+	desired.Annotations[RevisionDigestAnnotation] = digest
 	if err := ctrl.SetControllerReference(agent, desired, r.Scheme); err != nil {
 		return fmt.Errorf("set owner on workload %s: %w", desired.Name, err)
 	}
@@ -322,6 +372,22 @@ func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alph
 		return fmt.Errorf("get workload %s: %w", desired.Name, err)
 	}
 
+	// A workload that exists under this name but was rendered from a DIFFERENT
+	// projection is a hash collision, not a drifted revision. Converging it is
+	// the whole payload of a chosen 40-bit collision: the safe spec passes its
+	// gate as revision H, the malicious spec computes the same H, and the block
+	// below — which exists to correct out-of-band drift — rewrites H's pod
+	// template to the malicious image while status still names the revision that
+	// passed. Stop before that, and say why.
+	//
+	// An ABSENT annotation is not a mismatch: a workload created before this
+	// field existed carries no digest, and treating unknown as collision would
+	// wedge every upgraded cluster. It is adopted and stamped on the next
+	// converge.
+	if existingDigest, ok := existing.Annotations[RevisionDigestAnnotation]; ok && existingDigest != digest {
+		return &revisionCollisionError{name: existing.Name, existing: existingDigest, desired: digest}
+	}
+
 	// Reconcile the WHOLE template, not just replicas. Two reasons, and the
 	// second is the important one:
 	//
@@ -333,7 +399,11 @@ func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alph
 	//     passed on X, the pods run Y, and the CR asserts X. That bypasses
 	//     ADR-0006 entirely and makes the hardening below a create-time decoration
 	//     rather than an invariant.
-	if !templateEquivalent(&existing, desired) {
+	if !templateEquivalent(&existing, desired) || existing.Annotations[RevisionDigestAnnotation] != digest {
+		if existing.Annotations == nil {
+			existing.Annotations = map[string]string{}
+		}
+		existing.Annotations[RevisionDigestAnnotation] = digest
 		existing.Spec.Replicas = desired.Spec.Replicas
 		existing.Spec.Template = desired.Spec.Template
 		if err := r.Update(ctx, &existing); err != nil {
