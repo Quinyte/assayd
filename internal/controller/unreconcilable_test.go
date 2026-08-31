@@ -71,7 +71,7 @@ func TestUnreconcilableAgentDegradesRatherThanPanicking(t *testing.T) {
 	}
 	var found bool
 	for _, cond := range got.Status.Conditions {
-		if cond.Type == plumev1alpha1.CondDegraded && cond.Reason == "NoWorkloadSpecified" {
+		if cond.Type == string(plumev1alpha1.CondDegraded) && cond.Reason == "NoWorkloadSpecified" {
 			found = true
 			if cond.Message == "" {
 				t.Error("the condition must say what to do about it")

@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
 )
@@ -49,6 +48,29 @@ func TestOnlyADigestPinnedImageIsAdmitted(t *testing.T) {
 		{"two digests", good + "@sha256:" +
 			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", false,
 			"the repo part must not itself contain an @, or the first digest is decorative"},
+
+		// The repo half. An earlier rule was `[^@]+@sha256:…`, which validated the
+		// digest and accepted anything at all before it — every case below was
+		// ADMITTED and failed later at pull time, surfacing in pod status rather
+		// than at apply.
+		{"uppercase registry", "GHCR.IO/Acme/Agent@sha256:" +
+			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", false,
+			"uppercase is not a legal OCI repository name; this repo hit that itself in 14217fb"},
+		{"spaces", "not a reference at all @sha256:" +
+			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", false,
+			"whitespace in a reference is not a reference"},
+		{"path traversal", "../../etc/passwd@sha256:" +
+			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", false,
+			"a digest suffix does not make an arbitrary string a repository"},
+
+		// The two forms most at risk of a FALSE rejection, which is the other way
+		// a grammar goes wrong.
+		{"registry with a port", "localhost:5000/acme/agent@sha256:" +
+			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", true,
+			"a local registry is the normal development case and must still work"},
+		{"tag and digest together", "ghcr.io/acme/agent:v1.2.3@sha256:" +
+			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", true,
+			"a tag alongside a digest is legal and common in CI output; the digest still pins it"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &plumev1alpha1.Agent{
@@ -63,7 +85,7 @@ func TestOnlyADigestPinnedImageIsAdmitted(t *testing.T) {
 				t.Errorf("a digest-pinned image was rejected — %s: %v", tc.why, err)
 			case !tc.admit && err == nil:
 				t.Errorf("%q was admitted — %s", tc.image, tc.why)
-			case !tc.admit && err != nil && !strings.Contains(err.Error(), "digest-pinned"):
+			case !tc.admit && err != nil && !strings.Contains(err.Error(), "sha256 digest"):
 				t.Errorf("rejected, but not by the digest rule, so this proves nothing about it: %v", err)
 			}
 		})
@@ -88,47 +110,5 @@ func TestTheDigestRejectionNamesTheFix(t *testing.T) {
 			t.Errorf("the rejection does not mention %q, so it names the violation without "+
 				"naming the fix:\n%s", want, err.Error())
 		}
-	}
-}
-
-// Codex r8 MAJOR 1. []metav1.Condition accepts any string and the condition
-// helpers take a `string`, so a typo compiled, ran, and left every alert and CLI
-// consumer watching the correctly-spelled type silent — while the vocabulary
-// test stayed green, because that test checks an inventory and not what reaches
-// the API. This is the enforcement.
-func TestAnUnknownConditionTypeIsRejectedByTheAPI(t *testing.T) {
-	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "condenum", nil)
-
-	for _, tc := range []struct {
-		name, condType string
-		admit          bool
-	}{
-		{"a declared condition", plumev1alpha1.CondReady, true},
-		{"a plausible typo", "PolicyApplyIncompelete", false},
-		{"an invented type", "TotallyWrongName", false},
-		{"right name, wrong case", "ready", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var live plumev1alpha1.Agent
-			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
-				t.Fatalf("get agent: %v", err)
-			}
-			live.Status.Conditions = []metav1.Condition{{
-				Type: tc.condType, Status: metav1.ConditionTrue, Reason: "Test",
-				Message: "x", LastTransitionTime: metav1.Now(), ObservedGeneration: live.Generation,
-			}}
-			err := k8s.Status().Update(context.Background(), &live)
-			switch {
-			case tc.admit && err != nil:
-				t.Errorf("a declared condition was rejected, so the operator cannot write its own "+
-					"vocabulary: %v", err)
-			case !tc.admit && err == nil:
-				t.Errorf("%q was accepted; a consumer watching the correct spelling stays silent "+
-					"through the degradation it was meant to announce", tc.condType)
-			case !tc.admit && err != nil && !strings.Contains(err.Error(), "closed vocabulary"):
-				t.Errorf("rejected, but not by the vocabulary rule: %v", err)
-			}
-		})
 	}
 }

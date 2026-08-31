@@ -86,7 +86,7 @@ type AgentRuntime struct {
 	// cluster-wide and CEL has no profile in its evaluation context, so an
 	// alternative permitting `:dev` would permit a mutable tag in production.
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:XValidation:rule="self.matches('^[^@]+@sha256:[0-9a-f]{64}$')",message="spec.runtime.image must be digest-pinned: <repo>@sha256:<64 lowercase hex>. A tag can be repointed after the revision is gated, so the running code would no longer be the code that passed. Resolve the tag to a digest (docker buildx imagetools inspect, or the digest your CI already publishes)."
+	// +kubebuilder:validation:XValidation:rule="self.matches('^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+(:[a-zA-Z0-9._-]+)?@sha256:[0-9a-f]{64}$')",message="spec.runtime.image must be a lowercase OCI reference pinned by a sha256 digest: <registry>[:port]/<repo>[:tag]@sha256:<64 lowercase hex>. A tag can be repointed after the revision is gated, so the running code would no longer be the code that passed. Resolve the tag to a digest (docker buildx imagetools inspect, or the digest your CI already publishes)."
 	Image string `json:"image"`
 
 	// Replicas >1 requires the card to assert shared task state, else the
@@ -260,76 +260,76 @@ const (
 // Condition types. Every unavailable guarantee surfaces as one of these — the
 // platform never degrades silently (NFR-8).
 const (
-	CondRegistered                  = "Registered"
-	CondCardUnsigned                = "CardUnsigned"
-	CondIdentityIssued              = "IdentityIssued"
-	CondIdPUnavailable              = "IdPUnavailable"
-	CondOnBehalfOfUnavailable       = "OnBehalfOfUnavailable"
-	CondIdentityBootstrapIncomplete = "IdentityBootstrapIncomplete"
-	CondKnowledgeBound              = "KnowledgeBound"
-	CondGatesPassed                 = "GatesPassed"
-	CondGatesSkipped                = "GatesSkipped"
-	CondGatesBypassed               = "GatesBypassed"
-	CondSandboxDowngraded           = "SandboxDowngraded"
-	CondTaskStateUnverified         = "TaskStateUnverified"
-	CondScratchpadDegraded          = "ScratchpadDegraded"
-	CondBudgetExhausted             = "BudgetExhausted"
-	CondBudgetEnforcementDegraded   = "BudgetEnforcementDegraded"
-	CondPricingStale                = "PricingStale"
-	CondReceiptsDegraded            = "ReceiptsDegraded"
-	CondKilled                      = "Killed"
-	CondReady                       = "Ready"
-	CondDegraded                    = "Degraded"
+	CondRegistered                  = ConditionType("Registered")
+	CondCardUnsigned                = ConditionType("CardUnsigned")
+	CondIdentityIssued              = ConditionType("IdentityIssued")
+	CondIdPUnavailable              = ConditionType("IdPUnavailable")
+	CondOnBehalfOfUnavailable       = ConditionType("OnBehalfOfUnavailable")
+	CondIdentityBootstrapIncomplete = ConditionType("IdentityBootstrapIncomplete")
+	CondKnowledgeBound              = ConditionType("KnowledgeBound")
+	CondGatesPassed                 = ConditionType("GatesPassed")
+	CondGatesSkipped                = ConditionType("GatesSkipped")
+	CondGatesBypassed               = ConditionType("GatesBypassed")
+	CondSandboxDowngraded           = ConditionType("SandboxDowngraded")
+	CondTaskStateUnverified         = ConditionType("TaskStateUnverified")
+	CondScratchpadDegraded          = ConditionType("ScratchpadDegraded")
+	CondBudgetExhausted             = ConditionType("BudgetExhausted")
+	CondBudgetEnforcementDegraded   = ConditionType("BudgetEnforcementDegraded")
+	CondPricingStale                = ConditionType("PricingStale")
+	CondReceiptsDegraded            = ConditionType("ReceiptsDegraded")
+	CondKilled                      = ConditionType("Killed")
+	CondReady                       = ConditionType("Ready")
+	CondDegraded                    = ConditionType("Degraded")
 	// CondProgressing reports a rollout in flight. Added by A13: without it, a
 	// spec edit on a serving agent had to be reported either as Canary — whose
 	// meaning §3.3 fixes as "weights are shifting", which is false before design
 	// 03 exists — or as Ready=False on an agent that is serving normally, which
 	// trips every alert keyed on the canonical condition.
-	CondProgressing = "Progressing"
+	CondProgressing = ConditionType("Progressing")
 
 	// Thirteen conditions design 02 §3.1 declares that had no constant here.
 	// Nine predate the round that added this comment; the vocabulary drifted
 	// unnoticed because the closure test asserted a hard-coded count and never
 	// compared a single name. Grouped by the design that raises each.
-	CondPolicyCompileFailed      = "PolicyCompileFailed"      // design 03 §5
-	CondPolicyApplyIncomplete    = "PolicyApplyIncomplete"    // design 03 §3.3.2
-	CondPolicyInputDrifted       = "PolicyInputDrifted"       // design 03 A29
-	CondCapabilityUnavailable    = "CapabilityUnavailable"    // design 03 A33
-	CondRevisionRecordUnreadable = "RevisionRecordUnreadable" // design 03 A28
-	CondLLMFallbackUnavailable   = "LLMFallbackUnavailable"   // design 03 A34 / design 20 A3
-	CondGatewayIncompatible      = "GatewayIncompatible"
-	CondModelDrifted             = "ModelDrifted" // design 20
-	CondGovernanceSkipped        = "GovernanceSkipped"
-	CondEnvSourceUnresolved      = "EnvSourceUnresolved"     // A20
-	CondRevisionMaterialChanged  = "RevisionMaterialChanged" // A20/A23
-	CondImageSignatureUnverified = "ImageSignatureUnverified"
+	CondPolicyCompileFailed      = ConditionType("PolicyCompileFailed")      // design 03 §5
+	CondPolicyApplyIncomplete    = ConditionType("PolicyApplyIncomplete")    // design 03 §3.3.2
+	CondPolicyInputDrifted       = ConditionType("PolicyInputDrifted")       // design 03 A29
+	CondCapabilityUnavailable    = ConditionType("CapabilityUnavailable")    // design 03 A33
+	CondRevisionRecordUnreadable = ConditionType("RevisionRecordUnreadable") // design 03 A28
+	CondLLMFallbackUnavailable   = ConditionType("LLMFallbackUnavailable")   // design 03 A34 / design 20 A3
+	CondGatewayIncompatible      = ConditionType("GatewayIncompatible")
+	CondModelDrifted             = ConditionType("ModelDrifted") // design 20
+	CondGovernanceSkipped        = ConditionType("GovernanceSkipped")
+	CondEnvSourceUnresolved      = ConditionType("EnvSourceUnresolved")     // A20
+	CondRevisionMaterialChanged  = ConditionType("RevisionMaterialChanged") // A20/A23
+	CondImageSignatureUnverified = ConditionType("ImageSignatureUnverified")
 	// CondEnvSourceProtectionUnavailable is SUPERSEDED by A35, which replaced the
 	// seal with immutable revision-scoped copies. It is declared because §3.1
 	// still lists it and this list must match §3.1 exactly; both go together in
 	// A35's owed retirement sweep, not separately.
-	CondEnvSourceProtectionUnavailable = "EnvSourceProtectionUnavailable"
+	CondEnvSourceProtectionUnavailable = ConditionType("EnvSourceProtectionUnavailable")
 	// CondRevisionHashCollision reports two DIFFERENT projections sharing one
 	// 40-bit revision name (A37). It is terminal: the operator will not adopt or
 	// rewrite a workload whose recorded digest disagrees with the desired one,
 	// because doing so is exactly the gate bypass the collision buys.
-	CondRevisionHashCollision = "RevisionHashCollision"
+	CondRevisionHashCollision = ConditionType("RevisionHashCollision")
 	// CondRevisionMaterialCollision reports a revision-scoped copy that already
 	// exists under the expected name but does not satisfy the whole invariant —
 	// kind, owner UID, immutability, bytes (A39). It is terminal for the same
 	// reason as above: adopting by name is how a name that looks right comes to
 	// hold content nobody hashed.
-	CondRevisionMaterialCollision = "RevisionMaterialCollision"
+	CondRevisionMaterialCollision = ConditionType("RevisionMaterialCollision")
 	// CondRevisionRecordUnsupported reports a retained revision whose record was
 	// written by a schema version this operator no longer carries a decoder for
 	// (design 03 A39). Deliberately NOT the corruption condition: "damaged" and
 	// "written by a version I dropped" call for different human actions, and
 	// collapsing them tells the operator to go looking for the wrong thing.
-	CondRevisionRecordUnsupported = "RevisionRecordUnsupported"
+	CondRevisionRecordUnsupported = ConditionType("RevisionRecordUnsupported")
 	// CondRevisionMaterialUnavailable reports a revision-scoped copy that is
 	// missing, or whose owner UID or digest disagrees with the record (A41). The
 	// revision's route goes to weight 0: losing availability is the right
 	// direction when the alternative is serving material nobody can vouch for.
-	CondRevisionMaterialUnavailable = "RevisionMaterialUnavailable"
+	CondRevisionMaterialUnavailable = ConditionType("RevisionMaterialUnavailable")
 )
 
 type AgentStatus struct {
@@ -380,19 +380,17 @@ type AgentStatus struct {
 	// Conditions is a map-list keyed by type: the API server then rejects
 	// duplicates outright, for every writer rather than only this operator.
 	//
-	// The TYPE is also a closed enum, enforced here (A51). []metav1.Condition
-	// accepts any string and the condition helpers take a `string`, so
-	// `c.set("PolicyApplyIncompelete", …)` compiled, ran, and left every alert
-	// and CLI consumer watching the correctly-spelled type silent — while the
-	// vocabulary test stayed green, because that test checks the inventory and
-	// not what reaches the API. A closed vocabulary that the API does not close
-	// is a convention.
-	//
-	// The list is duplicated from the constants above, which is a second place to
-	// be wrong — so TestTheConditionEnumMatchesTheVocabulary compares them.
+	// The type is closed by ConditionType in Go, NOT by CEL here (A52). A CEL
+	// enum was tried and withdrawn: one unrecognised type rejects the ENTIRE
+	// status write, so an operator asserting a condition its installed CRD does
+	// not list loses `phase`, `activeRevisionDigest` and `Ready` for that Agent
+	// and error-loops forever. The chart ships the CRD under `crds/`, which
+	// `helm upgrade` never updates, and half the vocabulary belongs to
+	// components that ship on their own cadence — so the first one to assert its
+	// own condition would take out every Agent it touched. That is NFR-8 with a
+	// wider blast radius than the typo the rule was meant to catch.
 	// +listType=map
 	// +listMapKey=type
-	// +kubebuilder:validation:XValidation:rule="self.all(c, c.type in ['BudgetEnforcementDegraded','BudgetExhausted','CapabilityUnavailable','CardUnsigned','Degraded','EnvSourceProtectionUnavailable','EnvSourceUnresolved','GatesBypassed','GatesPassed','GatesSkipped','GatewayIncompatible','GovernanceSkipped','IdPUnavailable','IdentityBootstrapIncomplete','IdentityIssued','ImageSignatureUnverified','Killed','KnowledgeBound','LLMFallbackUnavailable','ModelDrifted','OnBehalfOfUnavailable','PolicyApplyIncomplete','PolicyCompileFailed','PolicyInputDrifted','PricingStale','Progressing','Ready','ReceiptsDegraded','Registered','RevisionHashCollision','RevisionMaterialChanged','RevisionMaterialCollision','RevisionMaterialUnavailable','RevisionRecordUnreadable','RevisionRecordUnsupported','SandboxDowngraded','ScratchpadDegraded','TaskStateUnverified'])",message="status.conditions[].type is a closed vocabulary (design 02 §3.1). An unrecognised type is almost always a typo, and a typo means the degraded path it was meant to announce is silent."
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// +optional
@@ -499,11 +497,18 @@ func init() {
 	SchemeBuilder.Register(&Agent{}, &AgentList{})
 }
 
+// ConditionType is the closed condition vocabulary of design 02 §3.1, as a Go
+// type. conditionSet.set takes one, so a misspelled condition is a COMPILE
+// error rather than a runtime silence: `c.set("PolicyApplyIncompelete", …)`
+// used to build, run, and leave every consumer watching the correct spelling
+// quiet through the degradation it was meant to announce.
+type ConditionType string
+
 // designConditions is the closed condition vocabulary of design 02 §3.1. A
 // []metav1.Condition accepts any string, so this list and its test are the only
 // things standing between the vocabulary and drift.
-func designConditions() []string {
-	return []string{
+func designConditions() []ConditionType {
+	return []ConditionType{
 		CondRegistered,
 		CondCardUnsigned,
 		CondIdentityIssued,

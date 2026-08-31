@@ -12,10 +12,20 @@ package revision
 
 import (
 	"reflect"
-	"testing"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 )
+
+// Fataler is the slice of *testing.T these helpers need. Taking it instead of
+// *testing.T keeps `testing` out of a non-test package: the shipped operator
+// binary was linking testing, flag and runtime/pprof, and — worse than the
+// 17 KB — exported production functions were calling t.Fatalf, which is
+// runtime.Goexit, and off a test goroutine that kills the process with no
+// recovery.
+type Fataler interface {
+	Helper()
+	Fatalf(format string, args ...any)
+}
 
 // LeafTypes are structs treated as single values rather than descended into,
 // because their identity is their whole content and they carry custom JSON.
@@ -56,7 +66,7 @@ func Leaves(t reflect.Type, prefix string, chain []int) []Leaf {
 }
 
 // distinct writes the n-th of two different values of type ft into val.
-func distinct(t *testing.T, val reflect.Value, ft reflect.Type, path string, n int) {
+func distinct(t Fataler, val reflect.Value, ft reflect.Type, path string, n int) {
 	t.Helper()
 	switch {
 	case ft == reflect.TypeOf(resource.Quantity{}):
@@ -88,7 +98,7 @@ func distinct(t *testing.T, val reflect.Value, ft reflect.Type, path string, n i
 // setLeaf allocates the pointer and slice chain down to l and writes value n.
 // Both sides of a comparison run this, so the ENCLOSING objects are identical
 // and only the leaf differs — without that, a test passes on a block appearing.
-func SetLeaf(t *testing.T, root reflect.Value, l Leaf, n int) {
+func SetLeaf(t Fataler, root reflect.Value, l Leaf, n int) {
 	t.Helper()
 	v := root
 	for si, i := range l.Chain {
@@ -212,7 +222,7 @@ func Classified(path string) bool {
 // constrains the value — an enum, a pattern, a digest. The generic distinct()
 // writes "leaf-a"/"leaf-b", which are distinct and INADMISSIBLE, so a test that
 // only uses it can never prove anything about a reachable API transition.
-func SetLeafString(t *testing.T, root reflect.Value, l Leaf, v string) {
+func SetLeafString(t Fataler, root reflect.Value, l Leaf, v string) {
 	t.Helper()
 	SetLeaf(t, root, l, 0) // allocate the pointer/slice chain
 	cur := root

@@ -175,10 +175,10 @@ func TestConditionVocabularyIsClosed(t *testing.T) {
 	declared := conditionConstantsInSource(t)
 	inList := map[string]bool{}
 	for _, c := range code {
-		inList[c] = true
+		inList[string(c)] = true
 	}
 	for _, c := range declared {
-		if !inList[c] {
+		if !inList[string(c)] {
 			t.Errorf("agent_types.go declares the condition constant %q and designConditions() "+
 				"omits it, so it is exempt from every check below — including the one that would "+
 				"have told you the design never approved it.", c)
@@ -197,7 +197,11 @@ func TestConditionVocabularyIsClosed(t *testing.T) {
 		return seen
 	}
 	inDesign := dupes(t, "design 02 §3.1", design)
-	inCode := dupes(t, "designConditions()", code)
+	codeStrings := make([]string, 0, len(code))
+	for _, c := range code {
+		codeStrings = append(codeStrings, string(c))
+	}
+	inCode := dupes(t, "designConditions()", codeStrings)
 
 	for _, c := range design {
 		if !inCode[c] {
@@ -206,7 +210,7 @@ func TestConditionVocabularyIsClosed(t *testing.T) {
 				"promise that a degraded path is never silent does not hold for it.", c)
 		}
 	}
-	for _, c := range code {
+	for _, c := range codeStrings {
 		if !inDesign[c] {
 			t.Errorf("this package declares %q and design 02 §3.1 does not.\n"+
 				"The vocabulary is closed: a condition reaches the API only through the design, "+
@@ -235,7 +239,7 @@ func conditionConstantsInSource(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("cannot read %s: %v — this test cannot pass without it", src, err)
 	}
-	m := regexp.MustCompile(`(?m)^\s*Cond\w+\s*=\s*"(\w+)"`).FindAllStringSubmatch(string(b), -1)
+	m := regexp.MustCompile(`(?m)^\s*Cond\w+\s*=\s*ConditionType\("(\w+)"\)`).FindAllStringSubmatch(string(b), -1)
 	if len(m) < 20 {
 		t.Fatalf("found only %d condition constants in %s; a partial parse would let this test "+
 			"pass on the handful it happened to read", len(m), src)
@@ -272,33 +276,19 @@ func conditionsDeclaredByDesign(t *testing.T) []string {
 	return out
 }
 
-// The CEL enum on status.conditions[].type duplicates the constants, which is a
-// second place to be wrong — so it is compared, not trusted. Every other
-// vocabulary check in this file derives one side from an authoritative artifact
-// for exactly this reason.
-func TestTheConditionEnumMatchesTheVocabulary(t *testing.T) {
+// The vocabulary is closed in Go, so this checks the thing that actually
+// enforces it: conditionSet.set takes a ConditionType, and a string literal
+// will not convert implicitly. There is nothing to compare against a CEL list
+// any more — A52 withdrew it, because one unrecognised type rejected the whole
+// status write and cost an Agent its phase, its digest and its Ready.
+func TestConditionConstantsAreTyped(t *testing.T) {
 	b, err := os.ReadFile("agent_types.go")
 	if err != nil {
 		t.Fatalf("cannot read agent_types.go: %v", err)
 	}
-	m := regexp.MustCompile(`rule="self\.all\(c, c\.type in \[(.*?)\]\)"`).FindStringSubmatch(string(b))
-	if m == nil {
-		t.Fatal("no condition-type CEL enum on status.conditions. If the rule moved, move this " +
-			"check with it; deleting it makes the vocabulary a convention again.")
-	}
-	inEnum := map[string]bool{}
-	for _, q := range regexp.MustCompile(`'(\w+)'`).FindAllStringSubmatch(m[1], -1) {
-		inEnum[q[1]] = true
-	}
-	declared := conditionConstantsInSource(t)
-	for _, c := range declared {
-		if !inEnum[c] {
-			t.Errorf("%q is a declared condition and the CEL enum omits it, so the API server "+
-				"would reject a status write this operator legitimately makes", c)
-		}
-	}
-	if len(inEnum) != len(declared) {
-		t.Errorf("the enum has %d entries and %d conditions are declared; the extra ones are "+
-			"names nothing can produce", len(inEnum), len(declared))
+	if bad := regexp.MustCompile(`(?m)^\s*Cond\w+\s*=\s*"`).FindAllString(string(b), -1); len(bad) > 0 {
+		t.Errorf("%d condition constants are untyped string literals: %v\n"+
+			"An untyped constant lets a bare string reach conditionSet.set, which is how a typo "+
+			"compiles and then says nothing at runtime.", len(bad), bad)
 	}
 }

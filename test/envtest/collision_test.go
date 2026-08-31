@@ -2,6 +2,7 @@ package envtest
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -352,23 +353,76 @@ func TestTheDigestIsStampedOnCreation(t *testing.T) {
 	}
 }
 
-// A workload carrying no stamp is REFUSED, not adopted.
+// A stripped stamp on a workload that STATUS vouches for must self-heal, not
+// wedge. This is the regression an independent code review reproduced: failing
+// closed on a missing stamp was applied one step too wide, so a principal with
+// only deployments/patch could strip the annotation AND rewrite the image, and
+// the workload stayed terminally refused with the attacker's pods running —
+// where before it self-corrected through the drift-correction rewrite.
 //
-// An earlier version adopted and stamped it, reasoning that a workload predating
-// the field would otherwise wedge an upgraded cluster — and this test pinned
-// that. There is no such workload: plume is unreleased, so the migration had
-// nothing to migrate and was purely an attack surface. Codex reproduced it:
-// strip the annotation, update the Agent to a colliding spec, and the operator
-// rewrites the pod template from the CURRENT spec and stamps the result as
-// legitimate. Legacy identity reconstructed from current spec is the collision
-// payload with an extra step.
-func TestAWorkloadWithNoRecordedDigestIsRefused(t *testing.T) {
+// The sequence that fail-closed was meant to stop additionally needs
+// agents/update to write a colliding spec, and collisionAgainstStatus refuses
+// that before this code runs. So the wider rule protected nothing and traded a
+// self-correcting drift for a permanent one.
+func TestAStrippedStampOnAVouchedWorkloadSelfHeals(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "unstamped", nil)
+	a := mustCreateAgent(t, ns, "selfheal", nil)
+	r := newReconciler(false)
+	settle(t, r, a)
+	name := controller.WorkloadName("selfheal", revision.Hash(a.Spec))
+	markAvailable(t, ns, name, 1)
+	got := settle(t, r, a)
+	if got.Status.ActiveRevisionDigest == "" {
+		t.Fatal("setup: nothing became active, so status vouches for nothing")
+	}
+	want := a.Spec.Runtime.Image
+
+	// deployments/patch only: rewrite the image AND remove the operator's mark.
+	key := types.NamespacedName{Namespace: ns, Name: name}
+	var d appsv1.Deployment
+	if err := k8s.Get(context.Background(), key, &d); err != nil {
+		t.Fatalf("get workload: %v", err)
+	}
+	d.Spec.Template.Spec.Containers[0].Image = "ghcr.io/attacker/backdoor@sha256:" +
+		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	delete(d.Annotations, controller.RevisionDigestAnnotation)
+	if err := k8s.Update(context.Background(), &d); err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
+
+	settle(t, r, a)
+
+	if err := k8s.Get(context.Background(), key, &d); err != nil {
+		t.Fatalf("get workload: %v", err)
+	}
+	if img := d.Spec.Template.Spec.Containers[0].Image; img != want {
+		t.Errorf("the tampered image is still running: %q.\n"+
+			"Stripping the stamp switched drift correction off permanently, so a WEAKER "+
+			"principal than the one the rule was written for gets a persistent compromise.", img)
+	}
+	if d.Annotations[controller.RevisionDigestAnnotation] != revision.Digest(a.Spec) {
+		t.Error("the workload was not re-stamped, so the next pass refuses it again")
+	}
+	var after plumev1alpha1.Agent
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	if c := condition(&after, plumev1alpha1.CondRevisionHashCollision); c != nil &&
+		c.Status == metav1.ConditionTrue {
+		t.Error("a workload status vouches for was reported as a collision")
+	}
+}
+
+// The other half: nothing vouches for it, so it stays refused. A squatter's
+// object and a workload whose provenance the operator cannot establish are the
+// same case.
+func TestAnUnvouchedUnstampedWorkloadIsRefused(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "unvouched", nil)
 	r := newReconciler(false)
 	settle(t, r, a)
 
-	name := controller.WorkloadName("unstamped", revision.Hash(a.Spec))
+	name := controller.WorkloadName("unvouched", revision.Hash(a.Spec))
 	key := types.NamespacedName{Namespace: ns, Name: name}
 	var d appsv1.Deployment
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
@@ -377,9 +431,18 @@ func TestAWorkloadWithNoRecordedDigestIsRefused(t *testing.T) {
 	before := d.Spec.Template.Spec.Containers[0].Image
 	delete(d.Annotations, controller.RevisionDigestAnnotation)
 	if err := k8s.Update(context.Background(), &d); err != nil {
-		t.Fatalf("strip the digest annotation: %v", err)
+		t.Fatalf("strip: %v", err)
 	}
-
+	// Status forgets, so nothing non-forgeable vouches for the pair.
+	var live plumev1alpha1.Agent
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	live.Status.ActiveRevision, live.Status.ActiveRevisionDigest = "", ""
+	live.Status.CandidateRevision, live.Status.CandidateRevisionDigest = "", ""
+	if err := k8s.Status().Update(context.Background(), &live); err != nil {
+		t.Fatalf("wipe status: %v", err)
+	}
 	reconcileOnce(t, r, a)
 
 	var after plumev1alpha1.Agent
@@ -388,18 +451,18 @@ func TestAWorkloadWithNoRecordedDigestIsRefused(t *testing.T) {
 	}
 	if c := condition(&after, plumev1alpha1.CondRevisionHashCollision); c == nil ||
 		c.Status != metav1.ConditionTrue {
-		t.Error("an unstamped workload was adopted rather than refused")
+		t.Error("a workload nothing vouches for was adopted")
 	}
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get workload: %v", err)
 	}
 	if got := d.Spec.Template.Spec.Containers[0].Image; got != before {
-		t.Errorf("the pod template was rewritten from current spec on an object whose provenance "+
-			"the operator could not establish: image went %q -> %q", before, got)
+		t.Errorf("the pod template was rewritten on an object whose provenance could not be "+
+			"established: %q -> %q", before, got)
 	}
 }
 
-// Availability authorizes PROMOTION, so it must answer "available workload of
+// Availability authorizes PROMOTION// Availability authorizes PROMOTION, so it must answer "available workload of
 // WHICH revision?". A same-named Deployment created by anyone with
 // deployments/create is Available too, and promoting on replicas alone made the
 // attacker's object the operator's evidence.
@@ -441,5 +504,51 @@ func TestAnUnstampedAvailableWorkloadDoesNotPromote(t *testing.T) {
 	if after.Status.ActiveRevision != "" {
 		t.Errorf("an unstamped but Available workload promoted revision %q; its own status was "+
 			"the only evidence the operator consulted", after.Status.ActiveRevision)
+	}
+}
+
+// The audit entry is `<name>@<digest>`, and removal compared the bare name — so
+// a revision that came BACK read as permanently abandoned. Nothing covered the
+// removal path; the only assertion on this field checked the append.
+func TestARevisionThatBecomesActiveAgainLeavesTheAbandonedList(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "aba", nil)
+	r := newReconciler(false)
+	settle(t, r, a)
+	first := revision.Hash(a.Spec)
+	firstSpec := *a.Spec.Runtime.DeepCopy()
+
+	set := func(t *testing.T, image string) {
+		t.Helper()
+		var live plumev1alpha1.Agent
+		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
+			t.Fatalf("get agent: %v", err)
+		}
+		live.Spec.Runtime.Image = image
+		if err := k8s.Update(context.Background(), &live); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		settle(t, r, &live)
+		markAvailable(t, ns, controller.WorkloadName("aba", revision.Hash(live.Spec)), 1)
+		settle(t, r, &live)
+	}
+
+	set(t, "ghcr.io/acme/agent@sha256:"+
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") // A -> B
+	set(t, firstSpec.Image) // B -> A
+
+	var after plumev1alpha1.Agent
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	if after.Status.ActiveRevision != first {
+		t.Fatalf("setup: the first revision is not active again, got %q", after.Status.ActiveRevision)
+	}
+	for _, e := range after.Status.SupersededCandidates {
+		if strings.HasPrefix(e, first+"@") {
+			t.Errorf("the ACTIVE, serving revision is still listed as abandoned: %v\n"+
+				"An operator reading the audit trail during an incident sees the thing that is "+
+				"running described as the thing that was given up on.", after.Status.SupersededCandidates)
+		}
 	}
 }

@@ -25,9 +25,9 @@ func newConditionSet(generation int64) *conditionSet {
 	return &conditionSet{generation: generation, asserted: map[string]metav1.Condition{}}
 }
 
-func (c *conditionSet) set(condType string, status metav1.ConditionStatus, reason, message string) {
-	c.asserted[condType] = metav1.Condition{
-		Type:               condType,
+func (c *conditionSet) set(condType plumev1alpha1.ConditionType, status metav1.ConditionStatus, reason, message string) {
+	c.asserted[string(condType)] = metav1.Condition{
+		Type:               string(condType),
 		Status:             status,
 		Reason:             reason,
 		Message:            message,
@@ -41,7 +41,7 @@ func (c *conditionSet) set(condType string, status metav1.ConditionStatus, reaso
 // sandbox is a lie. Types NOT listed belong to other controllers (the gate
 // controller, the budget backstop, design 20's drift controllers) and are left
 // untouched — clearing another controller's condition would be a write race.
-var ownedTypes = map[string]bool{
+var ownedTypes = map[plumev1alpha1.ConditionType]bool{
 	plumev1alpha1.CondReady:               true,
 	plumev1alpha1.CondProgressing:         true,
 	plumev1alpha1.CondGatesSkipped:        true,
@@ -68,7 +68,7 @@ var ownedTypes = map[string]bool{
 // indistinguishable from "never evaluated". Dropping GatesPassed when an
 // EvalSuite CRD is uninstalled would silently erase the record that a revision
 // ever passed a gate.
-var stickyTypes = map[string]bool{
+var stickyTypes = map[plumev1alpha1.ConditionType]bool{
 	plumev1alpha1.CondReady:       true,
 	plumev1alpha1.CondProgressing: true,
 	plumev1alpha1.CondGatesPassed: true,
@@ -82,10 +82,10 @@ func (c *conditionSet) merge(existing []metav1.Condition) []metav1.Condition {
 		next, asserted := c.asserted[prev.Type]
 		if !asserted {
 			switch {
-			case stickyTypes[prev.Type]:
+			case stickyTypes[plumev1alpha1.ConditionType(prev.Type)]:
 				// Keep the record; a later pass that has an opinion will overwrite it.
 				out = append(out, prev)
-			case ownedTypes[prev.Type]:
+			case ownedTypes[plumev1alpha1.ConditionType(prev.Type)]:
 				// Abnormal-true and no longer observed: its absence is the signal.
 			default:
 				out = append(out, prev) // another controller's; leave it alone
@@ -149,3 +149,6 @@ func equalStatus(a, b *plumev1alpha1.AgentStatus) bool {
 	}
 	return reflect.DeepEqual(x, y)
 }
+
+// conditionTypeSource is the file scanned by TestNoConditionTypeIsALiteral.
+const conditionTypeSource = "agent_controller.go"

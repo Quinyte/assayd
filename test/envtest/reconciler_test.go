@@ -104,9 +104,9 @@ func markAvailable(t *testing.T, ns, name string, n int32) {
 	}
 }
 
-func condition(a *plumev1alpha1.Agent, t string) *metav1.Condition {
+func condition(a *plumev1alpha1.Agent, t plumev1alpha1.ConditionType) *metav1.Condition {
 	for i := range a.Status.Conditions {
-		if a.Status.Conditions[i].Type == t {
+		if a.Status.Conditions[i].Type == string(t) {
 			return &a.Status.Conditions[i]
 		}
 	}

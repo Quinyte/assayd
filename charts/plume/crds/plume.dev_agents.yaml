@@ -455,12 +455,13 @@ spec:
                     minLength: 1
                     type: string
                     x-kubernetes-validations:
-                    - message: 'spec.runtime.image must be digest-pinned: <repo>@sha256:<64
+                    - message: 'spec.runtime.image must be a lowercase OCI reference
+                        pinned by a sha256 digest: <registry>[:port]/<repo>[:tag]@sha256:<64
                         lowercase hex>. A tag can be repointed after the revision
                         is gated, so the running code would no longer be the code
                         that passed. Resolve the tag to a digest (docker buildx imagetools
                         inspect, or the digest your CI already publishes).'
-                      rule: self.matches('^[^@]+@sha256:[0-9a-f]{64}$')
+                      rule: self.matches('^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+(:[a-zA-Z0-9._-]+)?@sha256:[0-9a-f]{64}$')
                   port:
                     default: 8080
                     description: Port is the A2A server port.
@@ -666,16 +667,15 @@ spec:
                   Conditions is a map-list keyed by type: the API server then rejects
                   duplicates outright, for every writer rather than only this operator.
 
-                  The TYPE is also a closed enum, enforced here (A51). []metav1.Condition
-                  accepts any string and the condition helpers take a `string`, so
-                  `c.set("PolicyApplyIncompelete", …)` compiled, ran, and left every alert
-                  and CLI consumer watching the correctly-spelled type silent — while the
-                  vocabulary test stayed green, because that test checks the inventory and
-                  not what reaches the API. A closed vocabulary that the API does not close
-                  is a convention.
-
-                  The list is duplicated from the constants above, which is a second place to
-                  be wrong — so TestTheConditionEnumMatchesTheVocabulary compares them.
+                  The type is closed by ConditionType in Go, NOT by CEL here (A52). A CEL
+                  enum was tried and withdrawn: one unrecognised type rejects the ENTIRE
+                  status write, so an operator asserting a condition its installed CRD does
+                  not list loses `phase`, `activeRevisionDigest` and `Ready` for that Agent
+                  and error-loops forever. The chart ships the CRD under `crds/`, which
+                  `helm upgrade` never updates, and half the vocabulary belongs to
+                  components that ship on their own cadence — so the first one to assert its
+                  own condition would take out every Agent it touched. That is NFR-8 with a
+                  wider blast radius than the typo the rule was meant to catch.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -734,11 +734,6 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-                x-kubernetes-validations:
-                - message: status.conditions[].type is a closed vocabulary (design
-                    02 §3.1). An unrecognised type is almost always a typo, and a
-                    typo means the degraded path it was meant to announce is silent.
-                  rule: self.all(c, c.type in ['BudgetEnforcementDegraded','BudgetExhausted','CapabilityUnavailable','CardUnsigned','Degraded','EnvSourceProtectionUnavailable','EnvSourceUnresolved','GatesBypassed','GatesPassed','GatesSkipped','GatewayIncompatible','GovernanceSkipped','IdPUnavailable','IdentityBootstrapIncomplete','IdentityIssued','ImageSignatureUnverified','Killed','KnowledgeBound','LLMFallbackUnavailable','ModelDrifted','OnBehalfOfUnavailable','PolicyApplyIncomplete','PolicyCompileFailed','PolicyInputDrifted','PricingStale','Progressing','Ready','ReceiptsDegraded','Registered','RevisionHashCollision','RevisionMaterialChanged','RevisionMaterialCollision','RevisionMaterialUnavailable','RevisionRecordUnreadable','RevisionRecordUnsupported','SandboxDowngraded','ScratchpadDegraded','TaskStateUnverified'])
               eval:
                 description: |-
                   Eval carries the last gate result. It is a printer column because it answers

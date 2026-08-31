@@ -324,7 +324,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		status.CandidateRevision, status.CandidateRevisionDigest = "", ""
 		// Rolling A -> B -> A leaves A in the superseded list, where a revision
 		// that is currently serving reads as one that was abandoned.
-		status.SupersededCandidates = removeString(status.SupersededCandidates, desired)
+		status.SupersededCandidates = removeString(status.SupersededCandidates, desired+"@"+desiredDigest)
 		status.Phase = plumev1alpha1.PhaseReady
 		conds.set(plumev1alpha1.CondProgressing, metav1.ConditionFalse, "RolloutComplete",
 			fmt.Sprintf("revision %s is the active revision", desired))
@@ -381,12 +381,29 @@ const RevisionDigestAnnotation = "plume.dev/revision-digest"
 // workload name. It is terminal by design: see ensureWorkload.
 type revisionCollisionError struct {
 	name, existing, desired string
+	// role is set when the collision was found in STATUS rather than on a
+	// workload, so the message can say "the active revision …" instead of
+	// rendering a role name into a "workload %s" slot.
+	role string
 }
 
 func (e *revisionCollisionError) Error() string {
+	if e.existing == "(no stamp)" {
+		return fmt.Sprintf("workload %s carries no plume.dev/revision-digest and nothing in status "+
+			"vouches for it, so this operator cannot establish that it created it. Refusing to "+
+			"converge. To recover: delete that Deployment and let the operator recreate it.", e.name)
+	}
+	if e.role != "" {
+		return fmt.Sprintf("the %s revision %s was gated with digest %s and this spec projects to %s: "+
+			"two different projections share one 40-bit revision name. Refusing, because promoting "+
+			"this spec would serve it under the gate result the other one earned. To recover: revert "+
+			"the spec, or change it so it no longer projects to the same name.",
+			e.role, e.name, e.existing, e.desired)
+	}
 	return fmt.Sprintf("workload %s was rendered from revision digest %s and this spec projects to %s: "+
-		"two different revisions share one 40-bit name. Refusing to converge, because rewriting it "+
-		"would serve this spec under the gate result the other revision earned", e.name, e.existing, e.desired)
+		"two different projections share one 40-bit name. Refusing to converge, because rewriting it "+
+		"would serve this spec under the gate result the other revision earned. To recover: delete "+
+		"that Deployment and let the operator recreate it.", e.name, e.existing, e.desired)
 }
 
 // collisionAgainstStatus reports a desired revision whose NAME matches a
@@ -399,7 +416,7 @@ func collisionAgainstStatus(st *plumev1alpha1.AgentStatus, rev, digest string) *
 		{"candidate", st.CandidateRevision, st.CandidateRevisionDigest},
 	} {
 		if r.name == rev && r.dig != "" && r.dig != digest {
-			return &revisionCollisionError{name: r.role + " revision " + r.name, existing: r.dig, desired: digest}
+			return &revisionCollisionError{role: r.role, name: r.name, existing: r.dig, desired: digest}
 		}
 	}
 	return nil
@@ -449,15 +466,18 @@ func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alph
 	case apierrors.IsNotFound(err):
 		err := r.Create(ctx, desired)
 		if apierrors.IsAlreadyExists(err) {
-			// NOT success. Something created this name between the Get above and
-			// this Create — either another reconcile of ours, or a principal with
-			// deployments/create who guessed the name, which is derived from the
-			// Agent name and a public digest. Treating it as success accepted an
-			// object nobody validated, and the availability check then promoted it
-			// on AvailableReplicas alone. Re-read and apply the same invariant as
-			// an existing workload; the next pass converges or reports a collision.
-			return r.ensureWorkload(ctx, agent, rev, digest, status)
+			// Return, do NOT recurse. The client reads Deployments from an informer
+			// cache that does not reflect this Create for some milliseconds, so
+			// Get→NotFound, Create→AlreadyExists is the routine read-after-write
+			// case — and recursing there grew stack depth and API Creates 1:1 with
+			// cache lag, measured at 1500 frames for 1500 stale Gets. A stalled
+			// watch would turn that into a fatal stack overflow of the only control
+			// plane, plus a Create storm on the way down. The reconciler is
+			// level-triggered; controller-runtime requeues with backoff.
+			return fmt.Errorf("workload %s appeared between the read and the create; "+
+				"requeueing to validate it: %w", desired.Name, err)
 		}
+
 		if err != nil {
 			return fmt.Errorf("create workload %s: %w", desired.Name, err)
 		}
@@ -489,11 +509,37 @@ func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alph
 	// whatever spec was current and stamp the result as legitimate. Legacy
 	// identity must never be reconstructed from current spec; that is the
 	// collision payload with an extra step.
+	// Refuse when nothing NON-FORGEABLE vouches for this name/digest pair, and
+	// not merely when the annotation is missing.
+	//
+	// The wider rule was a regression: a principal with only deployments/patch
+	// could strip the stamp AND rewrite the image, and the workload then stayed
+	// terminally refused with the attacker's pods running — where before it
+	// self-healed, because the template rewrite below corrects out-of-band drift.
+	// The sequence r8 BLOCKER 3 describes additionally needs agents/update to
+	// write a colliding spec, and collisionAgainstStatus above already refuses
+	// that before this code runs. So the wider rule protected nothing and traded
+	// a self-correcting drift for a permanent one.
+	//
+	// status is written only by this controller through the status subresource,
+	// so consulting it is not "reconstructing identity from current spec".
+	// The digest comparison here is EQUIVALENT to comparing names alone, and that
+	// is worth stating because a mutation shows it is unpinned. A name that
+	// matches with a DIFFERENT digest was already refused by
+	// collisionAgainstStatus at the top of Reconcile, so by the time this runs a
+	// matching name implies a matching digest — unless status held a name with no
+	// digest, which TestNameAndDigestAreAlwaysWrittenTogether rules out. It is
+	// written on the digest anyway so that every provenance test in this file
+	// reads the same way and none has to be re-derived as safe.
+	vouched := (status.ActiveRevision == rev && status.ActiveRevisionDigest == digest) ||
+		(status.CandidateRevision == rev && status.CandidateRevisionDigest == digest)
 	existingDigest, stamped := existing.Annotations[RevisionDigestAnnotation]
-	if !stamped || existingDigest != digest {
+	switch {
+	case stamped && existingDigest != digest:
 		return &revisionCollisionError{name: existing.Name, existing: existingDigest, desired: digest}
+	case !stamped && !vouched:
+		return &revisionCollisionError{name: existing.Name, existing: "(no stamp)", desired: digest}
 	}
-	_ = status
 
 	// Reconcile the WHOLE template, not just replicas. Two reasons, and the
 	// second is the important one:

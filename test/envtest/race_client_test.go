@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
@@ -70,8 +71,21 @@ func TestAnAlreadyExistsRaceDoesNotAcceptAnUnvalidatedWorkload(t *testing.T) {
 		Scheme:             scheme,
 		EvalSuiteInstalled: func() bool { return false },
 	}
-	reconcileOnce(t, r, a) // Get says NotFound -> Create -> AlreadyExists
-	reconcileOnce(t, r, a)
+	// The hidden Get lands on whichever pass first reaches ensureWorkload — the
+	// first reconcile returns early to add a finalizer — so this does not depend
+	// on a pass number. What must never happen is a SILENT success that leaves
+	// the squatting object accepted.
+	sawError := false
+	for i := 0; i < 4; i++ {
+		if _, err := r.Reconcile(context.Background(),
+			ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)}); err != nil {
+			sawError = true
+		}
+	}
+	if !sawError {
+		t.Error("the AlreadyExists race never surfaced: the object that appeared between the " +
+			"read and the create was accepted without being validated")
+	}
 
 	var after plumev1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
