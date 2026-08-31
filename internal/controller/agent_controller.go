@@ -151,7 +151,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// content is part of the identity, so a spec alone cannot produce one — which
 	// is the point: an editor changing a referenced ConfigMap must mint a
 	// candidate, not serve new behaviour under the old revision's gate result.
-	resolved, unresolved, err := r.resolveEnvSources(ctx, &agent)
+	resolved, buffers, unresolved, err := r.resolveEnvSources(ctx, &agent)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -218,7 +218,24 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		status.CandidateRevision, status.CandidateRevisionDigest = "", ""
 	}
 
-	if err := r.ensureWorkload(ctx, &agent, desired, desiredDigest, status); err != nil {
+	// A35: create the revision's own immutable copies BEFORE the workload, and
+	// point the workload at them. Order matters — publishing a workload that
+	// reads the user's object, even briefly, is the window this closes.
+	material, merr := r.ensureRevisionMaterial(ctx, &agent, desired, desiredDigest, buffers)
+	if merr != nil {
+		if me := (*materialError)(nil); errors.As(merr, &me) {
+			conds.set(plumev1alpha1.CondRevisionMaterialUnavailable, metav1.ConditionTrue,
+				"MaterialInvalid", me.Error())
+			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "RevisionMaterialUnavailable", me.Error())
+			status.Phase = plumev1alpha1.PhaseDegraded
+			status.Conditions = conds.merge(agent.Status.Conditions)
+			status.ObservedGeneration = agent.Generation
+			return ctrl.Result{}, r.writeStatus(ctx, &agent, status)
+		}
+		return ctrl.Result{}, merr
+	}
+
+	if err := r.ensureWorkload(ctx, &agent, desired, desiredDigest, status, material); err != nil {
 		if collision := (*revisionCollisionError)(nil); errors.As(err, &collision) {
 			return ctrl.Result{}, r.reportCollision(ctx, &agent, status, conds, collision)
 		}
@@ -476,12 +493,15 @@ func (r *AgentReconciler) revisionAvailable(ctx context.Context, agent *plumev1a
 // two are the same fact to an Agent — its behaviour is not knowable — and both
 // must stop the revision rather than produce a partial identity.
 func (r *AgentReconciler) resolveEnvSources(ctx context.Context, agent *plumev1alpha1.Agent) (
-	revision.Resolved, []revision.SourceRef, error) {
+	revision.Resolved, map[revision.SourceRef]*sourceBuffer, []revision.SourceRef, error) {
 	refs := revision.EnvSources(agent.Spec)
 	if len(refs) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	out := revision.Resolved{}
+	// ONE read fills both. A35's copies are created from these exact bytes, never
+	// from a second read (A39).
+	buffers := map[revision.SourceRef]*sourceBuffer{}
 	var unresolved []revision.SourceRef
 	for _, ref := range refs {
 		key := types.NamespacedName{Namespace: agent.Namespace, Name: ref.Name}
@@ -493,9 +513,11 @@ func (r *AgentReconciler) resolveEnvSources(ctx context.Context, agent *plumev1a
 					unresolved = append(unresolved, ref)
 					continue
 				}
-				return nil, nil, fmt.Errorf("read %s for %s: %w", ref, agent.Name, err)
+				return nil, nil, nil, fmt.Errorf("read %s for %s: %w", ref, agent.Name, err)
 			}
-			out[ref] = revision.ContentDigest(cm.Data, cm.BinaryData)
+			d := revision.ContentDigest(cm.Data, cm.BinaryData)
+			out[ref] = d
+			buffers[ref] = &sourceBuffer{kind: ref.Kind, data: cm.Data, binary: cm.BinaryData, digest: d}
 		case "Secret":
 			var sec corev1.Secret
 			if err := r.Get(ctx, key, &sec); err != nil {
@@ -503,14 +525,16 @@ func (r *AgentReconciler) resolveEnvSources(ctx context.Context, agent *plumev1a
 					unresolved = append(unresolved, ref)
 					continue
 				}
-				return nil, nil, fmt.Errorf("read %s for %s: %w", ref, agent.Name, err)
+				return nil, nil, nil, fmt.Errorf("read %s for %s: %w", ref, agent.Name, err)
 			}
 			// StringData is a write-only convenience the API server folds into
 			// Data, so reading Data alone is complete.
-			out[ref] = revision.ContentDigest(nil, sec.Data)
+			d := revision.ContentDigest(nil, sec.Data)
+			out[ref] = d
+			buffers[ref] = &sourceBuffer{kind: ref.Kind, binary: sec.Data, digest: d}
 		}
 	}
-	return out, unresolved, nil
+	return out, buffers, unresolved, nil
 }
 
 // reportUnresolvedSources is the A20 failure path: no revision, no workload, and
@@ -541,8 +565,8 @@ func (r *AgentReconciler) reportUnresolvedSources(ctx context.Context, agent *pl
 }
 
 func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alpha1.Agent, rev, digest string,
-	status *plumev1alpha1.AgentStatus) error {
-	desired := r.deploymentFor(agent, rev)
+	status *plumev1alpha1.AgentStatus, material map[revision.SourceRef]string) error {
+	desired := r.deploymentFor(agent, rev, material)
 	if desired.Annotations == nil {
 		desired.Annotations = map[string]string{}
 	}
@@ -705,7 +729,8 @@ func podSpecEquivalent(existing, desired corev1.PodSpec) bool {
 // deploymentFor renders one revision's workload. Design 02 §6: non-root,
 // read-only rootfs, seccomp — applied to every agent, not only sandboxed ones,
 // since the sandbox fallback path must be no weaker than the default path.
-func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, rev string) *appsv1.Deployment {
+func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, rev string,
+	material map[revision.SourceRef]string) *appsv1.Deployment {
 	rt := agent.Spec.Runtime
 	labels := map[string]string{
 		LabelAgent:    agent.Name,
@@ -758,8 +783,8 @@ func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, rev string) 
 						Name:      "agent",
 						Image:     rt.Image,
 						Resources: rt.Resources,
-						Env:       rt.Env,
-						EnvFrom:   rt.EnvFrom,
+						Env:       rewriteEnv(rt.Env, material),
+						EnvFrom:   rewriteEnvFrom(rt.EnvFrom, material),
 						Ports: []corev1.ContainerPort{{
 							Name:          "a2a",
 							ContainerPort: port(rt),

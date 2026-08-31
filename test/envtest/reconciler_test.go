@@ -512,3 +512,31 @@ func revisionOf(t *testing.T, ns string, spec plumev1alpha1.AgentSpec) string {
 	}
 	return h
 }
+
+// digestOf is revisionOf's full-width counterpart.
+func digestOf(t *testing.T, ns string, spec plumev1alpha1.AgentSpec) string {
+	t.Helper()
+	resolved := revision.Resolved{}
+	for _, ref := range revision.EnvSources(spec) {
+		key := types.NamespacedName{Namespace: ns, Name: ref.Name}
+		switch ref.Kind {
+		case "ConfigMap":
+			var cm corev1.ConfigMap
+			if err := k8s.Get(context.Background(), key, &cm); err != nil {
+				t.Fatalf("resolve %s: %v", ref, err)
+			}
+			resolved[ref] = revision.ContentDigest(cm.Data, cm.BinaryData)
+		case "Secret":
+			var sec corev1.Secret
+			if err := k8s.Get(context.Background(), key, &sec); err != nil {
+				t.Fatalf("resolve %s: %v", ref, err)
+			}
+			resolved[ref] = revision.ContentDigest(nil, sec.Data)
+		}
+	}
+	d, err := revision.Digest(spec, resolved)
+	if err != nil {
+		t.Fatalf("digest: %v", err)
+	}
+	return d
+}
