@@ -271,3 +271,34 @@ func conditionsDeclaredByDesign(t *testing.T) []string {
 	}
 	return out
 }
+
+// The CEL enum on status.conditions[].type duplicates the constants, which is a
+// second place to be wrong — so it is compared, not trusted. Every other
+// vocabulary check in this file derives one side from an authoritative artifact
+// for exactly this reason.
+func TestTheConditionEnumMatchesTheVocabulary(t *testing.T) {
+	b, err := os.ReadFile("agent_types.go")
+	if err != nil {
+		t.Fatalf("cannot read agent_types.go: %v", err)
+	}
+	m := regexp.MustCompile(`rule="self\.all\(c, c\.type in \[(.*?)\]\)"`).FindStringSubmatch(string(b))
+	if m == nil {
+		t.Fatal("no condition-type CEL enum on status.conditions. If the rule moved, move this " +
+			"check with it; deleting it makes the vocabulary a convention again.")
+	}
+	inEnum := map[string]bool{}
+	for _, q := range regexp.MustCompile(`'(\w+)'`).FindAllStringSubmatch(m[1], -1) {
+		inEnum[q[1]] = true
+	}
+	declared := conditionConstantsInSource(t)
+	for _, c := range declared {
+		if !inEnum[c] {
+			t.Errorf("%q is a declared condition and the CEL enum omits it, so the API server "+
+				"would reject a status write this operator legitimately makes", c)
+		}
+	}
+	if len(inEnum) != len(declared) {
+		t.Errorf("the enum has %d entries and %d conditions are declared; the extra ones are "+
+			"names nothing can produce", len(inEnum), len(declared))
+	}
+}

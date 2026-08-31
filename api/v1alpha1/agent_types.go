@@ -379,8 +379,20 @@ type AgentStatus struct {
 	Eval *EvalStatus `json:"eval,omitempty"`
 	// Conditions is a map-list keyed by type: the API server then rejects
 	// duplicates outright, for every writer rather than only this operator.
+	//
+	// The TYPE is also a closed enum, enforced here (A51). []metav1.Condition
+	// accepts any string and the condition helpers take a `string`, so
+	// `c.set("PolicyApplyIncompelete", …)` compiled, ran, and left every alert
+	// and CLI consumer watching the correctly-spelled type silent — while the
+	// vocabulary test stayed green, because that test checks the inventory and
+	// not what reaches the API. A closed vocabulary that the API does not close
+	// is a convention.
+	//
+	// The list is duplicated from the constants above, which is a second place to
+	// be wrong — so TestTheConditionEnumMatchesTheVocabulary compares them.
 	// +listType=map
 	// +listMapKey=type
+	// +kubebuilder:validation:XValidation:rule="self.all(c, c.type in ['BudgetEnforcementDegraded','BudgetExhausted','CapabilityUnavailable','CardUnsigned','Degraded','EnvSourceProtectionUnavailable','EnvSourceUnresolved','GatesBypassed','GatesPassed','GatesSkipped','GatewayIncompatible','GovernanceSkipped','IdPUnavailable','IdentityBootstrapIncomplete','IdentityIssued','ImageSignatureUnverified','Killed','KnowledgeBound','LLMFallbackUnavailable','ModelDrifted','OnBehalfOfUnavailable','PolicyApplyIncomplete','PolicyCompileFailed','PolicyInputDrifted','PricingStale','Progressing','Ready','ReceiptsDegraded','Registered','RevisionHashCollision','RevisionMaterialChanged','RevisionMaterialCollision','RevisionMaterialUnavailable','RevisionRecordUnreadable','RevisionRecordUnsupported','SandboxDowngraded','ScratchpadDegraded','TaskStateUnverified'])",message="status.conditions[].type is a closed vocabulary (design 02 §3.1). An unrecognised type is almost always a typo, and a typo means the degraded path it was meant to announce is silent."
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// +optional

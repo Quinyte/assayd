@@ -665,6 +665,17 @@ spec:
                 description: |-
                   Conditions is a map-list keyed by type: the API server then rejects
                   duplicates outright, for every writer rather than only this operator.
+
+                  The TYPE is also a closed enum, enforced here (A51). []metav1.Condition
+                  accepts any string and the condition helpers take a `string`, so
+                  `c.set("PolicyApplyIncompelete", …)` compiled, ran, and left every alert
+                  and CLI consumer watching the correctly-spelled type silent — while the
+                  vocabulary test stayed green, because that test checks the inventory and
+                  not what reaches the API. A closed vocabulary that the API does not close
+                  is a convention.
+
+                  The list is duplicated from the constants above, which is a second place to
+                  be wrong — so TestTheConditionEnumMatchesTheVocabulary compares them.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -723,6 +734,11 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+                x-kubernetes-validations:
+                - message: status.conditions[].type is a closed vocabulary (design
+                    02 §3.1). An unrecognised type is almost always a typo, and a
+                    typo means the degraded path it was meant to announce is silent.
+                  rule: self.all(c, c.type in ['BudgetEnforcementDegraded','BudgetExhausted','CapabilityUnavailable','CardUnsigned','Degraded','EnvSourceProtectionUnavailable','EnvSourceUnresolved','GatesBypassed','GatesPassed','GatesSkipped','GatewayIncompatible','GovernanceSkipped','IdPUnavailable','IdentityBootstrapIncomplete','IdentityIssued','ImageSignatureUnverified','Killed','KnowledgeBound','LLMFallbackUnavailable','ModelDrifted','OnBehalfOfUnavailable','PolicyApplyIncomplete','PolicyCompileFailed','PolicyInputDrifted','PricingStale','Progressing','Ready','ReceiptsDegraded','Registered','RevisionHashCollision','RevisionMaterialChanged','RevisionMaterialCollision','RevisionMaterialUnavailable','RevisionRecordUnreadable','RevisionRecordUnsupported','SandboxDowngraded','ScratchpadDegraded','TaskStateUnverified'])
               eval:
                 description: |-
                   Eval carries the last gate result. It is a printer column because it answers

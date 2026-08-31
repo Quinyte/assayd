@@ -138,7 +138,7 @@ func TestTheGoldenSpecPopulatesEveryLeaf(t *testing.T) {
 	// one fixture cover every leaf would be unsatisfiable and the check would end
 	// up deleted instead of believed.
 	fixtures := []plumev1alpha1.AgentSpec{goldenSpec(), goldenExternalSpec()}
-	for _, l := range leaves(reflect.TypeOf(plumev1alpha1.AgentSpec{}), "spec", nil) {
+	for _, l := range Leaves(reflect.TypeOf(plumev1alpha1.AgentSpec{}), "spec", nil) {
 		covered := false
 		for _, spec := range fixtures {
 			if v, ok := readLeaf(reflect.ValueOf(spec), l); ok && !v.IsZero() {
@@ -148,7 +148,7 @@ func TestTheGoldenSpecPopulatesEveryLeaf(t *testing.T) {
 		}
 		if !covered {
 			t.Errorf("no golden fixture sets %s, so a change to how that leaf is encoded "+
-				"does not move a golden digest and would land unreviewed", l.path)
+				"does not move a golden digest and would land unreviewed", l.Path)
 		}
 	}
 }
@@ -181,14 +181,14 @@ func TestGoldenExternalDigest(t *testing.T) {
 // EnvVar populate every mutually-exclusive union arm, which is unsatisfiable —
 // so the fixture would have been declared incomplete forever and the check
 // would have been deleted rather than believed.
-func readLeaf(v reflect.Value, l leaf) (reflect.Value, bool) {
+func readLeaf(v reflect.Value, l Leaf) (reflect.Value, bool) {
 	for v.Kind() == reflect.Ptr {
 		if v.IsNil() {
 			return reflect.Value{}, false
 		}
 		v = v.Elem()
 	}
-	if len(l.chain) == 0 {
+	if len(l.Chain) == 0 {
 		return v, !v.IsZero()
 	}
 	if v.Kind() == reflect.Slice {
@@ -199,9 +199,9 @@ func readLeaf(v reflect.Value, l leaf) (reflect.Value, bool) {
 		}
 		return reflect.Value{}, false
 	}
-	f := v.Field(l.chain[0])
-	rest := leaf{path: l.path, chain: l.chain[1:], typ: l.typ}
-	if len(rest.chain) == 0 {
+	f := v.Field(l.Chain[0])
+	rest := Leaf{Path: l.Path, Chain: l.Chain[1:], Typ: l.Typ}
+	if len(rest.Chain) == 0 {
 		for f.Kind() == reflect.Ptr {
 			if f.IsNil() {
 				return reflect.Value{}, false

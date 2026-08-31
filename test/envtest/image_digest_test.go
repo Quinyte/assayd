@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
 )
@@ -87,5 +88,47 @@ func TestTheDigestRejectionNamesTheFix(t *testing.T) {
 			t.Errorf("the rejection does not mention %q, so it names the violation without "+
 				"naming the fix:\n%s", want, err.Error())
 		}
+	}
+}
+
+// Codex r8 MAJOR 1. []metav1.Condition accepts any string and the condition
+// helpers take a `string`, so a typo compiled, ran, and left every alert and CLI
+// consumer watching the correctly-spelled type silent — while the vocabulary
+// test stayed green, because that test checks an inventory and not what reaches
+// the API. This is the enforcement.
+func TestAnUnknownConditionTypeIsRejectedByTheAPI(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "condenum", nil)
+
+	for _, tc := range []struct {
+		name, condType string
+		admit          bool
+	}{
+		{"a declared condition", plumev1alpha1.CondReady, true},
+		{"a plausible typo", "PolicyApplyIncompelete", false},
+		{"an invented type", "TotallyWrongName", false},
+		{"right name, wrong case", "ready", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var live plumev1alpha1.Agent
+			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
+				t.Fatalf("get agent: %v", err)
+			}
+			live.Status.Conditions = []metav1.Condition{{
+				Type: tc.condType, Status: metav1.ConditionTrue, Reason: "Test",
+				Message: "x", LastTransitionTime: metav1.Now(), ObservedGeneration: live.Generation,
+			}}
+			err := k8s.Status().Update(context.Background(), &live)
+			switch {
+			case tc.admit && err != nil:
+				t.Errorf("a declared condition was rejected, so the operator cannot write its own "+
+					"vocabulary: %v", err)
+			case !tc.admit && err == nil:
+				t.Errorf("%q was accepted; a consumer watching the correct spelling stays silent "+
+					"through the degradation it was meant to announce", tc.condType)
+			case !tc.admit && err != nil && !strings.Contains(err.Error(), "closed vocabulary"):
+				t.Errorf("rejected, but not by the vocabulary rule: %v", err)
+			}
+		})
 	}
 }
