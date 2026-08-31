@@ -3,6 +3,7 @@ package envtest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -277,7 +278,10 @@ func TestNewGenerationSupersedesTheInFlightCandidate(t *testing.T) {
 	}
 
 	got := settle(t, r, a)
-	if !contains(got.Status.SupersededCandidates, first) {
+	// The entry is `<name>@<digest>` (A50): a bare name cannot say WHICH revision
+	// was abandoned, since two colliding projections share it. Assert the prefix
+	// and that a digest is actually present.
+	if !containsPrefix(got.Status.SupersededCandidates, first+"@") {
 		t.Errorf("superseded candidate %q was not recorded in %v — the transition was silent",
 			first, got.Status.SupersededCandidates)
 	}
@@ -457,6 +461,18 @@ func TestExternalAgentIsHeldNotFakedReady(t *testing.T) {
 func contains(xs []string, s string) bool {
 	for _, x := range xs {
 		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// containsPrefix is the audit-entry form of contains: entries are
+// `<name>@<digest>`, so a test asserting on the name alone would also pass on an
+// entry naming a different revision that happens to share the 40-bit name.
+func containsPrefix(xs []string, prefix string) bool {
+	for _, x := range xs {
+		if strings.HasPrefix(x, prefix) && len(x) > len(prefix) {
 			return true
 		}
 	}

@@ -359,6 +359,11 @@ type AgentStatus struct {
 	// transition is auditable rather than silent. It is capped: the audit trail
 	// belongs in events and receipts, which are durable, whereas an unbounded
 	// status list grows an object nobody prunes.
+	//
+	// Entries are `<name>@<digest>` (A50). A bare name is not an audit record of
+	// WHICH revision was abandoned — two colliding projections share the name,
+	// so the trail would be unable to distinguish the one that was superseded
+	// from the one that superseded it.
 	// +kubebuilder:validation:MaxItems=10
 	// +optional
 	SupersededCandidates []string `json:"supersededCandidates,omitempty"`
@@ -384,6 +389,10 @@ type AgentStatus struct {
 
 type CardStatus struct {
 	Revision string `json:"revision"`
+	// RevisionDigest identifies which revision this card belongs to (A50); the
+	// field above only names it.
+	// +optional
+	RevisionDigest string `json:"revisionDigest,omitempty"`
 	// +optional
 	Name string `json:"name,omitempty"`
 	// +optional
@@ -409,6 +418,13 @@ type EvalStatus struct {
 	// Revision names what was gated, so a stale score is recognisable as stale.
 	// +optional
 	Revision string `json:"revision,omitempty"`
+	// RevisionDigest identifies it (A50). The name is 40 bits and a chosen
+	// collision against it costs about a second, so a gate controller comparing
+	// evalStatus.revision alone can promote a DIFFERENT projection on the verdict
+	// this one earned — a decision made before any workload is inspected, so the
+	// workload-level collision guard never sees it.
+	// +optional
+	RevisionDigest string `json:"revisionDigest,omitempty"`
 	// +optional
 	At *metav1.Time `json:"at,omitempty"`
 }

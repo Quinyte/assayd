@@ -190,7 +190,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// candidate is ever in flight; the abandoned one is recorded so the
 	// transition is auditable rather than silent.
 	if status.CandidateRevision != "" && status.CandidateRevisionDigest != desiredDigest {
-		status.SupersededCandidates = appendSuperseded(status.SupersededCandidates, status.CandidateRevision)
+		status.SupersededCandidates = appendSuperseded(status.SupersededCandidates,
+			status.CandidateRevision+"@"+status.CandidateRevisionDigest)
 		logger.Info("superseding in-flight candidate",
 			"superseded", status.CandidateRevision, "candidate", desired)
 		status.CandidateRevision, status.CandidateRevisionDigest = "", ""
