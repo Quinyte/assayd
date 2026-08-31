@@ -188,26 +188,322 @@ spec:
                   against this.
                 properties:
                   egressAllowlist:
-                    description: EgressAllowlist may be pinned by a compliance profile
-                      (ADR-0014).
+                    description: |-
+                      EgressAllowlist may be pinned by a compliance profile (ADR-0014). It is the
+                      permitted set; Providers must be a subset of it.
                     items:
-                      type: string
+                      description: |-
+                        LLMAllowEntry is an endpoint identity with `models` in place of `model`: the
+                        permitted set, which requested providers must be a subset of.
+                      properties:
+                        arm:
+                          description: |-
+                            LLMArm discriminates an endpoint identity. Design 02 A24: an endpoint is
+                            `{arm, that arm's instance fields, model}` — NOT `(provider, model)`, which is
+                            non-injective. Two Azure OpenAI resources share the arm and a model name while
+                            differing in endpoint, deployment, region and BAA posture, so a flat string
+                            cannot tell them apart: the compiler could not prove requested-is-a-subset-of-
+                            permitted, design 20 could not target the right fallback, and price and drift
+                            attribution had to guess (r8 BLOCKER 6).
+                          enum:
+                          - anthropic
+                          - openai
+                          - azureopenai
+                          - vertexai
+                          - bedrock
+                          - custom
+                          type: string
+                        azureopenai:
+                          description: |-
+                            AzureOpenAIInstance is what distinguishes two Azure resources. Design 03
+                            §3.4.1.1: this arm carries no `model` field, and at `apiVersion: v1` the model
+                            may be supplied by the request — which is why a models-narrowed allowlist
+                            entry is rejected for it unless a non-v1 deploymentName pins the identity.
+                          properties:
+                            apiVersion:
+                              type: string
+                            deploymentName:
+                              type: string
+                            endpoint:
+                              minLength: 1
+                              type: string
+                          required:
+                          - endpoint
+                          type: object
+                        bedrock:
+                          properties:
+                            guardrail:
+                              type: string
+                            region:
+                              minLength: 1
+                              type: string
+                          required:
+                          - region
+                          type: object
+                        custom:
+                          properties:
+                            host:
+                              minLength: 1
+                              type: string
+                            pathPrefix:
+                              type: string
+                            port:
+                              format: int32
+                              type: integer
+                          required:
+                          - host
+                          type: object
+                        models:
+                          description: Models narrows the entry. Absent means every
+                            model this identity serves.
+                          items:
+                            type: string
+                          type: array
+                        vertexai:
+                          properties:
+                            projectId:
+                              minLength: 1
+                              type: string
+                            region:
+                              minLength: 1
+                              type: string
+                          required:
+                          - projectId
+                          - region
+                          type: object
+                      required:
+                      - arm
+                      type: object
+                      x-kubernetes-validations:
+                      - message: arm azureopenai requires an azureopenai instance
+                          block; an arm-level entry names every Azure resource in
+                          the tenant
+                        rule: (self.arm == 'azureopenai') == has(self.azureopenai)
+                      - message: arm vertexai requires a vertexai instance block
+                        rule: (self.arm == 'vertexai') == has(self.vertexai)
+                      - message: arm bedrock requires a bedrock instance block
+                        rule: (self.arm == 'bedrock') == has(self.bedrock)
+                      - message: arm custom requires a custom instance block
+                        rule: (self.arm == 'custom') == has(self.custom)
+                      - message: 'a models-narrowed entry is not enforceable on azureopenai
+                          unless azureopenai.deploymentName pins the identity: at
+                          apiVersion v1 the model may be supplied by the request,
+                          so nothing in the emitted provider block constrains it (design
+                          03 §3.4.1.1, A19)'
+                        rule: self.arm != 'azureopenai' || !has(self.models) || (has(self.azureopenai)
+                          && has(self.azureopenai.deploymentName))
                     type: array
                   fallback:
-                    description: Fallback is the ModelDrifted remediation target (design
-                      20).
+                    description: |-
+                      Fallback is the ModelDrifted remediation target (design 20). It is a full
+                      endpoint identity because design 20 A2 keys drift on one: an arm plus a
+                      model name would let a canary against a healthy deployment clear drift on
+                      the one that was actually drifting.
                     properties:
+                      arm:
+                        description: |-
+                          LLMArm discriminates an endpoint identity. Design 02 A24: an endpoint is
+                          `{arm, that arm's instance fields, model}` — NOT `(provider, model)`, which is
+                          non-injective. Two Azure OpenAI resources share the arm and a model name while
+                          differing in endpoint, deployment, region and BAA posture, so a flat string
+                          cannot tell them apart: the compiler could not prove requested-is-a-subset-of-
+                          permitted, design 20 could not target the right fallback, and price and drift
+                          attribution had to guess (r8 BLOCKER 6).
+                        enum:
+                        - anthropic
+                        - openai
+                        - azureopenai
+                        - vertexai
+                        - bedrock
+                        - custom
+                        type: string
+                      azureopenai:
+                        description: |-
+                          AzureOpenAIInstance is what distinguishes two Azure resources. Design 03
+                          §3.4.1.1: this arm carries no `model` field, and at `apiVersion: v1` the model
+                          may be supplied by the request — which is why a models-narrowed allowlist
+                          entry is rejected for it unless a non-v1 deploymentName pins the identity.
+                        properties:
+                          apiVersion:
+                            type: string
+                          deploymentName:
+                            type: string
+                          endpoint:
+                            minLength: 1
+                            type: string
+                        required:
+                        - endpoint
+                        type: object
+                      bedrock:
+                        properties:
+                          guardrail:
+                            type: string
+                          region:
+                            minLength: 1
+                            type: string
+                        required:
+                        - region
+                        type: object
+                      custom:
+                        properties:
+                          host:
+                            minLength: 1
+                            type: string
+                          pathPrefix:
+                            type: string
+                          port:
+                            format: int32
+                            type: integer
+                        required:
+                        - host
+                        type: object
                       model:
+                        description: |-
+                          Model is carried by anthropic, openai, vertexai, bedrock and custom.
+                          azureopenai does not have one — see the CEL rule above.
                         type: string
-                      provider:
-                        type: string
+                      vertexai:
+                        properties:
+                          projectId:
+                            minLength: 1
+                            type: string
+                          region:
+                            minLength: 1
+                            type: string
+                        required:
+                        - projectId
+                        - region
+                        type: object
                     required:
-                    - model
-                    - provider
+                    - arm
                     type: object
+                    x-kubernetes-validations:
+                    - message: 'arm azureopenai requires spec.llm…azureopenai (endpoint,
+                        and deploymentName where the model is pinned), and no other
+                        arm may set it: two Azure resources share the arm and a model
+                        name while differing in endpoint, deployment and BAA posture'
+                      rule: (self.arm == 'azureopenai') == has(self.azureopenai)
+                    - message: arm vertexai requires spec.llm…vertexai (projectId,
+                        region), and no other arm may set it
+                      rule: (self.arm == 'vertexai') == has(self.vertexai)
+                    - message: arm bedrock requires spec.llm…bedrock (region), and
+                        no other arm may set it
+                      rule: (self.arm == 'bedrock') == has(self.bedrock)
+                    - message: arm custom requires spec.llm…custom (host), and no
+                        other arm may set it
+                      rule: (self.arm == 'custom') == has(self.custom)
+                    - message: arm azureopenai carries no model field; the deployment
+                        is the identity (design 03 §3.4.1.1). Set azureopenai.deploymentName
+                        instead.
+                      rule: self.arm != 'azureopenai' || !has(self.model)
                   providers:
+                    description: Providers are endpoint IDENTITIES, not strings (A53).
                     items:
-                      type: string
+                      description: |-
+                        LLMEndpoint is one endpoint identity: an arm, that arm's instance fields, and
+                        a model where the arm carries one.
+
+                        The instance block must match the arm, or the identity is not an identity —
+                        an azureopenai entry with no instance names every Azure resource in the
+                        tenant, which is the collapse this type exists to prevent.
+                      properties:
+                        arm:
+                          description: |-
+                            LLMArm discriminates an endpoint identity. Design 02 A24: an endpoint is
+                            `{arm, that arm's instance fields, model}` — NOT `(provider, model)`, which is
+                            non-injective. Two Azure OpenAI resources share the arm and a model name while
+                            differing in endpoint, deployment, region and BAA posture, so a flat string
+                            cannot tell them apart: the compiler could not prove requested-is-a-subset-of-
+                            permitted, design 20 could not target the right fallback, and price and drift
+                            attribution had to guess (r8 BLOCKER 6).
+                          enum:
+                          - anthropic
+                          - openai
+                          - azureopenai
+                          - vertexai
+                          - bedrock
+                          - custom
+                          type: string
+                        azureopenai:
+                          description: |-
+                            AzureOpenAIInstance is what distinguishes two Azure resources. Design 03
+                            §3.4.1.1: this arm carries no `model` field, and at `apiVersion: v1` the model
+                            may be supplied by the request — which is why a models-narrowed allowlist
+                            entry is rejected for it unless a non-v1 deploymentName pins the identity.
+                          properties:
+                            apiVersion:
+                              type: string
+                            deploymentName:
+                              type: string
+                            endpoint:
+                              minLength: 1
+                              type: string
+                          required:
+                          - endpoint
+                          type: object
+                        bedrock:
+                          properties:
+                            guardrail:
+                              type: string
+                            region:
+                              minLength: 1
+                              type: string
+                          required:
+                          - region
+                          type: object
+                        custom:
+                          properties:
+                            host:
+                              minLength: 1
+                              type: string
+                            pathPrefix:
+                              type: string
+                            port:
+                              format: int32
+                              type: integer
+                          required:
+                          - host
+                          type: object
+                        model:
+                          description: |-
+                            Model is carried by anthropic, openai, vertexai, bedrock and custom.
+                            azureopenai does not have one — see the CEL rule above.
+                          type: string
+                        vertexai:
+                          properties:
+                            projectId:
+                              minLength: 1
+                              type: string
+                            region:
+                              minLength: 1
+                              type: string
+                          required:
+                          - projectId
+                          - region
+                          type: object
+                      required:
+                      - arm
+                      type: object
+                      x-kubernetes-validations:
+                      - message: 'arm azureopenai requires spec.llm…azureopenai (endpoint,
+                          and deploymentName where the model is pinned), and no other
+                          arm may set it: two Azure resources share the arm and a
+                          model name while differing in endpoint, deployment and BAA
+                          posture'
+                        rule: (self.arm == 'azureopenai') == has(self.azureopenai)
+                      - message: arm vertexai requires spec.llm…vertexai (projectId,
+                          region), and no other arm may set it
+                        rule: (self.arm == 'vertexai') == has(self.vertexai)
+                      - message: arm bedrock requires spec.llm…bedrock (region), and
+                          no other arm may set it
+                        rule: (self.arm == 'bedrock') == has(self.bedrock)
+                      - message: arm custom requires spec.llm…custom (host), and no
+                          other arm may set it
+                        rule: (self.arm == 'custom') == has(self.custom)
+                      - message: arm azureopenai carries no model field; the deployment
+                          is the identity (design 03 §3.4.1.1). Set azureopenai.deploymentName
+                          instead.
+                        rule: self.arm != 'azureopenai' || !has(self.model)
                     type: array
                 type: object
               loop:

@@ -183,20 +183,124 @@ type ToolBinding struct {
 	RequiresApproval bool `json:"requiresApproval,omitempty"`
 }
 
-type LLMSpec struct {
+// LLMArm discriminates an endpoint identity. Design 02 A24: an endpoint is
+// `{arm, that arm's instance fields, model}` — NOT `(provider, model)`, which is
+// non-injective. Two Azure OpenAI resources share the arm and a model name while
+// differing in endpoint, deployment, region and BAA posture, so a flat string
+// cannot tell them apart: the compiler could not prove requested-is-a-subset-of-
+// permitted, design 20 could not target the right fallback, and price and drift
+// attribution had to guess (r8 BLOCKER 6).
+// +kubebuilder:validation:Enum=anthropic;openai;azureopenai;vertexai;bedrock;custom
+type LLMArm string
+
+const (
+	ArmAnthropic   LLMArm = "anthropic"
+	ArmOpenAI      LLMArm = "openai"
+	ArmAzureOpenAI LLMArm = "azureopenai"
+	ArmVertexAI    LLMArm = "vertexai"
+	ArmBedrock     LLMArm = "bedrock"
+	ArmCustom      LLMArm = "custom"
+)
+
+// AzureOpenAIInstance is what distinguishes two Azure resources. Design 03
+// §3.4.1.1: this arm carries no `model` field, and at `apiVersion: v1` the model
+// may be supplied by the request — which is why a models-narrowed allowlist
+// entry is rejected for it unless a non-v1 deploymentName pins the identity.
+type AzureOpenAIInstance struct {
+	// +kubebuilder:validation:MinLength=1
+	Endpoint string `json:"endpoint"`
 	// +optional
-	Providers []string `json:"providers,omitempty"`
-	// EgressAllowlist may be pinned by a compliance profile (ADR-0014).
+	DeploymentName string `json:"deploymentName,omitempty"`
 	// +optional
-	EgressAllowlist []string `json:"egressAllowlist,omitempty"`
-	// Fallback is the ModelDrifted remediation target (design 20).
-	// +optional
-	Fallback *ModelRef `json:"fallback,omitempty"`
+	APIVersion string `json:"apiVersion,omitempty"`
 }
 
-type ModelRef struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+type VertexAIInstance struct {
+	// +kubebuilder:validation:MinLength=1
+	ProjectID string `json:"projectId"`
+	// +kubebuilder:validation:MinLength=1
+	Region string `json:"region"`
+}
+
+type BedrockInstance struct {
+	// +kubebuilder:validation:MinLength=1
+	Region string `json:"region"`
+	// +optional
+	Guardrail string `json:"guardrail,omitempty"`
+}
+
+type CustomInstance struct {
+	// +kubebuilder:validation:MinLength=1
+	Host string `json:"host"`
+	// +optional
+	Port int32 `json:"port,omitempty"`
+	// +optional
+	PathPrefix string `json:"pathPrefix,omitempty"`
+}
+
+// LLMEndpoint is one endpoint identity: an arm, that arm's instance fields, and
+// a model where the arm carries one.
+//
+// The instance block must match the arm, or the identity is not an identity —
+// an azureopenai entry with no instance names every Azure resource in the
+// tenant, which is the collapse this type exists to prevent.
+// +kubebuilder:validation:XValidation:rule="(self.arm == 'azureopenai') == has(self.azureopenai)",message="arm azureopenai requires spec.llm…azureopenai (endpoint, and deploymentName where the model is pinned), and no other arm may set it: two Azure resources share the arm and a model name while differing in endpoint, deployment and BAA posture"
+// +kubebuilder:validation:XValidation:rule="(self.arm == 'vertexai') == has(self.vertexai)",message="arm vertexai requires spec.llm…vertexai (projectId, region), and no other arm may set it"
+// +kubebuilder:validation:XValidation:rule="(self.arm == 'bedrock') == has(self.bedrock)",message="arm bedrock requires spec.llm…bedrock (region), and no other arm may set it"
+// +kubebuilder:validation:XValidation:rule="(self.arm == 'custom') == has(self.custom)",message="arm custom requires spec.llm…custom (host), and no other arm may set it"
+// +kubebuilder:validation:XValidation:rule="self.arm != 'azureopenai' || !has(self.model)",message="arm azureopenai carries no model field; the deployment is the identity (design 03 §3.4.1.1). Set azureopenai.deploymentName instead."
+type LLMEndpoint struct {
+	Arm LLMArm `json:"arm"`
+	// Model is carried by anthropic, openai, vertexai, bedrock and custom.
+	// azureopenai does not have one — see the CEL rule above.
+	// +optional
+	Model string `json:"model,omitempty"`
+	// +optional
+	AzureOpenAI *AzureOpenAIInstance `json:"azureopenai,omitempty"`
+	// +optional
+	VertexAI *VertexAIInstance `json:"vertexai,omitempty"`
+	// +optional
+	Bedrock *BedrockInstance `json:"bedrock,omitempty"`
+	// +optional
+	Custom *CustomInstance `json:"custom,omitempty"`
+}
+
+// LLMAllowEntry is an endpoint identity with `models` in place of `model`: the
+// permitted set, which requested providers must be a subset of.
+// +kubebuilder:validation:XValidation:rule="(self.arm == 'azureopenai') == has(self.azureopenai)",message="arm azureopenai requires an azureopenai instance block; an arm-level entry names every Azure resource in the tenant"
+// +kubebuilder:validation:XValidation:rule="(self.arm == 'vertexai') == has(self.vertexai)",message="arm vertexai requires a vertexai instance block"
+// +kubebuilder:validation:XValidation:rule="(self.arm == 'bedrock') == has(self.bedrock)",message="arm bedrock requires a bedrock instance block"
+// +kubebuilder:validation:XValidation:rule="(self.arm == 'custom') == has(self.custom)",message="arm custom requires a custom instance block"
+// +kubebuilder:validation:XValidation:rule="self.arm != 'azureopenai' || !has(self.models) || (has(self.azureopenai) && has(self.azureopenai.deploymentName))",message="a models-narrowed entry is not enforceable on azureopenai unless azureopenai.deploymentName pins the identity: at apiVersion v1 the model may be supplied by the request, so nothing in the emitted provider block constrains it (design 03 §3.4.1.1, A19)"
+type LLMAllowEntry struct {
+	Arm LLMArm `json:"arm"`
+	// Models narrows the entry. Absent means every model this identity serves.
+	// +optional
+	Models []string `json:"models,omitempty"`
+	// +optional
+	AzureOpenAI *AzureOpenAIInstance `json:"azureopenai,omitempty"`
+	// +optional
+	VertexAI *VertexAIInstance `json:"vertexai,omitempty"`
+	// +optional
+	Bedrock *BedrockInstance `json:"bedrock,omitempty"`
+	// +optional
+	Custom *CustomInstance `json:"custom,omitempty"`
+}
+
+type LLMSpec struct {
+	// Providers are endpoint IDENTITIES, not strings (A53).
+	// +optional
+	Providers []LLMEndpoint `json:"providers,omitempty"`
+	// EgressAllowlist may be pinned by a compliance profile (ADR-0014). It is the
+	// permitted set; Providers must be a subset of it.
+	// +optional
+	EgressAllowlist []LLMAllowEntry `json:"egressAllowlist,omitempty"`
+	// Fallback is the ModelDrifted remediation target (design 20). It is a full
+	// endpoint identity because design 20 A2 keys drift on one: an arm plus a
+	// model name would let a canary against a healthy deployment clear drift on
+	// the one that was actually drifting.
+	// +optional
+	Fallback *LLMEndpoint `json:"fallback,omitempty"`
 }
 
 type BudgetSpec struct {

@@ -55,10 +55,35 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 		Knowledge: []plumev1alpha1.KnowledgeBinding{{Name: "payer-policies", Version: "v12",
 			Scope: &plumev1alpha1.KGScope{EntityTypes: []string{"Procedure", "Policy"}}}},
 		Tools: []plumev1alpha1.ToolBinding{{Name: "claims-system", RequiresApproval: true}},
+		// One entry per ARM, for the same reason the Env list carries one per union
+		// arm: the arms are mutually exclusive within an entry, so a fixture with
+		// two entries silently leaves four arms' instance leaves unpinned.
 		LLM: &plumev1alpha1.LLMSpec{
-			Providers:       []string{"openai/gpt-x", "internal/pa"},
-			EgressAllowlist: []string{"openai/*", "internal/*"},
-			Fallback:        &plumev1alpha1.ModelRef{Provider: "internal", Model: "pa-classifier"},
+			Providers: []plumev1alpha1.LLMEndpoint{
+				{Arm: plumev1alpha1.ArmOpenAI, Model: "gpt-x"},
+				{Arm: plumev1alpha1.ArmAnthropic, Model: "claude"},
+				{Arm: plumev1alpha1.ArmAzureOpenAI, AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{
+					Endpoint: "acme.openai.azure.com", DeploymentName: "gpt4o-prod", APIVersion: "2024-10-21"}},
+				{Arm: plumev1alpha1.ArmVertexAI, Model: "gemini-pro", VertexAI: &plumev1alpha1.VertexAIInstance{
+					ProjectID: "acme-prod", Region: "us-central1"}},
+				{Arm: plumev1alpha1.ArmBedrock, Model: "claude-3", Bedrock: &plumev1alpha1.BedrockInstance{
+					Region: "us-east-1", Guardrail: "gr-1"}},
+				{Arm: plumev1alpha1.ArmCustom, Model: "pa", Custom: &plumev1alpha1.CustomInstance{
+					Host: "llm.internal.example.com", Port: 8443, PathPrefix: "/v1"}},
+			},
+			EgressAllowlist: []plumev1alpha1.LLMAllowEntry{
+				{Arm: plumev1alpha1.ArmOpenAI, Models: []string{"gpt-4o"}},
+				{Arm: plumev1alpha1.ArmAnthropic},
+				{Arm: plumev1alpha1.ArmAzureOpenAI, AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{
+					Endpoint: "acme.openai.azure.com", DeploymentName: "gpt4o-prod", APIVersion: "2024-10-21"}},
+				{Arm: plumev1alpha1.ArmVertexAI, VertexAI: &plumev1alpha1.VertexAIInstance{
+					ProjectID: "acme-prod", Region: "us-central1"}},
+				{Arm: plumev1alpha1.ArmBedrock, Bedrock: &plumev1alpha1.BedrockInstance{
+					Region: "us-east-1", Guardrail: "gr-1"}},
+				{Arm: plumev1alpha1.ArmCustom, Custom: &plumev1alpha1.CustomInstance{
+					Host: "llm.internal.example.com", Port: 8443, PathPrefix: "/v1"}},
+			},
+			Fallback: &plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmAnthropic, Model: "pa-classifier"},
 		},
 		Budget: &plumev1alpha1.BudgetSpec{
 			TokensPerDay: &tokens, USDPerDay: &usd,
@@ -83,6 +108,11 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 // edit: either revert the change, or ship a migration that carries existing
 // revisions forward. Updating the constant to make the test pass is how a
 // cluster-wide rollout storm gets released.
+// MIGRATION 3 (2026-08-31, design 02 A53 / Codex r8 BLOCKER 6) — a real
+// encoding change. llm.providers, llm.egressAllowlist and llm.fallback became
+// typed endpoint identities, so every revision hash moves. Free only because P1
+// is unshipped; after the first install this needs a carry-forward.
+//
 // FIXTURE CHANGE (2026-08-31, Codex r8 BLOCKER 1) — again not a migration. The
 // constant moved because every image in the fixtures is now digest-pinned, which
 // design 02 A21 required and nothing enforced. The projection is unchanged.
@@ -115,7 +145,7 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 // migration costs nothing today. Taken after the first install it would need a
 // carry-forward that maps old hashes to new ones. Design 02 §3.3 records the
 // same thing so an implementer does not rediscover it from this file.
-const goldenDigest = "04f4dd7640"
+const goldenDigest = "8406d8dfa8"
 
 // goldenExternalDigest pins the external-agent shape, under the same rule.
 const goldenExternalDigest = "d998beaf43"
@@ -137,7 +167,7 @@ func TestTheGoldenSpecPopulatesEveryLeaf(t *testing.T) {
 	// exclusive at admission — one spec cannot legally carry both, so demanding
 	// one fixture cover every leaf would be unsatisfiable and the check would end
 	// up deleted instead of believed.
-	fixtures := []plumev1alpha1.AgentSpec{goldenSpec(), goldenExternalSpec()}
+	fixtures := append([]plumev1alpha1.AgentSpec{goldenSpec(), goldenExternalSpec()}, coverageSpecs()...)
 	for _, l := range Leaves(reflect.TypeOf(plumev1alpha1.AgentSpec{}), "spec", nil) {
 		covered := false
 		for _, spec := range fixtures {
@@ -150,6 +180,37 @@ func TestTheGoldenSpecPopulatesEveryLeaf(t *testing.T) {
 			t.Errorf("no golden fixture sets %s, so a change to how that leaf is encoded "+
 				"does not move a golden digest and would land unreviewed", l.Path)
 		}
+	}
+}
+
+// coverageSpecs exist for the leaf-coverage check and are deliberately NOT
+// digest-pinned. `llm.fallback` is a single pointer, so one spec can carry one
+// arm, and pinning four more digests would pin four more constants that move
+// every time the encoding does — noise around the one that matters.
+//
+// What that costs is stated rather than glossed: these leaves are covered for
+// CLASSIFICATION and not for encoding. The cost is small because the fallback
+// arms go through the same endpointIdentity/instanceIdentity path as
+// `llm.providers[]`, whose arms ARE in goldenSpec and therefore digest-pinned —
+// so an encoding change reaches goldenDigest through the providers side. If
+// fallback ever gets its own encoding, it needs its own pinned fixture.
+func coverageSpecs() []plumev1alpha1.AgentSpec {
+	fb := func(e plumev1alpha1.LLMEndpoint) plumev1alpha1.AgentSpec {
+		return plumev1alpha1.AgentSpec{
+			Runtime: &plumev1alpha1.AgentRuntime{Image: goldenSpec().Runtime.Image},
+			LLM:     &plumev1alpha1.LLMSpec{Fallback: &e},
+		}
+	}
+	return []plumev1alpha1.AgentSpec{
+		fb(plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmAzureOpenAI,
+			AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{
+				Endpoint: "acme.openai.azure.com", DeploymentName: "gpt4o-prod", APIVersion: "2024-10-21"}}),
+		fb(plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmVertexAI, Model: "gemini-pro",
+			VertexAI: &plumev1alpha1.VertexAIInstance{ProjectID: "acme-prod", Region: "us-central1"}}),
+		fb(plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmBedrock, Model: "claude-3",
+			Bedrock: &plumev1alpha1.BedrockInstance{Region: "us-east-1", Guardrail: "gr-1"}}),
+		fb(plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmCustom, Model: "pa",
+			Custom: &plumev1alpha1.CustomInstance{Host: "llm.internal.example.com", Port: 8443, PathPrefix: "/v1"}}),
 	}
 }
 

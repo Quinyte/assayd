@@ -163,20 +163,22 @@ func TestBehaviourSurfaceMintsARevision(t *testing.T) {
 
 		{field: "llm.providers",
 			base: func(s *plumev1alpha1.AgentSpec) {
-				s.LLM = &plumev1alpha1.LLMSpec{Providers: []string{"internal/small"}}
+				s.LLM = &plumev1alpha1.LLMSpec{Providers: []plumev1alpha1.LLMEndpoint{{Arm: plumev1alpha1.ArmOpenAI, Model: "small"}}}
 			},
-			mutate: func(s *plumev1alpha1.AgentSpec) { s.LLM = &plumev1alpha1.LLMSpec{Providers: []string{"openai/gpt-x"}} },
-			why:    "THE critical one: an ungated model swap would hollow out ADR-0006"},
+			mutate: func(s *plumev1alpha1.AgentSpec) {
+				s.LLM = &plumev1alpha1.LLMSpec{Providers: []plumev1alpha1.LLMEndpoint{{Arm: plumev1alpha1.ArmOpenAI, Model: "gpt-x"}}}
+			},
+			why: "THE critical one: an ungated model swap would hollow out ADR-0006"},
 
 		{field: "llm.fallback",
 			base: func(s *plumev1alpha1.AgentSpec) {
 				s.LLM = &plumev1alpha1.LLMSpec{
-					Providers: []string{"openai/gpt-x"},
-					Fallback:  &plumev1alpha1.ModelRef{Provider: "internal", Model: "small"},
+					Providers: []plumev1alpha1.LLMEndpoint{{Arm: plumev1alpha1.ArmOpenAI, Model: "gpt-x"}},
+					Fallback:  &plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmAnthropic, Model: "small"},
 				}
 			},
 			mutate: func(s *plumev1alpha1.AgentSpec) {
-				s.LLM.Fallback = &plumev1alpha1.ModelRef{Provider: "internal", Model: "tiny"}
+				s.LLM.Fallback = &plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmAnthropic, Model: "tiny"}
 			},
 			why: "the fallback is what serves traffic when the primary drifts (design 20)"},
 

@@ -144,7 +144,7 @@ func mutateField(t *testing.T, path string) plumev1alpha1.AgentSpec {
 	case "Tools":
 		s.Tools = []plumev1alpha1.ToolBinding{{Name: "db"}}
 	case "LLM":
-		s.LLM = &plumev1alpha1.LLMSpec{Providers: []string{"openai/gpt-x"}}
+		s.LLM = &plumev1alpha1.LLMSpec{Providers: []plumev1alpha1.LLMEndpoint{{Arm: plumev1alpha1.ArmOpenAI, Model: "gpt-x"}}}
 	case "Budget":
 		tokens := int64(2000000)
 		s.Budget = &plumev1alpha1.BudgetSpec{TokensPerDay: &tokens}

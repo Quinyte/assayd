@@ -84,16 +84,43 @@ func TestOptionalAbsentDiffersFromExplicitFalse(t *testing.T) {
 	}
 }
 
+// Providers are a SET: design 03 compiles them to a commutative max-price
+// computation, and kustomize, helm and kubectl round-trips all re-serialize
+// lists — so hashing their order would re-gate on a no-op diff. The allowlist
+// was sorted and providers were not, which no test noticed.
+func TestReorderingProvidersDoesNotMintARevision(t *testing.T) {
+	mk := func(eps ...plumev1alpha1.LLMEndpoint) plumev1alpha1.AgentSpec {
+		s := baseSpec()
+		s.LLM = &plumev1alpha1.LLMSpec{Providers: eps}
+		return s
+	}
+	a := plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmAnthropic, Model: "claude"}
+	b := plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmOpenAI, Model: "gpt-4o"}
+	if Hash(mk(a, b)) != Hash(mk(b, a)) {
+		t.Error("reordering providers minted a revision; a re-serialized manifest would pay for " +
+			"an eval and canary cycle for a diff that changed nothing")
+	}
+	// And the set is still injective: two DIFFERENT sets must not collapse.
+	c := plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmOpenAI, Model: "gpt-4o-mini"}
+	if Hash(mk(a, b)) == Hash(mk(a, c)) {
+		t.Error("two different provider sets hash identically; sorting must canonicalise order, " +
+			"not erase content")
+	}
+}
+
 // Codex r7 BLOCKER 2. The surrounding LLM block is identical in every pair, so
 // this cannot pass on providers changing — the vacuity that hid the omission
 // behind the aggregate `LLM` mutation for two rounds.
 func TestEgressAllowlistChangesMintARevision(t *testing.T) {
-	mk := func(allow ...string) plumev1alpha1.AgentSpec {
+	arm := func(a plumev1alpha1.LLMArm) plumev1alpha1.LLMAllowEntry {
+		return plumev1alpha1.LLMAllowEntry{Arm: a}
+	}
+	mk := func(allow ...plumev1alpha1.LLMAllowEntry) plumev1alpha1.AgentSpec {
 		s := baseSpec()
 		s.LLM = &plumev1alpha1.LLMSpec{
-			Providers:       []string{"internal/pa"},
+			Providers:       []plumev1alpha1.LLMEndpoint{{Arm: plumev1alpha1.ArmAnthropic, Model: "pa"}},
 			EgressAllowlist: allow,
-			Fallback:        &plumev1alpha1.ModelRef{Provider: "internal", Model: "pa"},
+			Fallback:        &plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmAnthropic, Model: "pa"},
 		}
 		return s
 	}
@@ -103,15 +130,33 @@ func TestEgressAllowlistChangesMintARevision(t *testing.T) {
 		wantSame bool
 		why      string
 	}{
-		{name: "add", a: mk("internal/*"), b: mk("internal/*", "openai/*"),
+		{name: "add", a: mk(arm("anthropic")), b: mk(arm("anthropic"), arm("openai")),
 			why: "widening egress is the ADR-0014 control; it must never reach production ungated"},
-		{name: "remove", a: mk("internal/*", "openai/*"), b: mk("internal/*"),
+		{name: "remove", a: mk(arm("anthropic"), arm("openai")), b: mk(arm("anthropic")),
 			why: "the gate is symmetric (A16): narrowing changes what the agent can reach too"},
-		{name: "absent vs empty", a: mk(), b: mk([]string{}...),
+		{name: "absent vs empty", a: mk(), b: mk([]plumev1alpha1.LLMAllowEntry{}...),
 			why: "nothing defines whether an empty allowlist means no narrowing or reach nothing, " +
 				"so collapsing them would make one of those an ungated grant change"},
-		{name: "reorder", a: mk("a/*", "b/*"), b: mk("b/*", "a/*"), wantSame: true,
-			why: "a re-serialized manifest must not re-gate; the set is sorted"},
+		{name: "reorder", a: mk(arm("anthropic"), arm("openai")), b: mk(arm("openai"), arm("anthropic")),
+			wantSame: true,
+			why:      "a re-serialized manifest must not re-gate; the set is sorted"},
+
+		// The whole reason for the typed union (A53): two Azure resources share
+		// the arm and differ only in the instance block. A flat string collapsed
+		// them, so a HIPAA agent could be repointed at an endpoint with different
+		// BAA posture with no revision minted.
+		{name: "same arm, different Azure endpoint",
+			a: mk(plumev1alpha1.LLMAllowEntry{Arm: plumev1alpha1.ArmAzureOpenAI,
+				AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{Endpoint: "a.openai.azure.com"}}),
+			b: mk(plumev1alpha1.LLMAllowEntry{Arm: plumev1alpha1.ArmAzureOpenAI,
+				AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{Endpoint: "b.openai.azure.com"}}),
+			why: "two Azure resources differ in endpoint and BAA posture; (provider, model) collapsed them"},
+		{name: "same arm and endpoint, different deployment",
+			a: mk(plumev1alpha1.LLMAllowEntry{Arm: plumev1alpha1.ArmAzureOpenAI,
+				AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{Endpoint: "a.openai.azure.com", DeploymentName: "gpt4o-prod"}}),
+			b: mk(plumev1alpha1.LLMAllowEntry{Arm: plumev1alpha1.ArmAzureOpenAI,
+				AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{Endpoint: "a.openai.azure.com", DeploymentName: "gpt4o-dev"}}),
+			why: "the deployment IS the model identity on this arm (design 03 §3.4.1.1)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			switch same := Hash(tc.a) == Hash(tc.b); {

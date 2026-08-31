@@ -42,6 +42,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -141,7 +142,7 @@ type kgScope struct {
 }
 
 type llm struct {
-	Providers []string `json:"providers,omitempty"`
+	Providers []string `json:"providers,omitempty"` // canonical endpoint identities
 	// EgressAllowlist is the set of endpoints the agent may reach. Design 02 A16
 	// classified it as behaviour — symmetric, so any change mints — and A6
 	// recorded that design 03 consumes it. It was never added HERE, so widening
@@ -155,7 +156,7 @@ type llm struct {
 	// "reach nothing", and collapsing them would make one of those a silent,
 	// ungated grant change — the same reasoning kgScope records.
 	EgressAllowlist *[]string `json:"egressAllowlist,omitempty"`
-	Fallback        *modelRef `json:"fallback,omitempty"`
+	Fallback        *string   `json:"fallback,omitempty"`
 }
 
 // toolBind carries RequiresApproval because design 02 A30 moved it to the
@@ -192,9 +193,37 @@ type exposeProtocol struct {
 	Auth       string `json:"auth,omitempty"`
 }
 
-type modelRef struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+// endpointIdentity and allowIdentity canonicalise an endpoint union to a single
+// injective string. Marshalling the struct would do too, and this is written out
+// so the ORDER of instance fields is fixed by this file rather than by the
+// declaration order of a CRD type someone may reorder later — a reorder there
+// would silently re-gate every Agent.
+func endpointIdentity(e plumev1alpha1.LLMEndpoint) string {
+	return string(e.Arm) + "|" + instanceIdentity(e.AzureOpenAI, e.VertexAI, e.Bedrock, e.Custom) +
+		"|model=" + e.Model
+}
+
+func allowIdentity(e plumev1alpha1.LLMAllowEntry) string {
+	models := append([]string(nil), e.Models...)
+	sort.Strings(models)
+	return string(e.Arm) + "|" + instanceIdentity(e.AzureOpenAI, e.VertexAI, e.Bedrock, e.Custom) +
+		"|models=" + strings.Join(models, ",")
+}
+
+func instanceIdentity(az *plumev1alpha1.AzureOpenAIInstance, vx *plumev1alpha1.VertexAIInstance,
+	br *plumev1alpha1.BedrockInstance, cu *plumev1alpha1.CustomInstance) string {
+	switch {
+	case az != nil:
+		return fmt.Sprintf("azure(endpoint=%s,deployment=%s,apiVersion=%s)",
+			az.Endpoint, az.DeploymentName, az.APIVersion)
+	case vx != nil:
+		return fmt.Sprintf("vertex(project=%s,region=%s)", vx.ProjectID, vx.Region)
+	case br != nil:
+		return fmt.Sprintf("bedrock(region=%s,guardrail=%s)", br.Region, br.Guardrail)
+	case cu != nil:
+		return fmt.Sprintf("custom(host=%s,port=%d,pathPrefix=%s)", cu.Host, cu.Port, cu.PathPrefix)
+	}
+	return "-"
 }
 
 type external struct {
@@ -304,14 +333,30 @@ func project(spec plumev1alpha1.AgentSpec) behaviour {
 	}
 
 	if l := spec.LLM; l != nil {
-		x := &llm{Providers: append([]string(nil), l.Providers...)}
+		// Each endpoint is canonicalised to its FULL identity, not to an arm or a
+		// model name: design 02 A24's whole point is that `(provider, model)` is
+		// non-injective, so projecting one would let two Azure deployments with
+		// different endpoints and BAA posture hash identically.
+		providers := make([]string, 0, len(l.Providers))
+		for _, e := range l.Providers {
+			providers = append(providers, endpointIdentity(e))
+		}
+		// NOT sorted here: the canonicalisation block below already sorts
+		// b.LLM.providersOrNil(), and a second sort is code no mutation can
+		// distinguish — which rule 5 calls a liability, because the next reader
+		// trusts it as load-bearing.
+		x := &llm{Providers: providers}
 		if l.EgressAllowlist != nil {
-			allow := append([]string(nil), l.EgressAllowlist...)
+			allow := make([]string, 0, len(l.EgressAllowlist))
+			for _, e := range l.EgressAllowlist {
+				allow = append(allow, allowIdentity(e))
+			}
 			sort.Strings(allow) // a set; a re-serialized manifest must not re-gate
 			x.EgressAllowlist = &allow
 		}
 		if l.Fallback != nil {
-			x.Fallback = &modelRef{Provider: l.Fallback.Provider, Model: l.Fallback.Model}
+			id := endpointIdentity(*l.Fallback)
+			x.Fallback = &id
 		}
 		b.LLM = x
 	}

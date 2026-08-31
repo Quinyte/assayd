@@ -81,9 +81,33 @@ func TestOnlyTheUnavoidableFieldsAreRequired(t *testing.T) {
 		"knowledge.version":       true, // an unpinned graph is the thing we refuse
 		"tools.name":              true,
 		"gates.evalSuiteRef":      true,
-		"llm.fallback.provider":   true,
-		"llm.fallback.model":      true,
 		"runtime.sandbox.profile": true,
+
+		// The endpoint union (A53). Each of these is the thing that makes an
+		// identity an identity rather than a category, which is the whole reason
+		// the flat strings were replaced: an entry with no arm names nothing, and
+		// an arm with no instance names EVERY resource on that arm — an azureopenai
+		// entry without an endpoint permits every Azure deployment in the tenant,
+		// including ones with different BAA posture. "Required is a demand" and
+		// these are the demands the type exists to make.
+		"llm.providers.arm":                        true,
+		"llm.providers.azureopenai.endpoint":       true,
+		"llm.providers.vertexai.projectId":         true,
+		"llm.providers.vertexai.region":            true,
+		"llm.providers.bedrock.region":             true,
+		"llm.providers.custom.host":                true,
+		"llm.egressAllowlist.arm":                  true,
+		"llm.egressAllowlist.azureopenai.endpoint": true,
+		"llm.egressAllowlist.vertexai.projectId":   true,
+		"llm.egressAllowlist.vertexai.region":      true,
+		"llm.egressAllowlist.bedrock.region":       true,
+		"llm.egressAllowlist.custom.host":          true,
+		"llm.fallback.arm":                         true,
+		"llm.fallback.azureopenai.endpoint":        true,
+		"llm.fallback.vertexai.projectId":          true,
+		"llm.fallback.vertexai.region":             true,
+		"llm.fallback.bedrock.region":              true,
+		"llm.fallback.custom.host":                 true,
 	}
 
 	// Every required field is a demand, whether its type is a scalar or an object:

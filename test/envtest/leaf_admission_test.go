@@ -43,6 +43,37 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 				External: &plumev1alpha1.ExternalAgent{Endpoint: "https://a.example.com"},
 			}
 		}
+		// The endpoint union is discriminated: an azureopenai instance block is
+		// only admissible on an azureopenai entry, so a base with no arm makes
+		// every instance leaf unreachable — 36 of 84, when the union landed. The
+		// base therefore seeds an entry whose ARM matches the leaf under test.
+		arm := plumev1alpha1.ArmAnthropic
+		for a, marker := range map[plumev1alpha1.LLMArm]string{
+			plumev1alpha1.ArmAzureOpenAI: ".AzureOpenAI.",
+			plumev1alpha1.ArmVertexAI:    ".VertexAI.",
+			plumev1alpha1.ArmBedrock:     ".Bedrock.",
+			plumev1alpha1.ArmCustom:      ".Custom.",
+		} {
+			if strings.Contains(path, marker) {
+				arm = a
+			}
+		}
+		ep := plumev1alpha1.LLMEndpoint{Arm: arm}
+		ae := plumev1alpha1.LLMAllowEntry{Arm: arm}
+		switch arm {
+		case plumev1alpha1.ArmAzureOpenAI:
+			inst := &plumev1alpha1.AzureOpenAIInstance{Endpoint: "a.openai.azure.com", DeploymentName: "d"}
+			ep.AzureOpenAI, ae.AzureOpenAI = inst, inst.DeepCopy()
+		case plumev1alpha1.ArmVertexAI:
+			inst := &plumev1alpha1.VertexAIInstance{ProjectID: "p", Region: "r"}
+			ep.VertexAI, ae.VertexAI = inst, inst.DeepCopy()
+		case plumev1alpha1.ArmBedrock:
+			inst := &plumev1alpha1.BedrockInstance{Region: "r"}
+			ep.Bedrock, ae.Bedrock = inst, inst.DeepCopy()
+		case plumev1alpha1.ArmCustom:
+			inst := &plumev1alpha1.CustomInstance{Host: "h"}
+			ep.Custom, ae.Custom = inst, inst.DeepCopy()
+		}
 		return plumev1alpha1.AgentSpec{
 			Runtime: &plumev1alpha1.AgentRuntime{
 				// Sandbox is NOT seeded: replicas>1 with a sandbox is an admission
@@ -50,6 +81,11 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 				// look unreachable. SetLeafString allocates it when the leaf under
 				// test is the profile itself.
 				Image: digest,
+			},
+			LLM: &plumev1alpha1.LLMSpec{
+				Providers:       []plumev1alpha1.LLMEndpoint{ep},
+				EgressAllowlist: []plumev1alpha1.LLMAllowEntry{*ae.DeepCopy()},
+				Fallback:        ep.DeepCopy(),
 			},
 			Knowledge: []plumev1alpha1.KnowledgeBinding{{Name: "kg", Version: "v1"}},
 			Tools:     []plumev1alpha1.ToolBinding{{Name: "tool"}},
@@ -70,6 +106,11 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 		"spec.External.Endpoint":       {"https://a.example.com", "https://b.example.com"},
 		"spec.Expose.A2A.Visibility":   {"cluster", "org"},
 		"spec.Expose.A2A.Auth":         {"none", "oauth"},
+		// The arm is an enum, and switching it must keep the instance block valid
+		// — so the pair is the two arms that carry no instance block at all.
+		"spec.LLM.Providers[].Arm":       {"anthropic", "openai"},
+		"spec.LLM.EgressAllowlist[].Arm": {"anthropic", "openai"},
+		"spec.LLM.Fallback.Arm":          {"anthropic", "openai"},
 	}
 
 	admissible := func(t *testing.T, name string, spec plumev1alpha1.AgentSpec) error {
