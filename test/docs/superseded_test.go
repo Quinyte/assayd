@@ -151,6 +151,17 @@ var rules = []rule{
 		why:     "A35 replaced the seal with immutable revision-scoped copies; sealing cannot close unplanned guard loss",
 	},
 	{
+		name: "referent-drift-refusal",
+		// The pre-A35 rollback rule: refuse a rollback because the USER's object
+		// changed since the revision was gated. A35 makes that irrelevant — the
+		// revision reads its own copy, so original drift says nothing about
+		// whether the revision can be rerun — and following the old rule extends
+		// an incident by declining a recovery that is available.
+		banned:  regexp.MustCompile(`(?i)rollback is refused[^.]*(referent|env content|original)|referent'?s? content has (changed|moved)`),
+		allowed: regexp.MustCompile(`(?i)supersed|revers|retract|no longer|irrelevant|A38`),
+		why:     "A38: rollback tests the retained COPY's digest and owner, never the original source's drift",
+	},
+	{
 		name:    "verifier-undecided",
 		banned:  regexp.MustCompile(`(?i)Sigstore[^.]{0,40}or[^.]{0,10}Kyverno|Kyverno[^.]{0,40}or[^.]{0,10}Sigstore`),
 		allowed: regexp.MustCompile(`(?i)not a design|earlier|supersed|chose|decided`),
@@ -472,6 +483,7 @@ var ruleFixtures = map[string]string{
 	"spec-only-hash":            "The revision digest is computed from spec alone.",
 	"env-referent-hash":         "Env sources are hashed by referent, not contents.",
 	"seal-not-copy":             "Every referenced source is sealed in place, and no bytes are copied.",
+	"referent-drift-refusal":    "If the referent's content has moved, rollback is refused naming both digests.",
 	"verifier-undecided":        "Ship a Sigstore policy-controller or a Kyverno verifyImages binding.",
 	"inert-tightening":          "A tightening update must make the dependent routes inert first.",
 }

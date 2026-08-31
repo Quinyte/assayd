@@ -296,6 +296,18 @@ const (
 	// rewrite a workload whose recorded digest disagrees with the desired one,
 	// because doing so is exactly the gate bypass the collision buys.
 	CondRevisionHashCollision = "RevisionHashCollision"
+	// CondRevisionMaterialCollision reports a revision-scoped copy that already
+	// exists under the expected name but does not satisfy the whole invariant —
+	// kind, owner UID, immutability, bytes (A39). It is terminal for the same
+	// reason as above: adopting by name is how a name that looks right comes to
+	// hold content nobody hashed.
+	CondRevisionMaterialCollision = "RevisionMaterialCollision"
+	// CondRevisionRecordUnsupported reports a retained revision whose record was
+	// written by a schema version this operator no longer carries a decoder for
+	// (design 03 A39). Deliberately NOT the corruption condition: "damaged" and
+	// "written by a version I dropped" call for different human actions, and
+	// collapsing them tells the operator to go looking for the wrong thing.
+	CondRevisionRecordUnsupported = "RevisionRecordUnsupported"
 )
 
 type AgentStatus struct {
@@ -477,5 +489,7 @@ func designConditions() []string {
 		CondImageSignatureUnverified,
 		CondEnvSourceProtectionUnavailable,
 		CondRevisionHashCollision,
+		CondRevisionMaterialCollision,
+		CondRevisionRecordUnsupported,
 	}
 }
