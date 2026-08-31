@@ -245,10 +245,7 @@ func Hash(spec plumev1alpha1.AgentSpec) string {
 func encode(spec plumev1alpha1.AgentSpec) []byte {
 	encoded, err := json.Marshal(project(spec))
 	if err != nil {
-		// Unreachable: the projection is strings and slices of strings. Encoding the
-		// error keeps the function total and distinct rather than collapsing every
-		// failing revision onto one constant.
-		encoded = []byte(fmt.Sprintf("revision-projection-marshal-error:%v:%#v", err, spec))
+		panic(fmt.Sprintf("revision: projection is unmarshalable, which cannot happen: %v", err))
 	}
 	return encoded
 }
@@ -367,7 +364,13 @@ func envFromRef(f corev1.EnvFromSource) envFromSource {
 func marshalOrEmpty(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return fmt.Sprintf("unmarshalable:%v:%#v", err, v)
+		// UNREACHABLE for every type this package marshals — behaviour is strings
+		// and slices of strings, and no corev1 selector can fail. Panicking is the
+		// honest response: the two alternatives were a constant (which collapses
+		// distinct failures onto one hash) and %#v (which prints POINTER
+		// ADDRESSES, so the same value hashes differently between runs and breaks
+		// the determinism this whole package exists to provide).
+		panic(fmt.Sprintf("revision: projection is unmarshalable, which cannot happen: %v", err))
 	}
 	return string(b)
 }

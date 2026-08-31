@@ -52,6 +52,11 @@ var ownedTypes = map[string]bool{
 	// Owned because assessEnvSourceProtection is the only writer, and it must be
 	// able to CLEAR the condition when the last env source is removed from a spec.
 	plumev1alpha1.CondEnvSourceProtectionUnavailable: true,
+	// Owned so it can CLEAR. It was in neither map, which meant merge() treated
+	// it as another controller's and carried it forward verbatim — forever, with
+	// a stale message, on an agent that had gone back to Ready. No other
+	// controller writes it.
+	plumev1alpha1.CondRevisionHashCollision: true,
 }
 
 // stickyTypes are owned conditions that must stay in the list once set, flipped

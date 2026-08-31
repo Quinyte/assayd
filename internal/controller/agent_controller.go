@@ -156,6 +156,36 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	status := agent.Status.DeepCopy()
 	conds := newConditionSet(agent.Generation)
 
+	// The assessors run BEFORE anything can return early. A pass that exits
+	// without them merges a condition set that never saw them, and because owned
+	// conditions are non-sticky, merge() then CLEARS every one — so entering the
+	// terminal collision state below used to retract SandboxDowngraded,
+	// GatesSkipped and EnvSourceProtectionUnavailable on an agent that is more
+	// degraded, not less.
+	r.assessGates(&agent, conds)
+	r.assessSandbox(&agent, conds)
+	r.assessTaskState(&agent, conds)
+	r.assessEnvSourceProtection(&agent, conds)
+
+	// STATUS is the authority on which revision a name belongs to, and it is
+	// checked before the workload is touched.
+	//
+	// The first version of this guard read a plume.dev/revision-digest annotation
+	// off the Deployment. That closed the collision against an agents/update
+	// principal and left it wide open to a WEAKER one: anyone with
+	// deployments/patch could set the annotation to the digest of the spec they
+	// were about to write — a pure function of that spec, no secret — or simply
+	// delete it, which the adoption rule blessed. Either way the operator itself
+	// installed the attacker's image on the gated revision, and unlike a raw
+	// image patch it survived drift correction. The guard was defeatable by the
+	// same principal the drift-correction block exists to defeat.
+	//
+	// status.activeRevisionDigest is on the status subresource, under separate
+	// RBAC, and is written only here. The annotation is kept as corroboration.
+	if c := collisionAgainstStatus(status, desired, desiredDigest); c != nil {
+		return ctrl.Result{}, r.reportCollision(ctx, &agent, status, conds, c)
+	}
+
 	// A new generation supersedes an in-flight candidate (§3.3). At most one
 	// candidate is ever in flight; the abandoned one is recorded so the
 	// transition is auditable rather than silent.
@@ -166,13 +196,18 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		status.CandidateRevision, status.CandidateRevisionDigest = "", ""
 	}
 
-	if err := r.ensureWorkload(ctx, &agent, desired, desiredDigest); err != nil {
+	if err := r.ensureWorkload(ctx, &agent, desired, desiredDigest, status); err != nil {
 		if collision := (*revisionCollisionError)(nil); errors.As(err, &collision) {
-			// Terminal, and deliberately does NOT converge the workload. Rewriting a
-			// Deployment whose recorded digest disagrees with this spec is precisely
-			// the gate bypass a 40-bit collision buys.
-			conds.set(plumev1alpha1.CondRevisionHashCollision, metav1.ConditionTrue, "DigestMismatch", collision.Error())
-			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "RevisionHashCollision", collision.Error())
+			return ctrl.Result{}, r.reportCollision(ctx, &agent, status, conds, collision)
+		}
+		if apierrors.IsInvalid(err) {
+			// The API server rejected the rendered workload. Returning a bare error
+			// here retried forever and wrote NO status, so the Agent sat at an empty
+			// phase with nothing said — the silent degraded path NFR-8 forbids, and
+			// the one an operator is least able to diagnose because the reason lives
+			// only in operator logs. A rejected render is a spec the user can fix.
+			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadRejected", err.Error())
+			conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "WorkloadRejected", err.Error())
 			status.Phase = plumev1alpha1.PhaseDegraded
 			status.Conditions = conds.merge(agent.Status.Conditions)
 			status.ObservedGeneration = agent.Generation
@@ -186,13 +221,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
-	r.assessGates(&agent, conds)
-	r.assessSandbox(&agent, conds)
-	r.assessEnvSourceProtection(&agent, conds)
-	r.assessTaskState(&agent, conds)
-
 	switch {
-	case !ready && status.ActiveRevision != "" && status.ActiveRevisionDigest != desiredDigest:
+	case !ready && status.ActiveRevision != "" && status.ActiveRevisionDigest != desiredDigest &&
+		r.revisionAvailable(ctx, &agent, status.ActiveRevision):
 		// A genuine rollout: an earlier revision still holds all traffic and is
 		// healthy while its successor comes up. Reporting Ready=False here would
 		// trip every alert keyed on the canonical condition on any routine spec
@@ -202,6 +233,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		status.Phase = plumev1alpha1.PhaseReady
 		conds.set(plumev1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", status.ActiveRevision))
+		// The guard on this case now CHECKS that. `ready` is computed for the
+		// DESIRED revision only, so this branch used to report "revision X is
+		// serving" from the mere presence of a name in status — true of an agent
+		// whose active workload had been deleted, which then read as a healthy
+		// rollout instead of an outage.
 		conds.set(plumev1alpha1.CondProgressing, metav1.ConditionTrue, "CandidateNotAvailable",
 			fmt.Sprintf("revision %s is rolling out; %s continues to serve",
 				desired, status.ActiveRevision))
@@ -352,7 +388,51 @@ func (e *revisionCollisionError) Error() string {
 		"would serve this spec under the gate result the other revision earned", e.name, e.existing, e.desired)
 }
 
-func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alpha1.Agent, rev, digest string) error {
+// collisionAgainstStatus reports a desired revision whose NAME matches a
+// recorded one while its identity does not. Status is written only by this
+// controller through the status subresource, so it is the non-forgeable side of
+// the comparison.
+func collisionAgainstStatus(st *plumev1alpha1.AgentStatus, rev, digest string) *revisionCollisionError {
+	for _, r := range []struct{ role, name, dig string }{
+		{"active", st.ActiveRevision, st.ActiveRevisionDigest},
+		{"candidate", st.CandidateRevision, st.CandidateRevisionDigest},
+	} {
+		if r.name == rev && r.dig != "" && r.dig != digest {
+			return &revisionCollisionError{name: r.role + " revision " + r.name, existing: r.dig, desired: digest}
+		}
+	}
+	return nil
+}
+
+// reportCollision is the single exit for every collision path, so none of them
+// can drift into asserting a different set of conditions than the others.
+func (r *AgentReconciler) reportCollision(ctx context.Context, agent *plumev1alpha1.Agent,
+	status *plumev1alpha1.AgentStatus, conds *conditionSet, c *revisionCollisionError) error {
+	conds.set(plumev1alpha1.CondRevisionHashCollision, metav1.ConditionTrue, "DigestMismatch", c.Error())
+	conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "RevisionHashCollision", c.Error())
+	// Degraded is asserted, not merely implied by the phase. CondDegraded is
+	// owned and non-sticky, so a path that sets the phase and stays silent
+	// actively CLEARS the condition — and a suspected chosen collision is the
+	// worst state this machine has, which is exactly when an alert keyed on the
+	// condition must not go quiet.
+	conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "RevisionHashCollision", c.Error())
+	status.Phase = plumev1alpha1.PhaseDegraded
+	status.Conditions = conds.merge(agent.Status.Conditions)
+	status.ObservedGeneration = agent.Generation
+	return r.writeStatus(ctx, agent, status)
+}
+
+// revisionAvailable answers whether a NAMED revision has available replicas,
+// as opposed to workloadAvailable, which only ever answers for the desired one.
+// An error is reported as unavailable: claiming a revision is serving because
+// the API server did not answer is the loud-and-wrong of rule 8.
+func (r *AgentReconciler) revisionAvailable(ctx context.Context, agent *plumev1alpha1.Agent, rev string) bool {
+	ok, err := r.workloadAvailable(ctx, agent, rev)
+	return err == nil && ok
+}
+
+func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alpha1.Agent, rev, digest string,
+	status *plumev1alpha1.AgentStatus) error {
 	desired := r.deploymentFor(agent, rev)
 	if desired.Annotations == nil {
 		desired.Annotations = map[string]string{}
@@ -386,8 +466,17 @@ func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alph
 	// field existed carries no digest, and treating unknown as collision would
 	// wedge every upgraded cluster. It is adopted and stamped on the next
 	// converge.
-	if existingDigest, ok := existing.Annotations[RevisionDigestAnnotation]; ok && existingDigest != digest {
+	// Corroboration only — status was checked first, above. An ABSENT annotation
+	// is adopted, but only when status records no digest for this name either:
+	// otherwise deleting the annotation is a one-step bypass, since the adoption
+	// rule would bless exactly the object an attacker just stripped.
+	existingDigest, stamped := existing.Annotations[RevisionDigestAnnotation]
+	switch {
+	case stamped && existingDigest != digest:
 		return &revisionCollisionError{name: existing.Name, existing: existingDigest, desired: digest}
+	case !stamped && status.ActiveRevision == rev && status.ActiveRevisionDigest != "" &&
+		status.ActiveRevisionDigest != digest:
+		return &revisionCollisionError{name: existing.Name, existing: status.ActiveRevisionDigest, desired: digest}
 	}
 
 	// Reconcile the WHOLE template, not just replicas. Two reasons, and the
@@ -641,6 +730,11 @@ func (r *AgentReconciler) assessEnvSourceProtection(agent *plumev1alpha1.Agent, 
 	if rt == nil {
 		return
 	}
+	// Every arm is reported, and an arm this switch does not NAME still counts.
+	// A named-arm enumeration that silently skips the rest is the exact defect
+	// internal/revision just replaced with a whole-selector marshal: corev1 gains
+	// arms between releases, and the one it gained last (fileKeyRef) is already
+	// classified as behaviour by the projection while being invisible here.
 	var refs []string
 	for _, f := range rt.EnvFrom {
 		switch {
@@ -648,17 +742,24 @@ func (r *AgentReconciler) assessEnvSourceProtection(agent *plumev1alpha1.Agent, 
 			refs = append(refs, "envFrom configMapRef/"+f.ConfigMapRef.Name)
 		case f.SecretRef != nil:
 			refs = append(refs, "envFrom secretRef/"+f.SecretRef.Name)
+		default:
+			refs = append(refs, "envFrom (unrecognised source)")
 		}
 	}
 	for _, e := range rt.Env {
 		if e.ValueFrom == nil {
 			continue
 		}
-		switch {
-		case e.ValueFrom.ConfigMapKeyRef != nil:
-			refs = append(refs, "env."+e.Name+" configMapKeyRef/"+e.ValueFrom.ConfigMapKeyRef.Name)
-		case e.ValueFrom.SecretKeyRef != nil:
-			refs = append(refs, "env."+e.Name+" secretKeyRef/"+e.ValueFrom.SecretKeyRef.Name)
+		switch v := e.ValueFrom; {
+		case v.ConfigMapKeyRef != nil:
+			refs = append(refs, "env."+e.Name+" configMapKeyRef/"+v.ConfigMapKeyRef.Name)
+		case v.SecretKeyRef != nil:
+			refs = append(refs, "env."+e.Name+" secretKeyRef/"+v.SecretKeyRef.Name)
+		case v.FieldRef != nil, v.ResourceFieldRef != nil:
+			// Downward API: the value comes from the Pod, which the operator owns.
+			// Not an ungated external input, so not reported.
+		default:
+			refs = append(refs, "env."+e.Name+" (unrecognised source)")
 		}
 	}
 	if len(refs) == 0 {
@@ -667,12 +768,29 @@ func (r *AgentReconciler) assessEnvSourceProtection(agent *plumev1alpha1.Agent, 
 		// learn to filter, and then miss the one that matters.
 		return
 	}
-	sortStrings(refs) // stable message, so a re-reconcile is a no-op write
+	// The message is BUDGETED. Kubernetes caps a condition message at 32768
+	// bytes and rejects the whole status write past it — so an Agent with enough
+	// env sources got no status at all: no Ready, no Degraded, nothing, in an
+	// error loop. The condition added to satisfy NFR-8 would have been the thing
+	// that silenced the object. 150 sources with long names was enough.
+	//
+	// refs keeps SPEC ORDER, which is the order the operator wrote and the order
+	// they will look for. It was sorted for a "stable message" that spec order
+	// already provided.
+	const budget = 12
+	listed, more := refs, 0
+	if len(listed) > budget {
+		listed, more = listed[:budget], len(refs)-budget
+	}
+	shown := strings.Join(listed, ", ")
+	if more > 0 {
+		shown = fmt.Sprintf("%s, and %d more", shown, more)
+	}
 	c.set(plumev1alpha1.CondEnvSourceProtectionUnavailable, metav1.ConditionTrue, "ContentHashingUnimplemented",
 		fmt.Sprintf("the revision identity covers the NAME of %d env source(s), not their contents "+
 			"(design 02 A43): %s. Anyone with update on a referenced object can change what this agent "+
 			"does, and the change will serve under this revision's existing gate result. Restrict update "+
-			"on those objects until A20/A35/A42 are implemented", len(refs), strings.Join(refs, ", ")))
+			"on those objects until A20/A35/A42 are implemented", len(refs), shown))
 }
 
 func (r *AgentReconciler) assessSandbox(agent *plumev1alpha1.Agent, c *conditionSet) {

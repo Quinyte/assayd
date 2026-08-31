@@ -2,6 +2,7 @@ package envtest
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -81,5 +82,80 @@ func TestRemovingTheLastEnvSourceClearsTheCondition(t *testing.T) {
 		c.Status == metav1.ConditionTrue {
 		t.Error("the condition survived removal of the last env source; an abnormal-true condition " +
 			"that no longer applies is exactly what teaches operators to ignore it")
+	}
+}
+
+// A condition message is capped at 32768 bytes and the API server rejects the
+// WHOLE status write past it — so an Agent with enough env sources got no status
+// at all: no Ready, no Degraded, nothing, in an error loop. The condition added
+// to satisfy NFR-8 would have been the thing that silenced the object.
+//
+// 150 sources with long-but-legal names was enough. Nothing caps envFrom length
+// or ConfigMap name length, so this is a spec a user can write.
+func TestTheEnvSourceMessageCannotBrickTheStatus(t *testing.T) {
+	ns := newNamespace(t)
+	long := strings.Repeat("n", 200)
+	a := mustCreateAgent(t, ns, "bigmsg", func(a *plumev1alpha1.Agent) {
+		for i := 0; i < 150; i++ {
+			a.Spec.Runtime.EnvFrom = append(a.Spec.Runtime.EnvFrom, corev1.EnvFromSource{
+				ConfigMapRef: &corev1.ConfigMapEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: fmt.Sprintf("%s-%d", long, i)}}})
+		}
+	})
+	got := settle(t, newReconciler(false), a)
+
+	if got.Status.Phase == "" || len(got.Status.Conditions) == 0 {
+		t.Fatal("the Agent has no status at all: the status write was rejected, so the object is " +
+			"silent about everything — which is a worse NFR-8 outcome than the one this condition " +
+			"was added to fix")
+	}
+	c := condition(&got, plumev1alpha1.CondEnvSourceProtectionUnavailable)
+	if c == nil {
+		t.Fatal("no env-source condition on an Agent with 150 env sources")
+	}
+	if len(c.Message) > 32768 {
+		t.Errorf("message is %d bytes; the API server rejects the status write past 32768", len(c.Message))
+	}
+	// The COUNT stays exact even though the list is truncated: an operator needs
+	// to know the scale, and "and N more" is the part that tells them.
+	if !strings.Contains(c.Message, "150 env source") {
+		t.Errorf("the message no longer states how many sources are affected:\n%s", c.Message)
+	}
+	if !strings.Contains(c.Message, "more") {
+		t.Errorf("the message was truncated without saying so:\n%s", c.Message)
+	}
+}
+
+// An arm this switch does not name still counts. corev1.EnvVarSource gains arms
+// between releases — fileKeyRef is the most recent — and the projection already
+// classifies all four of its leaves as behaviour, so an unreported arm is a
+// disclosure gap on material that IS gated.
+func TestAnUnnamedEnvSourceArmIsStillReported(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "filekey", func(a *plumev1alpha1.Agent) {
+		a.Spec.Runtime.Env = []corev1.EnvVar{{Name: "K", ValueFrom: &corev1.EnvVarSource{
+			FileKeyRef: &corev1.FileKeySelector{VolumeName: "v", Path: "p.env", Key: "K"}}}}
+	})
+	// fileKeyRef also needs a volume this operator does not render yet, so the
+	// API server rejects the Deployment. That must not be silent either: the
+	// first version returned a bare error, wrote no status, and left the Agent at
+	// an empty phase forever with the reason only in operator logs.
+	r := newReconciler(false)
+	for i := 0; i < 3; i++ {
+		reconcileOnce(t, r, a)
+	}
+	var got plumev1alpha1.Agent
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	if c := condition(&got, plumev1alpha1.CondEnvSourceProtectionUnavailable); c == nil ||
+		c.Status != metav1.ConditionTrue {
+		t.Error("an env source the switch does not name by arm was not reported; a named-arm " +
+			"enumeration that skips the rest is the defect internal/revision just removed")
+	}
+	if c := condition(&got, plumev1alpha1.CondReady); c == nil || c.Reason != "WorkloadRejected" {
+		t.Errorf("the API server rejected the rendered workload and the Agent says %+v; "+
+			"a rejected render is a spec the user can fix, and they cannot fix what is only "+
+			"in the operator's log", c)
 	}
 }

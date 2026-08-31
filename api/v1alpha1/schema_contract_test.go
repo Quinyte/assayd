@@ -166,6 +166,25 @@ func TestConditionVocabularyIsClosed(t *testing.T) {
 	design := conditionsDeclaredByDesign(t)
 	code := designConditions()
 
+	// designConditions() is a hand-maintained list, so it can delete its own
+	// cases: adding CondBogusDrifted to the constant block WITHOUT adding it here
+	// left this test green, even though its comment claimed the opposite. That is
+	// the same unsoundness leaf_test.go avoids by reflecting over an upstream
+	// type. The constants are therefore parsed out of the source, and
+	// designConditions() becomes a thing under test rather than the oracle.
+	declared := conditionConstantsInSource(t)
+	inList := map[string]bool{}
+	for _, c := range code {
+		inList[c] = true
+	}
+	for _, c := range declared {
+		if !inList[c] {
+			t.Errorf("agent_types.go declares the condition constant %q and designConditions() "+
+				"omits it, so it is exempt from every check below — including the one that would "+
+				"have told you the design never approved it.", c)
+		}
+	}
+
 	dupes := func(t *testing.T, where string, xs []string) map[string]bool {
 		t.Helper()
 		seen := map[string]bool{}
@@ -204,6 +223,30 @@ func TestConditionVocabularyIsClosed(t *testing.T) {
 // A missing or unparseable design is a FAILURE, never a skip: a gate that
 // quietly stops running is worse than one that was never written, because it
 // still reports green.
+// conditionConstantsInSource reads every Cond… constant out of agent_types.go.
+// Parsing our OWN source is exactly what design 03 A23 warns against when the
+// parsed thing is the registry under test — here it is the opposite: the
+// constants are the ground truth a human writes, and designConditions() is the
+// derived list that must keep up with them.
+func conditionConstantsInSource(t *testing.T) []string {
+	t.Helper()
+	const src = "agent_types.go"
+	b, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("cannot read %s: %v — this test cannot pass without it", src, err)
+	}
+	m := regexp.MustCompile(`(?m)^\s*Cond\w+\s*=\s*"(\w+)"`).FindAllStringSubmatch(string(b), -1)
+	if len(m) < 20 {
+		t.Fatalf("found only %d condition constants in %s; a partial parse would let this test "+
+			"pass on the handful it happened to read", len(m), src)
+	}
+	out := make([]string, 0, len(m))
+	for _, g := range m {
+		out = append(out, g[1])
+	}
+	return out
+}
+
 func conditionsDeclaredByDesign(t *testing.T) []string {
 	t.Helper()
 	const design = "../../docs/designs/02-agent-crd-operator.md"
