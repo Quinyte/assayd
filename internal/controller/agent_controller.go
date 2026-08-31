@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -187,6 +188,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	r.assessGates(&agent, conds)
 	r.assessSandbox(&agent, conds)
+	r.assessEnvSourceProtection(&agent, conds)
 	r.assessTaskState(&agent, conds)
 
 	switch {
@@ -619,6 +621,60 @@ func (r *AgentReconciler) assessGates(agent *plumev1alpha1.Agent, c *conditionSe
 // assessSandbox reports the §3.2 downgrade. The agent-sandbox CRD is not bound
 // yet, so every sandboxed agent currently downgrades — stated loudly, per NFR-8,
 // rather than silently running an unsandboxed pod.
+// assessEnvSourceProtection is NFR-8 applied to a degradation this operator
+// currently HAS, rather than to one it might have.
+//
+// Design 02 §3.3 says the revision identity covers the resolved CONTENT of every
+// env source (A20), and A35/A42 say a revision reads its own immutable copy in
+// an operator-owned namespace. None of that is built: internal/revision hashes
+// the REFERENT, and workloads are created in the Agent's own namespace. So an
+// editor changes a referenced ConfigMap from a safe system prompt to an injected
+// one, a Pod is replaced, and the new content serves under the old revision's
+// gate result — with no permission to touch the Agent.
+//
+// A43 wrote that down in the design. A design paragraph is not what NFR-8 asks
+// for: "any downgraded guarantee surfaces as a CR condition, never silently."
+// Until A20+A35+A42 land, an Agent that actually references an env source says
+// so on the object.
+func (r *AgentReconciler) assessEnvSourceProtection(agent *plumev1alpha1.Agent, c *conditionSet) {
+	rt := agent.Spec.Runtime
+	if rt == nil {
+		return
+	}
+	var refs []string
+	for _, f := range rt.EnvFrom {
+		switch {
+		case f.ConfigMapRef != nil:
+			refs = append(refs, "envFrom configMapRef/"+f.ConfigMapRef.Name)
+		case f.SecretRef != nil:
+			refs = append(refs, "envFrom secretRef/"+f.SecretRef.Name)
+		}
+	}
+	for _, e := range rt.Env {
+		if e.ValueFrom == nil {
+			continue
+		}
+		switch {
+		case e.ValueFrom.ConfigMapKeyRef != nil:
+			refs = append(refs, "env."+e.Name+" configMapKeyRef/"+e.ValueFrom.ConfigMapKeyRef.Name)
+		case e.ValueFrom.SecretKeyRef != nil:
+			refs = append(refs, "env."+e.Name+" secretKeyRef/"+e.ValueFrom.SecretKeyRef.Name)
+		}
+	}
+	if len(refs) == 0 {
+		// No env source, no exposure. Saying nothing here is correct: an abnormal-
+		// true condition on an Agent that cannot be affected is the noise operators
+		// learn to filter, and then miss the one that matters.
+		return
+	}
+	sortStrings(refs) // stable message, so a re-reconcile is a no-op write
+	c.set(plumev1alpha1.CondEnvSourceProtectionUnavailable, metav1.ConditionTrue, "ContentHashingUnimplemented",
+		fmt.Sprintf("the revision identity covers the NAME of %d env source(s), not their contents "+
+			"(design 02 A43): %s. Anyone with update on a referenced object can change what this agent "+
+			"does, and the change will serve under this revision's existing gate result. Restrict update "+
+			"on those objects until A20/A35/A42 are implemented", len(refs), strings.Join(refs, ", ")))
+}
+
 func (r *AgentReconciler) assessSandbox(agent *plumev1alpha1.Agent, c *conditionSet) {
 	if agent.Spec.Runtime == nil || agent.Spec.Runtime.Sandbox == nil {
 		return

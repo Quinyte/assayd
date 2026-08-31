@@ -49,6 +49,9 @@ var ownedTypes = map[string]bool{
 	plumev1alpha1.CondSandboxDowngraded:   true,
 	plumev1alpha1.CondTaskStateUnverified: true,
 	plumev1alpha1.CondDegraded:            true,
+	// Owned because assessEnvSourceProtection is the only writer, and it must be
+	// able to CLEAR the condition when the last env source is removed from a spec.
+	plumev1alpha1.CondEnvSourceProtectionUnavailable: true,
 }
 
 // stickyTypes are owned conditions that must stay in the list once set, flipped
