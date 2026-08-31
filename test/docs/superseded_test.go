@@ -139,6 +139,18 @@ var rules = []rule{
 		why:     "A20 hashes every env source by CONTENT; referent identity alone let an update replace a prompt under a gated revision",
 	},
 	{
+		name: "seal-not-copy",
+		// A23 chose to seal env sources in place and said so emphatically — "no
+		// bytes are copied" was the design's shorthand for the whole mechanism.
+		// A35 reversed it: a revision reads its own immutable copy, because a
+		// seal is a control and a removed control stops controlling. The phrase
+		// is memorable enough to be quoted back into a body by someone working
+		// from the older half of the document.
+		banned:  regexp.MustCompile(`(?i)no bytes are copied|sealed,? not snapshotted|seals? the source in place`),
+		allowed: regexp.MustCompile(`(?i)supersed|revers|retract|no longer|A35|retired`),
+		why:     "A35 replaced the seal with immutable revision-scoped copies; sealing cannot close unplanned guard loss",
+	},
+	{
 		name:    "verifier-undecided",
 		banned:  regexp.MustCompile(`(?i)Sigstore[^.]{0,40}or[^.]{0,10}Kyverno|Kyverno[^.]{0,40}or[^.]{0,10}Sigstore`),
 		allowed: regexp.MustCompile(`(?i)not a design|earlier|supersed|chose|decided`),
@@ -459,6 +471,7 @@ var ruleFixtures = map[string]string{
 	"allowlist-equality":        "The emitted Backend's provider set equals the allowlist.",
 	"spec-only-hash":            "The revision digest is computed from spec alone.",
 	"env-referent-hash":         "Env sources are hashed by referent, not contents.",
+	"seal-not-copy":             "Every referenced source is sealed in place, and no bytes are copied.",
 	"verifier-undecided":        "Ship a Sigstore policy-controller or a Kyverno verifyImages binding.",
 	"inert-tightening":          "A tightening update must make the dependent routes inert first.",
 }
