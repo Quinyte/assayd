@@ -74,7 +74,7 @@ func mustCreateAgent(t *testing.T, ns, name string, mutate func(*plumev1alpha1.A
 	a := &plumev1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent:1.0.0"},
+			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
 		},
 	}
 	if mutate != nil {
@@ -126,7 +126,7 @@ func TestReconcileMaterializesTheRevisionWorkload(t *testing.T) {
 		t.Fatalf("the workload for revision %s was not created: %v", rev, err)
 	}
 
-	if got := d.Spec.Template.Spec.Containers[0].Image; got != "ghcr.io/acme/agent:1.0.0" {
+	if got := d.Spec.Template.Spec.Containers[0].Image; got != a.Spec.Runtime.Image {
 		t.Errorf("image is %q, want the agent's image", got)
 	}
 	if d.Labels[controller.LabelRevision] != rev {
@@ -267,7 +267,7 @@ func TestNewGenerationSupersedesTheInFlightCandidate(t *testing.T) {
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	a.Spec.Runtime.Image = "ghcr.io/acme/agent:2.0.0"
+	a.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:5669fbc273a09c85000000000000000000000000000000000000000000000000"
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestRetentionNeverCollectsTheRollbackTarget(t *testing.T) {
 		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 			t.Fatalf("get: %v", err)
 		}
-		a.Spec.Runtime.Image = fmt.Sprintf("ghcr.io/acme/agent:%d.0.0", i)
+		a.Spec.Runtime.Image = fmt.Sprintf("ghcr.io/acme/agent@sha256:%064d", i)
 		if err := k8s.Update(context.Background(), a); err != nil {
 			t.Fatalf("update: %v", err)
 		}

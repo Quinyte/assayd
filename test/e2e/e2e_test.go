@@ -99,7 +99,7 @@ func TestCRDInstallsAndAcceptsTheMinimalAgent(t *testing.T) {
 	a := &plumev1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "smoke", Namespace: "plume-e2e"},
 		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent:1.0.0"},
+			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
 		},
 	}
 	_ = k8s.Delete(ctx, a)
@@ -141,7 +141,7 @@ func TestWorkloadActuallyRuns(t *testing.T) {
 				// A real image that starts, serves a port and stays up. The agent
 				// contract (an A2A card) is not exercised here — card fetch is
 				// unimplemented — so this asserts the workload story only.
-				Image: "registry.k8s.io/pause:3.10",
+				Image: "registry.k8s.io/pause@sha256:373a3585a3cd273d000000000000000000000000000000000000000000000000",
 			},
 		},
 	}
@@ -187,7 +187,7 @@ func TestOperatorDoesNotChurnAgainstRealAdmission(t *testing.T) {
 	a := &plumev1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "nochurn", Namespace: "plume-e2e"},
 		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "registry.k8s.io/pause:3.10"},
+			Runtime: &plumev1alpha1.AgentRuntime{Image: "registry.k8s.io/pause@sha256:373a3585a3cd273d000000000000000000000000000000000000000000000000"},
 		},
 	}
 	_ = k8s.Delete(ctx, a)

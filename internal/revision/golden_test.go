@@ -21,7 +21,7 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 	tokens, usd, hops, yes := int64(2000000), "12.50", int32(4), true
 	return plumev1alpha1.AgentSpec{
 		Runtime: &plumev1alpha1.AgentRuntime{
-			Image: "ghcr.io/acme/pa-agent:1.4.2", Replicas: 2, Port: 8080,
+			Image: "ghcr.io/acme/pa-agent@sha256:1400000000000000000000000000000000000000000000000000000000000000", Replicas: 2, Port: 8080,
 			Sandbox: &plumev1alpha1.SandboxSpec{Profile: "gvisor"},
 			// One entry per union ARM: the arms are mutually exclusive, so a single
 			// EnvVar cannot populate them all and a fixture with one entry silently
@@ -83,6 +83,10 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 // edit: either revert the change, or ship a migration that carries existing
 // revisions forward. Updating the constant to make the test pass is how a
 // cluster-wide rollout storm gets released.
+// FIXTURE CHANGE (2026-08-31, Codex r8 BLOCKER 1) — again not a migration. The
+// constant moved because every image in the fixtures is now digest-pinned, which
+// design 02 A21 required and nothing enforced. The projection is unchanged.
+//
 // FIXTURE CHANGE (2026-08-31, Codex r7 MAJOR 3) — NOT a migration, and the
 // difference matters. The constant moved because goldenSpec gained the leaves
 // it always claimed to cover (usdPerDay, taskTimeout, maxHops, expose auth, one
@@ -111,7 +115,7 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 // migration costs nothing today. Taken after the first install it would need a
 // carry-forward that maps old hashes to new ones. Design 02 §3.3 records the
 // same thing so an implementer does not rediscover it from this file.
-const goldenDigest = "77df3fe02d"
+const goldenDigest = "04f4dd7640"
 
 // goldenExternalDigest pins the external-agent shape, under the same rule.
 const goldenExternalDigest = "d998beaf43"

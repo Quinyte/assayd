@@ -14,10 +14,10 @@ import (
 // about 2^20 trials: the pair below was found in 2.1 seconds on a laptop.
 //
 // The bypass it buys is total. The safe spec passes evaluation as revision
-// 0cdaf69858. The principal then writes the colliding spec, which names a
+// 1e6dc371e2. The principal then writes the colliding spec, which names a
 // different image and projects to the same ten characters. An operator
 // comparing names sees activeRevision == desired, skips candidate gating, and
-// converges the Deployment named 0cdaf69858 — through the very block that
+// converges the Deployment named 1e6dc371e2 — through the very block that
 // exists to correct out-of-band drift — to the attacker's image, while status
 // still reports the revision that passed its gate.
 //
@@ -32,7 +32,7 @@ func collidingPair() (safe, evil plumev1alpha1.AgentSpec) {
 			Env:   []corev1.EnvVar{{Name: "PAD", Value: pad}},
 		}}
 	}
-	return mk("ghcr.io/acme/agent:1.0.0", "654623"), mk("ghcr.io/attacker/backdoor:1.0.0", "x1702559")
+	return mk("ghcr.io/acme/agent@sha256:a100000000000000000000000000000000000000000000000000000000000001", "493725"), mk("ghcr.io/attacker/backdoor@sha256:b200000000000000000000000000000000000000000000000000000000000002", "x504692")
 }
 
 func TestTheNameCollidesAndTheIdentityDoesNot(t *testing.T) {

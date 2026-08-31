@@ -131,7 +131,7 @@ func mutateField(t *testing.T, path string) plumev1alpha1.AgentSpec {
 	s := baseSpec()
 	switch path {
 	case "Runtime.Image":
-		s.Runtime.Image = "ghcr.io/acme/agent:99"
+		s.Runtime.Image = "ghcr.io/acme/agent@sha256:4300000000000000000000000000000000000000000000000000000000000000"
 	case "Runtime.Env":
 		s.Runtime.Env = []corev1.EnvVar{{Name: "MODE", Value: "x"}}
 	case "Runtime.EnvFrom":

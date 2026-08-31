@@ -23,7 +23,7 @@ func withGraph(s *plumev1alpha1.AgentSpec) {
 func baseSpec() plumev1alpha1.AgentSpec {
 	return plumev1alpha1.AgentSpec{
 		Runtime: &plumev1alpha1.AgentRuntime{
-			Image:    "ghcr.io/acme/agent:1.0.0",
+			Image:    "ghcr.io/acme/agent@sha256:1100000000000000000000000000000000000000000000000000000000000000",
 			Replicas: 1,
 			Port:     8080,
 		},
@@ -71,7 +71,7 @@ func TestBehaviourSurfaceMintsARevision(t *testing.T) {
 		why    string
 	}{
 		{field: "runtime.image", mutate: func(s *plumev1alpha1.AgentSpec) {
-			s.Runtime.Image = "ghcr.io/acme/agent:2.0.0"
+			s.Runtime.Image = "ghcr.io/acme/agent@sha256:2200000000000000000000000000000000000000000000000000000000000000"
 		}, why: "different code"},
 
 		// A30. Both sides carry the tool so tools[].name is constant and only

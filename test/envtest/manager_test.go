@@ -101,7 +101,7 @@ func TestManagerReconcilesAnAgentEndToEnd(t *testing.T) {
 	a := &plumev1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "managed", Namespace: ns},
 		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent:1.0.0"},
+			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
 		},
 	}
 	if err := k8s.Create(ctx, a); err != nil {
@@ -150,7 +150,7 @@ func TestManagerWatchesOwnedWorkloads(t *testing.T) {
 	a := &plumev1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "watched", Namespace: ns},
 		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent:1.0.0"},
+			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
 		},
 	}
 	if err := k8s.Create(ctx, a); err != nil {
@@ -179,7 +179,7 @@ func TestManagerWatchesOwnedWorkloads(t *testing.T) {
 		if err := k8s.Get(ctx, key, &got); err != nil {
 			return false
 		}
-		return got.Spec.Template.Spec.Containers[0].Image == "ghcr.io/acme/agent:1.0.0"
+		return got.Spec.Template.Spec.Containers[0].Image == a.Spec.Runtime.Image
 	})
 }
 
@@ -193,7 +193,7 @@ func TestManagerReleasesTheFinalizerOnDelete(t *testing.T) {
 	a := &plumev1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "deleted", Namespace: ns},
 		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent:1.0.0"},
+			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
 		},
 	}
 	if err := k8s.Create(ctx, a); err != nil {
@@ -270,7 +270,7 @@ func TestReconcilerIsSafeUnderGenerationChangedPredicate(t *testing.T) {
 	a := &plumev1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "predicated", Namespace: ns},
 		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent:1.0.0"},
+			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
 		},
 	}
 	if err := k8s.Create(ctx, a); err != nil {

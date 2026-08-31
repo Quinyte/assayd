@@ -39,7 +39,7 @@ metadata:
   name: my-agent
 spec:
   runtime:
-    image: ghcr.io/acme/my-agent:1.0.0
+    image: ghcr.io/acme/my-agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000
 `
 
 func TestMinimalAgentIsAccepted(t *testing.T) {
@@ -81,7 +81,7 @@ metadata:
   name: claims-triage
 spec:
   runtime:
-    image: ghcr.io/acme/claims-triage:2.1.0
+    image: ghcr.io/acme/claims-triage@sha256:79b86a71cc2ef03d000000000000000000000000000000000000000000000000
   knowledge:
     - name: claims-policy
       version: "2026.3"
@@ -123,7 +123,7 @@ apiVersion: plume.dev/v1alpha1
 kind: Agent
 metadata: {name: both}
 spec:
-  runtime: {image: ghcr.io/acme/a:1}
+  runtime: {image: ghcr.io/acme/a@sha256:3bda1c750240ee09000000000000000000000000000000000000000000000000}
   external: {endpoint: "https://agent.example.com"}
 `,
 			expect: "exactly one of spec.runtime",
@@ -136,7 +136,7 @@ kind: Agent
 metadata: {name: scaled-sandbox}
 spec:
   runtime:
-    image: ghcr.io/acme/a:1
+    image: ghcr.io/acme/a@sha256:3bda1c750240ee09000000000000000000000000000000000000000000000000
     replicas: 3
     sandbox: {profile: gvisor}
 `,
@@ -149,7 +149,7 @@ apiVersion: plume.dev/v1alpha1
 kind: Agent
 metadata: {name: this-agent-name-is-deliberately-far-too-long-to-fit-a-label}
 spec:
-  runtime: {image: ghcr.io/acme/a:1}
+  runtime: {image: ghcr.io/acme/a@sha256:3bda1c750240ee09000000000000000000000000000000000000000000000000}
 `,
 			expect: "at most 52 characters",
 		},
@@ -221,7 +221,7 @@ apiVersion: plume.dev/v1alpha1
 kind: Agent
 metadata: {name: reacher}
 spec:
-  runtime: {image: ghcr.io/acme/a:1}
+  runtime: {image: ghcr.io/acme/a@sha256:3bda1c750240ee09000000000000000000000000000000000000000000000000}
   tools:
     - name: prod-payments-db
       namespace: finance

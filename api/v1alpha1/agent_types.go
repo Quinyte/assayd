@@ -68,8 +68,25 @@ type AgentSpec struct {
 //
 // +kubebuilder:validation:XValidation:rule="!(has(self.sandbox) && self.replicas > 1)",message="spec.runtime.sandbox is a stateful singleton: set replicas to 1, or drop sandbox to scale out"
 type AgentRuntime struct {
-	// Image must be cosign-signed; admission rejects unsigned images.
+	// Image is digest-pinned: exactly one "@sha256:" followed by 64 lowercase hex
+	// characters (A21). A tag can be repointed at other bytes after a revision is
+	// gated — retag while `agent:prod` is serving, let a node drain, and
+	// Kubernetes pulls the new image while the spec, the revision digest and the
+	// gate result all still name the old one. No Agent write is involved, so
+	// nothing in the revision machinery can see it.
+	//
+	// The rule this comment used to make — "must be cosign-signed; admission
+	// rejects unsigned images" — was FALSE and shipped verbatim in the generated
+	// CRD. Nothing verifies a signature: CEL cannot, and the chart ships no
+	// admission policy. That arrives with the Sigstore policy-controller binding
+	// design 07 A2 chose. Digest-pinning is what will make it meaningful, because
+	// a signature is verified against a digest.
+	//
+	// Unconditional, with no local-profile relaxation: one schema applies
+	// cluster-wide and CEL has no profile in its evaluation context, so an
+	// alternative permitting `:dev` would permit a mutable tag in production.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self.matches('^[^@]+@sha256:[0-9a-f]{64}$')",message="spec.runtime.image must be digest-pinned: <repo>@sha256:<64 lowercase hex>. A tag can be repointed after the revision is gated, so the running code would no longer be the code that passed. Resolve the tag to a digest (docker buildx imagetools inspect, or the digest your CI already publishes)."
 	Image string `json:"image"`
 
 	// Replicas >1 requires the card to assert shared task state, else the

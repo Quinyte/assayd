@@ -56,7 +56,7 @@ func TestAnAlreadyExistsRaceDoesNotAcceptAnUnvalidatedWorkload(t *testing.T) {
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"squat": "yes"}},
 				Spec: corev1.PodSpec{Containers: []corev1.Container{
-					{Name: "agent", Image: "ghcr.io/attacker/backdoor:1.0.0"}}},
+					{Name: "agent", Image: "ghcr.io/attacker/backdoor@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"}}},
 			},
 		},
 	}
@@ -85,7 +85,7 @@ func TestAnAlreadyExistsRaceDoesNotAcceptAnUnvalidatedWorkload(t *testing.T) {
 	if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &d); err != nil {
 		t.Fatalf("get workload: %v", err)
 	}
-	if img := d.Spec.Template.Spec.Containers[0].Image; img != "ghcr.io/attacker/backdoor:1.0.0" {
+	if img := d.Spec.Template.Spec.Containers[0].Image; img != squatter.Spec.Template.Spec.Containers[0].Image {
 		return // converged over it; acceptable, the squatter did not win
 	}
 	if c := condition(&after, plumev1alpha1.CondRevisionHashCollision); c == nil ||
@@ -125,7 +125,7 @@ func TestAnUnstampedActiveWorkloadIsNotReportedAsServing(t *testing.T) {
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
-	live.Spec.Runtime.Image = "ghcr.io/acme/agent:5.0.0" // a genuinely different revision
+	live.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:3b0595374736e4a2000000000000000000000000000000000000000000000000" // a genuinely different revision
 	if err := k8s.Update(context.Background(), &live); err != nil {
 		t.Fatalf("update: %v", err)
 	}

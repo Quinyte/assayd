@@ -137,7 +137,7 @@ func TestOutOfBandDriftIsCorrected(t *testing.T) {
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if img := d.Spec.Template.Spec.Containers[0].Image; img != "ghcr.io/acme/agent:1.0.0" {
+	if img := d.Spec.Template.Spec.Containers[0].Image; img != a.Spec.Runtime.Image {
 		t.Errorf("image is still %q after reconcile. The gate passed on one revision and "+
 			"the pods run another, while the CR asserts the first — ADR-0006 bypassed by "+
 			"anyone with deployments/update.", img)
@@ -359,7 +359,7 @@ func TestSpecEditOnAServingAgentStaysReady(t *testing.T) {
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	a.Spec.Runtime.Image = "ghcr.io/acme/agent:2.0.0"
+	a.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:5669fbc273a09c85000000000000000000000000000000000000000000000000"
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestHoldingOnGatesKeepsAServingAgentReady(t *testing.T) {
 		t.Fatalf("get: %v", err)
 	}
 	a.Spec.Gates = []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
-	a.Spec.Runtime.Image = "ghcr.io/acme/agent:2.0.0"
+	a.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:5669fbc273a09c85000000000000000000000000000000000000000000000000"
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -582,7 +582,7 @@ func TestProgressingIsClearedOnEveryExitFromARollout(t *testing.T) {
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	a.Spec.Runtime.Image = "ghcr.io/acme/agent:2.0.0"
+	a.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:5669fbc273a09c85000000000000000000000000000000000000000000000000"
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -604,7 +604,7 @@ func TestProgressingIsClearedOnEveryExitFromARollout(t *testing.T) {
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	a.Spec.Runtime.Image = "ghcr.io/acme/agent:3.0.0"
+	a.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:5b187bff8aca8394000000000000000000000000000000000000000000000000"
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -616,7 +616,7 @@ func TestProgressingIsClearedOnEveryExitFromARollout(t *testing.T) {
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	a.Spec.Runtime.Image = "ghcr.io/acme/agent:2.0.0" // back to the active revision
+	a.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:5669fbc273a09c85000000000000000000000000000000000000000000000000" // back to the active revision
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}

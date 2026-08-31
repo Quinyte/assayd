@@ -33,11 +33,11 @@ import (
 // two specs naming different images that project to one revision NAME.
 func pinnedCollidingSpecs() (safe, evil plumev1alpha1.AgentSpec) {
 	safe = plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{
-		Image: "ghcr.io/acme/agent:1.0.0",
-		Env:   []corev1.EnvVar{{Name: "PAD", Value: "654623"}}}}
+		Image: "ghcr.io/acme/agent@sha256:a100000000000000000000000000000000000000000000000000000000000001",
+		Env:   []corev1.EnvVar{{Name: "PAD", Value: "493725"}}}}
 	evil = plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{
-		Image: "ghcr.io/attacker/backdoor:1.0.0",
-		Env:   []corev1.EnvVar{{Name: "PAD", Value: "x1702559"}}}}
+		Image: "ghcr.io/attacker/backdoor@sha256:b200000000000000000000000000000000000000000000000000000000000002",
+		Env:   []corev1.EnvVar{{Name: "PAD", Value: "x504692"}}}}
 	return safe, evil
 }
 
@@ -77,7 +77,7 @@ func TestACollidingSpecCannotRewriteAGatedWorkload(t *testing.T) {
 	if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &d); err != nil {
 		t.Fatalf("get workload: %v", err)
 	}
-	if img := d.Spec.Template.Spec.Containers[0].Image; img != "ghcr.io/acme/agent:1.0.0" {
+	if img := d.Spec.Template.Spec.Containers[0].Image; img != safe.Runtime.Image {
 		t.Errorf("the gated workload now runs %q.\n"+
 			"A chosen 40-bit collision rewrote a revision that had already passed its gate — "+
 			"ADR-0006 is bypassed entirely and status still names the revision that passed.", img)
@@ -220,7 +220,7 @@ func TestACollisionClearsWhenTheSpecIsRepaired(t *testing.T) {
 	// Repair: an ordinary spec that shares no name with the active revision.
 	repaired := safe
 	repaired.Runtime = safe.Runtime.DeepCopy()
-	repaired.Runtime.Image = "ghcr.io/acme/agent:2.0.0"
+	repaired.Runtime.Image = "ghcr.io/acme/agent@sha256:5669fbc273a09c85000000000000000000000000000000000000000000000000"
 	after := set(t, repaired)
 
 	if c := condition(&after, plumev1alpha1.CondRevisionHashCollision); c != nil &&
@@ -309,7 +309,7 @@ func TestARolloutIsNotReportedReadyWhenTheActiveRevisionHasNoWorkload(t *testing
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
-	live.Spec.Runtime.Image = "ghcr.io/acme/agent:9.9.9"
+	live.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:1a0149e949ee9d40000000000000000000000000000000000000000000000000"
 	if err := k8s.Update(context.Background(), &live); err != nil {
 		t.Fatalf("update: %v", err)
 	}

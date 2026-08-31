@@ -294,7 +294,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: c
-    image: curlimages/curl:8.11.1
+    image: curlimages/curl@sha256:4acaee7ce3d5df2e000000000000000000000000000000000000000000000000
     command: ["sleep", "3600"]`)
 	if out, err := kubectl(t, "wait", "--for=condition=Ready", "pod/conf-curl", "-n", "default", "--timeout=180s"); err != nil {
 		t.Fatalf("curl pod never became Ready: %s", out)
