@@ -46,7 +46,7 @@ func (c *hideOnce) Get(ctx context.Context, key client.ObjectKey, obj client.Obj
 func TestAnAlreadyExistsRaceDoesNotAcceptAnUnvalidatedWorkload(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "race", nil)
-	name := controller.WorkloadName("race", revision.Hash(a.Spec))
+	name := controller.WorkloadName("race", revision.MustHash(a.Spec))
 
 	// Someone else's Deployment is already sitting on the name, Available, with
 	// no stamp from this operator.
@@ -117,7 +117,7 @@ func TestAnUnstampedActiveWorkloadIsNotReportedAsServing(t *testing.T) {
 	a := mustCreateAgent(t, ns, "unstampedactive", nil)
 	r := newReconciler(false)
 	settle(t, r, a)
-	active := controller.WorkloadName("unstampedactive", revision.Hash(a.Spec))
+	active := controller.WorkloadName("unstampedactive", revision.MustHash(a.Spec))
 	markAvailable(t, ns, active, 1)
 	got := settle(t, r, a)
 	if got.Status.ActiveRevision == "" {

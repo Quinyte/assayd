@@ -36,8 +36,6 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 					APIVersion: "v1", FieldPath: "metadata.name"}}},
 				{Name: "CPU", ValueFrom: &corev1.EnvVarSource{ResourceFieldRef: &corev1.ResourceFieldSelector{
 					ContainerName: "agent", Resource: "limits.cpu", Divisor: resource.MustParse("1")}}},
-				{Name: "FIL", ValueFrom: &corev1.EnvVarSource{FileKeyRef: &corev1.FileKeySelector{
-					VolumeName: "vol", Path: "p.env", Key: "K", Optional: &yes}}},
 			},
 			EnvFrom: []corev1.EnvFromSource{
 				{Prefix: "P_", ConfigMapRef: &corev1.ConfigMapEnvSource{
@@ -108,6 +106,12 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 // edit: either revert the change, or ship a migration that carries existing
 // revisions forward. Updating the constant to make the test pass is how a
 // cluster-wide rollout storm gets released.
+// MIGRATION 4 (2026-08-31, design 02 A20 implemented) — the projection now
+// carries a digest of the RESOLVED CONTENT of every referenced env source, so
+// every revision hash moves again. This is the migration that closes the live
+// bypass: before it, changing a referenced ConfigMap left the identity
+// unchanged and the new content served under the old gate result.
+//
 // MIGRATION 3 (2026-08-31, design 02 A53 / Codex r8 BLOCKER 6) — a real
 // encoding change. llm.providers, llm.egressAllowlist and llm.fallback became
 // typed endpoint identities, so every revision hash moves. Free only because P1
@@ -145,13 +149,13 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 // migration costs nothing today. Taken after the first install it would need a
 // carry-forward that maps old hashes to new ones. Design 02 §3.3 records the
 // same thing so an implementer does not rediscover it from this file.
-const goldenDigest = "8406d8dfa8"
+const goldenDigest = "6074745b5b"
 
 // goldenExternalDigest pins the external-agent shape, under the same rule.
 const goldenExternalDigest = "d998beaf43"
 
 func TestGoldenDigest(t *testing.T) {
-	if got := Hash(goldenSpec()); got != goldenDigest {
+	if got := HashWith(goldenSpec(), "fixed"); got != goldenDigest {
 		t.Errorf("behaviour projection encoding changed: got %q, pinned %q.\n"+
 			"This is a migration, not a test edit — see the comment on goldenDigest.", got, goldenDigest)
 	}
@@ -201,7 +205,21 @@ func coverageSpecs() []plumev1alpha1.AgentSpec {
 			LLM:     &plumev1alpha1.LLMSpec{Fallback: &e},
 		}
 	}
+	// fileKeyRef reads from a VOLUME, and this API renders none — so the operator
+	// cannot hash its content and A20 refuses to mint. It cannot appear in a
+	// digest-pinned fixture for that reason, and it stays here so its four leaves
+	// keep classification coverage. The refusal is asserted separately by
+	// TestAFileKeyRefSpecCannotMintARevision.
+	fileKey := plumev1alpha1.AgentSpec{
+		Runtime: &plumev1alpha1.AgentRuntime{
+			Image: goldenSpec().Runtime.Image,
+			Env: []corev1.EnvVar{{Name: "FIL", ValueFrom: &corev1.EnvVarSource{
+				FileKeyRef: &corev1.FileKeySelector{
+					VolumeName: "vol", Path: "p.env", Key: "K", Optional: boolPtr(true)}}}},
+		},
+	}
 	return []plumev1alpha1.AgentSpec{
+		fileKey,
 		fb(plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmAzureOpenAI,
 			AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{
 				Endpoint: "acme.openai.azure.com", DeploymentName: "gpt4o-prod", APIVersion: "2024-10-21"}}),
@@ -229,7 +247,7 @@ func goldenExternalSpec() plumev1alpha1.AgentSpec {
 }
 
 func TestGoldenExternalDigest(t *testing.T) {
-	if got := Hash(goldenExternalSpec()); got != goldenExternalDigest {
+	if got := HashWith(goldenExternalSpec(), "fixed"); got != goldenExternalDigest {
 		t.Errorf("the external-agent projection encoding changed: got %q, pinned %q.\n"+
 			"Same rule as goldenDigest: this is a migration, not a test edit.", got, goldenExternalDigest)
 	}

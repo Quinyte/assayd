@@ -52,6 +52,7 @@ var ownedTypes = map[plumev1alpha1.ConditionType]bool{
 	// Owned because assessEnvSourceProtection is the only writer, and it must be
 	// able to CLEAR the condition when the last env source is removed from a spec.
 	plumev1alpha1.CondEnvSourceProtectionUnavailable: true,
+	plumev1alpha1.CondEnvSourceUnresolved:            true,
 	// Owned so it can CLEAR. It was in neither map, which meant merge() treated
 	// it as another controller's and carried it forward verbatim — forever, with
 	// a stale message, on an agent that had gone back to Ready. No other

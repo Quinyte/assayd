@@ -150,7 +150,14 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 				unreachable = append(unreachable, l.Path)
 				t.Skipf("no admissible perturbation: %v / %v", errA, errB)
 			}
-			same := revision.Hash(a) == revision.Hash(b)
+			ha, aerr := revision.HashOrRefusal(a, "fixed")
+			hb, berr := revision.HashOrRefusal(b, "fixed")
+			if aerr != nil || berr != nil {
+				// A20 refuses a spec whose env arm the operator cannot read, so this
+				// leaf has no identity to classify.
+				t.Skipf("refused by A20: %v / %v", aerr, berr)
+			}
+			same := ha == hb
 			mustMint := revision.ClassifiedAsBehaviour(l.Path)
 			switch {
 			case mustMint && same:

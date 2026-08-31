@@ -11,6 +11,7 @@
 package controller
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -98,6 +99,11 @@ func NewAgentReconciler(c client.Client, scheme *runtime.Scheme, evalSuiteInstal
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch
 // Events are the durable record design 02 §3.3 promises for a superseded
 // candidate; status is the convenience and is capped.
+// A20: the revision identity covers the resolved CONTENT of every referenced
+// env source, so the operator must read them. `get` only — it never writes a
+// user's ConfigMap or Secret, and the copies A35 will create live under names
+// this operator owns.
+// +kubebuilder:rbac:groups="",resources=configmaps;secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // Discovery of whether the EvalSuite CRD is installed decides whether rollouts
 // are eval-gated (ADR-0006), so the operator must be able to see CRDs.
@@ -141,11 +147,26 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, r.reportUnreconcilable(ctx, &agent)
 	}
 
+	// A20: resolve every referenced env source BEFORE computing an identity. The
+	// content is part of the identity, so a spec alone cannot produce one — which
+	// is the point: an editor changing a referenced ConfigMap must mint a
+	// candidate, not serve new behaviour under the old revision's gate result.
+	resolved, unresolved, err := r.resolveEnvSources(ctx, &agent)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// `desired` NAMES the revision; `desiredDigest` IDENTIFIES it. Every equality
 	// test below is on the digest, because the name is 40 bits and a chosen
 	// collision against it takes about a second (A37).
-	desired := revision.Hash(agent.Spec)
-	desiredDigest := revision.Digest(agent.Spec)
+	desired, herr := revision.Hash(agent.Spec, resolved)
+	desiredDigest, derr := revision.Digest(agent.Spec, resolved)
+	if herr != nil || derr != nil {
+		// No revision is minted and no workload is created. A missing referent is
+		// UNRESOLVED, never a zero digest: a zero would let deleting an object
+		// mint the same hash as never having referenced it.
+		return ctrl.Result{}, r.reportUnresolvedSources(ctx, &agent, unresolved, cmp.Or(herr, derr))
+	}
 	logger = logger.WithValues("revision", desired)
 
 	owned, err := r.ownedWorkloads(ctx, &agent)
@@ -447,6 +468,76 @@ func (r *AgentReconciler) reportCollision(ctx context.Context, agent *plumev1alp
 func (r *AgentReconciler) revisionAvailable(ctx context.Context, agent *plumev1alpha1.Agent, rev, digest string) bool {
 	ok, err := r.workloadAvailable(ctx, agent, rev, digest)
 	return err == nil && ok
+}
+
+// resolveEnvSources reads every ConfigMap and Secret the runtime references and
+// returns their content digests. A source that does not exist, or that the
+// operator may not read, is returned as unresolved rather than as an error: the
+// two are the same fact to an Agent — its behaviour is not knowable — and both
+// must stop the revision rather than produce a partial identity.
+func (r *AgentReconciler) resolveEnvSources(ctx context.Context, agent *plumev1alpha1.Agent) (
+	revision.Resolved, []revision.SourceRef, error) {
+	refs := revision.EnvSources(agent.Spec)
+	if len(refs) == 0 {
+		return nil, nil, nil
+	}
+	out := revision.Resolved{}
+	var unresolved []revision.SourceRef
+	for _, ref := range refs {
+		key := types.NamespacedName{Namespace: agent.Namespace, Name: ref.Name}
+		switch ref.Kind {
+		case "ConfigMap":
+			var cm corev1.ConfigMap
+			if err := r.Get(ctx, key, &cm); err != nil {
+				if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+					unresolved = append(unresolved, ref)
+					continue
+				}
+				return nil, nil, fmt.Errorf("read %s for %s: %w", ref, agent.Name, err)
+			}
+			out[ref] = revision.ContentDigest(cm.Data, cm.BinaryData)
+		case "Secret":
+			var sec corev1.Secret
+			if err := r.Get(ctx, key, &sec); err != nil {
+				if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+					unresolved = append(unresolved, ref)
+					continue
+				}
+				return nil, nil, fmt.Errorf("read %s for %s: %w", ref, agent.Name, err)
+			}
+			// StringData is a write-only convenience the API server folds into
+			// Data, so reading Data alone is complete.
+			out[ref] = revision.ContentDigest(nil, sec.Data)
+		}
+	}
+	return out, unresolved, nil
+}
+
+// reportUnresolvedSources is the A20 failure path: no revision, no workload, and
+// a condition naming what could not be read.
+func (r *AgentReconciler) reportUnresolvedSources(ctx context.Context, agent *plumev1alpha1.Agent,
+	unresolved []revision.SourceRef, cause error) error {
+	status := agent.Status.DeepCopy()
+	conds := newConditionSet(agent.Generation)
+	r.assessGates(agent, conds)
+	r.assessSandbox(agent, conds)
+	r.assessTaskState(agent, conds)
+
+	names := make([]string, 0, len(unresolved))
+	for _, u := range unresolved {
+		names = append(names, u.String())
+	}
+	msg := cause.Error()
+	if len(names) > 0 {
+		msg = fmt.Sprintf("%s: %s. Create them, or remove the reference from spec.runtime",
+			strings.Join(names, ", "), cause)
+	}
+	conds.set(plumev1alpha1.CondEnvSourceUnresolved, metav1.ConditionTrue, "Unresolved", msg)
+	conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "EnvSourceUnresolved", msg)
+	status.Phase = plumev1alpha1.PhasePending
+	status.Conditions = conds.merge(agent.Status.Conditions)
+	status.ObservedGeneration = agent.Generation
+	return r.writeStatus(ctx, agent, status)
 }
 
 func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alpha1.Agent, rev, digest string,
@@ -856,11 +947,17 @@ func (r *AgentReconciler) assessEnvSourceProtection(agent *plumev1alpha1.Agent, 
 	if more > 0 {
 		shown = fmt.Sprintf("%s, and %d more", shown, more)
 	}
-	c.set(plumev1alpha1.CondEnvSourceProtectionUnavailable, metav1.ConditionTrue, "ContentHashingUnimplemented",
-		fmt.Sprintf("the revision identity covers the NAME of %d env source(s), not their contents "+
-			"(design 02 A43): %s. Anyone with update on a referenced object can change what this agent "+
-			"does, and the change will serve under this revision's existing gate result. Restrict update "+
-			"on those objects until A20/A35/A42 are implemented", len(refs), shown))
+	// A20 is implemented, so a source edit now MINTS a candidate and is gated
+	// before promotion. What remains is A35 and A42: the retained workload still
+	// resolves the user's object by name, so replacing a Pod can serve changed
+	// bytes under a revision that already passed. Narrower than the gap this
+	// condition first announced, and still a real one (design 02 A46).
+	c.set(plumev1alpha1.CondEnvSourceProtectionUnavailable, metav1.ConditionTrue, "SourcesNotIsolated",
+		fmt.Sprintf("%d env source(s) are hashed by content and gated on change (A20), but the "+
+			"running workload still reads them BY NAME: %s. Replacing a Pod after an edit serves the "+
+			"new content under this revision's existing gate result. Restrict update on those objects "+
+			"until A35 (revision-scoped copies) and A42 (the run namespace) are implemented",
+			len(refs), shown))
 }
 
 func (r *AgentReconciler) assessSandbox(agent *plumev1alpha1.Agent, c *conditionSet) {

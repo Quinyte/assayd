@@ -8,6 +8,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -116,7 +117,7 @@ func condition(a *plumev1alpha1.Agent, t plumev1alpha1.ConditionType) *metav1.Co
 func TestReconcileMaterializesTheRevisionWorkload(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "materialize", nil)
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 
 	reconcileOnce(t, newReconciler(false), a) // installs the finalizer
 	reconcileOnce(t, newReconciler(false), a) // creates the workload
@@ -157,7 +158,7 @@ func TestReconcileMaterializesTheRevisionWorkload(t *testing.T) {
 func TestPromotionRequiresAnAvailableWorkload(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "promote", nil)
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 	r := newReconciler(false)
 
 	got := settle(t, r, a)
@@ -189,7 +190,7 @@ func TestUngatedRolloutIsLoudAboutIt(t *testing.T) {
 	a := mustCreateAgent(t, ns, "ungated", nil)
 	r := newReconciler(false)
 	settle(t, r, a)
-	markAvailable(t, ns, controller.WorkloadName("ungated", revision.Hash(a.Spec)), 1)
+	markAvailable(t, ns, controller.WorkloadName("ungated", revision.MustHash(a.Spec)), 1)
 	got := settle(t, r, a)
 
 	c := condition(&got, plumev1alpha1.CondGatesSkipped)
@@ -214,7 +215,7 @@ func TestGatesDeclaredWithoutTheCRDIsLoudAboutIt(t *testing.T) {
 	})
 	r := newReconciler(false) // gates declared, EvalSuite CRD absent
 	settle(t, r, a)
-	markAvailable(t, ns, controller.WorkloadName("gatesnocrd", revision.Hash(a.Spec)), 1)
+	markAvailable(t, ns, controller.WorkloadName("gatesnocrd", revision.MustHash(a.Spec)), 1)
 	got := settle(t, r, a)
 
 	c := condition(&got, plumev1alpha1.CondGatesSkipped)
@@ -240,7 +241,7 @@ func TestDeclaredGatesHoldWhenNoGateControllerExists(t *testing.T) {
 	})
 	r := newReconciler(true) // EvalSuite CRD present
 	settle(t, r, a)
-	markAvailable(t, ns, controller.WorkloadName("gated", revision.Hash(a.Spec)), 1)
+	markAvailable(t, ns, controller.WorkloadName("gated", revision.MustHash(a.Spec)), 1)
 	got := settle(t, r, a)
 
 	if got.Status.Phase != plumev1alpha1.PhaseHeld {
@@ -260,7 +261,7 @@ func TestDeclaredGatesHoldWhenNoGateControllerExists(t *testing.T) {
 func TestNewGenerationSupersedesTheInFlightCandidate(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "supersede", nil)
-	first := revision.Hash(a.Spec)
+	first := revision.MustHash(a.Spec)
 	r := newReconciler(false)
 	settle(t, r, a)
 
@@ -272,7 +273,7 @@ func TestNewGenerationSupersedesTheInFlightCandidate(t *testing.T) {
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	second := revision.Hash(a.Spec)
+	second := revision.MustHash(a.Spec)
 	if first == second {
 		t.Fatal("fixture error: the image change did not mint a new revision")
 	}
@@ -307,7 +308,7 @@ func TestRetentionNeverCollectsTheRollbackTarget(t *testing.T) {
 		if err := k8s.Update(context.Background(), a); err != nil {
 			t.Fatalf("update: %v", err)
 		}
-		rev := revision.Hash(a.Spec)
+		rev := revision.MustHash(a.Spec)
 		revs = append(revs, rev)
 		settle(t, r, a)
 		markAvailable(t, ns, controller.WorkloadName("retain", rev), 1)
@@ -382,7 +383,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	a := mustCreateAgent(t, ns, "idempotent", nil)
 	r := newReconciler(false)
 	settle(t, r, a)
-	markAvailable(t, ns, controller.WorkloadName("idempotent", revision.Hash(a.Spec)), 1)
+	markAvailable(t, ns, controller.WorkloadName("idempotent", revision.MustHash(a.Spec)), 1)
 	settle(t, r, a)
 
 	// Count writes rather than compare resourceVersions: the API server does not
@@ -477,4 +478,37 @@ func containsPrefix(xs []string, prefix string) bool {
 		}
 	}
 	return false
+}
+
+// revisionOf computes the revision NAME the operator will compute, by resolving
+// every referenced env source from the cluster exactly as it does.
+//
+// A test cannot use revision.MustHash on a spec with env sources — that helper
+// panics, deliberately, because hashing without content asserts about an
+// identity the operator can never mint (A20).
+func revisionOf(t *testing.T, ns string, spec plumev1alpha1.AgentSpec) string {
+	t.Helper()
+	resolved := revision.Resolved{}
+	for _, ref := range revision.EnvSources(spec) {
+		key := types.NamespacedName{Namespace: ns, Name: ref.Name}
+		switch ref.Kind {
+		case "ConfigMap":
+			var cm corev1.ConfigMap
+			if err := k8s.Get(context.Background(), key, &cm); err != nil {
+				t.Fatalf("resolve %s: %v", ref, err)
+			}
+			resolved[ref] = revision.ContentDigest(cm.Data, cm.BinaryData)
+		case "Secret":
+			var sec corev1.Secret
+			if err := k8s.Get(context.Background(), key, &sec); err != nil {
+				t.Fatalf("resolve %s: %v", ref, err)
+			}
+			resolved[ref] = revision.ContentDigest(nil, sec.Data)
+		}
+	}
+	h, err := revision.Hash(spec, resolved)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	return h
 }

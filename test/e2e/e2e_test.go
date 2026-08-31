@@ -151,7 +151,7 @@ func TestWorkloadActuallyRuns(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = k8s.Delete(context.Background(), a) })
 
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 	name := controller.WorkloadName("runs", rev)
 
 	deadline := time.Now().Add(3 * time.Minute)
@@ -196,7 +196,7 @@ func TestOperatorDoesNotChurnAgainstRealAdmission(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = k8s.Delete(context.Background(), a) })
 
-	name := controller.WorkloadName("nochurn", revision.Hash(a.Spec))
+	name := controller.WorkloadName("nochurn", revision.MustHash(a.Spec))
 	key := types.NamespacedName{Namespace: "plume-e2e", Name: name}
 
 	var first appsv1.Deployment

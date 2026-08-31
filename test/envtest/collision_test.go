@@ -44,10 +44,10 @@ func pinnedCollidingSpecs() (safe, evil plumev1alpha1.AgentSpec) {
 
 func TestACollidingSpecCannotRewriteAGatedWorkload(t *testing.T) {
 	safe, evil := pinnedCollidingSpecs()
-	if revision.Hash(safe) != revision.Hash(evil) {
+	if revision.MustHash(safe) != revision.MustHash(evil) {
 		t.Fatalf("the pinned pair no longer collides; see internal/revision/collision_test.go")
 	}
-	name := controller.WorkloadName("collide", revision.Hash(safe))
+	name := controller.WorkloadName("collide", revision.MustHash(safe))
 
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "collide", func(a *plumev1alpha1.Agent) { a.Spec = safe })
@@ -56,10 +56,10 @@ func TestACollidingSpecCannotRewriteAGatedWorkload(t *testing.T) {
 	markAvailable(t, ns, name, 1)
 	got := settle(t, r, a)
 
-	if got.Status.ActiveRevision != revision.Hash(safe) {
+	if got.Status.ActiveRevision != revision.MustHash(safe) {
 		t.Fatalf("setup: safe revision did not become active, got %q", got.Status.ActiveRevision)
 	}
-	if got.Status.ActiveRevisionDigest != revision.Digest(safe) {
+	if got.Status.ActiveRevisionDigest != revision.MustDigest(safe) {
 		t.Fatalf("setup: status did not persist the full digest, got %q", got.Status.ActiveRevisionDigest)
 	}
 
@@ -140,10 +140,10 @@ func TestACollidingSpecIsRefusedWithNoWorkloadAndWithAStrippedAnnotation(t *test
 			a := mustCreateAgent(t, ns, "guard", func(a *plumev1alpha1.Agent) { a.Spec = safe })
 			r := newReconciler(false)
 			settle(t, r, a)
-			workload := controller.WorkloadName("guard", revision.Hash(safe))
+			workload := controller.WorkloadName("guard", revision.MustHash(safe))
 			markAvailable(t, ns, workload, 1)
 			got := settle(t, r, a)
-			if got.Status.ActiveRevisionDigest != revision.Digest(safe) {
+			if got.Status.ActiveRevisionDigest != revision.MustDigest(safe) {
 				t.Fatalf("setup: safe revision is not active")
 			}
 
@@ -168,7 +168,7 @@ func TestACollidingSpecIsRefusedWithNoWorkloadAndWithAStrippedAnnotation(t *test
 				t.Errorf("no collision reported with the %s: the guard depended on the "+
 					"Deployment, which the attacking principal controls", tc.name)
 			}
-			if after.Status.ActiveRevisionDigest != revision.Digest(safe) {
+			if after.Status.ActiveRevisionDigest != revision.MustDigest(safe) {
 				t.Error("the colliding spec became the active revision")
 			}
 			// Degraded is ASSERTED on this path, not merely implied by the phase.
@@ -193,7 +193,7 @@ func TestACollisionClearsWhenTheSpecIsRepaired(t *testing.T) {
 	a := mustCreateAgent(t, ns, "repair", func(a *plumev1alpha1.Agent) { a.Spec = safe })
 	r := newReconciler(false)
 	settle(t, r, a)
-	markAvailable(t, ns, controller.WorkloadName("repair", revision.Hash(safe)), 1)
+	markAvailable(t, ns, controller.WorkloadName("repair", revision.MustHash(safe)), 1)
 	settle(t, r, a)
 
 	set := func(t *testing.T, spec plumev1alpha1.AgentSpec) plumev1alpha1.Agent {
@@ -249,7 +249,7 @@ func TestAStampedWorkloadIsNotAdoptedWhenStatusHasNoRecord(t *testing.T) {
 	a := mustCreateAgent(t, ns, "norecord", func(a *plumev1alpha1.Agent) { a.Spec = safe })
 	r := newReconciler(false)
 	settle(t, r, a)
-	markAvailable(t, ns, controller.WorkloadName("norecord", revision.Hash(safe)), 1)
+	markAvailable(t, ns, controller.WorkloadName("norecord", revision.MustHash(safe)), 1)
 	settle(t, r, a)
 
 	// Status forgets; the cluster does not.
@@ -291,7 +291,7 @@ func TestARolloutIsNotReportedReadyWhenTheActiveRevisionHasNoWorkload(t *testing
 	a := mustCreateAgent(t, ns, "lostactive", nil)
 	r := newReconciler(false)
 	settle(t, r, a)
-	active := controller.WorkloadName("lostactive", revision.Hash(a.Spec))
+	active := controller.WorkloadName("lostactive", revision.MustHash(a.Spec))
 	markAvailable(t, ns, active, 1)
 	got := settle(t, r, a)
 	if got.Status.ActiveRevision == "" {
@@ -333,7 +333,7 @@ func TestTheDigestIsStampedOnCreation(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "stamped", nil)
 	r := newReconciler(false)
-	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("stamped", revision.Hash(a.Spec))}
+	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("stamped", revision.MustHash(a.Spec))}
 
 	// Reconcile only until the workload FIRST exists, then look immediately.
 	// Settling first would hide the window this test is about: a later pass
@@ -347,9 +347,9 @@ func TestTheDigestIsStampedOnCreation(t *testing.T) {
 	if !found {
 		t.Fatal("workload never created")
 	}
-	if got := d.Annotations[controller.RevisionDigestAnnotation]; got != revision.Digest(a.Spec) {
+	if got := d.Annotations[controller.RevisionDigestAnnotation]; got != revision.MustDigest(a.Spec) {
 		t.Errorf("a freshly created workload carries digest %q, want %q — it was unguarded "+
-			"until some later reconcile happened to stamp it", got, revision.Digest(a.Spec))
+			"until some later reconcile happened to stamp it", got, revision.MustDigest(a.Spec))
 	}
 }
 
@@ -369,7 +369,7 @@ func TestAStrippedStampOnAVouchedWorkloadSelfHeals(t *testing.T) {
 	a := mustCreateAgent(t, ns, "selfheal", nil)
 	r := newReconciler(false)
 	settle(t, r, a)
-	name := controller.WorkloadName("selfheal", revision.Hash(a.Spec))
+	name := controller.WorkloadName("selfheal", revision.MustHash(a.Spec))
 	markAvailable(t, ns, name, 1)
 	got := settle(t, r, a)
 	if got.Status.ActiveRevisionDigest == "" {
@@ -400,7 +400,7 @@ func TestAStrippedStampOnAVouchedWorkloadSelfHeals(t *testing.T) {
 			"Stripping the stamp switched drift correction off permanently, so a WEAKER "+
 			"principal than the one the rule was written for gets a persistent compromise.", img)
 	}
-	if d.Annotations[controller.RevisionDigestAnnotation] != revision.Digest(a.Spec) {
+	if d.Annotations[controller.RevisionDigestAnnotation] != revision.MustDigest(a.Spec) {
 		t.Error("the workload was not re-stamped, so the next pass refuses it again")
 	}
 	var after plumev1alpha1.Agent
@@ -422,7 +422,7 @@ func TestAnUnvouchedUnstampedWorkloadIsRefused(t *testing.T) {
 	r := newReconciler(false)
 	settle(t, r, a)
 
-	name := controller.WorkloadName("unvouched", revision.Hash(a.Spec))
+	name := controller.WorkloadName("unvouched", revision.MustHash(a.Spec))
 	key := types.NamespacedName{Namespace: ns, Name: name}
 	var d appsv1.Deployment
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
@@ -471,7 +471,7 @@ func TestAnUnstampedAvailableWorkloadDoesNotPromote(t *testing.T) {
 	a := mustCreateAgent(t, ns, "notmine", nil)
 	r := newReconciler(false)
 	settle(t, r, a)
-	name := controller.WorkloadName("notmine", revision.Hash(a.Spec))
+	name := controller.WorkloadName("notmine", revision.MustHash(a.Spec))
 	markAvailable(t, ns, name, 1)
 
 	// Strip the operator's mark, keeping the object Available.
@@ -515,7 +515,7 @@ func TestARevisionThatBecomesActiveAgainLeavesTheAbandonedList(t *testing.T) {
 	a := mustCreateAgent(t, ns, "aba", nil)
 	r := newReconciler(false)
 	settle(t, r, a)
-	first := revision.Hash(a.Spec)
+	first := revision.MustHash(a.Spec)
 	firstSpec := *a.Spec.Runtime.DeepCopy()
 
 	set := func(t *testing.T, image string) {
@@ -529,7 +529,7 @@ func TestARevisionThatBecomesActiveAgainLeavesTheAbandonedList(t *testing.T) {
 			t.Fatalf("update: %v", err)
 		}
 		settle(t, r, &live)
-		markAvailable(t, ns, controller.WorkloadName("aba", revision.Hash(live.Spec)), 1)
+		markAvailable(t, ns, controller.WorkloadName("aba", revision.MustHash(live.Spec)), 1)
 		settle(t, r, &live)
 	}
 

@@ -67,10 +67,13 @@ type behaviour struct {
 	Sandbox   string          `json:"sandbox,omitempty"`
 	Knowledge []knowledgeBind `json:"knowledge,omitempty"`
 	Tools     []toolBind      `json:"tools,omitempty"`
-	Budget    *budget         `json:"budget,omitempty"`
-	Expose    *expose         `json:"expose,omitempty"`
-	LLM       *llm            `json:"llm,omitempty"`
-	External  *external       `json:"external,omitempty"`
+	// EnvSourceDigests is A20: "<Kind>/<name>=<sha256 of resolved contents>",
+	// one per referenced source, in EnvSources' sorted order.
+	EnvSourceDigests []string  `json:"envSourceDigests,omitempty"`
+	Budget           *budget   `json:"budget,omitempty"`
+	Expose           *expose   `json:"expose,omitempty"`
+	LLM              *llm      `json:"llm,omitempty"`
+	External         *external `json:"external,omitempty"`
 }
 
 // Nested structs rather than joined strings, so JSON supplies the delimiters.
@@ -249,9 +252,19 @@ type external struct {
 // Deployment named H to the malicious image while status still names the
 // revision that passed. The old justification counted how many revisions
 // coexist, which answers an accidental-collision question nobody was asking.
-func Digest(spec plumev1alpha1.AgentSpec) string {
-	sum := sha256.Sum256(encode(spec))
-	return hex.EncodeToString(sum[:])
+func Digest(spec plumev1alpha1.AgentSpec, resolved Resolved) (string, error) {
+	if unknown := UnknownEnvArms(spec); len(unknown) > 0 {
+		return "", fmt.Errorf("cannot mint a revision: %v. An env source this operator does not "+
+			"recognise is one whose content it cannot hash, and hashing only the arms it happens "+
+			"to know is a guarantee with a hole nothing reports (A20)", unknown)
+	}
+	if missing := MissingSources(spec, resolved); len(missing) > 0 {
+		return "", fmt.Errorf("cannot mint a revision: %v unresolved. A missing referent is "+
+			"UNRESOLVED, never a zero digest — a zero would let deleting an object mint the same "+
+			"hash as never having referenced it (A20)", missing)
+	}
+	sum := sha256.Sum256(encode(spec, resolved))
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // Hash returns the revision NAME: a DNS-safe, stable, 10-character prefix of
@@ -261,18 +274,29 @@ func Digest(spec plumev1alpha1.AgentSpec) string {
 // are not the same revision unless their Digests agree, and the controller
 // treats a same-name/different-digest pair as a terminal RevisionHashCollision
 // rather than as one revision.
-func Hash(spec plumev1alpha1.AgentSpec) string {
+func Hash(spec plumev1alpha1.AgentSpec, resolved Resolved) (string, error) {
 	// json.Marshal emits struct fields in declaration order and map keys
 	// lexically; the projection contains no maps, so this is canonical without a
 	// separate canonicalizer. Lists that carry no order semantics are sorted in
 	// project().
-	return Digest(spec)[:HashLength]
+	d, err := Digest(spec, resolved)
+	if err != nil {
+		return "", err
+	}
+	return d[:HashLength], nil
 }
 
 // encode canonicalizes the projection. Both Digest and Hash go through it, so
 // they can never disagree about what was hashed.
-func encode(spec plumev1alpha1.AgentSpec) []byte {
-	encoded, err := json.Marshal(project(spec))
+func encode(spec plumev1alpha1.AgentSpec, resolved Resolved) []byte {
+	p := project(spec)
+	// A20: the CONTENT of every referenced source is part of the identity. The
+	// digests are folded in EnvSources' sorted order, so the projection does not
+	// depend on map iteration.
+	for _, r := range EnvSources(spec) {
+		p.EnvSourceDigests = append(p.EnvSourceDigests, r.String()+"="+resolved[r])
+	}
+	encoded, err := json.Marshal(p)
 	if err != nil {
 		panic(fmt.Sprintf("revision: projection is unmarshalable, which cannot happen: %v", err))
 	}

@@ -38,19 +38,19 @@ func collidingPair() (safe, evil plumev1alpha1.AgentSpec) {
 func TestTheNameCollidesAndTheIdentityDoesNot(t *testing.T) {
 	safe, evil := collidingPair()
 
-	if Hash(safe) != Hash(evil) {
+	if MustHash(safe) != MustHash(evil) {
 		t.Fatalf("the pinned pair no longer collides (%s vs %s).\n"+
 			"The projection encoding changed. This is not a stale test to delete: find a new "+
 			"colliding pair for the new encoding and pin that, or the regression is unguarded.",
-			Hash(safe), Hash(evil))
+			MustHash(safe), MustHash(evil))
 	}
-	t.Logf("both specs project to revision name %s", Hash(safe))
+	t.Logf("both specs project to revision name %s", MustHash(safe))
 
-	if Digest(safe) == Digest(evil) {
+	if MustDigest(safe) == MustDigest(evil) {
 		t.Error("the two specs share a FULL digest — that would be a SHA-256 collision, " +
 			"and every identity decision in this operator rests on it")
 	}
-	if Digest(safe)[:HashLength] != Hash(safe) {
+	if MustDigest(safe)[:HashLength] != MustHash(safe) {
 		t.Error("Hash is not a prefix of Digest; the name and the identity must be derived " +
 			"from one encoding or they can disagree about what was hashed")
 	}
@@ -63,8 +63,8 @@ func TestTheRevisionNameIsNotASecurityBoundary(t *testing.T) {
 		t.Skip("HashLength now carries 128+ bits; this test's premise no longer holds")
 	}
 	safe, evil := collidingPair()
-	if Hash(safe) == Hash(evil) && Digest(safe) != Digest(evil) {
+	if MustHash(safe) == MustHash(evil) && MustDigest(safe) != MustDigest(evil) {
 		return // the demonstrated property
 	}
-	t.Errorf("expected a same-name/different-identity pair; got name %s/%s", Hash(safe), Hash(evil))
+	t.Errorf("expected a same-name/different-identity pair; got name %s/%s", MustHash(safe), MustHash(evil))
 }

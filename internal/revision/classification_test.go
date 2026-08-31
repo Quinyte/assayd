@@ -103,7 +103,7 @@ func TestBehaviourFieldsAreProjected(t *testing.T) {
 			// mutated it.
 			base := baseFor(path)
 			mutated := mutateField(t, path)
-			if Hash(base) == Hash(mutated) {
+			if HashWithFixed(base) == HashWithFixed(mutated) {
 				t.Errorf("%s is classified behaviour-surface but changing it does not mint a "+
 					"revision — it is in the table and not in the projection", path)
 			}

@@ -33,21 +33,21 @@ func baseSpec() plumev1alpha1.AgentSpec {
 
 func TestHashIsDeterministic(t *testing.T) {
 	a, b := baseSpec(), baseSpec()
-	if Hash(a) != Hash(b) {
+	if HashWithFixed(a) != HashWithFixed(b) {
 		t.Fatal("equal specs must hash equally, or every reconcile mints a revision")
 	}
 	// Stable across calls: a hash that varies per invocation would orphan the
 	// workload it names — the class of defect 02-review caught as a blocker.
-	first := Hash(a)
+	first := HashWithFixed(a)
 	for i := 0; i < 100; i++ {
-		if Hash(a) != first {
+		if HashWithFixed(a) != first {
 			t.Fatal("hash is not stable across invocations")
 		}
 	}
 }
 
 func TestHashShape(t *testing.T) {
-	h := Hash(baseSpec())
+	h := HashWithFixed(baseSpec())
 	if len(h) != 10 {
 		t.Errorf("hash is %q (len %d); want 10 chars — it becomes a DNS label suffix", h, len(h))
 	}
@@ -198,7 +198,7 @@ func TestBehaviourSurfaceMintsARevision(t *testing.T) {
 				tc.base(&after)
 			}
 			tc.mutate(&after)
-			if Hash(before) == Hash(after) {
+			if HashWithFixed(before) == HashWithFixed(after) {
 				t.Errorf("changing %s did not mint a revision, so it would reach production "+
 					"through no gate at all — %s", tc.field, tc.why)
 			}
@@ -240,7 +240,7 @@ func TestPolicySurfaceDoesNotMintARevision(t *testing.T) {
 		t.Run(tc.field, func(t *testing.T) {
 			before, after := baseSpec(), baseSpec()
 			tc.mutate(&after)
-			if Hash(before) != Hash(after) {
+			if HashWithFixed(before) != HashWithFixed(after) {
 				t.Errorf("changing %s minted a revision, so a routine operation now pays for "+
 					"an eval and canary cycle — %s", tc.field, tc.why)
 			}

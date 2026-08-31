@@ -107,7 +107,7 @@ func TestManagerReconcilesAnAgentEndToEnd(t *testing.T) {
 	if err := k8s.Create(ctx, a); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 
 	// The finalizer is added on the first pass and the reconciler returns
 	// Requeue rather than relying on its own write producing a watch event. If
@@ -156,7 +156,7 @@ func TestManagerWatchesOwnedWorkloads(t *testing.T) {
 	if err := k8s.Create(ctx, a); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("watched", rev)}
 
 	eventually(t, "the workload to exist", func() bool {
@@ -276,7 +276,7 @@ func TestReconcilerIsSafeUnderGenerationChangedPredicate(t *testing.T) {
 	if err := k8s.Create(ctx, a); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 
 	// Adding the finalizer changes only metadata, so the predicate suppresses the
 	// resulting watch event. Only the explicit requeue gets us past this point.

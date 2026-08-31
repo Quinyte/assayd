@@ -39,7 +39,20 @@ func TestEveryEnvVarSourceLeafMintsARevision(t *testing.T) {
 				s.Runtime.Env = []corev1.EnvVar{{Name: "X", ValueFrom: &src}}
 				return s
 			}
-			if a, b := Hash(mk(0)), Hash(mk(1)); a == b {
+			a, aerr := HashOrRefusal(mk(0), "fixed")
+			b, berr := HashOrRefusal(mk(1), "fixed")
+			if aerr != nil || berr != nil {
+				// An arm the operator cannot read is REFUSED, not classified: A20
+				// blocks the revision rather than hashing what it happens to know.
+				// Asserting "the hash moves" would be asserting about a hash that
+				// does not exist.
+				if aerr == nil || berr == nil {
+					t.Errorf("%s: one specimen minted and the other was refused (%v / %v); the "+
+						"refusal must not depend on the VALUE at a leaf", l.Path, aerr, berr)
+				}
+				return
+			}
+			if a == b {
 				t.Errorf("changing ONLY %s did not mint a revision (%s == %s).\n"+
 					"That leaf is a process input, so a principal can change what the agent "+
 					"reads while status still names the revision an eval passed.", l.Path, a, b)
@@ -62,7 +75,16 @@ func TestEveryEnvFromSourceLeafMintsARevision(t *testing.T) {
 				s.Runtime.EnvFrom = []corev1.EnvFromSource{src}
 				return s
 			}
-			if a, b := Hash(mk(0)), Hash(mk(1)); a == b {
+			a, aerr := HashOrRefusal(mk(0), "fixed")
+			b, berr := HashOrRefusal(mk(1), "fixed")
+			if aerr != nil || berr != nil {
+				if aerr == nil || berr == nil {
+					t.Errorf("%s: one specimen minted and the other was refused (%v / %v)",
+						l.Path, aerr, berr)
+				}
+				return // refused, not classified — see the EnvVarSource test above
+			}
+			if a == b {
 				t.Errorf("changing ONLY %s did not mint a revision (%s == %s)", l.Path, a, b)
 			}
 		})
@@ -79,7 +101,7 @@ func TestOptionalAbsentDiffersFromExplicitFalse(t *testing.T) {
 		return s
 	}
 	f := false
-	if Hash(mk(nil)) == Hash(mk(&f)) {
+	if HashWith(mk(nil), "fixed") == HashWith(mk(&f), "fixed") {
 		t.Error("optional absent and optional:false hash identically; presence is part of the selector")
 	}
 }
@@ -96,13 +118,13 @@ func TestReorderingProvidersDoesNotMintARevision(t *testing.T) {
 	}
 	a := plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmAnthropic, Model: "claude"}
 	b := plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmOpenAI, Model: "gpt-4o"}
-	if Hash(mk(a, b)) != Hash(mk(b, a)) {
+	if HashWith(mk(a, b), "fixed") != HashWith(mk(b, a), "fixed") {
 		t.Error("reordering providers minted a revision; a re-serialized manifest would pay for " +
 			"an eval and canary cycle for a diff that changed nothing")
 	}
 	// And the set is still injective: two DIFFERENT sets must not collapse.
 	c := plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmOpenAI, Model: "gpt-4o-mini"}
-	if Hash(mk(a, b)) == Hash(mk(a, c)) {
+	if HashWith(mk(a, b), "fixed") == HashWith(mk(a, c), "fixed") {
 		t.Error("two different provider sets hash identically; sorting must canonicalise order, " +
 			"not erase content")
 	}
@@ -159,7 +181,7 @@ func TestEgressAllowlistChangesMintARevision(t *testing.T) {
 			why: "the deployment IS the model identity on this arm (design 03 §3.4.1.1)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			switch same := Hash(tc.a) == Hash(tc.b); {
+			switch same := HashWith(tc.a, "fixed") == HashWith(tc.b, "fixed"); {
 			case tc.wantSame && !same:
 				t.Errorf("%s minted a revision and must not — %s", tc.name, tc.why)
 			case !tc.wantSame && same:
@@ -203,7 +225,18 @@ func TestEveryAgentSpecLeafBehavesAsClassified(t *testing.T) {
 				SetLeaf(t, reflect.ValueOf(&s).Elem(), l, n)
 				return s
 			}
-			a, b := Hash(mk(0)), Hash(mk(1))
+			a, aerr := HashOrRefusal(mk(0), "fixed")
+			b, berr := HashOrRefusal(mk(1), "fixed")
+			if aerr != nil || berr != nil {
+				if aerr == nil || berr == nil {
+					t.Errorf("%s: one specimen minted and the other was refused (%v / %v); a "+
+						"refusal must not depend on the VALUE at a leaf", l.Path, aerr, berr)
+				}
+				// A20 refuses the whole spec when an env arm cannot be read, so this
+				// leaf has no hash to classify. The refusal is the behaviour and is
+				// asserted by TestAFileKeyRefSpecCannotMintARevision.
+				return
+			}
 			switch {
 			case class == mints && a == b:
 				t.Errorf("%s is BEHAVIOUR and changing it alone did not mint a revision.\n"+

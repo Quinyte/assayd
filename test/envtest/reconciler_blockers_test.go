@@ -41,7 +41,7 @@ func TestUnwiredReconcilerHoldsRatherThanPromotingUngated(t *testing.T) {
 	r := &controller.AgentReconciler{Client: k8s, Scheme: scheme}
 
 	settle(t, r, a)
-	markAvailable(t, ns, controller.WorkloadName("unwired", revision.Hash(a.Spec)), 1)
+	markAvailable(t, ns, controller.WorkloadName("unwired", revision.MustHash(a.Spec)), 1)
 	got := settle(t, r, a)
 
 	if got.Status.ActiveRevision != "" {
@@ -81,7 +81,7 @@ func TestPolicySurfaceEditsReachTheWorkload(t *testing.T) {
 		}
 	})
 	r := newReconciler(false)
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("inplace", rev), 1)
 	settle(t, r, a)
@@ -94,7 +94,7 @@ func TestPolicySurfaceEditsReachTheWorkload(t *testing.T) {
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if revision.Hash(a.Spec) != rev {
+	if revision.MustHash(a.Spec) != rev {
 		t.Fatal("fixture: a resources edit minted a revision; A12 says it is policy-surface")
 	}
 	settle(t, r, a)
@@ -115,7 +115,7 @@ func TestOutOfBandDriftIsCorrected(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "drift", nil)
 	r := newReconciler(false)
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("drift", rev), 1)
 	settle(t, r, a)
@@ -351,7 +351,7 @@ func TestSpecEditOnAServingAgentStaysReady(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "rolling", nil)
 	r := newReconciler(false)
-	first := revision.Hash(a.Spec)
+	first := revision.MustHash(a.Spec)
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("rolling", first), 1)
 	settle(t, r, a)
@@ -400,7 +400,7 @@ func TestPolicySurfaceRemovalsAlsoReachTheWorkload(t *testing.T) {
 		}
 	})
 	r := newReconciler(false)
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("removal", rev), 1)
 	settle(t, r, a)
@@ -454,7 +454,7 @@ func TestHoldingOnGatesKeepsAServingAgentReady(t *testing.T) {
 	a := mustCreateAgent(t, ns, "holdready", nil)
 	// Promote once with no gates and no EvalSuite CRD.
 	r := newReconciler(false)
-	first := revision.Hash(a.Spec)
+	first := revision.MustHash(a.Spec)
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("holdready", first), 1)
 	settle(t, r, a)
@@ -470,7 +470,7 @@ func TestHoldingOnGatesKeepsAServingAgentReady(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 	gated := newReconciler(true)
-	second := revision.Hash(a.Spec)
+	second := revision.MustHash(a.Spec)
 	settle(t, gated, a)
 	markAvailable(t, ns, controller.WorkloadName("holdready", second), 1)
 	got := settle(t, gated, a)
@@ -508,7 +508,7 @@ func TestUnwiredWithNoGatesDoesNotClaimToHold(t *testing.T) {
 	a := mustCreateAgent(t, ns, "unwirednogates", nil) // no spec.gates
 	r := &controller.AgentReconciler{Client: k8s, Scheme: scheme}
 	settle(t, r, a)
-	markAvailable(t, ns, controller.WorkloadName("unwirednogates", revision.Hash(a.Spec)), 1)
+	markAvailable(t, ns, controller.WorkloadName("unwirednogates", revision.MustHash(a.Spec)), 1)
 	got := settle(t, r, a)
 
 	if got.Status.ActiveRevision == "" {
@@ -531,7 +531,7 @@ func TestActiveRevisionLosingItsPodsIsNotReportedReady(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "podsdie", nil)
 	r := newReconciler(false)
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 	settle(t, r, a)
 	name := controller.WorkloadName("podsdie", rev)
 	markAvailable(t, ns, name, 1)
@@ -573,7 +573,7 @@ func TestProgressingIsClearedOnEveryExitFromARollout(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "progclear", nil)
 	r := newReconciler(false)
-	first := revision.Hash(a.Spec)
+	first := revision.MustHash(a.Spec)
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("progclear", first), 1)
 	settle(t, r, a)
@@ -586,7 +586,7 @@ func TestProgressingIsClearedOnEveryExitFromARollout(t *testing.T) {
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	second := revision.Hash(a.Spec)
+	second := revision.MustHash(a.Spec)
 	got := settle(t, r, a)
 	if c := condition(&got, plumev1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatal("fixture: the rollout did not register as Progressing")
@@ -645,7 +645,7 @@ func TestProgressingIsClearedOnEveryExitFromARollout(t *testing.T) {
 func TestAddingGatesToARunningAgentDoesNotHoldIt(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "addgates", nil)
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 
 	// Promote ungated.
 	ungated := newReconciler(false)
@@ -664,7 +664,7 @@ func TestAddingGatesToARunningAgentDoesNotHoldIt(t *testing.T) {
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if revision.Hash(a.Spec) != rev {
+	if revision.MustHash(a.Spec) != rev {
 		t.Fatal("fixture: adding gates minted a revision; A12 says gates are policy-surface")
 	}
 
@@ -782,7 +782,8 @@ func TestEachContainerFieldIsIndividuallyReconciled(t *testing.T) {
 					LocalObjectReference: corev1.LocalObjectReference{Name: "cfg"}}}}
 			})
 			r := newReconciler(false)
-			rev := revision.Hash(a.Spec)
+			mustCreateSource(t, ns, "ConfigMap", "cfg", map[string]string{"K": "v"})
+			rev := revisionOf(t, ns, a.Spec)
 			settle(t, r, a)
 			key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName(name, rev)}
 			markAvailable(t, ns, key.Name, 1)
@@ -814,7 +815,7 @@ func TestPortEditReachesTheWorkloadWithoutANewRevision(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "portedit", nil)
 	r := newReconciler(false)
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("portedit", rev), 1)
 	settle(t, r, a)
@@ -826,7 +827,7 @@ func TestPortEditReachesTheWorkloadWithoutANewRevision(t *testing.T) {
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if revision.Hash(a.Spec) != rev {
+	if revision.MustHash(a.Spec) != rev {
 		t.Fatal("fixture: a port edit minted a revision; A12 says port is policy-surface")
 	}
 	settle(t, r, a)
@@ -920,7 +921,7 @@ func TestPreviouslyExemptedFieldsAreReverted(t *testing.T) {
 			name := "exempt-" + tc.field
 			a := mustCreateAgent(t, ns, name, nil)
 			r := newReconciler(false)
-			rev := revision.Hash(a.Spec)
+			rev := revision.MustHash(a.Spec)
 			settle(t, r, a)
 			key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName(name, rev)}
 			markAvailable(t, ns, key.Name, 1)
@@ -1036,7 +1037,7 @@ func TestPodSpecDriftIsReverted(t *testing.T) {
 			name := "podspec-" + tc.field
 			a := mustCreateAgent(t, ns, name, nil)
 			r := newReconciler(false)
-			rev := revision.Hash(a.Spec)
+			rev := revision.MustHash(a.Spec)
 			settle(t, r, a)
 			key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName(name, rev)}
 			markAvailable(t, ns, key.Name, 1)
@@ -1069,7 +1070,7 @@ func TestRenderedPodSpecSurvivesAPIServerDefaulting(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "defaulting", nil)
 	r := newReconciler(false)
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 	settle(t, r, a)
 
 	var d appsv1.Deployment
@@ -1100,7 +1101,7 @@ func TestDegradedPhaseAssertsTheDegradedCondition(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "degradedcond", nil)
 	r := newReconciler(false)
-	rev := revision.Hash(a.Spec)
+	rev := revision.MustHash(a.Spec)
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("degradedcond", rev), 1)
 	got := settle(t, r, a)
