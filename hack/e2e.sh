@@ -8,7 +8,18 @@ set -euo pipefail
 
 DISTRO="${DISTRO:-k3d}"
 CLUSTER="${CLUSTER:-plume-local}"
-IMAGE="plume-operator:e2e"
+# The tag is UNIQUE PER RUN, and that is not cosmetic.
+#
+# With a fixed tag and pullPolicy: Never, `helm upgrade` sees an unchanged
+# Deployment spec and does not restart the pod — so the freshly built image sits
+# in the cluster's image store while the OLD binary keeps running. Measured on
+# 2026-09-01: the operator pod had been up for nine days, and every e2e run in
+# that window tested a nine-day-old binary and reported green.
+#
+# A unique tag changes the pod template, so Kubernetes must roll it, and
+# `--wait` then means what it appears to mean.
+IMAGE_TAG="e2e-$(date +%s)"
+IMAGE="plume-operator:${IMAGE_TAG}"
 
 case "${DISTRO}" in
 k3d)
@@ -63,9 +74,13 @@ echo "==> installing the chart"
 helm upgrade --install plume charts/plume \
   -f charts/plume/values-local.yaml \
   --set operator.image.repository=plume-operator \
-  --set operator.image.tag=e2e \
+  --set operator.image.tag="${IMAGE_TAG}" \
   --set operator.image.pullPolicy=Never \
   --wait --timeout 5m
+
+# The suite asserts it is talking to THIS build, so a stale pod can never again
+# look like a passing run.
+export PLUME_E2E_IMAGE="${IMAGE}"
 
 echo "==> running e2e suite"
 PLUME_E2E=1 go test ./test/e2e/... -count=1 -timeout 20m -v

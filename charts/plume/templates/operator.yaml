@@ -20,6 +20,22 @@ metadata:
     app.kubernetes.io/component: agent-operator
 spec:
   replicas: {{ if eq .Values.profile "local" }}1{{ else }}{{ .Values.operator.replicas }}{{ end }}
+  # maxSurge 0 / maxUnavailable 1 — the OLD pod goes away before the new one
+  # starts, and that ordering is required rather than preferred.
+  #
+  # Readiness is gated on leader election (cmd/operator: the "reconciling"
+  # readyz check waits for mgr.Elected). With the default RollingUpdate the new
+  # pod is created first and cannot become ready until it holds the lease, while
+  # the old pod holds the lease and cannot be terminated until the new one is
+  # ready. That deadlocks every upgrade until the rollout times out.
+  #
+  # Measured 2026-09-01: the deadlock is real, and it had been invisible because
+  # e2e reused one image tag and so never rolled the pod at all.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       {{- include "plume.operator.selectorLabels" . | nindent 6 }}

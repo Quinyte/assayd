@@ -34,6 +34,14 @@ var (
 	notRun bool
 )
 
+// pauseImage is a REAL, PULLABLE digest — `docker manifest inspect
+// registry.k8s.io/pause:3.10`. It is a constant because A21's digest migration
+// rewrote every tagged image in the repository and gave this one a SYNTHETIC
+// digest: valid to CEL, unpullable by a kubelet. envtest never pulls, so the
+// suite stayed green while the only test that runs a real container could no
+// longer start one.
+const pauseImage = "registry.k8s.io/pause@sha256:7c38f24774e3cbd906d2d33c38354ccf787635581c122965132c9bd309754d4a"
+
 func TestMain(m *testing.M) {
 	// Opt-in, deliberately. This suite CREATES objects in whatever cluster the
 	// current context names — on a laptop pointed at a shared cluster that is not
@@ -141,7 +149,7 @@ func TestWorkloadActuallyRuns(t *testing.T) {
 				// A real image that starts, serves a port and stays up. The agent
 				// contract (an A2A card) is not exercised here — card fetch is
 				// unimplemented — so this asserts the workload story only.
-				Image: "registry.k8s.io/pause@sha256:373a3585a3cd273d000000000000000000000000000000000000000000000000",
+				Image: pauseImage,
 			},
 		},
 	}
@@ -187,7 +195,7 @@ func TestOperatorDoesNotChurnAgainstRealAdmission(t *testing.T) {
 	a := &plumev1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "nochurn", Namespace: "plume-e2e"},
 		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "registry.k8s.io/pause@sha256:373a3585a3cd273d000000000000000000000000000000000000000000000000"},
+			Runtime: &plumev1alpha1.AgentRuntime{Image: pauseImage},
 		},
 	}
 	_ = k8s.Delete(ctx, a)
@@ -292,4 +300,190 @@ func TestServiceAccountDefaultingDoesNotCauseChurn(t *testing.T) {
 		"design 07). The assertion is written so the gap is visible in the run output " +
 		"rather than absent: envtest cannot cover ServiceAccount admission, so nothing " +
 		"currently proves the operator does not churn against a real API server.")
+}
+
+// The test that would have caught A57's RBAC blocker, and the reason it is here
+// rather than in envtest.
+//
+// envtest hands the reconciler a cluster-admin client, so every RBAC defect is
+// invisible there. A35's copies and A56's sweep were both Forbidden on a real
+// cluster: every Agent referencing a ConfigMap or Secret failed to deploy
+// permanently and said nothing, and once material existed the Agent could never
+// be deleted, because the finalizer waited on a delete it was not allowed to
+// perform. The whole feature was 100% broken in production and 100% green in CI.
+//
+// Nothing else in the suite creates an Agent with an env source, which is why
+// there was no test to fail.
+func TestAnAgentWithEnvSourcesDeploysAndCanBeDeleted(t *testing.T) {
+	requireCluster(t)
+	requireOperator(t)
+	ctx := context.Background()
+	ensureNamespace(t, ctx, "plume-e2e")
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "e2e-prompt", Namespace: "plume-e2e"},
+		Data:       map[string]string{"SYSTEM_PROMPT": "you are helpful"},
+	}
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "e2e-creds", Namespace: "plume-e2e"},
+		Data:       map[string][]byte{"TOKEN": []byte("s3cret")},
+	}
+	for _, o := range []client.Object{cm, sec} {
+		_ = k8s.Delete(ctx, o)
+		if err := k8s.Create(ctx, o); err != nil {
+			t.Fatalf("create %s: %v", o.GetName(), err)
+		}
+		t.Cleanup(func() { _ = k8s.Delete(context.Background(), o) })
+	}
+
+	a := &plumev1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "envsrc", Namespace: "plume-e2e"},
+		Spec: plumev1alpha1.AgentSpec{
+			Runtime: &plumev1alpha1.AgentRuntime{
+				Image: pauseImage,
+				EnvFrom: []corev1.EnvFromSource{
+					{ConfigMapRef: &corev1.ConfigMapEnvSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "e2e-prompt"}}},
+					{SecretRef: &corev1.SecretEnvSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "e2e-creds"}}},
+				},
+			},
+		},
+	}
+	key := client.ObjectKey{Namespace: "plume-e2e", Name: "envsrc"}
+	_ = k8s.Delete(ctx, a)
+	if !waitGone(t, ctx, key, 2*time.Minute) {
+		t.Fatal("a previous run's Agent is still being deleted after 2m; if its finalizer is " +
+			"stuck the operator cannot delete the material it created")
+	}
+	if err := k8s.Create(ctx, a); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	// A35 CREATE, under the operator's real ServiceAccount.
+	var copies corev1.ConfigMapList
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		if err := k8s.List(ctx, &copies, client.InNamespace("plume-e2e"),
+			client.MatchingLabels{controller.MaterialAgentUIDLabel: string(a.UID)}); err == nil &&
+			len(copies.Items) > 0 {
+			break
+		}
+		time.Sleep(3 * time.Second)
+	}
+	if len(copies.Items) == 0 {
+		var live plumev1alpha1.Agent
+		_ = k8s.Get(ctx, client.ObjectKeyFromObject(a), &live)
+		t.Fatalf("the operator created no revision material. If this is Forbidden, the RBAC in "+
+			"config/rbac/role.yaml does not match what the material code calls.\nphase=%q conditions=%+v",
+			live.Status.Phase, live.Status.Conditions)
+	}
+
+	// The workload runs, reading the copies rather than the user's objects.
+	var ready bool
+	for time.Now().Before(deadline) {
+		var ds appsv1.DeploymentList
+		if err := k8s.List(ctx, &ds, client.InNamespace("plume-e2e"),
+			client.MatchingLabels{controller.LabelAgent: "envsrc"}); err == nil {
+			for _, d := range ds.Items {
+				if d.Status.AvailableReplicas > 0 {
+					ef := d.Spec.Template.Spec.Containers[0].EnvFrom
+					if len(ef) != 2 || ef[0].ConfigMapRef == nil ||
+						ef[0].ConfigMapRef.Name == "e2e-prompt" {
+						t.Fatalf("the running workload references the user's object: %+v", ef)
+					}
+					ready = true
+				}
+			}
+		}
+		if ready {
+			break
+		}
+		time.Sleep(3 * time.Second)
+	}
+	if !ready {
+		var live plumev1alpha1.Agent
+		_ = k8s.Get(ctx, client.ObjectKeyFromObject(a), &live)
+		t.Fatalf("no workload became available. A Pod referencing material that does not exist "+
+			"cannot start, and A41 made those references non-optional on purpose.\nconditions=%+v",
+			live.Status.Conditions)
+	}
+
+	// A56 DELETE, and the finalizer completing. This is the half that hung
+	// forever: teardown waits on a delete it was Forbidden to perform.
+	if err := k8s.Delete(ctx, a); err != nil {
+		t.Fatalf("delete agent: %v", err)
+	}
+	if !waitGone(t, ctx, key, 3*time.Minute) {
+		var live plumev1alpha1.Agent
+		_ = k8s.Get(ctx, key, &live)
+		t.Fatalf("the Agent still exists 3m after deletion, finalizers=%v. Teardown cannot "+
+			"complete if the operator may not delete the material it created.", live.Finalizers)
+	}
+	if err := k8s.List(ctx, &copies, client.InNamespace("plume-e2e"),
+		client.MatchingLabels{controller.MaterialAgentUIDLabel: string(a.UID)}); err != nil {
+		t.Fatalf("list material: %v", err)
+	}
+	if len(copies.Items) != 0 {
+		t.Errorf("%d copies outlived the Agent; they hold a snapshot of the Secret's bytes and "+
+			"nothing else collects them", len(copies.Items))
+	}
+}
+
+// waitGone polls into a SCRATCH object. Polling into the caller's object fills
+// it with a resourceVersion, and creating it afterwards then fails with
+// "resourceVersion should not be set on objects to be created" — which reads
+// like an operator bug and is a test bug.
+func waitGone(t *testing.T, ctx context.Context, key client.ObjectKey, d time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		var scratch plumev1alpha1.Agent
+		if err := k8s.Get(ctx, key, &scratch); err != nil {
+			return true
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return false
+}
+
+// The suite must be talking to the binary this run just built.
+//
+// It was not. With a fixed image tag and pullPolicy: Never, `helm upgrade` sees
+// an unchanged Deployment spec and does not restart the pod — so a freshly
+// built image sat in the cluster's image store while a NINE DAY OLD binary kept
+// serving. Every e2e run in that window reported green against code nobody had
+// written yet, which is the most expensive kind of passing test: it is evidence
+// pointing at the wrong artifact.
+//
+// hack/e2e.sh now tags per run. This is what stops that regressing quietly.
+func TestTheOperatorUnderTestIsTheOneJustBuilt(t *testing.T) {
+	requireCluster(t)
+	requireOperator(t)
+	want := os.Getenv("PLUME_E2E_IMAGE")
+	if want == "" {
+		t.Fatal("PLUME_E2E_IMAGE is unset, so this run cannot tell which binary it is testing. " +
+			"hack/e2e.sh exports it; a hand-run suite must too.")
+	}
+	var d appsv1.Deployment
+	if err := k8s.Get(context.Background(),
+		types.NamespacedName{Namespace: "plume-system", Name: "plume-agent-operator"}, &d); err != nil {
+		t.Fatalf("get operator deployment: %v", err)
+	}
+	if got := d.Spec.Template.Spec.Containers[0].Image; got != want {
+		t.Fatalf("the deployed operator is %q and this run built %q.\n"+
+			"Every assertion in this suite is about the wrong binary.", got, want)
+	}
+	var pods corev1.PodList
+	if err := k8s.List(context.Background(), &pods, client.InNamespace("plume-system")); err != nil {
+		t.Fatalf("list operator pods: %v", err)
+	}
+	for _, p := range pods.Items {
+		for _, c := range p.Spec.Containers {
+			if c.Name == "manager" && c.Image != want {
+				t.Errorf("pod %s is still running %q, not %q — the rollout did not complete",
+					p.Name, c.Image, want)
+			}
+		}
+	}
 }
