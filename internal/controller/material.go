@@ -264,3 +264,72 @@ func rewriteEnvFrom(in []corev1.EnvFromSource, material map[revision.SourceRef]s
 	}
 	return out
 }
+
+// deleteMaterial removes revision-scoped copies matching a selector.
+//
+// This exists because A44 chose LABELS over an ownerReference — a choice made so
+// A42's namespace move would not change the invariant, and one that means
+// Kubernetes garbage collection will not clean these up. Nothing else will
+// either: the copies hold a snapshot of a Secret's bytes, so leaking them is
+// leaking credential material, which is the cost A23 warned about when it
+// declined copying in the first place.
+func (r *AgentReconciler) deleteMaterial(ctx context.Context, ns string, sel client.MatchingLabels) error {
+	for _, list := range []client.ObjectList{&corev1.ConfigMapList{}, &corev1.SecretList{}} {
+		if err := r.List(ctx, list, client.InNamespace(ns), sel); err != nil {
+			return fmt.Errorf("list revision material in %s: %w", ns, err)
+		}
+		var items []client.Object
+		switch l := list.(type) {
+		case *corev1.ConfigMapList:
+			for i := range l.Items {
+				items = append(items, &l.Items[i])
+			}
+		case *corev1.SecretList:
+			for i := range l.Items {
+				items = append(items, &l.Items[i])
+			}
+		}
+		for _, o := range items {
+			if err := r.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("delete revision material %s: %w", o.GetName(), err)
+			}
+		}
+	}
+	return nil
+}
+
+// collectRevisionMaterial removes copies for revisions that no longer exist.
+//
+// It keys on what SURVIVES rather than on what was deleted: a sweep that
+// enumerates retired revisions misses any the operator never saw — a crash
+// between creating material and publishing the revision leaves copies no status
+// names, and those are exactly the ones nothing else would ever remove.
+func (r *AgentReconciler) collectRevisionMaterial(ctx context.Context, agent *plumev1alpha1.Agent,
+	keep map[string]bool) error {
+	var cms corev1.ConfigMapList
+	var secs corev1.SecretList
+	sel := client.MatchingLabels{MaterialAgentUIDLabel: string(agent.UID)}
+	if err := r.List(ctx, &cms, client.InNamespace(agent.Namespace), sel); err != nil {
+		return fmt.Errorf("list revision material: %w", err)
+	}
+	if err := r.List(ctx, &secs, client.InNamespace(agent.Namespace), sel); err != nil {
+		return fmt.Errorf("list revision material: %w", err)
+	}
+	var stale []client.Object
+	for i := range cms.Items {
+		if !keep[cms.Items[i].Labels[MaterialRevisionLabel]] {
+			stale = append(stale, &cms.Items[i])
+		}
+	}
+	for i := range secs.Items {
+		if !keep[secs.Items[i].Labels[MaterialRevisionLabel]] {
+			stale = append(stale, &secs.Items[i])
+		}
+	}
+	for _, o := range stale {
+		if err := r.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("gc revision material %s: %w", o.GetName(), err)
+		}
+	}
+	return nil
+}

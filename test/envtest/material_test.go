@@ -348,3 +348,100 @@ func TestEachProvenanceCheckRefusesOnItsOwn(t *testing.T) {
 		})
 	}
 }
+
+// The material carries no ownerReference (A44), so nothing in Kubernetes
+// collects it. These two paths are the only things that do, and a copy left
+// behind is a snapshot of a Secret's bytes outliving the Agent that justified
+// reading them.
+func TestMaterialIsCollectedWithItsRevision(t *testing.T) {
+	ns := newNamespace(t)
+	mustCreateSource(t, ns, "ConfigMap", "prompt", map[string]string{"P": "v0"})
+	a := mustCreateAgent(t, ns, "gcmat", func(a *plumev1alpha1.Agent) {
+		a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "prompt"}}}}
+	})
+	r := newReconciler(false)
+
+	// Walk the agent through more revisions than the retention window holds.
+	var names []string
+	for i := 0; i < 5; i++ {
+		var cm corev1.ConfigMap
+		if err := k8s.Get(context.Background(),
+			types.NamespacedName{Namespace: ns, Name: "prompt"}, &cm); err != nil {
+			t.Fatalf("get source: %v", err)
+		}
+		cm.Data["P"] = strings.Repeat("v", i+1)
+		if err := k8s.Update(context.Background(), &cm); err != nil {
+			t.Fatalf("edit source: %v", err)
+		}
+		var live plumev1alpha1.Agent
+		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
+			t.Fatalf("get agent: %v", err)
+		}
+		settle(t, r, &live)
+		rev := revisionOf(t, ns, live.Spec)
+		names = append(names, controller.MaterialName("gcmat", rev, 0))
+		markAvailable(t, ns, controller.WorkloadName("gcmat", rev), 1)
+		settle(t, r, &live)
+	}
+
+	var cms corev1.ConfigMapList
+	if err := k8s.List(context.Background(), &cms, client.InNamespace(ns),
+		client.MatchingLabels{controller.MaterialAgentUIDLabel: string(a.UID)}); err != nil {
+		t.Fatalf("list material: %v", err)
+	}
+	// active + candidate + revisionHistoryLimit is the documented retained set.
+	if len(cms.Items) > 4 {
+		var got []string
+		for _, c := range cms.Items {
+			got = append(got, c.Name)
+		}
+		t.Errorf("%d material objects survive %d revisions: %v\n"+
+			"Nothing else collects these, so every retired revision leaks a copy of whatever "+
+			"its source held.", len(cms.Items), len(names), got)
+	}
+	if len(cms.Items) == 0 {
+		t.Error("the ACTIVE revision's material was collected too; the workload would fail to start")
+	}
+}
+
+// Deleting the Agent must take its material with it.
+func TestMaterialIsCollectedWithTheAgent(t *testing.T) {
+	ns := newNamespace(t)
+	mustCreateSource(t, ns, "Secret", "creds", map[string]string{"TOKEN": "s3cret"})
+	a := mustCreateAgent(t, ns, "gcagent", func(a *plumev1alpha1.Agent) {
+		a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "creds"}}}}
+	})
+	r := newReconciler(false)
+	settle(t, r, a)
+
+	var secs corev1.SecretList
+	sel := client.MatchingLabels{controller.MaterialAgentUIDLabel: string(a.UID)}
+	if err := k8s.List(context.Background(), &secs, client.InNamespace(ns), sel); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(secs.Items) != 1 {
+		t.Fatalf("setup: expected one Secret copy, got %d", len(secs.Items))
+	}
+	if string(secs.Items[0].Data["TOKEN"]) != "s3cret" {
+		t.Fatal("setup: the copy does not hold the source's bytes")
+	}
+
+	if err := k8s.Delete(context.Background(), a); err != nil {
+		t.Fatalf("delete agent: %v", err)
+	}
+	var live plumev1alpha1.Agent
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	reconcileOnce(t, r, &live)
+
+	if err := k8s.List(context.Background(), &secs, client.InNamespace(ns), sel); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(secs.Items) != 0 {
+		t.Errorf("%d Secret copies outlived the Agent. They hold a snapshot of the credential "+
+			"bytes, and nothing else in the cluster will ever collect them.", len(secs.Items))
+	}
+}

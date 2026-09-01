@@ -1041,13 +1041,23 @@ func (r *AgentReconciler) collectGarbage(
 	})
 
 	limit := DefaultRevisionHistoryLimit
-	for i := limit; i < len(retainable); i++ {
-		d := retainable[i]
-		if err := r.Delete(ctx, &d); err != nil && !apierrors.IsNotFound(err) {
+	keep := map[string]bool{}
+	for k := range protected {
+		keep[k] = true
+	}
+	for i, d := range retainable {
+		if i < limit {
+			keep[d.Labels[LabelRevision]] = true
+			continue
+		}
+		if err := r.Delete(ctx, &retainable[i]); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("gc workload %s: %w", d.Name, err)
 		}
 	}
-	return nil
+	// The material goes with the revision. It carries no ownerReference by A44,
+	// so Kubernetes will not collect it and a leaked copy is a leaked snapshot of
+	// a Secret's bytes.
+	return r.collectRevisionMaterial(ctx, agent, keep)
 }
 
 // ownedWorkloads returns the Deployments this Agent actually controls.
@@ -1088,10 +1098,18 @@ func (r *AgentReconciler) ownedWorkloads(ctx context.Context, agent *plumev1alph
 func (r *AgentReconciler) finalize(ctx context.Context, agent *plumev1alpha1.Agent) (ctrl.Result, error) {
 	// TODO(design 03/06/05): drain traffic to weight 0 respecting taskTimeout,
 	// revoke gateway routes in reverse apply order, deactivate (never delete) the
-	// agent-actor OAuth client, GC directory entries. Workloads go with the
-	// ownerRef; nothing else is wired yet, so there is nothing to unwind.
+	// agent-actor OAuth client, GC directory entries.
 	if !containsString(agent.Finalizers, Finalizer) {
 		return ctrl.Result{}, nil
+	}
+	// Workloads go with the ownerReference. REVISION MATERIAL DOES NOT: A44 chose
+	// labels precisely so A42's namespace move would not change the invariant,
+	// and the cost of that choice is that nothing collects these but this step.
+	// A copy left behind is a snapshot of a Secret's bytes outliving the Agent
+	// that justified reading them.
+	if err := r.deleteMaterial(ctx, agent.Namespace,
+		client.MatchingLabels{MaterialAgentUIDLabel: string(agent.UID)}); err != nil {
+		return ctrl.Result{}, err
 	}
 	agent.Finalizers = removeString(agent.Finalizers, Finalizer)
 	if err := r.Update(ctx, agent); err != nil {
