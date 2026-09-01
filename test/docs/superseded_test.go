@@ -162,6 +162,17 @@ var rules = []rule{
 		why:     "A38: rollback tests the retained COPY's digest and owner, never the original source's drift",
 	},
 	{
+		name: "bare-revision-gate",
+		// A gate keyed on the ten-character revision NAME can be spent on a
+		// colliding projection, and it decides before any workload exists to
+		// inspect — so design 02's workload guard is not in that path. A37 and
+		// A50 separated name from identity; this stops the shorthand returning to
+		// a body that grants production traffic.
+		banned:  regexp.MustCompile(`(?i)evalStatus\.revision ==|verdict names the revision name|gate(s|d)? on the revision name`),
+		allowed: regexp.MustCompile(`(?i)supersed|no longer|retract|digest|A37|A50`),
+		why:     "a revision NAME is 40 bits and a chosen collision costs about a second; the digest decides (A37, A50, design 16 A2)",
+	},
+	{
 		name:    "verifier-undecided",
 		banned:  regexp.MustCompile(`(?i)Sigstore[^.]{0,40}or[^.]{0,10}Kyverno|Kyverno[^.]{0,40}or[^.]{0,10}Sigstore`),
 		allowed: regexp.MustCompile(`(?i)not a design|earlier|supersed|chose|decided`),
@@ -483,6 +494,7 @@ var ruleFixtures = map[string]string{
 	"spec-only-hash":            "The revision digest is computed from spec alone.",
 	"env-referent-hash":         "Env sources are hashed by referent, not contents.",
 	"seal-not-copy":             "Every referenced source is sealed in place, and no bytes are copied.",
+	"bare-revision-gate":        "The gate controller promotes when evalStatus.revision == the candidate.",
 	"referent-drift-refusal":    "If the referent's content has moved, rollback is refused naming both digests.",
 	"verifier-undecided":        "Ship a Sigstore policy-controller or a Kyverno verifyImages binding.",
 	"inert-tightening":          "A tightening update must make the dependent routes inert first.",
