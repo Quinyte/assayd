@@ -15,12 +15,11 @@
 //     mixing it in would change the hash after deploy and orphan the workload it
 //     named (02-review, blocker).
 //
-//     NOT YET TRUE, and stated so rather than implied: design 02 A20 extends the
-//     projection with a digest of the RESOLVED CONTENTS of every ConfigMap and
-//     Secret reachable through envFrom or env[].valueFrom. Referent identity
-//     alone lets anyone with update on a referenced object replace a system
-//     prompt and have it serve under the old revision's gate result. This code
-//     still hashes the referent only; the content extension is unimplemented.
+//     A20 IS implemented: the projection carries a digest of the RESOLVED
+//     CONTENTS of every ConfigMap and Secret reachable through envFrom or
+//     env[].valueFrom, and Digest refuses without them. Referent identity alone
+//     let anyone with update on a referenced object replace a system prompt and
+//     have it serve under the old revision's gate result.
 //
 //   - Unrecognized inputs OVER-gate rather than collapse. Any arm of a k8s union
 //     type this code does not name explicitly is hashed by its marshalled form,
@@ -82,8 +81,10 @@ type behaviour struct {
 // the model that answers requests.
 type envVar struct {
 	Name string `json:"name"`
-	// Value is hashed. ValueFrom is currently represented by its REFERENT ONLY,
-	// which is a KNOWN BYPASS, not a design choice.
+	// Value is hashed. ValueFrom is represented by its referent HERE, and the
+	// resolved CONTENT of that referent is folded in separately by encode() —
+	// see EnvSourceDigests. Both are needed: the referent says which object, the
+	// content digest says what it held.
 	//
 	// The sentence that stood here said "rotating the value inside a Secret must
 	// not re-gate; repointing at a different Secret must." That rule is
@@ -94,12 +95,10 @@ type envVar struct {
 	// environment for envFrom/valueFrom anyway, so the no-re-gate property the
 	// old rule protected did not exist.
 	//
-	// What is owed here is A20 + A35 + A42 together, and none of it is in this
-	// package: the identity must be minted from RESOLVED CONTENT, the content
-	// copied into immutable revision-scoped material, and the workload pointed
-	// at the copy in an operator-owned namespace. Until then the referent is
-	// what this hashes, and design 02 §3.3's content-hashing rule describes
-	// something the code does not do.
+	// A20 and A35 are implemented — content is hashed and the workload reads an
+	// immutable copy. What remains is A42: the copies live in the Agent's own
+	// namespace, so a principal with create/delete can still replace one under
+	// the same name.
 	Value     string     `json:"value,omitempty"`
 	ValueFrom *envSource `json:"valueFrom,omitempty"`
 }

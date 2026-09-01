@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 
@@ -10,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
 	"github.com/Quinyte/plume/internal/revision"
@@ -123,14 +123,20 @@ func (r *AgentReconciler) ensureOneCopy(ctx context.Context, agent *plumev1alpha
 		case err != nil:
 			return fmt.Errorf("read revision material %s: %w", name, err)
 		}
-		if err := checkProvenance(name, labels, existing.Labels, annotations, existing.Annotations,
-			existing.Immutable); err != nil {
-			return err
-		}
-		if !dataEqual(existing.Data, buf.binary) {
+		// CONTENT FIRST (A57). `immutable: true` freezes data, not labels or
+		// annotations — so a principal with `update` can rewrite the metadata, and
+		// if that were an integrity check they could permanently Degrade the
+		// agent. That converts the content edit this design stops into a denial of
+		// service: a smaller loss, and still a capability this code would have
+		// granted.
+		//
+		// The bytes are the only thing the Pod reads. If they match, this IS the
+		// material the revision was minted from, whatever the metadata says, so
+		// the operator restamps rather than refusing.
+		if revision.ContentDigest(nil, existing.Data) != buf.digest {
 			return &materialError{name: name, why: "contents differ from the source it was minted from"}
 		}
-		return nil
+		return r.repairMetadata(ctx, &existing, labels, annotations, name)
 	}
 
 	var existing corev1.ConfigMap
@@ -141,14 +147,10 @@ func (r *AgentReconciler) ensureOneCopy(ctx context.Context, agent *plumev1alpha
 	case err != nil:
 		return fmt.Errorf("read revision material %s: %w", name, err)
 	}
-	if err := checkProvenance(name, labels, existing.Labels, annotations, existing.Annotations,
-		existing.Immutable); err != nil {
-		return err
-	}
 	if revision.ContentDigest(existing.Data, existing.BinaryData) != buf.digest {
 		return &materialError{name: name, why: "contents differ from the source it was minted from"}
 	}
-	return nil
+	return r.repairMetadata(ctx, &existing, labels, annotations, name)
 }
 
 // createMaterial treats AlreadyExists as a RACE, never as success: something
@@ -164,47 +166,6 @@ func (r *AgentReconciler) createMaterial(ctx context.Context, obj client.Object,
 		return fmt.Errorf("create revision material %s: %w", name, err)
 	}
 	return nil
-}
-
-// checkProvenance is A39's "AlreadyExists is not an adoption": a copy this
-// operator did not just create must satisfy the WHOLE invariant, or it is
-// material whose origin nobody can establish.
-func checkProvenance(name string, wantLabels, gotLabels, wantAnn, gotAnn map[string]string,
-	immutable *bool) error {
-	if gotAnn[MaterialDigestAnnotation] != wantAnn[MaterialDigestAnnotation] {
-		return &materialError{name: name, why: fmt.Sprintf(
-			"was minted for revision digest %q and this one is %q, so it belongs to a different revision",
-			gotAnn[MaterialDigestAnnotation], wantAnn[MaterialDigestAnnotation])}
-	}
-	want, got := wantLabels, gotLabels
-	if gotAnn[MaterialSourceAnnotation] != wantAnn[MaterialSourceAnnotation] {
-		return &materialError{name: name, why: fmt.Sprintf(
-			"was copied from %q and this reference is %q",
-			gotAnn[MaterialSourceAnnotation], wantAnn[MaterialSourceAnnotation])}
-	}
-	for _, k := range []string{MaterialAgentUIDLabel, MaterialRevisionLabel} {
-		if got[k] != want[k] {
-			return &materialError{name: name, why: fmt.Sprintf(
-				"label %s is %q and this revision expects %q, so it belongs to something else",
-				k, got[k], want[k])}
-		}
-	}
-	if immutable == nil || !*immutable {
-		return &materialError{name: name, why: "not immutable, so its contents can still be rewritten"}
-	}
-	return nil
-}
-
-func dataEqual(a, b map[string][]byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if !bytes.Equal(v, b[k]) {
-			return false
-		}
-	}
-	return true
 }
 
 // rewriteEnv and rewriteEnvFrom point the workload at the revision's own copies
@@ -265,6 +226,42 @@ func rewriteEnvFrom(in []corev1.EnvFromSource, material map[revision.SourceRef]s
 	return out
 }
 
+// isRevisionMaterial decides whether an object is something THIS operator
+// created for THIS Agent, and it is the authority for every delete.
+//
+// The label alone is not: an Agent's UID is readable by anyone with `get` on it,
+// and adding a label needs only `update` — which is the exact principal A20 and
+// A35 exist to defend against. Selecting on the label and deleting the matches
+// turns `configmaps/update` into `configmaps/delete` across the namespace, with
+// the operator's credentials. This package already refuses that reasoning for
+// Deployments: ownedWorkloads decides ownership by controller reference and UID
+// "which nobody can forge by labelling", and A44 removed the ownerReference here
+// without putting anything in its place.
+//
+// The NAME is what an attacker cannot forge. Kubernetes names are immutable, so
+// renaming a victim object into this shape requires the delete they are trying
+// to obtain. Everything else is corroboration.
+func isRevisionMaterial(agent *plumev1alpha1.Agent, o client.Object) bool {
+	rev := o.GetLabels()[MaterialRevisionLabel]
+	if rev == "" || o.GetLabels()[MaterialAgentUIDLabel] != string(agent.UID) {
+		return false
+	}
+	ann := o.GetAnnotations()
+	if ann[MaterialDigestAnnotation] == "" || ann[MaterialSourceAnnotation] == "" {
+		return false
+	}
+	// The index is bounded by the number of sources any revision of this Agent
+	// could have had. Nothing records that historically, so the name is matched
+	// against a generous range rather than an exact one — the point is the SHAPE,
+	// which a victim object does not have.
+	for i := 0; i < 64; i++ {
+		if o.GetName() == MaterialName(agent.Name, rev, i) {
+			return true
+		}
+	}
+	return false
+}
+
 // deleteMaterial removes revision-scoped copies matching a selector.
 //
 // This exists because A44 chose LABELS over an ownerReference — a choice made so
@@ -273,7 +270,8 @@ func rewriteEnvFrom(in []corev1.EnvFromSource, material map[revision.SourceRef]s
 // either: the copies hold a snapshot of a Secret's bytes, so leaking them is
 // leaking credential material, which is the cost A23 warned about when it
 // declined copying in the first place.
-func (r *AgentReconciler) deleteMaterial(ctx context.Context, ns string, sel client.MatchingLabels) error {
+func (r *AgentReconciler) deleteMaterial(ctx context.Context, agent *plumev1alpha1.Agent, ns string,
+	sel client.MatchingLabels) error {
 	for _, list := range []client.ObjectList{&corev1.ConfigMapList{}, &corev1.SecretList{}} {
 		if err := r.List(ctx, list, client.InNamespace(ns), sel); err != nil {
 			return fmt.Errorf("list revision material in %s: %w", ns, err)
@@ -290,6 +288,14 @@ func (r *AgentReconciler) deleteMaterial(ctx context.Context, ns string, sel cli
 			}
 		}
 		for _, o := range items {
+			if !isRevisionMaterial(agent, o) {
+				// Someone else's object wearing our label. Deleting it would be the
+				// operator lending its credentials to a principal who only had
+				// `update`.
+				log.FromContext(ctx).Info("refusing to delete an object that is not this agent's "+
+					"revision material", "object", o.GetName(), "namespace", ns)
+				continue
+			}
 			if err := r.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("delete revision material %s: %w", o.GetName(), err)
 			}
@@ -315,21 +321,86 @@ func (r *AgentReconciler) collectRevisionMaterial(ctx context.Context, agent *pl
 	if err := r.List(ctx, &secs, client.InNamespace(agent.Namespace), sel); err != nil {
 		return fmt.Errorf("list revision material: %w", err)
 	}
-	var stale []client.Object
+	var candidates []client.Object
 	for i := range cms.Items {
-		if !keep[cms.Items[i].Labels[MaterialRevisionLabel]] {
-			stale = append(stale, &cms.Items[i])
-		}
+		candidates = append(candidates, &cms.Items[i])
 	}
 	for i := range secs.Items {
-		if !keep[secs.Items[i].Labels[MaterialRevisionLabel]] {
-			stale = append(stale, &secs.Items[i])
-		}
+		candidates = append(candidates, &secs.Items[i])
 	}
-	for _, o := range stale {
+	for _, o := range candidates {
+		if !isRevisionMaterial(agent, o) {
+			log.FromContext(ctx).Info("refusing to collect an object that is not this agent's "+
+				"revision material", "object", o.GetName())
+			continue
+		}
+		if keep[o.GetLabels()[MaterialRevisionLabel]] {
+			continue
+		}
 		if err := r.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("gc revision material %s: %w", o.GetName(), err)
 		}
 	}
 	return nil
+}
+
+// repairMetadata restores the operator's labels, annotations and immutability on
+// material whose CONTENT already matches (A57).
+//
+// This is the other half of "content first": metadata is bookkeeping the
+// operator owns, so it is repaired rather than treated as evidence. It also
+// resolves the same-name-recreated-Agent case — a copy surviving a finalizer
+// that did not complete would otherwise wedge the new Agent permanently on a
+// UID label it cannot match and cannot collect.
+func (r *AgentReconciler) repairMetadata(ctx context.Context, obj client.Object,
+	labels, annotations map[string]string, name string) error {
+	// Immutability cannot be enabled after the fact — Kubernetes forbids changing
+	// the field — so material that is not immutable is deleted and recreated.
+	// That is safe here precisely because the content already matches.
+	switch o := obj.(type) {
+	case *corev1.ConfigMap:
+		if o.Immutable == nil || !*o.Immutable {
+			return r.recreateMaterial(ctx, obj, name)
+		}
+	case *corev1.Secret:
+		if o.Immutable == nil || !*o.Immutable {
+			return r.recreateMaterial(ctx, obj, name)
+		}
+	}
+	l, a, needs := obj.GetLabels(), obj.GetAnnotations(), false
+	if l == nil {
+		l = map[string]string{}
+	}
+	if a == nil {
+		a = map[string]string{}
+	}
+	for k, v := range labels {
+		if l[k] != v {
+			l[k], needs = v, true
+		}
+	}
+	for k, v := range annotations {
+		if a[k] != v {
+			a[k], needs = v, true
+		}
+	}
+	if !needs {
+		return nil
+	}
+	obj.SetLabels(l)
+	obj.SetAnnotations(a)
+	if err := r.Update(ctx, obj); err != nil {
+		return fmt.Errorf("restamp revision material %s: %w", name, err)
+	}
+	return nil
+}
+
+// recreateMaterial deletes material that cannot be repaired in place and returns
+// a retriable error, so the next pass creates it fresh from the buffer.
+func (r *AgentReconciler) recreateMaterial(ctx context.Context, obj client.Object, name string) error {
+	if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete unrepairable revision material %s: %w", name, err)
+	}
+	return fmt.Errorf("revision material %s was not immutable and could not be repaired in place; "+
+		"deleted, and the next pass recreates it from the source", name)
 }

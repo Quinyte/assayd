@@ -96,8 +96,19 @@ func TestContentDigestIsCanonical(t *testing.T) {
 		t.Error("data and binaryData collapse; Kubernetes forbids the key overlap precisely " +
 			"because they would otherwise be indistinguishable")
 	}
-	// Length-prefixed, so concatenation cannot be ambiguous.
+	// Length-prefixed, so concatenation cannot be ambiguous. The pair below is the
+	// one that MATTERS: {"ab":"c"} vs {"a":"bc"} renders differently even with no
+	// prefix at all, so it passed while the prefixes were removed and read as
+	// covering them.
+	//
+	// A ConfigMap value may contain newlines, so this is a spec a user can write.
 	if ContentDigest(map[string]string{"ab": "c"}, nil) == ContentDigest(map[string]string{"a": "bc"}, nil) {
 		t.Error("two different key/value splits produced one digest")
+	}
+	honest := ContentDigest(map[string]string{"a": "1", "b": "2"}, nil)
+	forged := ContentDigest(map[string]string{"a": "1\ndata:b=2"}, nil)
+	if honest == forged {
+		t.Error("a value containing the record separator forged another key's entry: " +
+			"the length prefixes are what stop that, and without them these collide")
 	}
 }

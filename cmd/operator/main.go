@@ -11,8 +11,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
 	"net/http"
 	"os"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -68,7 +70,24 @@ func run() error {
 		return fmt.Errorf("load kubeconfig: %w", err)
 	}
 
+	// ConfigMaps and Secrets are read UNCACHED, and the reason is not performance.
+	//
+	// A cached client LISTs and WATCHes every object of a type it serves, cluster
+	// wide, the first time one is read — so resolving one Agent's env source
+	// would put a plaintext copy of every Secret in the cluster into this
+	// process's memory. For a feature whose whole argument is that a leaked copy
+	// of a Secret's bytes is a cost worth bounding, caching all of them is the
+	// larger version of the same mistake, and an OOM risk besides.
+	//
+	// It also removes a correctness trap: finalize lists material and releases
+	// the finalizer when it sees none. A cache that has not yet observed a copy
+	// created moments earlier makes that sweep a no-op, the Agent disappears, and
+	// nothing collects the copy afterwards because every remaining path keys on
+	// the UID of an Agent that no longer exists.
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Client: client.Options{Cache: &client.CacheOptions{
+			DisableFor: []client.Object{&corev1.ConfigMap{}, &corev1.Secret{}},
+		}},
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		HealthProbeBindAddress: probeAddr,

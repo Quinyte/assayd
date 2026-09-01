@@ -103,7 +103,12 @@ func NewAgentReconciler(c client.Client, scheme *runtime.Scheme, evalSuiteInstal
 // env source, so the operator must read them. `get` only — it never writes a
 // user's ConfigMap or Secret, and the copies A35 will create live under names
 // this operator owns.
-// +kubebuilder:rbac:groups="",resources=configmaps;secrets,verbs=get;list;watch
+// `create` and `delete` are for A35's revision-scoped copies and A56's sweep,
+// NOT for the user's objects — the operator never writes a source. The marker
+// cannot express that distinction, so §6 states it and the material code is the
+// only caller: everything it creates or deletes is named
+// `<agent>-<revision>-env-<n>` and verified before deletion (A57).
+// +kubebuilder:rbac:groups="",resources=configmaps;secrets,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // Discovery of whether the EvalSuite CRD is installed decides whether rollouts
 // are eval-gated (ADR-0006), so the operator must be able to see CRDs.
@@ -223,14 +228,31 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// reads the user's object, even briefly, is the window this closes.
 	material, merr := r.ensureRevisionMaterial(ctx, &agent, desired, desiredDigest, buffers)
 	if merr != nil {
+		// EVERY error here reaches the object, not only the typed one. The
+		// earlier version returned a bare error for a Forbidden create, an
+		// unavailable API server or ordinary cache lag — so an operator missing
+		// RBAC to create material produced an Agent with no phase, no conditions
+		// and a silent backoff loop. That is the NFR-8 failure this same file
+		// fixes twenty lines below for IsInvalid, and it is what made a
+		// completely broken feature undiagnosable.
+		reason := "MaterialUnavailable"
 		if me := (*materialError)(nil); errors.As(merr, &me) {
-			conds.set(plumev1alpha1.CondRevisionMaterialUnavailable, metav1.ConditionTrue,
-				"MaterialInvalid", me.Error())
-			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "RevisionMaterialUnavailable", me.Error())
-			status.Phase = plumev1alpha1.PhaseDegraded
-			status.Conditions = conds.merge(agent.Status.Conditions)
-			status.ObservedGeneration = agent.Generation
-			return ctrl.Result{}, r.writeStatus(ctx, &agent, status)
+			reason = "MaterialInvalid"
+		}
+		conds.set(plumev1alpha1.CondRevisionMaterialUnavailable, metav1.ConditionTrue,
+			reason, merr.Error())
+		conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse,
+			"RevisionMaterialUnavailable", merr.Error())
+		status.Phase = plumev1alpha1.PhaseDegraded
+		status.Conditions = conds.merge(agent.Status.Conditions)
+		status.ObservedGeneration = agent.Generation
+		if err := r.writeStatus(ctx, &agent, status); err != nil {
+			return ctrl.Result{}, err
+		}
+		// A typed materialError is terminal until a human acts; anything else is
+		// transient and must retry with backoff.
+		if me := (*materialError)(nil); errors.As(merr, &me) {
+			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, merr
 	}
@@ -978,11 +1000,12 @@ func (r *AgentReconciler) assessEnvSourceProtection(agent *plumev1alpha1.Agent, 
 	// bytes under a revision that already passed. Narrower than the gap this
 	// condition first announced, and still a real one (design 02 A46).
 	c.set(plumev1alpha1.CondEnvSourceProtectionUnavailable, metav1.ConditionTrue, "SourcesNotIsolated",
-		fmt.Sprintf("%d env source(s) are hashed by content and gated on change (A20), but the "+
-			"running workload still reads them BY NAME: %s. Replacing a Pod after an edit serves the "+
-			"new content under this revision's existing gate result. Restrict update on those objects "+
-			"until A35 (revision-scoped copies) and A42 (the run namespace) are implemented",
-			len(refs), shown))
+		fmt.Sprintf("%d env source(s) are hashed by content (A20) and this revision reads its own "+
+			"immutable copy (A35), so editing them cannot change what it serves: %s. The remaining "+
+			"gap is DELETE-AND-RECREATE — immutable forbids an update and permits replacing the "+
+			"copy under the same name — so restrict CREATE and DELETE, not update, on ConfigMaps "+
+			"and Secrets in this namespace until A42 isolates them. This condition is observability, "+
+			"not a control", len(refs), shown))
 }
 
 func (r *AgentReconciler) assessSandbox(agent *plumev1alpha1.Agent, c *conditionSet) {
@@ -1107,7 +1130,7 @@ func (r *AgentReconciler) finalize(ctx context.Context, agent *plumev1alpha1.Age
 	// and the cost of that choice is that nothing collects these but this step.
 	// A copy left behind is a snapshot of a Secret's bytes outliving the Agent
 	// that justified reading them.
-	if err := r.deleteMaterial(ctx, agent.Namespace,
+	if err := r.deleteMaterial(ctx, agent, agent.Namespace,
 		client.MatchingLabels{MaterialAgentUIDLabel: string(agent.UID)}); err != nil {
 		return ctrl.Result{}, err
 	}
