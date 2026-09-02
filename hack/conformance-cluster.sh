@@ -39,7 +39,20 @@ helm install agw-crds "oci://ghcr.io/agentgateway/charts/agentgateway-crds" --ve
   -n agentgateway-system --create-namespace >/dev/null
 helm install agw "oci://ghcr.io/agentgateway/charts/agentgateway" --version "$AGW_VERSION" \
   -n agentgateway-system >/dev/null
-kubectl -n agentgateway-system rollout status deploy/agw-agentgateway --timeout=120s >/dev/null
+# 120s was not enough for a COLD pull of cr.agentgateway.dev/controller. Measured
+# on 2026-09-02: still ContainerCreating at 4 minutes on a laptop with three
+# other k3d clusters running. The old failure printed only "timed out waiting
+# for the condition", which says nothing about whether the dependency is broken,
+# the cluster is wedged, or an image is simply large — so the diagnosis had to be
+# reproduced by hand. Say what to look at.
+if ! kubectl -n agentgateway-system rollout status deploy/agw-agentgateway --timeout=420s; then
+  echo
+  echo "agentgateway did not become ready. This is usually a slow or failing image"
+  echo "pull, not a broken dependency contract. What the cluster says:"
+  kubectl -n agentgateway-system get pods
+  kubectl -n agentgateway-system get events --sort-by=.lastTimestamp | tail -15
+  exit 1
+fi
 
 echo "==> conformance"
 # ONCE, with the exit code preserved. An earlier version piped a first run

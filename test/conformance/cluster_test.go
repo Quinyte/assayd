@@ -270,6 +270,14 @@ spec:
 // yet, a gateway Pod still ContainerCreating, and a local port bind — and each
 // surfaced as a connection error that reads exactly like a policy result. The
 // first version of this test read one as a policy result.
+// curlImage is a REAL, PULLABLE digest — `docker manifest inspect
+// curlimages/curl:8.11.1`. It is a constant because A21's digest migration
+// rewrote every tagged image in the repository with a SYNTHETIC digest: valid
+// to CEL, unpullable by a kubelet. This suite's traffic pod then never started,
+// and the two tests that send requests timed out at 180s each —
+// discovered only when the suite was next run, days later.
+const curlImage = "curlimages/curl@sha256:9be9b39ac2a66b98bef6d1e1e615af8ff50ec2e746b9163bc12f2bdbf14a949d"
+
 func trafficFrom(t *testing.T) func(path string) int {
 	t.Helper()
 	// The gateway's Service is created by the controller alongside its Deployment.
@@ -286,7 +294,7 @@ func trafficFrom(t *testing.T) func(path string) int {
 	if svc == "" {
 		t.Fatal("the Gateway never produced a Service; traffic assertions need one")
 	}
-	_ = apply(t, `
+	_ = apply(t, fmt.Sprintf(`
 apiVersion: v1
 kind: Pod
 metadata: {name: conf-curl, namespace: default}
@@ -294,10 +302,16 @@ spec:
   restartPolicy: Never
   containers:
   - name: c
-    image: curlimages/curl@sha256:4acaee7ce3d5df2e000000000000000000000000000000000000000000000000
-    command: ["sleep", "3600"]`)
+    image: %s
+    command: ["sleep", "3600"]`, curlImage))
 	if out, err := kubectl(t, "wait", "--for=condition=Ready", "pod/conf-curl", "-n", "default", "--timeout=180s"); err != nil {
-		t.Fatalf("curl pod never became Ready: %s", out)
+		// Say WHY, or this reads as a dataplane problem. The last time this
+		// happened the image digest was synthetic and unpullable, and the two
+		// traffic tests each burned 180s before failing with nothing to act on.
+		ev, _ := kubectl(t, "get", "events", "-n", "default", "--field-selector",
+			"involvedObject.name=conf-curl")
+		t.Fatalf("curl pod never became Ready, so no traffic assertion in this suite can run: %s\n"+
+			"image=%s\nevents:\n%s", out, curlImage, ev)
 	}
 
 	url := "http://" + svc + ":8080"
