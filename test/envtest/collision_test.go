@@ -75,7 +75,7 @@ func TestACollidingSpecCannotRewriteAGatedWorkload(t *testing.T) {
 	reconcileOnce(t, r, &live)
 
 	var d appsv1.Deployment
-	if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &d); err != nil {
+	if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: runNS(ns), Name: name}, &d); err != nil {
 		t.Fatalf("get workload: %v", err)
 	}
 	if img := d.Spec.Template.Spec.Containers[0].Image; img != safe.Runtime.Image {
@@ -115,7 +115,7 @@ func TestACollidingSpecIsRefusedWithNoWorkloadAndWithAStrippedAnnotation(t *test
 	}{
 		{"workload deleted", func(t *testing.T, ns, workload string) {
 			var d appsv1.Deployment
-			key := types.NamespacedName{Namespace: ns, Name: workload}
+			key := types.NamespacedName{Namespace: runNS(ns), Name: workload}
 			if err := k8s.Get(context.Background(), key, &d); err != nil {
 				t.Fatalf("get workload: %v", err)
 			}
@@ -125,7 +125,7 @@ func TestACollidingSpecIsRefusedWithNoWorkloadAndWithAStrippedAnnotation(t *test
 		}},
 		{"annotation stripped", func(t *testing.T, ns, workload string) {
 			var d appsv1.Deployment
-			key := types.NamespacedName{Namespace: ns, Name: workload}
+			key := types.NamespacedName{Namespace: runNS(ns), Name: workload}
 			if err := k8s.Get(context.Background(), key, &d); err != nil {
 				t.Fatalf("get workload: %v", err)
 			}
@@ -300,7 +300,7 @@ func TestARolloutIsNotReportedReadyWhenTheActiveRevisionHasNoWorkload(t *testing
 
 	// Delete the ACTIVE workload, then ask for a different revision.
 	var d appsv1.Deployment
-	if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: active}, &d); err != nil {
+	if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: runNS(ns), Name: active}, &d); err != nil {
 		t.Fatalf("get workload: %v", err)
 	}
 	if err := k8s.Delete(context.Background(), &d); err != nil {
@@ -333,7 +333,7 @@ func TestTheDigestIsStampedOnCreation(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "stamped", nil)
 	r := newReconciler(false)
-	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("stamped", revision.MustHash(a.Spec))}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("stamped", revision.MustHash(a.Spec))}
 
 	// Reconcile only until the workload FIRST exists, then look immediately.
 	// Settling first would hide the window this test is about: a later pass
@@ -378,7 +378,7 @@ func TestAStrippedStampOnAVouchedWorkloadSelfHeals(t *testing.T) {
 	want := a.Spec.Runtime.Image
 
 	// deployments/patch only: rewrite the image AND remove the operator's mark.
-	key := types.NamespacedName{Namespace: ns, Name: name}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: name}
 	var d appsv1.Deployment
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get workload: %v", err)
@@ -423,7 +423,7 @@ func TestAnUnvouchedUnstampedWorkloadIsRefused(t *testing.T) {
 	settle(t, r, a)
 
 	name := controller.WorkloadName("unvouched", revision.MustHash(a.Spec))
-	key := types.NamespacedName{Namespace: ns, Name: name}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: name}
 	var d appsv1.Deployment
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get workload: %v", err)
@@ -476,7 +476,7 @@ func TestAnUnstampedAvailableWorkloadDoesNotPromote(t *testing.T) {
 
 	// Strip the operator's mark, keeping the object Available.
 	var d appsv1.Deployment
-	key := types.NamespacedName{Namespace: ns, Name: name}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: name}
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get workload: %v", err)
 	}

@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -26,8 +28,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
 	"github.com/Quinyte/plume/internal/revision"
@@ -72,22 +78,68 @@ type AgentReconciler struct {
 	// promotion is not. Prefer NewAgentReconciler, which refuses to construct one
 	// without the hook.
 	EvalSuiteInstalled func() bool
+
+	// OperatorNamespace is where the binding records live (design 02 A60) and
+	// whose UID is the install identity stamped on run namespaces. Required.
+	OperatorNamespace string
+	// Reader is the UNCACHED reader the run-namespace protocol's live lists
+	// use. In envtest the client itself is uncached and this may be nil.
+	Reader client.Reader
+	// LabelAuthorityPresent reports whether design 07 A5.9's admission
+	// policies exist. The operator fail-closes without them. Required; see
+	// LabelAuthorityPresent for the production adapter.
+	LabelAuthorityPresent func(context.Context) (bool, error)
+
+	installMu  sync.Mutex
+	installUID string
+	// runNamespaceLocks serializes the writers of one binding record within
+	// this process; see lockRunNamespace.
+	runNamespaceLocks sync.Map
 }
 
 // NewAgentReconciler builds a reconciler with its dependencies stated, so that
 // wiring a manager cannot silently decide ADR-0006's fate by omission.
-func NewAgentReconciler(c client.Client, scheme *runtime.Scheme, evalSuiteInstalled func() bool) (*AgentReconciler, error) {
+func NewAgentReconciler(c client.Client, reader client.Reader, scheme *runtime.Scheme,
+	operatorNamespace string, evalSuiteInstalled func() bool,
+	labelAuthority func(context.Context) (bool, error)) (*AgentReconciler, error) {
 	switch {
 	case c == nil:
 		return nil, fmt.Errorf("agent reconciler: client is required")
+	case reader == nil:
+		return nil, fmt.Errorf("agent reconciler: an uncached reader is required — the run-namespace " +
+			"teardown protocol (design 02 A60) lists live, and a cached list is what it exists to avoid")
 	case scheme == nil:
 		return nil, fmt.Errorf("agent reconciler: scheme is required")
+	case operatorNamespace == "":
+		return nil, fmt.Errorf("agent reconciler: operatorNamespace is required — the run-namespace " +
+			"binding records live there (design 02 A60) and there is no safe default")
 	case evalSuiteInstalled == nil:
 		return nil, fmt.Errorf("agent reconciler: evalSuiteInstalled is required — " +
 			"whether the EvalSuite CRD is present decides whether rollouts are eval-gated " +
 			"(ADR-0006), and it must be an explicit decision rather than a zero value")
+	case labelAuthority == nil:
+		return nil, fmt.Errorf("agent reconciler: labelAuthority is required — without design 07 A5.9's " +
+			"admission policies the plume.dev namespace labels are forgeable, and whether they are " +
+			"installed must be checked rather than assumed")
 	}
-	return &AgentReconciler{Client: c, Scheme: scheme, EvalSuiteInstalled: evalSuiteInstalled}, nil
+	return &AgentReconciler{Client: c, Reader: reader, Scheme: scheme, OperatorNamespace: operatorNamespace,
+		EvalSuiteInstalled: evalSuiteInstalled, LabelAuthorityPresent: labelAuthority}, nil
+}
+
+// installIdentity is the operator namespace's UID, stamped on run namespaces
+// as plume.dev/owned-by. Observability only, never evidence.
+func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
+	r.installMu.Lock()
+	defer r.installMu.Unlock()
+	if r.installUID != "" {
+		return r.installUID, nil
+	}
+	var ns corev1.Namespace
+	if err := r.Get(ctx, types.NamespacedName{Name: r.OperatorNamespace}, &ns); err != nil {
+		return "", fmt.Errorf("read the operator's namespace %s: %w", r.OperatorNamespace, err)
+	}
+	r.installUID = string(ns.UID)
+	return r.installUID, nil
 }
 
 // +kubebuilder:rbac:groups=plume.dev,resources=agents,verbs=get;list;watch;update;patch
@@ -108,8 +160,24 @@ func NewAgentReconciler(c client.Client, scheme *runtime.Scheme, evalSuiteInstal
 // cannot express that distinction, so §6 states it and the material code is the
 // only caller: everything it creates or deletes is named
 // `<agent>-<revision>-env-<n>` and verified before deletion (A57).
-// +kubebuilder:rbac:groups="",resources=configmaps;secrets,verbs=get;list;watch;create;delete
+// `update` is for the binding record's compare-and-swap (A60) and for A57's
+// metadata repair, which called Update without the grant — Forbidden on a real
+// cluster, green in envtest, which runs as admin (design 07 A5.7).
+// +kubebuilder:rbac:groups="",resources=configmaps;secrets,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// A42/A60: the operator creates, labels and — when the last Agent of a source
+// namespace goes — deletes run namespaces. RBAC cannot bound a dynamic name, so
+// every write verb here is cluster-wide; the code writes only to a namespace
+// whose name has the plume-run- shape AND whose UID the binding record
+// vouches for (design 07 A5.7). A real escalation, named rather than buried.
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;delete
+// ResourceQuota and LimitRange are mirrored from the source namespace into the
+// run namespace (A60); mirrors are named plume-mirror-<name> and only those are
+// ever written or deleted.
+// +kubebuilder:rbac:groups="",resources=resourcequotas;limitranges,verbs=get;list;watch;create;update;delete
+// The operator checks that design 07 A5.9's label-reserving policies exist
+// before creating a run namespace, and fail-closes if they do not.
+// +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingadmissionpolicies;validatingadmissionpolicybindings,verbs=get
 // Discovery of whether the EvalSuite CRD is installed decides whether rollouts
 // are eval-gated (ADR-0006), so the operator must be able to see CRDs.
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
@@ -119,7 +187,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	var agent plumev1alpha1.Agent
 	if err := r.Get(ctx, req.NamespacedName, &agent); err != nil {
-		// A deleted Agent is not an error; its workloads go with it via ownerRefs.
+		// A deleted Agent is not an error. Its workloads and material do NOT go
+		// with it by ownerReference — they live in the run namespace (A42) and a
+		// cross-namespace owner is treated as absent — so the finalizer below is
+		// the only thing that collects them, and it has run by the time the
+		// object is gone.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -174,11 +246,6 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	logger = logger.WithValues("revision", desired)
 
-	owned, err := r.ownedWorkloads(ctx, &agent)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
 	status := agent.Status.DeepCopy()
 	conds := newConditionSet(agent.Generation)
 
@@ -186,12 +253,46 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// without them merges a condition set that never saw them, and because owned
 	// conditions are non-sticky, merge() then CLEARS every one — so entering the
 	// terminal collision state below used to retract SandboxDowngraded,
-	// GatesSkipped and EnvSourceProtectionUnavailable on an agent that is more
+	// GatesSkipped and SandboxDowngraded on an agent that is more
 	// degraded, not less.
 	r.assessGates(&agent, conds)
 	r.assessSandbox(&agent, conds)
 	r.assessTaskState(&agent, conds)
-	r.assessEnvSourceProtection(&agent, conds)
+
+	// A42/A60: everything below goes into the operator-owned run namespace, and
+	// the operator must be able to prove it created that namespace before it
+	// writes a single copy into it.
+	runNS, err := r.ensureRunNamespace(ctx, &agent)
+	if err != nil {
+		rerr := (*runNamespaceError)(nil)
+		if !errors.As(err, &rerr) {
+			return ctrl.Result{}, err
+		}
+		conds.set(plumev1alpha1.CondRunNamespaceUnavailable, metav1.ConditionTrue, rerr.reason, rerr.message)
+		conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "RunNamespaceUnavailable", rerr.message)
+		if rerr.terminal {
+			conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "RunNamespaceUnavailable", rerr.message)
+			status.Phase = plumev1alpha1.PhaseDegraded
+		} else {
+			status.Phase = plumev1alpha1.PhasePending
+		}
+		status.Conditions = conds.merge(agent.Status.Conditions)
+		status.ObservedGeneration = agent.Generation
+		if err := r.writeStatus(ctx, &agent, status); err != nil {
+			return ctrl.Result{}, err
+		}
+		if rerr.terminal {
+			return ctrl.Result{}, nil
+		}
+		// Terminating clears by itself; nothing watches the binding record, so
+		// poll rather than wait for an event that never comes.
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	owned, err := r.ownedWorkloads(ctx, &agent, runNS)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// STATUS is the authority on which revision a name belongs to, and it is
 	// checked before the workload is touched.
@@ -226,7 +327,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// A35: create the revision's own immutable copies BEFORE the workload, and
 	// point the workload at them. Order matters — publishing a workload that
 	// reads the user's object, even briefly, is the window this closes.
-	material, merr := r.ensureRevisionMaterial(ctx, &agent, desired, desiredDigest, buffers)
+	material, merr := r.ensureRevisionMaterial(ctx, &agent, runNS, desired, desiredDigest, buffers)
 	if merr != nil {
 		// EVERY error here reaches the object, not only the typed one. The
 		// earlier version returned a bare error for a Forbidden create, an
@@ -235,6 +336,21 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// and a silent backoff loop. That is the NFR-8 failure this same file
 		// fixes twenty lines below for IsInvalid, and it is what made a
 		// completely broken feature undiagnosable.
+		if isNamespaceTerminating(merr) {
+			// The run namespace went Terminating between ensureRunNamespace and
+			// this create. That is a wait, not an error to retry against: the next
+			// pass meets row 10 and the handler takes over.
+			msg := fmt.Sprintf("run namespace %s is being deleted; waiting for it to be gone: %v", runNS, merr)
+			conds.set(plumev1alpha1.CondRunNamespaceUnavailable, metav1.ConditionTrue, ReasonTerminating, msg)
+			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "RunNamespaceUnavailable", msg)
+			status.Phase = plumev1alpha1.PhasePending
+			status.Conditions = conds.merge(agent.Status.Conditions)
+			status.ObservedGeneration = agent.Generation
+			if err := r.writeStatus(ctx, &agent, status); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
 		reason := "MaterialUnavailable"
 		if me := (*materialError)(nil); errors.As(merr, &me) {
 			reason = "MaterialInvalid"
@@ -257,7 +373,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, merr
 	}
 
-	if err := r.ensureWorkload(ctx, &agent, desired, desiredDigest, status, material); err != nil {
+	if err := r.ensureWorkload(ctx, &agent, runNS, desired, desiredDigest, status, material); err != nil {
 		if collision := (*revisionCollisionError)(nil); errors.As(err, &collision) {
 			return ctrl.Result{}, r.reportCollision(ctx, &agent, status, conds, collision)
 		}
@@ -277,14 +393,14 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
-	ready, err := r.workloadAvailable(ctx, &agent, desired, desiredDigest)
+	ready, err := r.workloadAvailable(ctx, &agent, runNS, desired, desiredDigest)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	switch {
 	case !ready && status.ActiveRevision != "" && status.ActiveRevisionDigest != desiredDigest &&
-		r.revisionAvailable(ctx, &agent, status.ActiveRevision, status.ActiveRevisionDigest):
+		r.revisionAvailable(ctx, &agent, runNS, status.ActiveRevision, status.ActiveRevisionDigest):
 		// A genuine rollout: an earlier revision still holds all traffic and is
 		// healthy while its successor comes up. Reporting Ready=False here would
 		// trip every alert keyed on the canonical condition on any routine spec
@@ -399,7 +515,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	// Collect AFTER the status that authorizes it is durable: a destructive act
 	// ordered ahead of its own record is backwards, even when it converges.
-	return ctrl.Result{}, r.collectGarbage(ctx, &agent, owned, status)
+	return ctrl.Result{}, r.collectGarbage(ctx, &agent, runNS, owned, status)
 }
 
 // reportUnreconcilable records why an Agent cannot be acted on, rather than
@@ -448,6 +564,11 @@ type revisionCollisionError struct {
 }
 
 func (e *revisionCollisionError) Error() string {
+	if e.existing == "(another agent's)" {
+		return fmt.Sprintf("workload %s exists in the run namespace and does not carry this Agent's UID, "+
+			"so this operator did not create it for this Agent. Refusing to converge. To recover: delete "+
+			"that Deployment and let the operator recreate it.", e.name)
+	}
 	if e.existing == "(no stamp)" {
 		return fmt.Sprintf("workload %s carries no plume.dev/revision-digest and nothing in status "+
 			"vouches for it, so this operator cannot establish that it created it. Refusing to "+
@@ -504,8 +625,8 @@ func (r *AgentReconciler) reportCollision(ctx context.Context, agent *plumev1alp
 // as opposed to workloadAvailable, which only ever answers for the desired one.
 // An error is reported as unavailable: claiming a revision is serving because
 // the API server did not answer is the loud-and-wrong of rule 8.
-func (r *AgentReconciler) revisionAvailable(ctx context.Context, agent *plumev1alpha1.Agent, rev, digest string) bool {
-	ok, err := r.workloadAvailable(ctx, agent, rev, digest)
+func (r *AgentReconciler) revisionAvailable(ctx context.Context, agent *plumev1alpha1.Agent, runNS, rev, digest string) bool {
+	ok, err := r.workloadAvailable(ctx, agent, runNS, rev, digest)
 	return err == nil && ok
 }
 
@@ -586,16 +707,17 @@ func (r *AgentReconciler) reportUnresolvedSources(ctx context.Context, agent *pl
 	return r.writeStatus(ctx, agent, status)
 }
 
-func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alpha1.Agent, rev, digest string,
+func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alpha1.Agent, runNS, rev, digest string,
 	status *plumev1alpha1.AgentStatus, material map[revision.SourceRef]string) error {
-	desired := r.deploymentFor(agent, rev, material)
+	desired := r.deploymentFor(agent, runNS, rev, material)
 	if desired.Annotations == nil {
 		desired.Annotations = map[string]string{}
 	}
 	desired.Annotations[RevisionDigestAnnotation] = digest
-	if err := ctrl.SetControllerReference(agent, desired, r.Scheme); err != nil {
-		return fmt.Errorf("set owner on workload %s: %w", desired.Name, err)
-	}
+	// No ownerReference: the Deployment is in the run namespace and the Agent is
+	// not, and a cross-namespace owner reference is treated as absent (A44/A60).
+	// Provenance is the name, the plume.dev/agent-uid label and the
+	// status-vouched digest; the finalizer collects it.
 
 	var existing appsv1.Deployment
 	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
@@ -672,6 +794,11 @@ func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alph
 		(status.CandidateRevision == rev && status.CandidateRevisionDigest == digest)
 	existingDigest, stamped := existing.Annotations[RevisionDigestAnnotation]
 	switch {
+	case existing.Labels[LabelAgentUID] != string(agent.UID):
+		// A60: AlreadyExists is never provenance. An object under this name that
+		// does not carry this Agent's UID is someone else's, and is refused whole
+		// rather than converged.
+		return &revisionCollisionError{name: existing.Name, existing: "(another agent's)", desired: digest}
 	case stamped && existingDigest != digest:
 		return &revisionCollisionError{name: existing.Name, existing: existingDigest, desired: digest}
 	case !stamped && !vouched:
@@ -751,12 +878,22 @@ func podSpecEquivalent(existing, desired corev1.PodSpec) bool {
 // deploymentFor renders one revision's workload. Design 02 §6: non-root,
 // read-only rootfs, seccomp — applied to every agent, not only sandboxed ones,
 // since the sandbox fallback path must be no weaker than the default path.
-func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, rev string,
+func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, runNS, rev string,
 	material map[revision.SourceRef]string) *appsv1.Deployment {
 	rt := agent.Spec.Runtime
-	labels := map[string]string{
+	// The selector is {agent, revision}; the object and its Pods additionally
+	// carry the Agent's UID (provenance, A60) and the Agent's OWN namespace —
+	// the SVID path segment reads that label, so the move to the run namespace
+	// is invisible to authorization (A59).
+	selector := map[string]string{
 		LabelAgent:    agent.Name,
 		LabelRevision: rev,
+	}
+	labels := map[string]string{
+		LabelAgent:          agent.Name,
+		LabelRevision:       rev,
+		LabelAgentUID:       string(agent.UID),
+		LabelAgentNamespace: agent.Namespace,
 	}
 	replicas := rt.Replicas
 	if replicas == 0 {
@@ -772,12 +909,12 @@ func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, rev string,
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      WorkloadName(agent.Name, rev),
-			Namespace: agent.Namespace,
+			Namespace: runNS,
 			Labels:    labels,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Selector: &metav1.LabelSelector{MatchLabels: selector},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
@@ -842,9 +979,9 @@ func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, rev string,
 // replica. Availability, not readiness of a single pod: a Deployment reporting
 // availableReplicas is the closest signal the operator has to "this revision can
 // serve" before the card fetch of §3.4 exists.
-func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *plumev1alpha1.Agent, rev, digest string) (bool, error) {
+func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *plumev1alpha1.Agent, runNS, rev, digest string) (bool, error) {
 	var d appsv1.Deployment
-	key := types.NamespacedName{Namespace: agent.Namespace, Name: WorkloadName(agent.Name, rev)}
+	key := types.NamespacedName{Namespace: runNS, Name: WorkloadName(agent.Name, rev)}
 	if err := r.Get(ctx, key, &d); err != nil {
 		if apierrors.IsNotFound(err) {
 			return false, nil
@@ -856,7 +993,7 @@ func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *plumev1a
 	// a same-named object created by anyone with deployments/create is Available
 	// too, and promoting on replicas alone made its status the operator's
 	// evidence. The digest stamp is the operator's own mark.
-	if d.Annotations[RevisionDigestAnnotation] != digest {
+	if d.Annotations[RevisionDigestAnnotation] != digest || d.Labels[LabelAgentUID] != string(agent.UID) {
 		return false, nil
 	}
 	return d.Status.AvailableReplicas > 0, nil
@@ -918,96 +1055,16 @@ func (r *AgentReconciler) assessGates(agent *plumev1alpha1.Agent, c *conditionSe
 // assessSandbox reports the §3.2 downgrade. The agent-sandbox CRD is not bound
 // yet, so every sandboxed agent currently downgrades — stated loudly, per NFR-8,
 // rather than silently running an unsandboxed pod.
-// assessEnvSourceProtection is NFR-8 applied to a degradation this operator
-// currently HAS, rather than to one it might have.
 //
-// Design 02 §3.3 says the revision identity covers the resolved CONTENT of every
-// env source (A20), and A35/A42 say a revision reads its own immutable copy in
-// an operator-owned namespace. None of that is built: internal/revision hashes
-// the REFERENT, and workloads are created in the Agent's own namespace. So an
-// editor changes a referenced ConfigMap from a safe system prompt to an injected
-// one, a Pod is replaced, and the new content serves under the old revision's
-// gate result — with no permission to touch the Agent.
-//
-// A43 wrote that down in the design. A design paragraph is not what NFR-8 asks
-// for: "any downgraded guarantee surfaces as a CR condition, never silently."
-// Until A20+A35+A42 land, an Agent that actually references an env source says
-// so on the object.
-func (r *AgentReconciler) assessEnvSourceProtection(agent *plumev1alpha1.Agent, c *conditionSet) {
-	rt := agent.Spec.Runtime
-	if rt == nil {
-		return
-	}
-	// Every arm is reported, and an arm this switch does not NAME still counts.
-	// A named-arm enumeration that silently skips the rest is the exact defect
-	// internal/revision just replaced with a whole-selector marshal: corev1 gains
-	// arms between releases, and the one it gained last (fileKeyRef) is already
-	// classified as behaviour by the projection while being invisible here.
-	var refs []string
-	for _, f := range rt.EnvFrom {
-		switch {
-		case f.ConfigMapRef != nil:
-			refs = append(refs, "envFrom configMapRef/"+f.ConfigMapRef.Name)
-		case f.SecretRef != nil:
-			refs = append(refs, "envFrom secretRef/"+f.SecretRef.Name)
-		default:
-			refs = append(refs, "envFrom (unrecognised source)")
-		}
-	}
-	for _, e := range rt.Env {
-		if e.ValueFrom == nil {
-			continue
-		}
-		switch v := e.ValueFrom; {
-		case v.ConfigMapKeyRef != nil:
-			refs = append(refs, "env."+e.Name+" configMapKeyRef/"+v.ConfigMapKeyRef.Name)
-		case v.SecretKeyRef != nil:
-			refs = append(refs, "env."+e.Name+" secretKeyRef/"+v.SecretKeyRef.Name)
-		case v.FieldRef != nil, v.ResourceFieldRef != nil:
-			// Downward API: the value comes from the Pod, which the operator owns.
-			// Not an ungated external input, so not reported.
-		default:
-			refs = append(refs, "env."+e.Name+" (unrecognised source)")
-		}
-	}
-	if len(refs) == 0 {
-		// No env source, no exposure. Saying nothing here is correct: an abnormal-
-		// true condition on an Agent that cannot be affected is the noise operators
-		// learn to filter, and then miss the one that matters.
-		return
-	}
-	// The message is BUDGETED. Kubernetes caps a condition message at 32768
-	// bytes and rejects the whole status write past it — so an Agent with enough
-	// env sources got no status at all: no Ready, no Degraded, nothing, in an
-	// error loop. The condition added to satisfy NFR-8 would have been the thing
-	// that silenced the object. 150 sources with long names was enough.
-	//
-	// refs keeps SPEC ORDER, which is the order the operator wrote and the order
-	// they will look for. It was sorted for a "stable message" that spec order
-	// already provided.
-	const budget = 12
-	listed, more := refs, 0
-	if len(listed) > budget {
-		listed, more = listed[:budget], len(refs)-budget
-	}
-	shown := strings.Join(listed, ", ")
-	if more > 0 {
-		shown = fmt.Sprintf("%s, and %d more", shown, more)
-	}
-	// A20 is implemented, so a source edit now MINTS a candidate and is gated
-	// before promotion. What remains is A35 and A42: the retained workload still
-	// resolves the user's object by name, so replacing a Pod can serve changed
-	// bytes under a revision that already passed. Narrower than the gap this
-	// condition first announced, and still a real one (design 02 A46).
-	c.set(plumev1alpha1.CondEnvSourceProtectionUnavailable, metav1.ConditionTrue, "SourcesNotIsolated",
-		fmt.Sprintf("%d env source(s) are hashed by content (A20) and this revision reads its own "+
-			"immutable copy (A35), so editing them cannot change what it serves: %s. The remaining "+
-			"gap is DELETE-AND-RECREATE — immutable forbids an update and permits replacing the "+
-			"copy under the same name — so restrict CREATE and DELETE, not update, on ConfigMaps "+
-			"and Secrets in this namespace until A42 isolates them. This condition is observability, "+
-			"not a control", len(refs), shown))
-}
-
+// EnvSourceProtectionUnavailable is no longer raised. It announced the
+// env-source bypass while A20, A35 and A42 were design; the last of the three
+// landed with the run namespace (runnamespace.go), and a real-cluster test
+// proves a principal with create/delete on ConfigMaps in the Agent's namespace
+// can no longer replace a published revision's copy. The condition type stays
+// in the closed vocabulary and in the OWNED set so a stale True written by an
+// operator before A42 is CLEARED on the first reconcile after upgrade — an
+// abnormal-true condition that no longer applies is what teaches operators to
+// ignore conditions.
 func (r *AgentReconciler) assessSandbox(agent *plumev1alpha1.Agent, c *conditionSet) {
 	if agent.Spec.Runtime == nil || agent.Spec.Runtime.Sandbox == nil {
 		return
@@ -1035,7 +1092,7 @@ func (r *AgentReconciler) assessTaskState(agent *plumev1alpha1.Agent, c *conditi
 // revisions IN ADDITION TO the active one and any in-flight candidate, so a
 // rollout can never GC its own rollback target.
 func (r *AgentReconciler) collectGarbage(
-	ctx context.Context, agent *plumev1alpha1.Agent,
+	ctx context.Context, agent *plumev1alpha1.Agent, runNS string,
 	owned []appsv1.Deployment, status *plumev1alpha1.AgentStatus,
 ) error {
 	protected := map[string]bool{}
@@ -1080,7 +1137,37 @@ func (r *AgentReconciler) collectGarbage(
 	// The material goes with the revision. It carries no ownerReference by A44,
 	// so Kubernetes will not collect it and a leaked copy is a leaked snapshot of
 	// a Secret's bytes.
-	return r.collectRevisionMaterial(ctx, agent, keep)
+	if err := r.collectRevisionMaterial(ctx, agent, runNS, keep); err != nil {
+		return err
+	}
+	return r.collectPreA42Leftovers(ctx, agent)
+}
+
+// collectPreA42Leftovers removes what an operator built before A42 left in the
+// Agent's OWN namespace: workloads it owned by controller reference, and
+// copies of the material name shape. Without this an upgrade ran two
+// workloads per Agent and leaked the old Secret copies where a namespace
+// editor could read them (found by the code review of A61). Ownership here is
+// the pre-A42 kind — a same-namespace controller reference, which nobody can
+// forge by labelling — and the copies are decided by isRevisionMaterial's name
+// authority as everywhere else.
+func (r *AgentReconciler) collectPreA42Leftovers(ctx context.Context, agent *plumev1alpha1.Agent) error {
+	var list appsv1.DeploymentList
+	if err := r.List(ctx, &list, client.InNamespace(agent.Namespace),
+		client.MatchingLabels{LabelAgent: agent.Name}); err != nil {
+		return fmt.Errorf("list pre-A42 workloads for %s/%s: %w", agent.Namespace, agent.Name, err)
+	}
+	for i := range list.Items {
+		d := &list.Items[i]
+		if ref := metav1.GetControllerOf(d); ref == nil || ref.UID != agent.UID {
+			continue
+		}
+		if err := r.Delete(ctx, d); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete pre-A42 workload %s: %w", d.Name, err)
+		}
+	}
+	return r.deleteMaterial(ctx, agent, agent.Namespace,
+		client.MatchingLabels{MaterialAgentUIDLabel: string(agent.UID)})
 }
 
 // ownedWorkloads returns the Deployments this Agent actually controls.
@@ -1088,12 +1175,15 @@ func (r *AgentReconciler) collectGarbage(
 // Selecting on the label alone was a defect with teeth: a stray plume.dev/agent
 // label — copied from an example, applied by a Kustomize commonLabels, or set by
 // anyone with deployment-create in the namespace — made this operator a deleter
-// of other people's workloads. Ownership is decided by the controller reference
-// and its UID, which nobody can forge by labelling.
-func (r *AgentReconciler) ownedWorkloads(ctx context.Context, agent *plumev1alpha1.Agent) ([]appsv1.Deployment, error) {
+// of other people's workloads. Ownership used to be the controller reference;
+// under A42 the Agent is in another namespace and that reference is treated as
+// absent (A44/A60). So ownership is the NAME — `<agent>-<revision>`, immutable,
+// so a victim object cannot be renamed into the shape (A57) — corroborated by
+// the plume.dev/agent-uid label. Nothing here is deleted for wearing a label.
+func (r *AgentReconciler) ownedWorkloads(ctx context.Context, agent *plumev1alpha1.Agent, runNS string) ([]appsv1.Deployment, error) {
 	var list appsv1.DeploymentList
 	if err := r.List(ctx, &list,
-		client.InNamespace(agent.Namespace),
+		client.InNamespace(runNS),
 		client.MatchingLabels{LabelAgent: agent.Name},
 	); err != nil {
 		return nil, fmt.Errorf("list workloads for %s/%s: %w", agent.Namespace, agent.Name, err)
@@ -1101,18 +1191,24 @@ func (r *AgentReconciler) ownedWorkloads(ctx context.Context, agent *plumev1alph
 
 	owned := make([]appsv1.Deployment, 0, len(list.Items))
 	for _, d := range list.Items {
-		ref := metav1.GetControllerOf(&d)
-		if ref == nil || ref.UID != agent.UID {
-			continue
-		}
-		// A workload with no revision label cannot be placed in the retention
-		// window, so it must never be a GC candidate.
-		if d.Labels[LabelRevision] == "" {
+		if !isRevisionWorkload(agent, &d) {
 			continue
 		}
 		owned = append(owned, d)
 	}
 	return owned, nil
+}
+
+// isRevisionWorkload decides whether a Deployment is one THIS operator created
+// for THIS Agent: name shape, revision label, and the Agent's UID.
+func isRevisionWorkload(agent *plumev1alpha1.Agent, d *appsv1.Deployment) bool {
+	rev := d.Labels[LabelRevision]
+	// A workload with no revision label cannot be placed in the retention
+	// window, so it must never be a GC candidate.
+	if rev == "" || d.Labels[LabelAgentUID] != string(agent.UID) {
+		return false
+	}
+	return d.Name == WorkloadName(agent.Name, rev)
 }
 
 // finalize runs §3.7's ordered teardown. Only the steps whose components exist
@@ -1125,13 +1221,37 @@ func (r *AgentReconciler) finalize(ctx context.Context, agent *plumev1alpha1.Age
 	if !containsString(agent.Finalizers, Finalizer) {
 		return ctrl.Result{}, nil
 	}
-	// Workloads go with the ownerReference. REVISION MATERIAL DOES NOT: A44 chose
-	// labels precisely so A42's namespace move would not change the invariant,
-	// and the cost of that choice is that nothing collects these but this step.
-	// A copy left behind is a snapshot of a Secret's bytes outliving the Agent
-	// that justified reading them.
-	if err := r.deleteMaterial(ctx, agent, agent.Namespace,
-		client.MatchingLabels{MaterialAgentUIDLabel: string(agent.UID)}); err != nil {
+	// Nothing here goes with an ownerReference: workloads and material live in
+	// the run namespace (A42) and a cross-namespace owner is treated as absent
+	// (A44/A60), so this step is the only thing that collects them. A copy left
+	// behind is a snapshot of a Secret's bytes outliving the Agent that
+	// justified reading them.
+	runNS := RunNamespaceName(agent.Namespace)
+	var run corev1.Namespace
+	switch err := r.Get(ctx, types.NamespacedName{Name: runNS}, &run); {
+	case apierrors.IsNotFound(err):
+		// Nothing to collect; the binding, if any, is the handler's.
+	case err != nil:
+		return ctrl.Result{}, fmt.Errorf("read run namespace %s: %w", runNS, err)
+	case run.DeletionTimestamp.IsZero():
+		owned, err := r.ownedWorkloads(ctx, agent, runNS)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		for i := range owned {
+			if err := r.Delete(ctx, &owned[i]); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("delete workload %s: %w", owned[i].Name, err)
+			}
+		}
+		if err := r.deleteMaterial(ctx, agent, runNS,
+			client.MatchingLabels{MaterialAgentUIDLabel: string(agent.UID)}); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	if err := r.collectPreA42Leftovers(ctx, agent); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.releaseRunNamespaceIfLast(ctx, agent); err != nil {
 		return ctrl.Result{}, err
 	}
 	agent.Finalizers = removeString(agent.Finalizers, Finalizer)
@@ -1157,10 +1277,91 @@ func (r *AgentReconciler) writeStatus(ctx context.Context, agent *plumev1alpha1.
 func WorkloadName(agent, rev string) string { return agent + "-" + rev }
 
 func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	// Workloads carry no ownerReference (A42/A60), so Owns() would never fire.
+	// The watch maps by the labels the operator stamps: the Agent's own
+	// namespace and name. Anyone who labels a Deployment that way only triggers
+	// a reconcile, which is idempotent.
+	byAgentLabels := handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
+		l := o.GetLabels()
+		if l[LabelAgentNamespace] == "" || l[LabelAgent] == "" {
+			return nil
+		}
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{
+			Namespace: l[LabelAgentNamespace], Name: l[LabelAgent]}}}
+	})
+	// A ResourceQuota or LimitRange change in a source namespace must reach its
+	// run namespace (A60): every Agent in that namespace is enqueued, and the
+	// first to reconcile mirrors it.
+	byNamespace := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
+		var agents plumev1alpha1.AgentList
+		if err := mgr.GetClient().List(ctx, &agents, client.InNamespace(o.GetNamespace())); err != nil {
+			return nil
+		}
+		out := make([]reconcile.Request, 0, len(agents.Items))
+		for i := range agents.Items {
+			out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&agents.Items[i])})
+		}
+		return out
+	})
+	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&plumev1alpha1.Agent{}).
-		Owns(&appsv1.Deployment{}).
-		Complete(r)
+		Watches(&appsv1.Deployment{}, byAgentLabels).
+		Watches(&corev1.ResourceQuota{}, byNamespace).
+		Watches(&corev1.LimitRange{}, byNamespace).
+		Complete(r); err != nil {
+		return err
+	}
+	// The Namespace-keyed reconciler exists so the Terminating/Deleting handler
+	// runs when the source namespace holds no Agent at all (A60). It keys on the
+	// pods-by label and the name shape — not on plume.dev/run-namespace, which a
+	// vCluster's host sync namespace also carries (design 26 A1).
+	isRun := predicate.NewPredicateFuncs(func(o client.Object) bool {
+		return strings.HasPrefix(o.GetName(), RunNamespacePrefix) &&
+			o.GetLabels()[LabelPodsBy] == PodsByAgentOperator
+	})
+	// isRun applies to delete events too, and a namespace whose deletion
+	// completed is exactly when the binding must be removed.
+	return ctrl.NewControllerManagedBy(mgr).
+		Named("run-namespace").
+		For(&corev1.Namespace{}, builder.WithPredicates(isRun)).
+		Complete(NewRunNamespaceReconciler(r))
+}
+
+// RunNamespaceReconciler runs the binding handler for a run namespace with no
+// Agent to reconcile it — a namespace whose last Agent is gone, or whose
+// deletion completed after the finalizer that issued it released.
+type RunNamespaceReconciler struct{ agents *AgentReconciler }
+
+// NewRunNamespaceReconciler wraps an AgentReconciler; SetupWithManager
+// registers one, and tests drive it directly.
+func NewRunNamespaceReconciler(agents *AgentReconciler) *RunNamespaceReconciler {
+	return &RunNamespaceReconciler{agents: agents}
+}
+
+func (n *RunNamespaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	if n.agents == nil {
+		return ctrl.Result{}, fmt.Errorf("run-namespace reconciler built without an AgentReconciler; " +
+			"use NewRunNamespaceReconciler")
+	}
+	defer n.agents.lockRunNamespace(req.Name)()
+	b, err := n.agents.readBinding(ctx, req.Name)
+	if err != nil {
+		if rerr := (*runNamespaceError)(nil); errors.As(err, &rerr) {
+			// An invalid record is reported on the Agents; nothing to do here.
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if b == nil {
+		return ctrl.Result{}, nil
+	}
+	if err := n.agents.runNamespaceHandler(ctx, b, nil); err != nil {
+		return ctrl.Result{}, err
+	}
+	if b.state == bindingTerminating || b.state == bindingDeleting {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+	return ctrl.Result{}, nil
 }
 
 func ptr[T any](v T) *T { return &v }

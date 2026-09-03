@@ -15,14 +15,18 @@ import (
 	"net/http"
 	"os"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"strings"
 	"time"
 
+	"context"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
@@ -45,11 +49,19 @@ func main() {
 
 func run() error {
 	var (
-		metricsAddr  string
-		probeAddr    string
-		leaderElect  bool
-		gateCheckTTL time.Duration
+		metricsAddr       string
+		probeAddr         string
+		leaderElect       bool
+		gateCheckTTL      time.Duration
+		operatorNamespace string
 	)
+	// The namespace the operator runs in: where the run-namespace binding
+	// records live (design 02 A60). Defaults to the ServiceAccount namespace
+	// file every Pod mounts; fatal if neither is set, because there is no safe
+	// default for where security state goes.
+	flag.StringVar(&operatorNamespace, "operator-namespace", saNamespace(),
+		"the namespace this operator runs in; run-namespace binding records are kept there "+
+			"(design 02 A60). Defaults to the mounted ServiceAccount namespace")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metric endpoint binds to")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "address the probe endpoint binds to")
 	flag.BoolVar(&leaderElect, "leader-elect", true,
@@ -64,6 +76,10 @@ func run() error {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	if operatorNamespace == "" {
+		return fmt.Errorf("--operator-namespace is unset and no ServiceAccount namespace file is mounted; " +
+			"the run-namespace binding records (design 02 A60) need a home and there is no safe default")
+	}
 
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
@@ -84,9 +100,13 @@ func run() error {
 	// created moments earlier makes that sweep a no-op, the Agent disappears, and
 	// nothing collects the copy afterwards because every remaining path keys on
 	// the UID of an Agent that no longer exists.
+	// Namespaces are uncached too: the run-namespace protocol compares a
+	// namespace's UID against its binding record on every reconcile, and a
+	// comparison against a cached object that a recreate has already replaced
+	// is no proof at all (design 02 A60/A61).
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Client: client.Options{Cache: &client.CacheOptions{
-			DisableFor: []client.Object{&corev1.ConfigMap{}, &corev1.Secret{}},
+			DisableFor: []client.Object{&corev1.ConfigMap{}, &corev1.Secret{}, &corev1.Namespace{}},
 		}},
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
@@ -117,10 +137,33 @@ func run() error {
 	// the context is shared by the detector and the manager.
 	ctx := ctrl.SetupSignalHandler()
 
-	agents, err := controller.NewAgentReconciler(mgr.GetClient(), mgr.GetScheme(),
-		func() bool { return detector.Installed() })
+	// The uncached reader is what the run-namespace teardown protocol lists
+	// with (design 02 A60): a cached list is exactly what it exists to avoid.
+	// The label-authority check reads the admission policies uncached too, so
+	// no cluster-wide informer on ValidatingAdmissionPolicy is started.
+	labelAuthority := controller.LabelAuthorityPresent(mgr.GetAPIReader())
+	agents, err := controller.NewAgentReconciler(mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme(),
+		operatorNamespace, func() bool { return detector.Installed() }, labelAuthority)
 	if err != nil {
 		return fmt.Errorf("build agent reconciler: %w", err)
+	}
+	// The startup half of "at startup and before every run-namespace creation"
+	// (design 07 A5.9). Not fatal: the policies can arrive after the operator,
+	// and every reconcile re-checks; but a fleet that cannot place a single
+	// workload should say so in the first log line, not in N conditions.
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		ok, err := labelAuthority(ctx)
+		switch {
+		case err != nil:
+			ctrl.Log.Error(err, "could not check the label-reserving admission policies (design 07 A5.9)")
+		case !ok:
+			ctrl.Log.Info("the label-reserving admission policies are not installed; no run namespace "+
+				"will be created and every Agent will report RunNamespaceUnavailable=LabelAuthorityAbsent "+
+				"until they are", "policies", []string{controller.NamespaceLabelPolicyName, controller.GatewayRoutePolicyName})
+		}
+		return nil
+	})); err != nil {
+		return fmt.Errorf("add startup check: %w", err)
 	}
 	if err := agents.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("register agent reconciler: %w", err)
@@ -154,6 +197,15 @@ func run() error {
 		return fmt.Errorf("manager exited: %w", err)
 	}
 	return nil
+}
+
+// saNamespace reads the namespace the kubelet projects for every Pod, or "".
+func saNamespace() string {
+	b, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func utilruntimeMust(err error) {

@@ -5,7 +5,7 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | # | Component | Phase | Size | Design status |
 |---|---|---|---|---|
 | 1 | KnowledgeGraphProvider contract (6-tool MCP surface + ontology schema + probe format + conformance) | P2 | M | **approved** (`01-…`, ADR-0017/0018, review PASS) |
-| 2 | Agent CRD + agent-operator | P1 | L | **integrated r8**, amendments A1–A60, **none critique-passed** (`02-…`, ADR-0019; latest `reviews/03-codex-review-r8.md`, 13 BLOCKER). A20/A21/A35/A37/A50/A53/A56 implemented; **A42 (run namespace) designed to implementable by A60, not implemented** |
+| 2 | Agent CRD + agent-operator | P1 | L | **integrated r8**, amendments A1–A60, **none critique-passed** (`02-…`, ADR-0019; latest `reviews/03-codex-review-r8.md`, 13 BLOCKER). A20/A21/A35/A37/A42/A50/A53/A56 implemented; **A42 (run namespace) implemented 2026-09-03 (A61), e2e-proven on k3d** |
 | 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | **re-opened 2026-08-27** — **ADR-0028** supersedes ADR-0020 after the research note was found to name a release that does not exist. §§3.3/3.4/3.5 rebuilt on v1.4.1 plus an execution spike; amendments A1–A45 (A45: owed hard-mode producer contracts). **Do not implement** |
 | 4 | Receipt tap + receipt envelope schema | P1 | M | r2 — critique **PASS** (`04-…`, `reviews/04-review.md`; awaiting user approval + ADR-0021) |
 | 5 | Agent directory (OASF on JetStream KV) | P1 | S | r2 — critique **PASS** (`05-…`, `reviews/05-review.md`; awaiting user approval, ADR-0022) |

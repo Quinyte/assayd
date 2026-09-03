@@ -1,0 +1,110 @@
+{{- include "plume.validate" . -}}
+# Design 07 A5.9: the plume.dev namespace labels are reserved to the operator.
+#
+# Three consumers act on those labels and none of them reads the operator's
+# binding record: SPIRE selects on plume.dev/pods-by, the Gateway admits routes
+# on plume.dev/run-namespace, and the operator's own Namespace reconciler keys
+# on both. A label is writable by whoever can create or update the namespace,
+# so without this policy the labels are a convention and a namespace-create
+# principal could mint a SPIFFE-selected namespace the operator never made.
+# The operator fail-closes when this policy is absent (RunNamespaceUnavailable=
+# LabelAuthorityAbsent), so it must render on every install.
+#
+# ValidatingAdmissionPolicy is GA from Kubernetes 1.30, Chart.yaml's floor.
+{{- /*
+The identities permitted to write the reserved labels are rendered INTO the
+CEL, not read from a params object: a params ConfigMap that goes missing —
+`kubectl delete ns plume-system` with the policies still bound — would have
+denied every namespace create and update in the cluster (parameterNotFoundAction
+cannot be anything but Deny for a policy this policy is). The operator's own
+ServiceAccount is always here; admission.extraOperators adds the tenant-operator
+(design 26 A1), the only hard-mode writer of run-namespace/tenant-sync.
+*/ -}}
+{{- $operators := list (printf "system:serviceaccount:%s:%s" .Values.namespace (include "plume.operator.name" .)) -}}
+{{- range .Values.admission.extraOperators }}{{ $operators = append $operators . }}{{ end }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: plume-namespace-labels
+  labels:
+    {{- include "plume.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        # The status and finalize subresources also write metadata; a label set
+        # through either slips past a rule that names only the main resource.
+        resources: ["namespaces", "namespaces/status", "namespaces/finalize"]
+  variables:
+    - name: reserved
+      expression: "['plume.dev/pods-by', 'plume.dev/run-namespace', 'plume.dev/tenant-sync', 'plume.dev/agent-namespace', 'plume.dev/owned-by']"
+    - name: newLabels
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+    - name: oldLabels
+      expression: "oldObject == null || !has(oldObject.metadata.labels) ? {} : oldObject.metadata.labels"
+    - name: newNonce
+      expression: "has(object.metadata.annotations) && 'plume.dev/binding-nonce' in object.metadata.annotations ? object.metadata.annotations['plume.dev/binding-nonce'] : ''"
+    - name: oldNonce
+      expression: "oldObject != null && has(oldObject.metadata.annotations) && 'plume.dev/binding-nonce' in oldObject.metadata.annotations ? oldObject.metadata.annotations['plume.dev/binding-nonce'] : ''"
+    - name: touched
+      expression: "variables.reserved.exists(k, (k in variables.newLabels ? variables.newLabels[k] : '') != (k in variables.oldLabels ? variables.oldLabels[k] : '')) || variables.newNonce != variables.oldNonce"
+    - name: operator
+      expression: {{ printf "request.userInfo.username in %s" (toJson $operators) | quote }}
+  validations:
+    - expression: "!variables.touched || variables.operator"
+      message: "plume.dev namespace labels and the plume.dev/binding-nonce annotation are reserved to the plume operators (design 07 A5.9)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: plume-namespace-labels
+  labels:
+    {{- include "plume.labels" . | nindent 4 }}
+spec:
+  policyName: plume-namespace-labels
+  validationActions: ["Deny"]
+---
+# A namespace the Gateway listener admits is not a grant to author routes into
+# it: an HTTPRoute whose parentRefs name the plume Gateway is admitted only
+# from the operator identity (design 07 A5.3/A5.9). Matches nothing until the
+# Gateway API CRDs are installed, which at P1 they are not.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: plume-gateway-routes
+  labels:
+    {{- include "plume.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["gateway.networking.k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["httproutes"]
+  variables:
+    # A parentRef without a namespace refers to the ROUTE's namespace (Gateway
+    # API), so a bare-name ref from inside the Gateway's namespace targets it
+    # too; request.namespace is the route's.
+    - name: targetsPlume
+      expression: {{ printf "has(object.spec.parentRefs) && object.spec.parentRefs.exists(p, p.name == %s && (has(p.namespace) ? p.namespace : request.namespace) == %s)" (.Values.gateway.name | toJson) (.Values.namespace | toJson) | quote }}
+    - name: operator
+      expression: {{ printf "request.userInfo.username in %s" (toJson $operators) | quote }}
+  validations:
+    - expression: "!variables.targetsPlume || variables.operator"
+      message: "routes attaching to the plume Gateway are authored by the plume operator only (design 07 A5.9)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: plume-gateway-routes
+  labels:
+    {{- include "plume.labels" . | nindent 4 }}
+spec:
+  policyName: plume-gateway-routes
+  validationActions: ["Deny"]

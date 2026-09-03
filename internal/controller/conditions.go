@@ -49,8 +49,8 @@ var ownedTypes = map[plumev1alpha1.ConditionType]bool{
 	plumev1alpha1.CondSandboxDowngraded:   true,
 	plumev1alpha1.CondTaskStateUnverified: true,
 	plumev1alpha1.CondDegraded:            true,
-	// Owned because assessEnvSourceProtection is the only writer, and it must be
-	// able to CLEAR the condition when the last env source is removed from a spec.
+	// Owned and no longer asserted by anything: A42 closed the gap it announced,
+	// so merge() CLEARS a stale True left by an operator from before A42.
 	plumev1alpha1.CondEnvSourceProtectionUnavailable: true,
 	plumev1alpha1.CondEnvSourceUnresolved:            true,
 	// Owned so it can CLEAR. It was in neither map, which meant merge() treated
@@ -58,6 +58,11 @@ var ownedTypes = map[plumev1alpha1.ConditionType]bool{
 	// a stale message, on an agent that had gone back to Ready. No other
 	// controller writes it.
 	plumev1alpha1.CondRevisionHashCollision: true,
+	// Owned so it CLEARS: Terminating clears by itself when the namespace is
+	// recreated, and LabelAuthorityAbsent when the policies appear. Left out of
+	// this set, every Agent that ever waited carried it forever beside
+	// Ready=True (found by the code review of A61).
+	plumev1alpha1.CondRunNamespaceUnavailable: true,
 }
 
 // stickyTypes are owned conditions that must stay in the list once set, flipped

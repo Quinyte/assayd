@@ -57,8 +57,17 @@ spec:
         - name: operator
           image: {{ include "plume.operator.image" . | quote }}
           imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+          # Where the run-namespace binding records live (design 02 A60): the
+          # operator's own namespace, from the downward API rather than a value
+          # that could disagree with where the Pod actually runs.
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           args:
             - --leader-elect={{ .Values.operator.leaderElection }}
+            - --operator-namespace=$(POD_NAMESPACE)
             - --eval-suite-check-interval={{ .Values.operator.evalSuiteCheckInterval }}
             - --health-probe-bind-address=:8081
             {{- if .Values.operator.metrics.enabled }}

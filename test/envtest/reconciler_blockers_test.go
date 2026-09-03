@@ -37,8 +37,10 @@ func TestUnwiredReconcilerHoldsRatherThanPromotingUngated(t *testing.T) {
 		a.Spec.Gates = []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
 	})
 
-	// Constructed exactly as an unwired cmd/ would leave it.
-	r := &controller.AgentReconciler{Client: k8s, Scheme: scheme}
+	// Constructed exactly as an unwired cmd/ would leave it — apart from the two
+	// fields without which no workload can be placed at all (A42).
+	r := &controller.AgentReconciler{Client: k8s, Scheme: scheme,
+		OperatorNamespace: operatorNamespace, LabelAuthorityPresent: labelAuthorityPresent}
 
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("unwired", revision.MustHash(a.Spec)), 1)
@@ -100,7 +102,7 @@ func TestPolicySurfaceEditsReachTheWorkload(t *testing.T) {
 	settle(t, r, a)
 
 	var d appsv1.Deployment
-	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("inplace", rev)}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("inplace", rev)}
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get deployment: %v", err)
 	}
@@ -122,7 +124,7 @@ func TestOutOfBandDriftIsCorrected(t *testing.T) {
 
 	// Anyone with deployments/update in the namespace.
 	var d appsv1.Deployment
-	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("drift", rev)}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("drift", rev)}
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -188,7 +190,7 @@ func TestGarbageCollectorIgnoresUnownedWorkloads(t *testing.T) {
 		names = append(names, name)
 		d := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: name, Namespace: ns,
+				Name: name, Namespace: runNS(ns),
 				Labels: map[string]string{controller.LabelAgent: "gcprobe"},
 			},
 			Spec: appsv1.DeploymentSpec{
@@ -208,7 +210,7 @@ func TestGarbageCollectorIgnoresUnownedWorkloads(t *testing.T) {
 
 	for _, name := range names {
 		var d appsv1.Deployment
-		err := k8s.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &d)
+		err := k8s.Get(context.Background(), types.NamespacedName{Namespace: runNS(ns), Name: name}, &d)
 		if err != nil {
 			t.Errorf("the operator deleted %s, a Deployment it does not own — a stray label "+
 				"must not make this a deleter of other people's workloads: %v", name, err)
@@ -235,7 +237,7 @@ func TestOwnershipIsDecidedByControllerRefNotLabels(t *testing.T) {
 			controller.LabelRevision: "deadbeef0" + string(rune('0'+i)),
 		}
 		d := &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: runNS(ns), Labels: labels},
 			Spec: appsv1.DeploymentSpec{
 				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
 				Template: corev1.PodTemplateSpec{
@@ -253,10 +255,11 @@ func TestOwnershipIsDecidedByControllerRefNotLabels(t *testing.T) {
 
 	for _, name := range names {
 		var d appsv1.Deployment
-		if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &d); err != nil {
+		if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: runNS(ns), Name: name}, &d); err != nil {
 			t.Errorf("the operator deleted %s: it carries this agent's labels and a revision "+
-				"label but no controller reference, so ownership must be decided by the "+
-				"reference and its UID, which nobody can forge by labelling: %v", name, err)
+				"label but neither the agent's UID label nor the <agent>-<revision> name, so "+
+				"ownership must be decided by the name — which nobody can forge by labelling "+
+				"(A60): %v", name, err)
 		}
 	}
 }
@@ -281,8 +284,11 @@ func TestOwnedWorkloadWithoutARevisionLabelIsNotCollected(t *testing.T) {
 		names = append(names, name)
 		d := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: name, Namespace: ns,
-				Labels: map[string]string{controller.LabelAgent: "unlabelled"},
+				Name: name, Namespace: runNS(ns),
+				// Carries the agent's UID — the provenance label (A60) — so only
+				// the missing revision label can save it.
+				Labels: map[string]string{controller.LabelAgent: "unlabelled",
+					controller.LabelAgentUID: string(agent.UID)},
 			},
 			Spec: appsv1.DeploymentSpec{
 				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
@@ -291,10 +297,6 @@ func TestOwnedWorkloadWithoutARevisionLabelIsNotCollected(t *testing.T) {
 					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "busybox"}}},
 				},
 			},
-		}
-		// Genuinely owned, so only the missing revision label can save it.
-		if err := ctrl.SetControllerReference(&agent, d, scheme); err != nil {
-			t.Fatalf("set owner: %v", err)
 		}
 		if err := k8s.Create(context.Background(), d); err != nil {
 			t.Fatalf("create: %v", err)
@@ -305,7 +307,7 @@ func TestOwnedWorkloadWithoutARevisionLabelIsNotCollected(t *testing.T) {
 
 	for _, name := range names {
 		var d appsv1.Deployment
-		if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &d); err != nil {
+		if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: runNS(ns), Name: name}, &d); err != nil {
 			t.Errorf("the operator collected %s, which it owns but which carries no revision "+
 				"label — it cannot be placed in the retention window, so it must not be a "+
 				"GC candidate: %v", name, err)
@@ -405,7 +407,7 @@ func TestPolicySurfaceRemovalsAlsoReachTheWorkload(t *testing.T) {
 	markAvailable(t, ns, controller.WorkloadName("removal", rev), 1)
 	settle(t, r, a)
 
-	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("removal", rev)}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("removal", rev)}
 
 	// Drop ONE key. Every key still in desired matches, so a derivative
 	// comparison sees no difference and the stale cpu request survives.
@@ -506,7 +508,8 @@ func TestHoldingOnGatesKeepsAServingAgentReady(t *testing.T) {
 func TestUnwiredWithNoGatesDoesNotClaimToHold(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "unwirednogates", nil) // no spec.gates
-	r := &controller.AgentReconciler{Client: k8s, Scheme: scheme}
+	r := &controller.AgentReconciler{Client: k8s, Scheme: scheme,
+		OperatorNamespace: operatorNamespace, LabelAuthorityPresent: labelAuthorityPresent}
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("unwirednogates", revision.MustHash(a.Spec)), 1)
 	got := settle(t, r, a)
@@ -785,7 +788,7 @@ func TestEachContainerFieldIsIndividuallyReconciled(t *testing.T) {
 			mustCreateSource(t, ns, "ConfigMap", "cfg", map[string]string{"K": "v"})
 			rev := revisionOf(t, ns, a.Spec)
 			settle(t, r, a)
-			key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName(name, rev)}
+			key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName(name, rev)}
 			markAvailable(t, ns, key.Name, 1)
 			settle(t, r, a)
 
@@ -833,7 +836,7 @@ func TestPortEditReachesTheWorkloadWithoutANewRevision(t *testing.T) {
 	settle(t, r, a)
 
 	var d appsv1.Deployment
-	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("portedit", rev)}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("portedit", rev)}
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -923,7 +926,7 @@ func TestPreviouslyExemptedFieldsAreReverted(t *testing.T) {
 			r := newReconciler(false)
 			rev := revision.MustHash(a.Spec)
 			settle(t, r, a)
-			key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName(name, rev)}
+			key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName(name, rev)}
 			markAvailable(t, ns, key.Name, 1)
 			settle(t, r, a)
 
@@ -1039,7 +1042,7 @@ func TestPodSpecDriftIsReverted(t *testing.T) {
 			r := newReconciler(false)
 			rev := revision.MustHash(a.Spec)
 			settle(t, r, a)
-			key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName(name, rev)}
+			key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName(name, rev)}
 			markAvailable(t, ns, key.Name, 1)
 			settle(t, r, a)
 
@@ -1074,7 +1077,7 @@ func TestRenderedPodSpecSurvivesAPIServerDefaulting(t *testing.T) {
 	settle(t, r, a)
 
 	var d appsv1.Deployment
-	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("defaulting", rev)}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("defaulting", rev)}
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -1082,6 +1085,7 @@ func TestRenderedPodSpecSurvivesAPIServerDefaulting(t *testing.T) {
 	counter := &countingClient{Client: k8s}
 	counting := &controller.AgentReconciler{
 		Client: counter, Scheme: scheme, EvalSuiteInstalled: func() bool { return false },
+		OperatorNamespace: operatorNamespace, LabelAuthorityPresent: labelAuthorityPresent,
 	}
 	for i := 0; i < 5; i++ {
 		reconcileOnce(t, counting, a)

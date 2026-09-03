@@ -191,11 +191,11 @@ The operator's `ClusterRole` (`files/operator-rules.yaml`, generated from the re
 
 | Grant | Why | What bounds it |
 |---|---|---|
-| `namespaces`: `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` | create and label run namespaces; **delete** them when their last Agent goes | RBAC cannot restrict a dynamic name, so all three write verbs are cluster-wide. The code writes — labels, annotations, or deletion — only to a namespace whose name has the `plume-run-` shape **and** whose UID matches the operator's binding record (design 02 A60); everything else is refused and logged. Unbounded `update` would otherwise let one bug relabel a tenant namespace as SPIFFE-selected |
+| `namespaces`: `get`, `list`, `watch`, `create`, `update`, `delete` | create and label run namespaces; **delete** them when their last Agent goes | RBAC cannot restrict a dynamic name, so all three write verbs are cluster-wide. The code writes — labels, annotations, or deletion — only to a namespace whose name has the `plume-run-` shape **and** whose UID matches the operator's binding record (design 02 A60); everything else is refused and logged. Unbounded `update` would otherwise let one bug relabel a tenant namespace as SPIFFE-selected |
 | `pods/log`: `get` | `plume logs` streams a run-namespace Pod's logs under the operator's credentials after a `SubjectAccessReview` for the caller (design 02 §3.2, *Read access*) | **not granted now**; lands with design 08's `plume logs` |
-| `validatingadmissionpolicies`, `validatingadmissionpolicybindings` (`admissionregistration.k8s.io`): `get`, `list`, `watch` | the operator checks that A5.9's policies exist before creating a run namespace and fail-closes if not | read-only |
+| `validatingadmissionpolicies`, `validatingadmissionpolicybindings` (`admissionregistration.k8s.io`): `get` | the operator checks that A5.9's policies exist before creating a run namespace and fail-closes if not | `get` only, through the uncached API reader — no informer on admission kinds is ever started |
 | `configmaps`, `secrets`: `+update` | the binding record is compare-and-swapped, and A57's metadata repair already needed it — `repairMetadata` calls `Update` and the shipped role grants no `update` on either kind, so restamping a copy's labels is Forbidden on a real cluster while green in envtest, which runs as admin. Inferred from the role, and to be confirmed with `kubectl auth can-i` against the deployed chart when A42's e2e runs | the operator never updates a user's object; every `Update` is on a name of the operator's own shape |
-| `resourcequotas`, `limitranges`: `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` | mirroring (A5.5) | mirrors are named `plume-mirror-<name>` — truncate-and-hashed past 253 characters by design 03 §3.2's rule — in run namespaces only; the name is the deletion authority |
+| `resourcequotas`, `limitranges`: `get`, `list`, `watch`, `create`, `update`, `delete` | mirroring (A5.5) | mirrors are named `plume-mirror-<name>` — truncate-and-hashed past 253 characters by design 03 §3.2's rule — in run namespaces only; the name is the deletion authority |
 | `networkpolicies` (`networking.k8s.io`): `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` | A5.4, when the gateway ships | not granted until the operator materializes one; a verb granted ahead of the code that uses it is rule 7 in RBAC form |
 
 The `ClusterRole` today grants none of these. They land with the A42 implementation and the generated file, not before.
@@ -212,7 +212,8 @@ spec:
   failurePolicy: Fail
   matchConstraints:
     resourceRules:
-      - {apiGroups: [""], apiVersions: [v1], operations: [CREATE, UPDATE], resources: [namespaces]}
+      - {apiGroups: [""], apiVersions: [v1], operations: [CREATE, UPDATE],
+         resources: [namespaces, namespaces/status, namespaces/finalize]}   # both subresources write metadata too
   variables:
     - name: reserved
       expression: "['plume.dev/pods-by', 'plume.dev/run-namespace', 'plume.dev/tenant-sync', 'plume.dev/agent-namespace', 'plume.dev/owned-by']"
@@ -224,15 +225,15 @@ spec:
         || ((has(object.metadata.annotations) && 'plume.dev/binding-nonce' in object.metadata.annotations ? object.metadata.annotations['plume.dev/binding-nonce'] : '') !=
             (oldObject != null && has(oldObject.metadata.annotations) && 'plume.dev/binding-nonce' in oldObject.metadata.annotations ? oldObject.metadata.annotations['plume.dev/binding-nonce'] : ''))
   validations:
-    - expression: "!variables.touched || request.userInfo.username in params.data.operators"
+    - expression: "!variables.touched || request.userInfo.username in ['system:serviceaccount:plume-system:plume-agent-operator']"
       message: "plume.dev namespace labels and the binding nonce are reserved to the plume operators"
 ```
 
-`params.data.operators` is a ConfigMap the chart renders with `system:serviceaccount:<ns>:<operator>` and, when the enterprise module is installed, the tenant-operator's identity — the only hard-mode writer of `run-namespace` and `tenant-sync` on a sync namespace (design 26 A1). The second policy matches `HTTPRoute` creates and updates and denies any whose `parentRefs` name the plume Gateway unless the requester is the operator's ServiceAccount, so a namespace the listener admits is not a grant to author routes into it.
+The permitted identities are rendered **into** the expression from values — the operator's own ServiceAccount always, plus `admission.extraOperators`, which is where the tenant-operator goes when the enterprise module is installed (the only hard-mode writer of `run-namespace` and `tenant-sync` on a sync namespace, design 26 A1). Not a params ConfigMap: the first draft read them from one with `parameterNotFoundAction: Deny`, and the code review showed that deleting it — `kubectl delete ns plume-system` with the policies still bound — denied every namespace create and update in the cluster. The second policy matches `HTTPRoute` creates and updates and denies any whose `parentRefs` name the plume Gateway unless the requester is a permitted identity, so a namespace the listener admits is not a grant to author routes into it; a `parentRef` without a namespace refers to the **route's** namespace (Gateway API), so the expression resolves it as `request.namespace` rather than skipping it.
 
-**The operator fail-closes on their absence.** At startup and before every run-namespace creation it checks that both policies and bindings exist; if not, `RunNamespaceUnavailable=LabelAuthorityAbsent` on the Agent and no namespace is created. A label nobody reserves is a convention, and the operator must not treat a convention as evidence. `failurePolicy: Fail` means an unavailable admission chain denies the write rather than admitting it.
+**The operator fail-closes on their absence, by name.** At startup it logs their absence, and on every reconcile it checks that both policies and bindings exist; if not, `RunNamespaceUnavailable=LabelAuthorityAbsent` on the Agent and no namespace is created, clearing when they appear. Presence is what is checked — a policy of the right name that validated nothing would pass — so the content is this chart's responsibility and the chart test pins it. `failurePolicy: Fail` means an unavailable admission chain denies the write rather than admitting it.
 
-**Today**: the policies are not rendered. They land with the A42 implementation, and the e2e that proves a principal holding Namespace and RBAC `create` cannot obtain a labelled namespace lands with them.
+**Today**: the policies render (`templates/admission.yaml`), the operator fail-closes without them, and the e2e proves a cluster-admin identity outside the list cannot create a `pods-by`-labelled namespace. The chart test refuses to ship without them, without the subresources, or with a params object.
 
 ### A5.8 Weight budget and stateful allowlist
 

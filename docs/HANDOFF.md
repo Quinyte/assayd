@@ -1,128 +1,128 @@
-# Handoff — plume, 2026-09-03
+# Handoff — plume, 2026-09-03 (end of the A42 session)
 
-Written at the end of a long session so the next one starts from facts rather
-than from a summary of a summary. Read this, then `AGENTS.md`, then the two
-design headers. Everything here was verified by running it, not recalled.
+Written at the end of the session that implemented design 02 A42. Everything
+here was verified by running it, not recalled. Read this, then `AGENTS.md`,
+then the two design headers.
 
 ## The one-line state
 
-**Design 03 (the policy compiler) has not started and is still marked
-`RE-OPENED, do not implement`.** No review round has returned PASS. The session
-went into design 02's revision identity instead, because ten Codex rounds and
-three same-family critiques kept finding the foundation design 03 sits on did
-not hold.
+**A42, the operator-owned run namespace, is IMPLEMENTED and proven on a real
+cluster.** The env-source bypass design 02 §3.2 tracked since A20 is closed:
+`make e2e` shows a principal with `create`/`delete` on ConfigMaps in the
+Agent's namespace can delete a ConfigMap there and cannot delete or recreate
+the revision's copy where it now lives. **Design 03 (the policy compiler) has
+still not started and is still `RE-OPENED, do not implement`.**
 
-Tree clean at `5366b60`. All gates green — see *Running tests* below, and note
-which ones are **not** in the per-commit loop.
-
-## What is implemented (as opposed to written)
-
-The distinction this document has been wrong about most often. These run:
+## What is implemented, as opposed to written
 
 | Amendment | What it does |
 |---|---|
 | A20 | revision identity covers the resolved **content** of every env source |
 | A21 | `runtime.image` must be a digest-pinned OCI reference (CEL) |
-| A35 | a revision reads its own **immutable copy**; the workload never reads the user's object |
+| A35 | a revision reads its own **immutable copy** |
 | A37 | the full digest is the revision identity; the 10-char name is a name |
+| **A42 / A60 / A61** | workloads and copies live in `plume-run-<ns>`; the operator proves it created that namespace by a binding record (nonce before binding, namespace UID after); a Terminating/Deleting handler tears it down when its last Agent goes; Pod Security labels, ResourceQuota and LimitRange are mirrored; the chart ships two admission policies reserving the `plume.dev` namespace labels to the operator, and the operator fail-closes without them |
 | A50 | the digest reaches `evalStatus` and `cards[]` |
-| A53 | typed LLM endpoint identities (arm + instance fields) |
+| A53 | typed LLM endpoint identities |
 | A56 | revision material is collected with its revision and with the Agent |
-| A57 | RBAC for the above; the delete authority is the **name**, not a label |
+| A57 | the delete authority is the **name**, not a label |
 
-Everything else in design 02's A1–A59 is design.
+Everything else in design 02 A1–A61 is design. `EnvSourceProtectionUnavailable`
+is **no longer raised** (A61); the type stays in the vocabulary so a stale one
+from an older operator is cleared on upgrade.
 
-## The open decision that is not a decision any more
+## What this session did, in order
 
-**A42 — the operator-owned run namespace.** The user chose "cross-design pass,
-then implement". It is the last of the env-source bypass: today a principal with
-`create`/`delete` on ConfigMaps can delete a revision's copy and recreate it
-under the same name (`immutable: true` forbids an update and permits exactly
-that). `EnvSourceProtectionUnavailable` announces this on every affected Agent.
+1. **Cross-design pass, 3 and 4 of 4** (commit `5043394`): design 07 A5 and
+   design 26 A1, plus design 02 A60, design 06 A3, design 24 A1, design 27 A1
+   and design 03 A45. Three same-family critiques and one cross-family Codex
+   review before commit; all findings applied; every review is a file under
+   `docs/designs/reviews/02-a60-*`. The Codex pass found what the same-family
+   passes had accepted — the labels SPIRE and the Gateway act on were never
+   bound to the binding authority — and that is why the admission policies
+   exist.
+2. **A42 implementation** (this commit): `internal/controller/runnamespace.go`,
+   the reconciler wiring, the chart, envtest, e2e. A 16-entry mutation ledger,
+   all KILLED, is in design 02 §12 A61.
+3. **Independent code review** (`reviews/02-a61-code-review.md`, 2 BLOCKER,
+   9 MAJOR, 12 MINOR — every one applied). It found what the ledger had not
+   named: the new condition never cleared; the crash-gap recovery wedged on
+   its own Terminating namespace; row 4 from `Creating` wrote a record the
+   decoder refuses; two workers could race rows 6/7; the UID was compared
+   against the informer cache; the label policy missed two subresources and
+   its params ConfigMap was a cluster-wide denial waiting to happen; a
+   bare-name `parentRef` bypassed the route policy; a pre-A42 upgrade leaked
+   copies. Eight of its mutations survived; each now has a test and all
+   thirteen re-run mutations are KILLED. Self-review caught none of this.
 
-**Four amendments owed; two are done.**
+## Decisions put to the user, not taken
 
-- [x] **design 03 A44** — namespace of every emitted resource, label-not-ownerRef
-      provenance, Gateway `allowedRoutes` must admit run namespaces, naming
-      suffix widened 8→16 hex
-- [x] **design 02 A59** — the `ClusterSPIFFEID` must key on a
-      `plume.dev/agent-namespace` **label**, not `.PodMeta.Namespace`, or the move
-      re-identifies every agent and every grant design 24 keys on the principal
-      stops matching
-- [ ] **design 07** — ships the `ClusterSPIFFEID` (A59's change lands there), the
-      Gateway with `allowedRoutes` selecting `plume.dev/run-namespace`, the
-      default-deny NetworkPolicy §6 already requires and the chart does **not**
-      ship, PodSecurity label mirroring, and the ResourceQuota question A44 names
-      as unsolved
-- [ ] **design 26** — which side of the vCluster split owns the run namespace
-
-Then implement A42, then an e2e proving delete-and-recreate no longer works.
+- **Tenant compute quotas are per namespace under A60's mirroring**, so a
+  tenant's `gpu: 1` bounds each of its two namespaces separately. Design 26 A1
+  states two resolutions — say so in the API, or build an aggregate — and takes
+  neither. Codex called the current text "two mirrors called one ceiling".
+- **ADRs.** A42/A60 (an operator-owned namespace and a cluster-wide binding
+  protocol) is a user decision no ADR records. Design 26 A1's routes-revoked
+  marker gives the compiler one tenant-side write, which ADR-0026's "read only"
+  forbids; a superseding ADR is owed before hard mode is built.
+- **Design 02 is 61 amendments deep and none has passed review.** The rate at
+  which rounds close N findings and open ~2 did not fall this session — three
+  same-family rounds on A60 each found something the previous had introduced.
+  Consolidating design 02 into one body was offered earlier and not chosen.
+  The cross-family review is what converged it; it is worth running one on
+  every amendment set from now on rather than after three same-family rounds.
 
 ## Also open
 
-- **r8 blockers 7–13 and majors 3, 6** — `docs/designs/reviews/03-codex-review-r8.md`.
-  7–9 are A42 propagation. 10–13 are design 03 and critique amendments 03
-  A41–A43, so they are the next thing after A42.
-- **Cross-family review is unavailable.** Codex refused r9 on cybersecurity
-  grounds after refusing r8 once and producing it on a re-frame. Recorded in
-  `docs/designs/reviews/README-review-availability.md`. Same-family critiques
-  found two blockers r8 had passed, so they are useful — and they are the same
-  model, which is weaker evidence, not equivalent.
+- **Codex a60 review, items not closed by this commit** (all enterprise /
+  hard-mode, recorded as owed in the designs they belong to): the hard-mode
+  host mapping and deletion lifecycle (design 03 A45), the vCluster SPIRE
+  premise (design 06 A3, spike owed), the trust domain in design 24's subjects
+  (design 24 A1 written, sweep of literals owed), design 27 consuming
+  `GatesTenantAdminBypassable` (design 27 A1 written, fixture owed).
+- **Real-cluster cases envtest cannot reach**: operator restart mid-protocol, a
+  paused delete racing a new Agent, a chosen name collision. envtest has no
+  namespace controller, so deletions never complete there; these need the e2e.
+- **NetworkPolicy** (design 07 A5.4) lands with the gateway; the Sigstore
+  opt-in stamp (A5.6) with the verifier; `plume logs` with design 08.
+- **r8 blockers 10–13, majors 3, 6** are design 03's and are the next thing.
+- **Cross-family review availability**: Codex accepted this session's request
+  framed as a defensive review of our own unreleased repository. Keep that
+  framing; see `reviews/README-review-availability.md`.
 
 ## Running tests — and the trap
 
 ```
-make test      # 7 layers: fmt, vet, unit, docs, hermetic conformance, envtest, chart
+make test      # 7 layers — the pre-commit gate; ran before every commit
 make race      # internal/... api/...
-make verify    # generation reproducible AND committed
+make verify    # generation reproducible AND committed (fails on ANY uncommitted file)
 make e2e                  # REAL k3d cluster — creates plume-local
 make conformance-cluster  # REAL k3d cluster — creates plume-conformance
 ```
 
-`make test`, `race` and `verify` ran before every commit this session. **The two
-real-cluster suites did not**, and both were broken for several commits before
-anyone ran them:
-
-- A21's digest migration rewrote every tagged image, including two REAL images,
-  to **synthetic digests** — valid to CEL, unpullable by a kubelet. The e2e
-  workload test and the cluster suite's traffic pod both silently stopped
-  working. Both digests are now named constants with the reason attached.
-- e2e reused one image tag with `pullPolicy: Never`, so `helm upgrade` never
-  rolled the pod. The operator under test had been running **nine days**. Fixed
-  with a per-run tag plus `TestTheOperatorUnderTestIsTheOneJustBuilt`.
-- Fixing that exposed a shipped defect: `readyz` waits on leader election, so the
-  default rolling update deadlocks every upgrade. Chart now sets
-  `maxSurge: 0 / maxUnavailable: 1` (design 07 A4).
-
-**Run both real-cluster suites before believing a green report on anything they
-cover.** Three of the four defects in that stretch were in the harness.
+`make e2e` ran green on the final tree (three times this session, the last
+after the code-review fixes); `make conformance-cluster` ran green once, before
+those fixes — it imports nothing from the operator packages, so they cannot
+have changed its result, but that is an argument and not a run. **Colima must be running** (`colima start`); it was not, and
+the first e2e attempt failed on the Docker socket with an exit code the
+wrapper reported as 0 — read the log, never the exit code. `make verify`
+fails whenever the tree has uncommitted files; that is its "committed" check,
+not a generation problem.
 
 ## Rules this session paid for
 
-1. **Reproduce before fixing.** Every blocker acted on was reproduced first.
-2. **Mutation-check every behavioural claim**, and distinguish INVALID (did not
-   compile) from SURVIVED. Several "survivors" were bad mutations of mine.
-3. **A refusal is not evidence about which rule refused.** Tests asserting "it
-   was refused" passed while the check under test was unreachable — three times.
-4. **Check the producing design, not the note.** Findings that answer a review in
-   the document it points at, without following into the document that owns the
-   other side, are the recurring failure. A42's own owed list named design 06 for
-   something that has always been design 02's.
-5. **Green is not evidence if it is about the wrong artifact.** See above.
-6. `cp` for backups, never `git checkout`, while mutating.
-7. Stage explicit paths; run `git status --porcelain` first.
-
-## Where the defects came from
-
-Nearly every serious one was **mine**, found by mutation or an independent pass,
-not by reading: a fail-closed rule that made a weaker principal's attack
-permanent; a condition enum that could lose an entire status; a GC keyed on a
-forgeable label; a leak introduced in the commit that argued against leaking.
-Three times a conclusion I had talked myself into was contradicted by the
-mutation result.
-
-Design 02 is 59 amendments deep and none has passed review. The defect discovery
-rate is not falling — each round closes N and introduces roughly 2. That is a
-process signal, and consolidating design 02 into one body was offered as an
-option and not chosen; it is worth raising again if the next rounds look the
-same.
+1. **When an amendment claims something about another design, read that
+   design first.** Every blocker in the a60 rounds was a claim that failed
+   against the producing text — A59's SPIFFE template did not even parse.
+2. **A critique finds what the last fix introduced.** r2 found a hole in r1's
+   fix, r3 in r2's. Read the new text as an attacker, not as the author.
+3. **A mutation that does not compile is INVALID.** Four of sixteen were, on
+   the first run, for unreachable code and unused variables; each was redone.
+4. **The first test of a path finds the defect the design argument missed.**
+   The handler excluded the reconciling Agent from its own confirming list.
+   And the ledger only pins what it names: the independent review's eight
+   surviving mutations were all on code the ledger had not listed. Write the
+   ledger from the design's rows AND from every branch in the code.
+5. `cp` for backups, never `git checkout`. Stage explicit paths. Read
+   `git status --porcelain` first — another Claude session and the Codex
+   reviewer share this worktree.

@@ -40,7 +40,7 @@ func TestTheWorkloadReadsItsOwnCopyNotTheUsersObject(t *testing.T) {
 
 	rev := revisionOf(t, ns, a.Spec)
 	var d appsv1.Deployment
-	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("ownscopy", rev)}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("ownscopy", rev)}
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get workload: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestTheCopyIsImmutableAndCarriesProvenance(t *testing.T) {
 
 	rev := revisionOf(t, ns, a.Spec)
 	var cm corev1.ConfigMap
-	key := types.NamespacedName{Namespace: ns, Name: controller.MaterialName("provenance", rev, 0)}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.MaterialName("provenance", rev, 0)}
 	if err := k8s.Get(context.Background(), key, &cm); err != nil {
 		t.Fatalf("get revision material: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestEditingTheSourceDoesNotChangeThePublishedRevisionsMaterial(t *testing.T
 	r := newReconciler(false)
 	settle(t, r, a)
 	rev := revisionOf(t, ns, a.Spec)
-	copyKey := types.NamespacedName{Namespace: ns, Name: controller.MaterialName("unchanged", rev, 0)}
+	copyKey := types.NamespacedName{Namespace: runNS(ns), Name: controller.MaterialName("unchanged", rev, 0)}
 
 	var cm corev1.ConfigMap
 	if err := k8s.Get(context.Background(),
@@ -160,7 +160,7 @@ func TestMetadataIsRepairedWhenTheContentMatches(t *testing.T) {
 			settle(t, r, a)
 
 			rev := revisionOf(t, ns, a.Spec)
-			key := types.NamespacedName{Namespace: ns, Name: controller.MaterialName(name, rev, 0)}
+			key := types.NamespacedName{Namespace: runNS(ns), Name: controller.MaterialName(name, rev, 0)}
 			var cm corev1.ConfigMap
 			if err := k8s.Get(context.Background(), key, &cm); err != nil {
 				t.Fatalf("get material: %v", err)
@@ -214,10 +214,11 @@ func TestNonImmutableMaterialIsRecreated(t *testing.T) {
 	mustCreateSource(t, ns, "ConfigMap", "prompt", map[string]string{"SYSTEM_PROMPT": "you are helpful"})
 	a := mustCreateAgent(t, ns, "recreate", withPromptRef)
 	rev := revisionOf(t, ns, a.Spec)
+	rns := provisionRunNamespace(t, ns)
 
 	// Plant a mutable copy with the right content before the operator runs.
 	planted := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: controller.MaterialName("recreate", rev, 0), Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: controller.MaterialName("recreate", rev, 0), Namespace: rns},
 		Data:       map[string]string{"SYSTEM_PROMPT": "you are helpful"},
 	}
 	if err := k8s.Create(context.Background(), planted); err != nil {
@@ -231,7 +232,7 @@ func TestNonImmutableMaterialIsRecreated(t *testing.T) {
 	}
 	var cm corev1.ConfigMap
 	if err := k8s.Get(context.Background(),
-		types.NamespacedName{Namespace: ns, Name: planted.Name}, &cm); err != nil {
+		types.NamespacedName{Namespace: runNS(ns), Name: planted.Name}, &cm); err != nil {
 		t.Fatalf("material is gone rather than recreated: %v", err)
 	}
 	if cm.Immutable == nil || !*cm.Immutable {
@@ -259,11 +260,12 @@ func TestMaterialWithTheRightProvenanceAndWrongContentIsRefused(t *testing.T) {
 		t.Fatalf("get agent: %v", err)
 	}
 	rev := revisionOf(t, ns, a.Spec)
+	rns := provisionRunNamespace(t, ns)
 
 	yes := true
 	planted := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: controller.MaterialName("wrongbytes", rev, 0), Namespace: ns,
+			Name: controller.MaterialName("wrongbytes", rev, 0), Namespace: rns,
 			Labels: map[string]string{
 				controller.MaterialAgentUIDLabel: string(live.UID),
 				controller.MaterialRevisionLabel: rev,
@@ -335,7 +337,7 @@ func TestMaterialIsCollectedWithItsRevision(t *testing.T) {
 	}
 
 	var cms corev1.ConfigMapList
-	if err := k8s.List(context.Background(), &cms, client.InNamespace(ns),
+	if err := k8s.List(context.Background(), &cms, client.InNamespace(runNS(ns)),
 		client.MatchingLabels{controller.MaterialAgentUIDLabel: string(a.UID)}); err != nil {
 		t.Fatalf("list material: %v", err)
 	}
@@ -367,7 +369,7 @@ func TestMaterialIsCollectedWithTheAgent(t *testing.T) {
 
 	var secs corev1.SecretList
 	sel := client.MatchingLabels{controller.MaterialAgentUIDLabel: string(a.UID)}
-	if err := k8s.List(context.Background(), &secs, client.InNamespace(ns), sel); err != nil {
+	if err := k8s.List(context.Background(), &secs, client.InNamespace(runNS(ns)), sel); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(secs.Items) != 1 {
@@ -386,7 +388,7 @@ func TestMaterialIsCollectedWithTheAgent(t *testing.T) {
 	}
 	reconcileOnce(t, r, &live)
 
-	if err := k8s.List(context.Background(), &secs, client.InNamespace(ns), sel); err != nil {
+	if err := k8s.List(context.Background(), &secs, client.InNamespace(runNS(ns)), sel); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(secs.Items) != 0 {
@@ -432,17 +434,18 @@ func TestALabelledBystanderObjectIsNotDeleted(t *testing.T) {
 		controller.MaterialDigestAnnotation: digestOf(t, ns, a.Spec),
 		controller.MaterialSourceAnnotation: "ConfigMap.prompt",
 	}
+	rns := provisionRunNamespace(t, ns)
 	victims := []client.Object{
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-			Name: "istio-ca-root-cert", Namespace: ns,
+			Name: "istio-ca-root-cert", Namespace: rns,
 			Labels: map[string]string{controller.MaterialAgentUIDLabel: string(live.UID)}},
 			Data: map[string]string{"root-cert.pem": "..."}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: "someone-elses-tls", Namespace: ns,
+			Name: "someone-elses-tls", Namespace: rns,
 			Labels: map[string]string{controller.MaterialAgentUIDLabel: string(live.UID)}},
 			Data: map[string][]byte{"tls.key": []byte("...")}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: "fully-labelled-bystander", Namespace: ns,
+			Name: "fully-labelled-bystander", Namespace: rns,
 			Labels: full, Annotations: fullAnn},
 			Data: map[string][]byte{"tls.key": []byte("...")}},
 	}
@@ -463,7 +466,7 @@ func TestALabelledBystanderObjectIsNotDeleted(t *testing.T) {
 
 	for _, v := range victims {
 		err := k8s.Get(context.Background(),
-			types.NamespacedName{Namespace: ns, Name: v.GetName()}, v)
+			types.NamespacedName{Namespace: rns, Name: v.GetName()}, v)
 		if err != nil {
 			t.Errorf("%s was deleted. A principal with `update` got a `delete` across the "+
 				"namespace, executed with the operator's credentials.", v.GetName())

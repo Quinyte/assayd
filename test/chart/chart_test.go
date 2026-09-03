@@ -508,3 +508,135 @@ func TestRegistryPathsAreLowercase(t *testing.T) {
 		}
 	}
 }
+
+// Design 07 A5.9: the chart reserves the plume.dev namespace labels to the
+// operator identity, because SPIRE and the Gateway act on those labels and
+// neither reads the operator's binding record. The operator fail-closes when
+// the policies are absent, so a chart that dropped them would take every Agent
+// down with RunNamespaceUnavailable=LabelAuthorityAbsent.
+func TestChartShipsTheLabelReservingAdmissionPolicies(t *testing.T) {
+	docs := render(t)
+	policies := map[string]map[string]any{}
+	for _, d := range kindsOf(docs, "ValidatingAdmissionPolicy") {
+		policies[nameOf(d)] = d
+	}
+	bindings := map[string]bool{}
+	for _, d := range kindsOf(docs, "ValidatingAdmissionPolicyBinding") {
+		bindings[nameOf(d)] = true
+	}
+	for _, name := range []string{"plume-namespace-labels", "plume-gateway-routes"} {
+		if policies[name] == nil {
+			t.Errorf("the chart renders no ValidatingAdmissionPolicy %s; the operator refuses to create "+
+				"run namespaces without it", name)
+			continue
+		}
+		if !bindings[name] {
+			t.Errorf("policy %s has no binding, so it validates nothing", name)
+		}
+		spec, _ := policies[name]["spec"].(map[string]any)
+		if spec["failurePolicy"] != "Fail" {
+			t.Errorf("policy %s has failurePolicy %v; an unavailable admission chain must deny, not admit", name, spec["failurePolicy"])
+		}
+	}
+	// The permitted identities are rendered INTO the CEL — no params object,
+	// so nothing that can go missing turns the policy into a cluster-wide
+	// denial of namespace writes — and at core tier the list is exactly the
+	// operator's ServiceAccount: every extra identity is a principal that can
+	// mint a SPIFFE-selected namespace.
+	for _, d := range kindsOf(docs, "ConfigMap") {
+		if nameOf(d) == "plume-operators" {
+			t.Error("the chart renders a plume-operators params ConfigMap; deleting it would deny every " +
+				"namespace write in the cluster")
+		}
+	}
+	for _, name := range []string{"plume-namespace-labels", "plume-gateway-routes"} {
+		spec, _ := policies[name]["spec"].(map[string]any)
+		if _, has := spec["paramKind"]; has {
+			t.Errorf("policy %s declares a paramKind; identities must be inline", name)
+		}
+		want := `request.userInfo.username in ["system:serviceaccount:plume-system:plume-agent-operator"]`
+		found := false
+		for _, v := range toList(spec["variables"]) {
+			vm, _ := v.(map[string]any)
+			if vm["name"] == "operator" && vm["expression"] == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("policy %s does not permit exactly the operator's ServiceAccount: want variable "+
+				"operator = %s", name, want)
+		}
+	}
+	// Labels can be written through the status and finalize subresources too.
+	spec, _ := policies["plume-namespace-labels"]["spec"].(map[string]any)
+	rules := toList(dig(spec, "matchConstraints")["resourceRules"])
+	var resources []string
+	for _, r := range rules {
+		rm, _ := r.(map[string]any)
+		resources = append(resources, toStrings(rm["resources"])...)
+	}
+	for _, want := range []string{"namespaces", "namespaces/status", "namespaces/finalize"} {
+		if !contains(resources, want) {
+			t.Errorf("the namespace-label policy does not match %s, so a label written through it slips past: %v", want, resources)
+		}
+	}
+	// A parentRef without a namespace refers to the route's own namespace, so
+	// the route policy must resolve it that way or a bare-name ref from inside
+	// the Gateway's namespace bypasses it.
+	rspec, _ := policies["plume-gateway-routes"]["spec"].(map[string]any)
+	for _, v := range toList(rspec["variables"]) {
+		vm, _ := v.(map[string]any)
+		if vm["name"] == "targetsPlume" && !strings.Contains(toStr(vm["expression"]), "request.namespace") {
+			t.Errorf("targetsPlume does not resolve a bare-name parentRef to the route's namespace: %s", vm["expression"])
+		}
+	}
+}
+
+func toList(v any) []any { l, _ := v.([]any); return l }
+
+func contains(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// The operator is told where it runs through the downward API, so the binding
+// records (design 02 A60) land where the Pod actually is.
+func TestOperatorIsToldItsNamespace(t *testing.T) {
+	docs := render(t)
+	deps := kindsOf(docs, "Deployment")
+	if len(deps) != 1 {
+		t.Fatalf("want one Deployment, got %d", len(deps))
+	}
+	containers, _ := dig(dig(dig(deps[0], "spec"), "template"), "spec")["containers"].([]any)
+	if len(containers) == 0 {
+		t.Fatal("no containers")
+	}
+	c, _ := containers[0].(map[string]any)
+	args := toStrings(c["args"])
+	found := false
+	for _, a := range args {
+		if a == "--operator-namespace=$(POD_NAMESPACE)" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the operator is not passed --operator-namespace from the downward API: %v", args)
+	}
+}
+
+// Every rendered document carries apiVersion and kind. `helm template` does
+// not validate that and `helm upgrade` does: a Helm whitespace trim once glued
+// a policy's apiVersion onto the comment line above it, so `helm template`
+// rendered a document the test suite still found by kind and the install
+// failed with "apiVersion not set".
+func TestEveryRenderedDocumentHasAnAPIVersion(t *testing.T) {
+	for _, d := range render(t, "-f", filepath.Join(chartPath, "values-local.yaml")) {
+		if d["apiVersion"] == nil || d["kind"] == nil {
+			t.Errorf("a rendered document has no apiVersion or kind: %v", nameOf(d))
+		}
+	}
+}

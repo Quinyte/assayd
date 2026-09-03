@@ -73,5 +73,25 @@ operator:
   # the right escape hatch for a cluster with its own topology rules.
   affinity: {}
 
-# The namespace the operator runs in. CRs may live anywhere.
+# The namespace the operator runs in. CRs may live anywhere. Agent WORKLOADS
+# and revision material do not live where the Agent does: the operator creates
+# one `plume-run-<agent-namespace>` per namespace that holds an Agent (design
+# 02 A42), and keeps its binding records here.
 namespace: plume-system
+
+# The agentgateway subchart is not shipped yet (design 07 A1): P1 is the
+# declared-ungoverned tier. The Gateway's name is fixed here because the
+# route-authoring admission policy (design 07 A5.9) must know it before the
+# Gateway exists, so that the first route anyone authors against it is already
+# governed.
+gateway:
+  enabled: false
+  name: plume
+
+# Design 07 A5.9: the identities permitted to write the reserved plume.dev
+# namespace labels. The operator's own ServiceAccount is always permitted;
+# list the tenant-operator's here when the enterprise module is installed.
+# Every identity added is a principal that can mint a SPIFFE-selected
+# namespace — keep it to plume's own controllers.
+admission:
+  extraOperators: []

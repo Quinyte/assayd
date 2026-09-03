@@ -15,12 +15,13 @@ import (
 	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
 )
 
-// NFR-8 applied to a degradation this operator HAS. Design 02 §3.3 says the
-// revision identity covers env-source CONTENT; internal/revision hashes the
-// referent. A43 wrote that down in the design, and an independent critique
-// pointed out that a design paragraph is not the mechanism NFR-8 asks for: an
-// Agent with envFrom reported Ready=True with nothing said.
-func TestAnAgentWithAnEnvSourceSaysItsContentIsNotGated(t *testing.T) {
+// EnvSourceProtectionUnavailable announced the env-source bypass while A20, A35
+// and A42 were design. A42 landed — copies and workloads live in the
+// operator-owned run namespace — and the e2e proves a namespace editor cannot
+// replace a copy there. So an Agent with env sources no longer carries the
+// condition: an abnormal-true condition that no longer applies is what teaches
+// operators to ignore conditions.
+func TestAnAgentWithAnEnvSourceNoLongerReportsItsSourcesUngated(t *testing.T) {
 	ns := newNamespace(t)
 	mustCreateSource(t, ns, "ConfigMap", "prompt", map[string]string{"P": "v"})
 	mustCreateSource(t, ns, "Secret", "creds", map[string]string{"k": "v"})
@@ -33,19 +34,19 @@ func TestAnAgentWithAnEnvSourceSaysItsContentIsNotGated(t *testing.T) {
 	})
 	got := settle(t, newReconciler(false), a)
 
-	c := condition(&got, plumev1alpha1.CondEnvSourceProtectionUnavailable)
-	if c == nil || c.Status != metav1.ConditionTrue {
-		t.Fatal("an Agent whose behaviour comes from a ConfigMap nobody gates reported nothing. " +
-			"Anyone with update on that object can change what this agent does and have it serve " +
-			"under the gate result the old content earned.")
+	if c := condition(&got, plumev1alpha1.CondEnvSourceProtectionUnavailable); c != nil &&
+		c.Status == metav1.ConditionTrue {
+		t.Fatalf("an Agent whose copies live in the run namespace still says its sources are "+
+			"unprotected; the condition names a gap A42 closed:\n%s", c.Message)
 	}
-	// The message must name the objects, or an operator cannot act on it: the
-	// remedy is restricting update on specific ConfigMaps and Secrets.
-	for _, want := range []string{"prompt", "creds", "A35"} {
-		if !strings.Contains(c.Message, want) {
-			t.Errorf("the condition message does not name %q, so it says a guarantee is missing "+
-				"without saying which objects to protect:\n%s", want, c.Message)
-		}
+	// The property the condition used to announce the absence of, asserted
+	// directly: the copies are where the Agent's namespace editor cannot reach.
+	var copies corev1.ConfigMapList
+	if err := k8s.List(context.Background(), &copies, client.InNamespace(runNS(ns))); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(copies.Items) != 1 {
+		t.Errorf("want the ConfigMap copy in %s, found %d", runNS(ns), len(copies.Items))
 	}
 }
 
@@ -62,31 +63,32 @@ func TestAnAgentWithNoEnvSourceStaysQuiet(t *testing.T) {
 	}
 }
 
-// And it must CLEAR: a spec that drops its last env source is no longer exposed,
-// and a stale abnormal-true condition is a lie NFR-8 does not license either.
-func TestRemovingTheLastEnvSourceClearsTheCondition(t *testing.T) {
+// The upgrade case: an operator built before A42 left the condition True on an
+// Agent. It is OWNED, so the first reconcile by this operator clears it rather
+// than carrying a lie forward.
+func TestAStaleEnvSourceConditionFromBeforeA42IsCleared(t *testing.T) {
 	ns := newNamespace(t)
 	mustCreateSource(t, ns, "ConfigMap", "prompt", map[string]string{"P": "v"})
-	a := mustCreateAgent(t, ns, "clears", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "stale", func(a *plumev1alpha1.Agent) {
 		a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "prompt"}}}}
 	})
-	r := newReconciler(false)
-	settle(t, r, a)
-
 	var live plumev1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
-		t.Fatalf("get agent: %v", err)
+		t.Fatalf("get: %v", err)
 	}
-	live.Spec.Runtime.EnvFrom = nil
-	if err := k8s.Update(context.Background(), &live); err != nil {
-		t.Fatalf("update: %v", err)
+	live.Status.Conditions = []metav1.Condition{{
+		Type: string(plumev1alpha1.CondEnvSourceProtectionUnavailable), Status: metav1.ConditionTrue,
+		Reason: "SourcesNotIsolated", Message: "written by an operator from before A42",
+		LastTransitionTime: metav1.Now()}}
+	if err := k8s.Status().Update(context.Background(), &live); err != nil {
+		t.Fatalf("plant the stale condition: %v", err)
 	}
-	got := settle(t, r, &live)
+	got := settle(t, newReconciler(false), &live)
 	if c := condition(&got, plumev1alpha1.CondEnvSourceProtectionUnavailable); c != nil &&
 		c.Status == metav1.ConditionTrue {
-		t.Error("the condition survived removal of the last env source; an abnormal-true condition " +
-			"that no longer applies is exactly what teaches operators to ignore it")
+		t.Error("a stale abnormal-true condition from before A42 survived the upgrade; an operator " +
+			"reading it would go looking for a gap that is closed")
 	}
 }
 
@@ -96,7 +98,9 @@ func TestRemovingTheLastEnvSourceClearsTheCondition(t *testing.T) {
 // to satisfy NFR-8 would have been the thing that silenced the object.
 //
 // 150 sources with long-but-legal names was enough. Nothing caps envFrom length
-// or ConfigMap name length, so this is a spec a user can write.
+// or ConfigMap name length, so this is a spec a user can write. The condition
+// that carried the names is retired (A42); the test stays because the status
+// write of a 150-source Agent is the thing that must not fail.
 func TestTheEnvSourceMessageCannotBrickTheStatus(t *testing.T) {
 	ns := newNamespace(t)
 	long := strings.Repeat("n", 200)
@@ -117,20 +121,19 @@ func TestTheEnvSourceMessageCannotBrickTheStatus(t *testing.T) {
 			"silent about everything — which is a worse NFR-8 outcome than the one this condition " +
 			"was added to fix")
 	}
-	c := condition(&got, plumev1alpha1.CondEnvSourceProtectionUnavailable)
-	if c == nil {
-		t.Fatal("no env-source condition on an Agent with 150 env sources")
+	// The condition that once carried the 150 names is retired (A42), so the
+	// status write's size is no longer at risk from it — but every condition
+	// message stays under the cap, because the next one to list objects will
+	// meet the same limit.
+	for _, c := range got.Status.Conditions {
+		if len(c.Message) > 32768 {
+			t.Errorf("%s message is %d bytes; the API server rejects the status write past 32768",
+				c.Type, len(c.Message))
+		}
 	}
-	if len(c.Message) > 32768 {
-		t.Errorf("message is %d bytes; the API server rejects the status write past 32768", len(c.Message))
-	}
-	// The COUNT stays exact even though the list is truncated: an operator needs
-	// to know the scale, and "and N more" is the part that tells them.
-	if !strings.Contains(c.Message, "150 env source") {
-		t.Errorf("the message no longer states how many sources are affected:\n%s", c.Message)
-	}
-	if !strings.Contains(c.Message, "more") {
-		t.Errorf("the message was truncated without saying so:\n%s", c.Message)
+	// envtest has no kubelet, so the revision is a candidate, not active.
+	if got.Status.CandidateRevision == "" && got.Status.ActiveRevision == "" {
+		t.Error("an Agent with 150 env sources minted no revision")
 	}
 }
 
@@ -206,7 +209,7 @@ func TestAnAgentWithAnUnresolvedSourceGetsNoRevision(t *testing.T) {
 		t.Error("a revision was minted for a spec whose behaviour is not knowable")
 	}
 	var list appsv1.DeploymentList
-	if err := k8s.List(context.Background(), &list, client.InNamespace(ns)); err != nil {
+	if err := k8s.List(context.Background(), &list, client.InNamespace(runNS(ns))); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(list.Items) != 0 {

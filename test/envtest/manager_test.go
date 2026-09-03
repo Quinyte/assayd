@@ -47,7 +47,8 @@ func startManager(t *testing.T) manager.Manager {
 		t.Fatalf("build manager: %v", err)
 	}
 
-	r, err := controller.NewAgentReconciler(mgr.GetClient(), mgr.GetScheme(), func() bool { return false })
+	r, err := controller.NewAgentReconciler(mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme(),
+		operatorNamespace, func() bool { return false }, labelAuthorityPresent)
 	if err != nil {
 		t.Fatalf("build reconciler: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestManagerReconcilesAnAgentEndToEnd(t *testing.T) {
 
 	eventually(t, "the workload to be created", func() bool {
 		var d appsv1.Deployment
-		key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("managed", rev)}
+		key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("managed", rev)}
 		return k8s.Get(ctx, key, &d) == nil
 	})
 
@@ -157,7 +158,7 @@ func TestManagerWatchesOwnedWorkloads(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	rev := revision.MustHash(a.Spec)
-	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("watched", rev)}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("watched", rev)}
 
 	eventually(t, "the workload to exist", func() bool {
 		var d appsv1.Deployment
@@ -238,7 +239,8 @@ func TestReconcilerIsSafeUnderGenerationChangedPredicate(t *testing.T) {
 		t.Fatalf("build manager: %v", err)
 	}
 
-	r, err := controller.NewAgentReconciler(mgr.GetClient(), mgr.GetScheme(), func() bool { return false })
+	r, err := controller.NewAgentReconciler(mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme(),
+		operatorNamespace, func() bool { return false }, labelAuthorityPresent)
 	if err != nil {
 		t.Fatalf("build reconciler: %v", err)
 	}
@@ -282,7 +284,7 @@ func TestReconcilerIsSafeUnderGenerationChangedPredicate(t *testing.T) {
 	// resulting watch event. Only the explicit requeue gets us past this point.
 	eventually(t, "the workload to be created despite the generation predicate", func() bool {
 		var d appsv1.Deployment
-		key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("predicated", rev)}
+		key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("predicated", rev)}
 		return k8s.Get(ctx, key, &d) == nil
 	})
 }

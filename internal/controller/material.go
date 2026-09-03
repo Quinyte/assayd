@@ -24,10 +24,10 @@ import (
 // that — the published revision reads material the editor never had a reference
 // to.
 //
-// This is A35 ALONE. A42's run namespace is not implemented, so copies live in
-// the Agent's namespace and a principal with create/delete on ConfigMaps can
-// still delete one and recreate it under the same name. That residual is stated
-// in design 02 §3.3 and is what A42 exists to close.
+// With A42 the copies live in the operator-owned run namespace (runnamespace.go),
+// where a principal with create/delete on ConfigMaps in the Agent's namespace
+// has no rights — which is what closes delete-and-recreate, the residual A35
+// alone left open.
 const (
 	// Provenance is a LABEL, not an ownerReference (A44). A42 will move these
 	// objects to another namespace, where a cross-namespace owner reference is
@@ -78,7 +78,7 @@ type sourceBuffer struct {
 // ensureRevisionMaterial creates the copies for a revision and returns the name
 // each source was copied to.
 func (r *AgentReconciler) ensureRevisionMaterial(ctx context.Context, agent *plumev1alpha1.Agent,
-	rev, revDigest string, buffers map[revision.SourceRef]*sourceBuffer,
+	runNS, rev, revDigest string, buffers map[revision.SourceRef]*sourceBuffer,
 ) (map[revision.SourceRef]string, error) {
 	names := map[revision.SourceRef]string{}
 	for i, ref := range revision.EnvSources(agent.Spec) {
@@ -89,7 +89,7 @@ func (r *AgentReconciler) ensureRevisionMaterial(ctx context.Context, agent *plu
 		}
 		name := MaterialName(agent.Name, rev, i)
 		names[ref] = name
-		if err := r.ensureOneCopy(ctx, agent, name, rev, revDigest, ref, buf); err != nil {
+		if err := r.ensureOneCopy(ctx, agent, runNS, name, rev, revDigest, ref, buf); err != nil {
 			return nil, err
 		}
 	}
@@ -97,7 +97,7 @@ func (r *AgentReconciler) ensureRevisionMaterial(ctx context.Context, agent *plu
 }
 
 func (r *AgentReconciler) ensureOneCopy(ctx context.Context, agent *plumev1alpha1.Agent,
-	name, rev, revDigest string, ref revision.SourceRef, buf *sourceBuffer) error {
+	runNS, name, rev, revDigest string, ref revision.SourceRef, buf *sourceBuffer) error {
 	labels := map[string]string{
 		MaterialAgentUIDLabel: string(agent.UID),
 		MaterialRevisionLabel: rev,
@@ -106,10 +106,10 @@ func (r *AgentReconciler) ensureOneCopy(ctx context.Context, agent *plumev1alpha
 		MaterialDigestAnnotation: revDigest,
 		MaterialSourceAnnotation: ref.Kind + "." + ref.Name,
 	}
-	meta := metav1.ObjectMeta{Name: name, Namespace: agent.Namespace,
+	meta := metav1.ObjectMeta{Name: name, Namespace: runNS,
 		Labels: labels, Annotations: annotations}
 	yes := true
-	key := types.NamespacedName{Namespace: agent.Namespace, Name: name}
+	key := types.NamespacedName{Namespace: runNS, Name: name}
 
 	// The KIND is preserved. A Secret copied into a ConfigMap would be readable
 	// by a wider set of principals than the original — a privilege change
@@ -311,14 +311,14 @@ func (r *AgentReconciler) deleteMaterial(ctx context.Context, agent *plumev1alph
 // between creating material and publishing the revision leaves copies no status
 // names, and those are exactly the ones nothing else would ever remove.
 func (r *AgentReconciler) collectRevisionMaterial(ctx context.Context, agent *plumev1alpha1.Agent,
-	keep map[string]bool) error {
+	runNS string, keep map[string]bool) error {
 	var cms corev1.ConfigMapList
 	var secs corev1.SecretList
 	sel := client.MatchingLabels{MaterialAgentUIDLabel: string(agent.UID)}
-	if err := r.List(ctx, &cms, client.InNamespace(agent.Namespace), sel); err != nil {
+	if err := r.List(ctx, &cms, client.InNamespace(runNS), sel); err != nil {
 		return fmt.Errorf("list revision material: %w", err)
 	}
-	if err := r.List(ctx, &secs, client.InNamespace(agent.Namespace), sel); err != nil {
+	if err := r.List(ctx, &secs, client.InNamespace(runNS), sel); err != nil {
 		return fmt.Errorf("list revision material: %w", err)
 	}
 	var candidates []client.Object

@@ -22,12 +22,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	"github.com/Quinyte/plume/internal/controller"
 )
 
 var (
@@ -61,6 +63,12 @@ func TestMain(m *testing.M) {
 	k8s, err = client.New(cfg, client.Options{Scheme: scheme})
 	must(err, "build client")
 
+	// The operator's own namespace: where run-namespace binding records live
+	// (design 02 A60). One per control plane, shared by every test.
+	must(client.IgnoreAlreadyExists(k8s.Create(context.Background(),
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: operatorNamespace}})),
+		"create the operator namespace")
+
 	code := m.Run()
 
 	if err := env.Stop(); err != nil {
@@ -74,6 +82,69 @@ func must(err error, what string) {
 		fmt.Fprintf(os.Stderr, "envtest: %s: %v\n", what, err)
 		os.Exit(1)
 	}
+}
+
+// operatorNamespace is the envtest stand-in for plume-system.
+const operatorNamespace = "plume-system"
+
+// runNS is the run namespace an Agent in ns gets its workload and material in
+// (design 02 A42). Tests that look for either look there.
+func runNS(ns string) string { return controller.RunNamespaceName(ns) }
+
+// labelAuthorityPresent is the envtest stand-in for the admission-policy check:
+// the chart is not installed here, so the reconciler is told the policies
+// exist. TestRunNamespaceRefusesWithoutLabelAuthority uses the real adapter.
+func labelAuthorityPresent(context.Context) (bool, error) { return true, nil }
+
+// provisionRunNamespace creates the run namespace for ns exactly as the operator
+// would — binding record first, then the namespace carrying the nonce, then the
+// record bound to the namespace's UID (design 02 A60 rows 2 and 6) — so a test
+// can plant objects in it BEFORE the reconciler's first pass. Planting into a
+// namespace the operator has no record of would be the pre-creation attack, and
+// the operator refuses it; this is the operator's own state, reproduced.
+// Idempotent: a run namespace the operator already made is returned as is.
+func provisionRunNamespace(t *testing.T, ns string) string {
+	t.Helper()
+	ctx := context.Background()
+	name := runNS(ns)
+	var existing corev1.ConfigMap
+	if err := k8s.Get(ctx, types.NamespacedName{Namespace: operatorNamespace, Name: controller.BindingName(name)}, &existing); err == nil {
+		return name
+	}
+	var source corev1.Namespace
+	if err := k8s.Get(ctx, types.NamespacedName{Name: ns}, &source); err != nil {
+		t.Fatalf("get namespace %s: %v", ns, err)
+	}
+	var operator corev1.Namespace
+	if err := k8s.Get(ctx, types.NamespacedName{Name: operatorNamespace}, &operator); err != nil {
+		t.Fatalf("get operator namespace: %v", err)
+	}
+	nonce := hex.EncodeToString(sha256.New().Sum([]byte(t.Name()))[:16])
+	rec := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: controller.BindingName(name), Namespace: operatorNamespace,
+			Labels: map[string]string{controller.LabelBinding: "true"}},
+		Data: map[string]string{
+			"schemaVersion": "1", "sourceNamespace": ns, "sourceNamespaceUID": string(source.UID),
+			"runNamespace": name, "nonce": nonce, "state": "Creating",
+		},
+	}
+	if err := k8s.Create(ctx, rec); err != nil {
+		t.Fatalf("create binding record: %v", err)
+	}
+	run := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name,
+		Labels: map[string]string{
+			controller.LabelRunNamespace: "true", controller.LabelPodsBy: controller.PodsByAgentOperator,
+			controller.LabelAgentNamespace: ns, controller.LabelOwnedBy: string(operator.UID)},
+		Annotations: map[string]string{controller.AnnotationBindingNonce: nonce}}}
+	if err := k8s.Create(ctx, run); err != nil {
+		t.Fatalf("create run namespace: %v", err)
+	}
+	rec.Data["runNamespaceUID"] = string(run.UID)
+	rec.Data["state"] = "Bound"
+	if err := k8s.Update(ctx, rec); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	return name
 }
 
 // newNamespace gives each test its own namespace so the shared control plane

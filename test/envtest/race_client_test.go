@@ -47,11 +47,12 @@ func TestAnAlreadyExistsRaceDoesNotAcceptAnUnvalidatedWorkload(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "race", nil)
 	name := controller.WorkloadName("race", revision.MustHash(a.Spec))
+	rns := provisionRunNamespace(t, ns)
 
 	// Someone else's Deployment is already sitting on the name, Available, with
 	// no stamp from this operator.
 	squatter := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: rns},
 		Spec: appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"squat": "yes"}},
 			Template: corev1.PodTemplateSpec{
@@ -67,9 +68,11 @@ func TestAnAlreadyExistsRaceDoesNotAcceptAnUnvalidatedWorkload(t *testing.T) {
 	markAvailable(t, ns, name, 1)
 
 	r := &controller.AgentReconciler{
-		Client:             &hideOnce{Client: k8s, hide: types.NamespacedName{Namespace: ns, Name: name}},
-		Scheme:             scheme,
-		EvalSuiteInstalled: func() bool { return false },
+		Client:                &hideOnce{Client: k8s, hide: types.NamespacedName{Namespace: runNS(ns), Name: name}},
+		Scheme:                scheme,
+		EvalSuiteInstalled:    func() bool { return false },
+		OperatorNamespace:     operatorNamespace,
+		LabelAuthorityPresent: labelAuthorityPresent,
 	}
 	// The hidden Get lands on whichever pass first reaches ensureWorkload — the
 	// first reconcile returns early to add a finalizer — so this does not depend
@@ -96,7 +99,7 @@ func TestAnAlreadyExistsRaceDoesNotAcceptAnUnvalidatedWorkload(t *testing.T) {
 			"revision %q, on the strength of its own status", after.Status.ActiveRevision)
 	}
 	var d appsv1.Deployment
-	if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &d); err != nil {
+	if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: runNS(ns), Name: name}, &d); err != nil {
 		t.Fatalf("get workload: %v", err)
 	}
 	if img := d.Spec.Template.Spec.Containers[0].Image; img != squatter.Spec.Template.Spec.Containers[0].Image {
@@ -125,7 +128,7 @@ func TestAnUnstampedActiveWorkloadIsNotReportedAsServing(t *testing.T) {
 	}
 
 	var d appsv1.Deployment
-	key := types.NamespacedName{Namespace: ns, Name: active}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: active}
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get workload: %v", err)
 	}

@@ -407,10 +407,12 @@ const (
 	CondEnvSourceUnresolved      = ConditionType("EnvSourceUnresolved")     // A20
 	CondRevisionMaterialChanged  = ConditionType("RevisionMaterialChanged") // A20/A23
 	CondImageSignatureUnverified = ConditionType("ImageSignatureUnverified")
-	// CondEnvSourceProtectionUnavailable is SUPERSEDED by A35, which replaced the
-	// seal with immutable revision-scoped copies. It is declared because §3.1
-	// still lists it and this list must match §3.1 exactly; both go together in
-	// A35's owed retirement sweep, not separately.
+	// CondEnvSourceProtectionUnavailable is NO LONGER RAISED. It announced the
+	// env-source bypass while A20, A35 and A42 were design; A42's run namespace
+	// closed the last of it (design 02 A61) and a real-cluster test proves it.
+	// The type stays in §3.1's closed vocabulary so an operator built after A42
+	// can still CLEAR a stale True left by one built before; removing it from
+	// the API is a later, separate amendment.
 	CondEnvSourceProtectionUnavailable = ConditionType("EnvSourceProtectionUnavailable")
 	// CondRevisionHashCollision reports two DIFFERENT projections sharing one
 	// 40-bit revision name (A37). It is terminal: the operator will not adopt or

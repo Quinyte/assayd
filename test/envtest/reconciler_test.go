@@ -65,9 +65,11 @@ func settle(t *testing.T, r *controller.AgentReconciler, a *plumev1alpha1.Agent)
 
 func newReconciler(gatesInstalled bool) *controller.AgentReconciler {
 	return &controller.AgentReconciler{
-		Client:             k8s,
-		Scheme:             scheme,
-		EvalSuiteInstalled: func() bool { return gatesInstalled },
+		Client:                k8s,
+		Scheme:                scheme,
+		EvalSuiteInstalled:    func() bool { return gatesInstalled },
+		OperatorNamespace:     operatorNamespace,
+		LabelAuthorityPresent: labelAuthorityPresent,
 	}
 }
 
@@ -88,11 +90,12 @@ func mustCreateAgent(t *testing.T, ns, name string, mutate func(*plumev1alpha1.A
 	return a
 }
 
-// markAvailable fakes what a kubelet would report.
+// markAvailable fakes what a kubelet would report. ns is the AGENT's namespace;
+// the workload lives in its run namespace (A42).
 func markAvailable(t *testing.T, ns, name string, n int32) {
 	t.Helper()
 	var d appsv1.Deployment
-	key := types.NamespacedName{Namespace: ns, Name: name}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: name}
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("get deployment %s: %v", name, err)
 	}
@@ -123,7 +126,7 @@ func TestReconcileMaterializesTheRevisionWorkload(t *testing.T) {
 	reconcileOnce(t, newReconciler(false), a) // creates the workload
 
 	var d appsv1.Deployment
-	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("materialize", rev)}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("materialize", rev)}
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
 		t.Fatalf("the workload for revision %s was not created: %v", rev, err)
 	}
@@ -149,9 +152,25 @@ func TestReconcileMaterializesTheRevisionWorkload(t *testing.T) {
 		t.Error("privilege escalation is allowed")
 	}
 
-	// The workload must be owned, or deleting the Agent would orphan it.
-	if len(d.OwnerReferences) != 1 || d.OwnerReferences[0].Name != "materialize" {
-		t.Errorf("workload is not owned by its Agent: %v", d.OwnerReferences)
+	// The workload carries no ownerReference — it is in the run namespace and a
+	// cross-namespace owner is treated as absent (A44/A60) — so provenance is
+	// the name, the Agent's UID label, and the Agent's own namespace, which the
+	// SVID template reads (A59).
+	var live plumev1alpha1.Agent
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	if len(d.OwnerReferences) != 0 {
+		t.Errorf("workload carries an ownerReference across namespaces, which Kubernetes treats "+
+			"as absent while it looks like ownership: %v", d.OwnerReferences)
+	}
+	if d.Labels[controller.LabelAgentUID] != string(live.UID) {
+		t.Errorf("workload does not carry the Agent's UID label: %v", d.Labels)
+	}
+	if d.Spec.Template.Labels[controller.LabelAgentNamespace] != ns {
+		t.Errorf("pod template does not carry the Agent's OWN namespace, so its SVID would be "+
+			"issued under the run namespace and every grant would stop matching (A59): %v",
+			d.Spec.Template.Labels)
 	}
 }
 
@@ -330,7 +349,7 @@ func TestRetentionNeverCollectsTheRollbackTarget(t *testing.T) {
 	// The active revision and the two most recent others must survive.
 	for _, rev := range []string{active, revs[len(revs)-2], revs[len(revs)-3]} {
 		var d appsv1.Deployment
-		key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("retain", rev)}
+		key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("retain", rev)}
 		if err := k8s.Get(context.Background(), key, &d); err != nil {
 			t.Errorf("revision %s was collected but is within the retention window "+
 				"(active + %d): rollback to it is now impossible: %v",
@@ -339,7 +358,7 @@ func TestRetentionNeverCollectsTheRollbackTarget(t *testing.T) {
 	}
 	// The oldest must not.
 	var d appsv1.Deployment
-	key := types.NamespacedName{Namespace: ns, Name: controller.WorkloadName("retain", revs[0])}
+	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("retain", revs[0])}
 	if err := k8s.Get(context.Background(), key, &d); !apierrors.IsNotFound(err) {
 		t.Errorf("revision %s is outside the retention window but was not collected", revs[0])
 	}
@@ -392,6 +411,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	counter := &countingClient{Client: k8s}
 	counting := &controller.AgentReconciler{
 		Client: counter, Scheme: scheme, EvalSuiteInstalled: func() bool { return false },
+		OperatorNamespace: operatorNamespace, LabelAuthorityPresent: labelAuthorityPresent,
 	}
 	for i := 0; i < 5; i++ {
 		reconcileOnce(t, counting, a)
@@ -404,7 +424,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 
 	// Exactly one workload: content-addressed revisions must never double-create.
 	var list appsv1.DeploymentList
-	if err := k8s.List(context.Background(), &list, client.InNamespace(ns)); err != nil {
+	if err := k8s.List(context.Background(), &list, client.InNamespace(runNS(ns))); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(list.Items) != 1 {
@@ -451,7 +471,7 @@ func TestExternalAgentIsHeldNotFakedReady(t *testing.T) {
 		t.Error("an external agent was reported Ready though nothing registered it")
 	}
 	var list appsv1.DeploymentList
-	if err := k8s.List(context.Background(), &list, client.InNamespace(ns)); err != nil {
+	if err := k8s.List(context.Background(), &list, client.InNamespace(runNS(ns))); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(list.Items) != 0 {
