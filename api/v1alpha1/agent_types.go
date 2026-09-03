@@ -434,6 +434,18 @@ const (
 	// revision's route goes to weight 0: losing availability is the right
 	// direction when the alternative is serving material nobody can vouch for.
 	CondRevisionMaterialUnavailable = ConditionType("RevisionMaterialUnavailable")
+	// CondRunNamespaceUnavailable reports that the operator-owned run namespace
+	// an Agent's workload and material must live in (design 02 A42/A60) cannot
+	// be used. Reasons: NotCreatedByOperator (a namespace of that name exists
+	// that the binding record does not vouch for — pre-created, or deleted and
+	// recreated), NameCollision (two source namespaces truncate-and-hash to one
+	// run name), Terminating (teardown in progress; clears by itself),
+	// BindingRecordInvalid (the record is missing a field, carries an unknown
+	// state, or a schema version this operator does not decode) and
+	// LabelAuthorityAbsent (the admission policies that reserve the plume.dev
+	// namespace labels to the operator are not installed). All but Terminating
+	// are terminal until a human acts, and the message says what to do.
+	CondRunNamespaceUnavailable = ConditionType("RunNamespaceUnavailable")
 )
 
 type AgentStatus struct {
@@ -651,5 +663,6 @@ func designConditions() []ConditionType {
 		CondRevisionMaterialCollision,
 		CondRevisionRecordUnsupported,
 		CondRevisionMaterialUnavailable,
+		CondRunNamespaceUnavailable,
 	}
 }

@@ -1,6 +1,6 @@
 # Design 07: Umbrella chart, profiles, e2e CI
 
-- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022
+- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A5 below, A5 (2026-09-03) not yet critiqued
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0002 (rules 5/6), 0012 (ambient profile), NFR-1/3/7/8 · interfaces: every P1 design (it packages them)
 
@@ -104,4 +104,138 @@ Folded into ADR-0022 (P1 infrastructure) after critique PASS.
 
 **Owed**: the pinned version and the namespace-selector shape. The integration test must admit a **signed** fixture and reject an **unsigned** one **in the exact namespace an Agent workload uses** — testing it anywhere else would pass while the enforcement gap this amendment describes was live.
 
-**This is a recommendation taken on doctrine, not a measured result** — it should be confirmed before design 07 is implemented, since it binds a third-party controller.- **A4 (2026-09-01)**: the operator Deployment sets `strategy: RollingUpdate` with **`maxSurge: 0`, `maxUnavailable: 1`** — the old pod must go away before the new one starts, and that ordering is required rather than preferred. `cmd/operator`'s `readyz` check waits on `mgr.Elected()`, so with the default rolling update Kubernetes creates the new pod first, it cannot become ready until it holds the leader lease, and the old pod holds that lease and cannot be terminated until the new pod is ready. **Every upgrade of this operator deadlocked** until the rollout timed out. Measured on a real cluster on 2026-09-01, and it had been invisible for a specific reason worth recording: `hack/e2e.sh` reused one image tag with `pullPolicy: Never`, so `helm upgrade` saw an unchanged pod template and never rolled the pod at all. The operator under test had been running for **nine days** while every e2e run reported green against it. The tag is now unique per run, and `TestTheOperatorUnderTestIsTheOneJustBuilt` compares the deployed image to the one the run built, so a stale pod can never again look like a passing suite.
+**This is a recommendation taken on doctrine, not a measured result** — it should be confirmed before design 07 is implemented, since it binds a third-party controller.
+
+## A4 (2026-09-01) — the operator's rolling update must retire the old pod first
+
+- The operator Deployment sets `strategy: RollingUpdate` with **`maxSurge: 0`, `maxUnavailable: 1`** — the old pod must go away before the new one starts, and that ordering is required rather than preferred. `cmd/operator`'s `readyz` check waits on `mgr.Elected()`, so with the default rolling update Kubernetes creates the new pod first, it cannot become ready until it holds the leader lease, and the old pod holds that lease and cannot be terminated until the new pod is ready. **Every upgrade of this operator deadlocked** until the rollout timed out. Measured on a real cluster on 2026-09-01, and it had been invisible for a specific reason worth recording: `hack/e2e.sh` reused one image tag with `pullPolicy: Never`, so `helm upgrade` saw an unchanged pod template and never rolled the pod at all. The operator under test had been running for **nine days** while every e2e run reported green against it. The tag is now unique per run, and `TestTheOperatorUnderTestIsTheOneJustBuilt` compares the deployed image to the one the run built, so a stale pod can never again look like a passing suite.
+
+## A5 (2026-09-03, from design 02 A42/A44/A59/A60, design 03 A44, Codex r8 BLOCKERs 7–8) — what the chart ships for the operator-owned run namespace, and what it cannot
+
+Design 02 A42 moves every Agent's workload, Service, routes and revision material out of the Agent's namespace into `plume-run-<agent-namespace>`, a namespace the operator creates. Five things about that move were owed to this design because this design owns the chart. Each is answered below, and each answer states what is rendered **today** — which for most of them is nothing, because the subcharts that would carry the object do not exist yet (A1). Rule 7 of `AGENTS.md`: a bound the chart does not render is not a bound.
+
+### A5.1 The chart renders nothing per run namespace — the operator does
+
+A Helm chart renders at install time; run namespaces are created at reconcile time, one per namespace that ever holds an Agent. So **no object that must exist per run namespace can be a chart template**: not the NetworkPolicy, not the Pod Security labels, not a ResourceQuota. The operator materializes all of them (design 02 §3.2, A60), and the chart's part is to supply the **shape** through values and to grant the **RBAC** the operator needs to do so. Every "the chart ships X into the run namespace" sentence in earlier text is therefore wrong in the same way, and this amendment is where that is corrected.
+
+### A5.2 `ClusterSPIFFEID` — the template, the selectors, and why the selector is the security boundary
+
+When the SPIRE subchart lands, `templates/` renders exactly one platform-owned `ClusterSPIFFEID` (design 02 §3.5):
+
+```yaml
+apiVersion: spire.spiffe.io/v1alpha1
+kind: ClusterSPIFFEID
+metadata: {name: plume-agent}
+spec:
+  spiffeIDTemplate: "spiffe://{{ .TrustDomain }}/agent/{{ index .PodMeta.Labels \"plume.dev/agent-namespace\" }}/{{ index .PodMeta.Labels \"plume.dev/agent\" }}"
+  namespaceSelector:
+    matchLabels: {plume.dev/pods-by: agent-operator}
+    matchExpressions:
+      - {key: plume.dev/tenant-sync, operator: DoesNotExist}
+  podSelector:
+    matchExpressions:
+      - {key: plume.dev/agent-namespace, operator: Exists}
+      - {key: plume.dev/agent, operator: Exists}
+```
+
+Three facts, verified against spire-controller-manager v0.7.0 and recorded in `docs/research/tenant-namespace-primitives-2026-09.md`:
+
+- **`index` is mandatory.** The template engine is Go `text/template` with no functions added; `{{ .PodMeta.Labels "key" }}` does not parse and the webhook rejects it. Design 02 A59 wrote that form and A60 corrects it; this is the rendered one.
+- **An absent label yields an empty segment, and an empty segment yields no SVID.** `index` returns `""` on a missing key; go-spiffe rejects `…/agent//x`; the controller logs a render failure, counts it in `status.stats.podEntryRenderFailures`, and creates no entry. That is fail-closed, but only because each label is a **whole** segment — so the `podSelector` above additionally requires both labels to exist, and any future edit that prefixes a segment with a literal must keep that invariant.
+- **The `namespaceSelector` is the boundary, and it is a different label from the listener's.** The namespace segment is a label the Pod's creator chooses, so *anyone who can create a Pod in a selected namespace can claim any agent's identity in any tenant*. The selector therefore admits only namespaces labelled `plume.dev/pods-by: agent-operator` — a label that certifies one property, that nothing but the operator creates Pods there — and **not** `plume.dev/run-namespace`, which the Gateway listener selects on (A5.3) and which design 26 A1 also stamps on a vCluster's host sync namespace, where every Pod is created by vCluster on behalf of a tenant who chooses its labels. Reusing the listener label there would have let a hard-mode tenant Pod labelled `agent-namespace: team-a` be issued a soft-mode tenant's identity in the host trust domain; the critique caught it. The `tenant-sync` `DoesNotExist` clause is the belt: the tenant-operator stamps `plume.dev/tenant-sync` on every sync namespace, so even a mislabelled one is excluded. **Neither label is a proof by itself** — a label is writable by whoever can create or update the namespace — so both are reserved to the operator identities by the admission policy in A5.9, and the operator refuses to create run namespaces while that policy is absent. The cross-family review was right that a split without a reservation fixes selector conflation and not provenance. The chart renders **no Role or RoleBinding granting Pod `create` in a `pods-by: agent-operator` namespace**, and the read-only RoleBinding design 02 §3.2 owes for `kubectl logs` must never carry a write verb — pinned by a chart test that fails on any verb outside `get`/`list`/`watch`, owed with the RoleBinding. Widening the selector — to `All`, or to tenant namespaces — silently turns every tenant's Pod-create grant into cross-tenant impersonation. The per-namespace hardening design 02 §3.5 records (one `ClusterSPIFFEID` per run namespace, namespace as a literal) is the answer if that boundary ever has to move.
+
+**Today**: the chart carries no SPIRE subchart and renders no `ClusterSPIFFEID`; no Agent has an SVID; design 02 §5's `IdentityIssued=False` row is the state of every Agent on every install. The object above is the one the subchart must render, in the future tense, and the e2e that proves an Agent in `team-a` gets `…/agent/team-a/<name>` from a Pod in `plume-run-team-a` is owed with it.
+
+### A5.3 The Gateway listener admits run namespaces by label
+
+When the agentgateway subchart lands (`gateway.enabled: true`), the chart's `Gateway` carries, on every listener that serves Agent routes:
+
+```yaml
+allowedRoutes:
+  namespaces:
+    from: Selector
+    selector:
+      matchLabels: {plume.dev/run-namespace: "true"}
+```
+
+Gateway API v1.6.1: `from` is one of `All | Selector | Same` (default `Same`), and `selector` is required with `Selector`. A route in a namespace the listener does not admit is rejected, which is how design 03 A44 found that leaving the default would wedge every moved route. A route's `parentRef` to a Gateway in the chart's namespace **needs no `ReferenceGrant`** — the specification exempts Gateway–route attachment; only `backendRef`s and Secret references need one — so this selector is the whole of the cross-namespace consent the move needs. The gateway-scoped tracing policy stays in the Gateway's own namespace (design 03 §3.2).
+
+An admitted namespace is not a route-authoring grant: A5.9's second policy admits an `HTTPRoute` whose `parentRefs` name the plume Gateway only from the operator's identity, so a principal who somehow held rights in a run namespace still could not attach an ungoverned route.
+
+**Today**: `gateway.enabled` is `false` and there is no Gateway (A1). Nothing is rendered.
+
+### A5.4 The default-deny NetworkPolicy — operator-materialized, and absent at P1 on purpose
+
+Design 02 §6 requires every Agent Pod to run under a default-deny NetworkPolicy whose only egress is the gateway. The chart has never rendered one, in any namespace; design 02 A42 named that gap and this amendment decides how it closes:
+
+- **Who**: the operator, into each run namespace, at creation and on every reconcile (A5.1 says why it cannot be the chart).
+- **Shape**: a **traffic matrix**, not a slogan, because "egress to the gateway only" as first written blocked two paths plume itself requires (the cross-family review's finding). Ingress: the gateway's Pods, **and the operator's Pods** — the operator fetches the candidate's Agent Card in-cluster before registration (design 02 §3.4) and is not a gateway Pod; the eval runner's candidate-only route (design 16) arrives through the gateway and needs no rule of its own. Egress: the gateway's Pods; DNS; **and the tenant's NATS endpoint**, because the reference SDK's shared A2A task store (design 09) connects to JetStream directly through `PLUME_NATS_URL`, and agentgateway does not proxy NATS. Each peer is a `namespaceSelector` plus `podSelector` from values — a `NetworkPolicyPeer` can name Pods, namespaces or an `ipBlock`, and **never a Service**, so "the cluster DNS Service" is not a shape the API accepts; DNS is the `kube-dns` Pods in `kube-system` on TCP and UDP 53, with the label values supplied per distribution and validated at render. A policy that forgets DNS is a policy that blocks everything and looks like "the gateway is down"; one that forgets the operator makes every candidate fail registration and looks like a card bug.
+- **When**: only with `gateway.enabled: true`. With the gateway off, "egress to the gateway only" is **no egress**, and every P1 Agent would lose the direct provider access the declared-ungoverned tier promises it. So at P1 **no NetworkPolicy is applied anywhere**, `GovernanceSkipped=GatewayDisabled` is on every Agent (design 03 §3.1), and the `NOTES.txt` A1 owes states it alongside "no budgets, no authn, no tool filtering".
+- **Enforcement is the CNI's, not Kubernetes'.** A NetworkPolicy on a cluster whose CNI does not implement the API is accepted and does nothing. k3s enables a network-policy controller by default; kind's default CNI does not. The e2e matrix must therefore assert enforcement on k3d and must **not** claim it on kind, and a run that cannot observe a blocked connection reports the axis as unverified rather than green. The k3d cell proves the two required paths **with enforcement on** — a card registration and a shared-task round trip — and a negative control to a forbidden destination; deleting either allow rule must fail it.
+
+**Today**: nothing is rendered or materialized. The control is decorative in every namespace, exactly as design 02 A42 said, and remains so until the gateway ships.
+
+### A5.5 Pod Security, ResourceQuota and LimitRange are mirrored by the operator
+
+The chart's own namespace runs `pod-security.kubernetes.io/enforce: restricted` (`templates/namespace.yaml`) and that does not follow a Pod into a run namespace. Design 02 A44/A60 make the operator mirror the source namespace's six Pod Security labels and every `ResourceQuota` and `LimitRange`. The chart's part is RBAC (A5.7). The rendered Agent Pod satisfies `restricted` **by construction** — the operator renders the whole security context itself (non-root, `RuntimeDefault` seccomp, no privilege escalation, all capabilities dropped, no volumes) and the Agent spec exposes none of it — so a tenant enforcing `restricted` gets Pods that admit, and a Pod Security rejection is reachable only through a future change: a new spec field, or a `-version` pin older than a field the operator uses. If it happens, **the operator does not see it**: the rejection lands on the ReplicaSet controller's Pod create, the Deployment is accepted, no Pod appears, and the reason is a `FailedCreate` event on the ReplicaSet. The Agent reports only `Ready=False, WorkloadNotAvailable`. That is an NFR-8 gap, stated: the operator does not watch ReplicaSet events today, and the fix — surfacing `FailedCreate` as a condition — is owed to design 02 §5.
+
+### A5.6 Sigstore policy-controller opts in the run namespace, not the Agent's
+
+A2/A3 say the verifier enforces per namespace, only where `policy.sigstore.dev/include=true` is set, and that the effective-enforcement check must run "in the exact namespace an Agent workload uses". Under A42 that namespace is the **run namespace**. So under a compliance profile the operator stamps the opt-in label on every run namespace it creates, and the preflight in A3 checks run namespaces — a check that passed on `team-a` while Pods ran unverified in `plume-run-team-a` would be the exact false positive A3 warns about. The chart's part is the profile flag that tells the operator to stamp it.
+
+**Today**: no verifier is bound (A2) and the operator stamps nothing.
+
+### A5.7 RBAC — the escalations, named
+
+The operator's `ClusterRole` (`files/operator-rules.yaml`, generated from the reconciler's markers and held equal by `TestChartRBACMatchesGeneratedRules`) grows by the following, and each is a real widening to say out loud rather than bury in a generated file:
+
+| Grant | Why | What bounds it |
+|---|---|---|
+| `namespaces`: `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` | create and label run namespaces; **delete** them when their last Agent goes | RBAC cannot restrict a dynamic name, so all three write verbs are cluster-wide. The code writes — labels, annotations, or deletion — only to a namespace whose name has the `plume-run-` shape **and** whose UID matches the operator's binding record (design 02 A60); everything else is refused and logged. Unbounded `update` would otherwise let one bug relabel a tenant namespace as SPIFFE-selected |
+| `pods/log`: `get` | `plume logs` streams a run-namespace Pod's logs under the operator's credentials after a `SubjectAccessReview` for the caller (design 02 §3.2, *Read access*) | **not granted now**; lands with design 08's `plume logs` |
+| `validatingadmissionpolicies`, `validatingadmissionpolicybindings` (`admissionregistration.k8s.io`): `get`, `list`, `watch` | the operator checks that A5.9's policies exist before creating a run namespace and fail-closes if not | read-only |
+| `configmaps`, `secrets`: `+update` | the binding record is compare-and-swapped, and A57's metadata repair already needed it — `repairMetadata` calls `Update` and the shipped role grants no `update` on either kind, so restamping a copy's labels is Forbidden on a real cluster while green in envtest, which runs as admin. Inferred from the role, and to be confirmed with `kubectl auth can-i` against the deployed chart when A42's e2e runs | the operator never updates a user's object; every `Update` is on a name of the operator's own shape |
+| `resourcequotas`, `limitranges`: `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` | mirroring (A5.5) | mirrors are named `plume-mirror-<name>` — truncate-and-hashed past 253 characters by design 03 §3.2's rule — in run namespaces only; the name is the deletion authority |
+| `networkpolicies` (`networking.k8s.io`): `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` | A5.4, when the gateway ships | not granted until the operator materializes one; a verb granted ahead of the code that uses it is rule 7 in RBAC form |
+
+The `ClusterRole` today grants none of these. They land with the A42 implementation and the generated file, not before.
+
+### A5.9 The admission policies that make the labels the operator's
+
+The binding record (design 02 A60) proves which namespace the operator created, and none of the three things that act on run-namespace labels reads it: SPIRE selects on `plume.dev/pods-by`, the Gateway admits on `plume.dev/run-namespace`, the operator's Namespace reconciler keys on both. A label is writable by whoever can create or update the namespace. So the chart reserves them. Two `ValidatingAdmissionPolicy` objects and their bindings, cluster-scoped and static, so the chart can render them today; `ValidatingAdmissionPolicy` is GA from Kubernetes 1.30, which is `Chart.yaml`'s floor:
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: plume-namespace-labels}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [""], apiVersions: [v1], operations: [CREATE, UPDATE], resources: [namespaces]}
+  variables:
+    - name: reserved
+      expression: "['plume.dev/pods-by', 'plume.dev/run-namespace', 'plume.dev/tenant-sync', 'plume.dev/agent-namespace', 'plume.dev/owned-by']"
+    - name: touched
+      expression: >-
+        variables.reserved.exists(k,
+          (has(object.metadata.labels) && k in object.metadata.labels ? object.metadata.labels[k] : '') !=
+          (oldObject != null && has(oldObject.metadata.labels) && k in oldObject.metadata.labels ? oldObject.metadata.labels[k] : ''))
+        || ((has(object.metadata.annotations) && 'plume.dev/binding-nonce' in object.metadata.annotations ? object.metadata.annotations['plume.dev/binding-nonce'] : '') !=
+            (oldObject != null && has(oldObject.metadata.annotations) && 'plume.dev/binding-nonce' in oldObject.metadata.annotations ? oldObject.metadata.annotations['plume.dev/binding-nonce'] : ''))
+  validations:
+    - expression: "!variables.touched || request.userInfo.username in params.data.operators"
+      message: "plume.dev namespace labels and the binding nonce are reserved to the plume operators"
+```
+
+`params.data.operators` is a ConfigMap the chart renders with `system:serviceaccount:<ns>:<operator>` and, when the enterprise module is installed, the tenant-operator's identity — the only hard-mode writer of `run-namespace` and `tenant-sync` on a sync namespace (design 26 A1). The second policy matches `HTTPRoute` creates and updates and denies any whose `parentRefs` name the plume Gateway unless the requester is the operator's ServiceAccount, so a namespace the listener admits is not a grant to author routes into it.
+
+**The operator fail-closes on their absence.** At startup and before every run-namespace creation it checks that both policies and bindings exist; if not, `RunNamespaceUnavailable=LabelAuthorityAbsent` on the Agent and no namespace is created. A label nobody reserves is a convention, and the operator must not treat a convention as evidence. `failurePolicy: Fail` means an unavailable admission chain denies the write rather than admitting it.
+
+**Today**: the policies are not rendered. They land with the A42 implementation, and the e2e that proves a principal holding Namespace and RBAC `create` cannot obtain a labelled namespace lands with them.
+
+### A5.8 Weight budget and stateful allowlist
+
+Unchanged. Nothing here adds a pod or a disk; the run namespace holds the same Agent Pods that ran in the tenant namespace before.
+
+**Owed**: the SPIRE and agentgateway subcharts that would render A5.2 and A5.3; `NOTES.txt` (A1) gaining the NetworkPolicy sentence; the e2e cell that proves NetworkPolicy enforcement on k3d and reports it unverified on kind; A5.9's policies and their negative e2e, with the A42 implementation.

@@ -5,12 +5,12 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | # | Component | Phase | Size | Design status |
 |---|---|---|---|---|
 | 1 | KnowledgeGraphProvider contract (6-tool MCP surface + ontology schema + probe format + conformance) | P2 | M | **approved** (`01-…`, ADR-0017/0018, review PASS) |
-| 2 | Agent CRD + agent-operator | P1 | L | **approved** (`02-…`, ADR-0019, review PASS); amendments A15–A21 (2026-08-26) — four REVISE rounds addressed (last: 0 blockers); A20–A21 uncritiqued |
-| 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | **re-opened 2026-08-27** — **ADR-0028** supersedes ADR-0020 after the research note was found to name a release that does not exist. §§3.3/3.4/3.5 rebuilt on v1.4.1 plus an execution spike; amendments A1–A16. Codex r2's blockers are closed or measured, twelve majors open. **Do not implement** |
+| 2 | Agent CRD + agent-operator | P1 | L | **integrated r8**, amendments A1–A60, **none critique-passed** (`02-…`, ADR-0019; latest `reviews/03-codex-review-r8.md`, 13 BLOCKER). A20/A21/A35/A37/A50/A53/A56 implemented; **A42 (run namespace) designed to implementable by A60, not implemented** |
+| 3 | Policy compiler (CR → agentgateway config, incl. expose) | P1 | M | **re-opened 2026-08-27** — **ADR-0028** supersedes ADR-0020 after the research note was found to name a release that does not exist. §§3.3/3.4/3.5 rebuilt on v1.4.1 plus an execution spike; amendments A1–A45 (A45: owed hard-mode producer contracts). **Do not implement** |
 | 4 | Receipt tap + receipt envelope schema | P1 | M | r2 — critique **PASS** (`04-…`, `reviews/04-review.md`; awaiting user approval + ADR-0021) |
 | 5 | Agent directory (OASF on JetStream KV) | P1 | S | r2 — critique **PASS** (`05-…`, `reviews/05-review.md`; awaiting user approval, ADR-0022) |
 | 6 | Identity glue | P1 | M | r2 — critique **PASS** (`06-…`, `reviews/06-review.md`; awaiting user approval, ADR-0022) |
-| 7 | Umbrella chart, profiles, e2e CI | P1 | M | r2 — critique **PASS** (`07-…`, `reviews/07-review.md`; awaiting user approval, ADR-0022) |
+| 7 | Umbrella chart, profiles, e2e CI | P1 | M | r2 — critique **PASS** (`07-…`, `reviews/07-review.md`; awaiting user approval, ADR-0022); amendments A1–A5, **A5 (2026-09-03) uncritiqued** — run-namespace mechanics the chart ships and the operator materializes |
 | 8 | CLI | P1+ | L | r2 — critique **PASS** (`08-…`, `reviews/08-review.md`; awaiting user approval, ADR-0022) |
 | 9 | SDK templates | P1 | M | r2 — critique **PASS** (`09-…`, `reviews/09-review.md`; awaiting user approval, ADR-0022) |
 | 10 | Observability pack | P1+ | M | r2 — critique **PASS** (`10-…`, `reviews/10-review.md`; awaiting user approval, ADR-0022) |
@@ -27,9 +27,9 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 21 | workflow-operator + Workflow CRD | P4 | M | r2 — critique **PASS** (`21-…`, `reviews/21-review.md`; **R2-a required pre-ADR-0025**: missing 06 `workflow-actor` record) |
 | 22 | Loop governance | P4 | M | r2 — critique **PASS** (`22-…`, `reviews/22-review.md`; awaiting user approval, ADR-0025) |
 | 23 | App layer | P4 | M | r2 — critique **PASS** (`23-…`, `reviews/23-review.md`; awaiting user approval, ADR-0025) |
-| 24 | AuthzProvider (OpenFGA) | P4 | M | r2 — critique **PASS** (`24-…`, `reviews/24-review.md`; awaiting user approval, ADR-0025; sequenced with 21 R2-a) |
+| 24 | AuthzProvider (OpenFGA) | P4 | M | r2 — critique **PASS** (`24-…`, `reviews/24-review.md`; awaiting user approval, ADR-0025; sequenced with 21 R2-a); **A1 (2026-09-03) uncritiqued** — trust domain in the machine subject |
 | 25 | model-operator + ModelHub | P5 | L | r2 — critique **PASS** (`25-…`, `reviews/25-review.md`; awaiting user approval, ADR-0026) |
-| 26 | Tenant CR fan-out | ent | L | r3 — critique **PASS** (`26-…`, `reviews/26-review.md`; **R3-a required pre-ADR-0026**: cross-cluster ownerRef lifecycle) |
-| 27 | Compliance profile packs | ent | M | r2 — critique **PASS** (`27-…`, `reviews/27-review.md`; **R2-a required pre-ADR-0026**: chainer runtime home) |
+| 26 | Tenant CR fan-out | ent | L | r3 — critique **PASS** (`26-…`, `reviews/26-review.md`; **R3-a required pre-ADR-0026**: cross-cluster ownerRef lifecycle); **A1 (2026-09-03) uncritiqued** — run namespace ownership per mode |
+| 27 | Compliance profile packs | ent | M | r2 — critique **PASS** (`27-…`, `reviews/27-review.md`; **R2-a required pre-ADR-0026**: chainer runtime home); **A1 (2026-09-03) uncritiqued** — hard-mode gate integrity is an attested exception |
 
 Update this table when a design starts / lands. Decisions made during design → new ADR.
