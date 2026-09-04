@@ -163,7 +163,7 @@ Three properties nobody else has:
 
 ### Exposure — everything that runs here is also a server
 
-Symmetry rule: consume open standards **and publish over the same ones**. A declarative `expose` block per CR, compiled to gateway listeners (per-consumer budgets are **not** part of it — design 03 A48 removed them as not Agent-scoped, and design 26 A2 owes the tenant intent that replaces them); external consumers are just another authenticated principal (IdP OAuth client, per-consumer budgets, receipts).
+Symmetry rule: consume open standards **and publish over the same ones**. A declarative `expose` block per CR, compiled to gateway listeners (per-consumer budgets are **not** part of it — design 03 A48 removed them as not Agent-scoped, and design 26 A2 owes the tenant intent that replaces them); external consumers are just another authenticated principal (IdP OAuth client, receipts).
 
 | Resource | Exposed as | Consumer sees |
 |---|---|---|
