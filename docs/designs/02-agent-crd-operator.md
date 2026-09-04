@@ -84,6 +84,15 @@ status:
     - {revision: pa-reviewer-7f3a2, name: …, version: …, fetchedAt: …, digest: …, signed: true}
     - {revision: pa-reviewer-9c1d4, name: …, version: …, fetchedAt: …, digest: …, signed: true}
   budget: {tokensRemaining: …, usdRemaining: …, usdSpentToday: …, windowResetsAt: …}
+  revisions:                                      # one RevisionRecord per member of the retained
+    - hash: pa-reviewer-7f3a2                     #   set (§3.3). Written by THIS operator alone;
+      schemaVersion: 1                            #   design 03 §3.1 owns the record's contents and
+      behaviourProjection: "…"                    #   its size bounds, this design owns the field.
+      originalBudget: {…}                         #   Absent from the CRD today — §5
+      resolvedInputs: {name: …, digest: …}        #   inline below 4 KiB, by reference above it
+      sealedBindings: [tools/claims-system]       #   which bindings were resolved when it went active
+      appliedDigest: "…"
+      recordDigest: "…"
   eval: {score: 0.94, suite: pa-regression, revision: pa-reviewer-9c1d4, at: …}  # last verdict
   conditions: [Registered, CardUnsigned, IdentityIssued, IdPUnavailable,
                OnBehalfOfUnavailable, IdentityBootstrapIncomplete,
@@ -431,6 +440,7 @@ Idempotent. Writes are `Create`/`Update` under **optimistic concurrency**, not s
 | `runtime.sandbox` ⇒ an agent-sandbox `Sandbox`, and the runtime-class detection behind `SandboxDowngraded` | **No `Sandbox` is ever created** — the API is not bound — and nothing detects a runtime class: every sandboxed Agent downgrades unconditionally to the hardened Deployment. The condition is therefore true but its stated *reason* is not measured |
 | The scratchpad, its read-only candidate attach, and `ScratchpadDegraded` | No volume, no claim, and the condition is never set. §7 registers a gauge for it |
 | `revisionHistoryLimit` as a spec field | An operator constant, default 2, not user-settable (§3.1). The retention arithmetic is unaffected |
+| `status.revisions[]` | Not on the CRD. The field is this design's and its contents are design 03 §3.1's; nothing writes or reads it until the compiler exists |
 | `registrationDeadline` as a spec field | **Neither a field nor a constant.** Registration is unimplemented, so nothing counts down and no retention slot is freed on a stuck card fetch |
 | SPIRE, and therefore every SVID | No SPIRE subchart ships; `IdentityIssued` cannot become true (§3.5) |
 | "≥1 gate required in prod"; `GatesBypassed=DevProfile` | Nothing requires an Agent to declare a gate: with the EvalSuite CRD present, an Agent that declares none **promotes** with `GatesSkipped` (§3.3). The operator has no notion of a profile, so `GatesBypassed` is never set |

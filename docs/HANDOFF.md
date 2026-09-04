@@ -96,6 +96,37 @@ mutation-checked:
   compiler's one tenant-side write, the quota decision and
   `GatesTenantAdminBypassable`.
 
+## Design 03: five amendments that diagnose correctly and are NOT finished
+
+`A46`–`A50` answer Codex r8's BLOCKERs 10–13 and MAJOR 6. **Three critique rounds
+returned REVISE — 6, then 5, then 5 blockers** (`reviews/03-a46-a50-critique.md`),
+and each round found the previous fix's defect *one step over*: round 1 "one
+field or one design over", round 2 "one tense, one row, one document over",
+round 3 "one clause over". The reviewer's own conclusion, reached with fresh
+context and unprompted: **patching further is the wrong unit of work; design 03
+needs the consolidation design 02 took at A62.** One rule is currently stated in
+five places with no two agreeing, and the status line now says so.
+
+What is sound and should be kept whatever happens next:
+
+- **the diagnoses.** A46 (the record sealed an absence and froze it), A47 (an
+  8 KiB cap on a producer's data), A48 (a tenant's shared limit was an
+  Agent-scoped input, frozen N times), A49 (`Withdraw` proved convergence and
+  claimed enforcement), A50 (a witness over a field with no producer).
+- **the cross-design corrections they forced**, each checked against the
+  producing document: design 04 A5 (`hop.endpoint` and `hop.gatewayInstance`
+  have no producer at all, and `ns` attribution has no source and no index
+  column), design 26 A2 (`TenantPolicyIntent` is one sentence in one table
+  cell), design 20 A7, design 23 §3, architecture §05.
+- **design 02 gained `status.revisions[]`** in its schema and a §5 row; it had
+  been written to by design 03 and absent from its own owner.
+
+What is not finished: the amendment text. Known-open blockers are listed in
+round 3 — the seal's empty-list ambiguity, `identity` as a `Binding` breaking
+A33's fleet-wide `CapabilityUnavailable`, the `-inputs` object failing design
+02's three-gate deletion authority, `sealedBindings` non-injective for two
+versions of one graph, and the seal firing after the canary begins.
+
 ## Still open
 
 - **Design 02 §5's first table is the list of what is stated and unenforced** —

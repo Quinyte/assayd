@@ -1,6 +1,6 @@
 # Design 26: Tenant CR — the multi-tenancy fan-out (enterprise)
 
-- **Status**: **approved** — critique PASS (reviews/26-review.md) · ADR-0026, **Amendment 1 (2026-09-04)** · amendment A1 (2026-09-03) below, not yet critiqued
+- **Status**: **approved** — critique PASS (reviews/26-review.md) · ADR-0026, **Amendment 1 (2026-09-04)** · amendments A1 (2026-09-03) and A2 (2026-09-04) below, neither yet critiqued
 - **Phase**: enterprise · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0013 (layered tenancy, mostly inherited), 0015 (enterprise module) · interfaces: the seams every prior design named — 04 D4 (per-tenant RECEIPTS streams), 11 (EVENTS), 22 (APPROVALS), 05 (DIRECTORY), 06 (IdP orgs), 21 r2 f4 (runtime tenancy), 24 (per-tenant FGA stores), 18 (per-tenant pack allowlists), 03 (gateway partitions)
 - **Research**: `docs/research/landscape-2026-08.md` §tenancy (vCluster dominant for hard isolation; Capsule for soft)
@@ -74,7 +74,7 @@ Create → fan-out (idempotent, per-layer conditions). **Suspend** → gateway p
 | Failure | Behavior |
 |---|---|
 | Partial fan-out | Per-layer conditions name the stuck layer; idempotent retry; tenant is not `Ready` and gets no traffic until all layers are |
-| Quota exceeded | Gateway partition enforces (429 with tenant context); `QuotasEnforced` reflects; per-agent budgets still apply *within* the tenant quota (two-tier, like ADR-0028's own tiers) |
+| Quota exceeded | **Traffic quotas are not enforced yet (A2)**: there is no compiler path, so `tokensPerDay`/`usdPerDay` at tenant scope bind nothing and `QuotasEnforced` must not report them as satisfied. When A2's intent and record land: the gateway partition enforces (429 with tenant context), `QuotasEnforced` reflects, and per-agent budgets still apply *within* the tenant quota (two-tier, like ADR-0028's own tiers). Non-traffic quotas — `agents`, `graphs` — are counted by the tenant-operator and are unaffected |
 | vCluster unhealthy (hard) | Tenant `Degraded`; host-side platform unaffected — blast radius is the design's point |
 | Cross-tenant reference attempt (Agent in A refs graph in B) | Admission denies (namespace/vCluster boundary + gateway partition); logged as a security event |
 | Tenant deleted upstream in IdP | `IdPReady=False`; no auto-recreate (identity objects are never auto-managed away — 06 D3) |
@@ -124,3 +124,22 @@ Four consequences, each named because propagation is the failure this cross-desi
 **ADR-0026 said the compiler holds "tenant CR read only"**, and this amendment gives it one tenant-side write (the marker ConfigMap). ADR-0026 **Amendment 1** (2026-09-04) records that write, the per-namespace quota decision above, and `GatesTenantAdminBypassable`; the other decisions of ADR-0026 stand, which is why it is an amendment and not a supersession. Design 02 A42/A60 — an operator-owned namespace and a cluster-wide binding protocol — is recorded in **ADR-0029**.
 
 **Owed to other designs by this amendment, named so they propagate.** Design 27 must consume `GatesTenantAdminBypassable` — a compliance profile on a hard-mode tenant is a profile whose gate the tenant's own admin can bypass, and 27 says nothing about hard mode today. Design 24 must state that the ext-authz adapter's SVID-to-subject mapping includes the **trust domain**: a hard tenant's SPIRE issues `spiffe://<tenant-td>/agent/team-a/reviewer` and a soft tenant's is issued in the host domain with the same path, and design 24's subjects (`agent:pa-reviewer`) carry neither namespace nor domain, so without it two tenants' principals collide. Both are pre-existing gaps in §4 and design 06 A1 that this amendment is the first to write beside the text a reader will cite.
+
+## A2 (2026-09-04, from Codex r8 BLOCKER 11 against design 03) — `TenantPolicyIntent` is one sentence, and design 03 has stopped compiling against it
+
+D1 counts tenant-scoped quota intents as one of this design's **two new mechanisms**. What exists of it is a single clause inside §3's Traffic row: *"a `TenantPolicyIntent` (tenant-scoped target kind) recorded as a design 03 amendment with its own row"*. There is no schema, no field list, no owning controller, and "tenant-scoped target kind" is never made concrete — design 03's `PolicyIntent` has `target: {kind, ns, name}` and nothing here says what a tenant target is.
+
+Design 03 had filled the gap by assuming: its provenance table gave `expose[].consumerBudgets` an owner of "design 26 `TenantPolicyIntent`", and **this design never uses the word `consumerBudgets` at all**. It then carried that value inside each Agent's immutable per-revision record and transacted it per route — so one shared tenant limit had N independently authoritative applied operands, each frozen at a different Agent's revision mint. Lowering a tenant's budget while a hundred Agents serve would freeze the old value in some records, withdraw in others and fail in the rest, with nothing owning the set-wide desired-versus-applied state. Design 03 A48 removes the field rather than leave it pointing at a producer that does not exist.
+
+**Owed here, before tenant quotas can be compiled at all:**
+
+| | |
+|---|---|
+| The intent | `TenantPolicyIntent`'s schema and its **tenant-scoped target** — what a target of kind Tenant *is*, given the compiler's existing target is `{kind, ns, name}` and a tenant spans namespaces |
+| The record | a `TenantPolicyRecord` with its own `schemaVersion`, digest and applied status **on the Tenant**, not scattered across Agents: the tenant is the object that owns the limit, so it is the object that must carry what was applied |
+| Membership | the **route-membership snapshot** the record was applied against, since a tenant's route set changes as Agents come and go, and "applied" means nothing without saying to which routes |
+| The transaction | its own stages, retry and partial-failure semantics, and what `QuotasEnforced` may claim when some routes converged and others did not. Design 03 A49 is the cautionary case: a per-route withdrawal cannot prove the dataplane stopped serving, so a tenant quota that must actually bind needs an enforcement point plume runs — the exact-tier rollup in design 04's audit index — rather than an apply the gateway may reject |
+| The backstop tier | §3's Traffic row already names it: a per-tenant rollup in design 04's audit index. That is the half plume itself runs and can therefore make bind. The gateway half is the approximation tier, and ADR-0028 says it is not a ceiling — nor is the rollup exact in USD, since both tiers price from the same table |
+
+Until this lands, `consumerBudgets` has no compiler path and a tenant's traffic quota is **not enforced at all** — §6's "Quota exceeded" row describes a mechanism that does not yet exist. Nothing here is implemented, and neither is the tenant-operator that would own it.
+

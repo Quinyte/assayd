@@ -21,7 +21,7 @@ Makes ADR-0016 mechanical: the App CR's composition, the HTTP/SSE projection sha
 | `agentRef` (chat) | `POST /api/chat` + **SSE** `GET /api/chat/<task_id>/events` | A2A task lifecycle projected as SSE events (`status`, `message`, `artifact`, `done`) — a thin, *documented* mapping of A2A's own stream, not a new protocol |
 | `graphRef` (optional, read-only) | `GET /api/kg/*` | the kgp query surface, scope-filtered per the App's declared entity types — for UIs that render graph context directly |
 
-All routes: OIDC-authenticated (the App's client, 06), user token exchanged at the gateway (on-behalf-of — per-user receipts/budgets with zero app code, ADR-0016's core claim), CORS pinned to the App's `route` host, rate limits per `consumerBudgets`.
+All routes: OIDC-authenticated (the App's client, 06), user token exchanged at the gateway (on-behalf-of — per-user receipts and budgets with zero app code — the per-consumer *quota* half needs design 26 A2's tenant intent, which does not exist yet (design 03 A48), ADR-0016's core claim), CORS pinned to the App's `route` host, rate limits per `consumerBudgets`.
 
 ## 4. The App CR (final shape) & release semantics
 
