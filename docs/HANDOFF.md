@@ -96,6 +96,35 @@ mutation-checked:
   compiler's one tenant-side write, the quota decision and
   `GatesTenantAdminBypassable`.
 
+## The receipt exporter was measured, and it overturned three claims
+
+`docs/research/agentgateway-otlp-attributes-2026-09.md` (primary sources, tag
+`v1.4.1`, re-verify by 2026-10-15) answers what design 04 A4 asserted without
+checking. Three things this corpus believed were **false**:
+
+- **`hop.gatewayInstance` has no producer** — it has four, all emitted by
+  default (`k8s.pod.name`, `service.instance.id`, `k8s.pod.ip`,
+  `k8s.node.name`). `k8s.pod.name` is the stable one; `service.instance.id`
+  embeds the Pod IP and moves on restart.
+- **Nothing can attribute a receipt to a route** — `route` is emitted by
+  default as `<ns>/<name>`, and design 03's names carry `-<rev>`, so it names
+  the *revision*. Design 03 A49's witness is buildable now; only the drain
+  allowance is still owed. `hop.route` is added to the envelope.
+- **`hop.type` is derived from a stamped backend class** — no such stamping
+  exists. There is a default `protocol` enum with no `kg_query`, so a KG and a
+  tool backend both report `mcp`.
+
+Two real gaps remain, and they are narrower and sharper than the old text:
+
+- **Azure `deploymentName` is not emitted anywhere.** Two deployments on one
+  endpoint differing only in deployment are one identity in receipts — which is
+  exactly the identity design 02 A24 exists to keep apart. Anything keying
+  spend, drift or fallback on the full tuple cannot do so for that pair.
+- **No namespace attribution at all.** Every namespace on the wire is the
+  gateway's or, under A42, the run namespace. The audit index has no `ns`
+  column either, so two same-named Agents in different namespaces already share
+  a budget row. Three options are laid out; one must be chosen.
+
 ## Design 03: five amendments that diagnose correctly and are NOT finished
 
 `A46`–`A50` answer Codex r8's BLOCKERs 10–13 and MAJOR 6. **Three critique rounds
