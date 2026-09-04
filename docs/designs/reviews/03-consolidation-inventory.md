@@ -1343,3 +1343,19 @@ was rejected on its substance in three rounds — only on its text.
 
 The problem is not the design. It is that the design has been amended fifty times and has now recorded
 its own inconsistency in its status line, which is where a document stops being a specification.
+
+---
+
+## Verification addendum (2026-09-04, measured after A51)
+
+Class G was reported as 23 dead anchors. Every cross-document anchor in design 03's **body** (§§1–10; §11 is provenance and excluded) was then checked mechanically — `design NN §x.y`, `design NN A<n>`, `ADR-NNNN`, `architecture §NN` — against the producing file. **All of them resolve.** Five apparent failures were the checker's own regex and are recorded here so the rewrite does not chase them:
+
+| Reported | Actual |
+|---|---|
+| design 02 has no A12 / A24 | both exist; design 02's §12 does not use the `**A<n>` bold form the checker required |
+| design 26 has no A1 / A2 | both exist, same reason |
+| design 07 has no A1 | A1 exists as an **inline** amendment tag at `07:41`, not a `## A1` heading, and design 07's status line correctly says "amendments A1–A5". Design 03's citation of it at `03:171` is sound, and the substance is independently true: measured, `charts/plume/` has no subcharts directory and `Chart.yaml` has no `dependencies:` block |
+
+**The one real anchor defect is smaller and different from what G described.** Design 03's body cites `§2.1`, `§2.6`, `§2.7` and `§2.8` eight times. Those are sections of `research/agentgateway-v1.4.1-spike.md`, all of which exist. Three citations name the spike; **five are bare** and rely on a "spike measured" antecedent one clause earlier. Design 03 has its own §2 — Doctrine & charter gates — so a bare `(§2.1)` reads as a self-reference to a section that says nothing of the kind. The consolidation should qualify all eight.
+
+**Consequence for the rewrite.** G is not 23 broken references needing research. It is one systematic ambiguity with a one-line fix, plus a class the checker cannot see: an anchor that resolves but does not *say* what the citing sentence claims. That second kind is what G-17 was, what the critique of A51 found one row below it in `knowledge[].endpoint`, and what the design 25 pricing-map disagreement was. It cannot be found mechanically — only by reading the producing document — so the rewrite must budget for reading, not for link-checking.
