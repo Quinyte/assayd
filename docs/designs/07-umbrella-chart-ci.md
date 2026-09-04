@@ -200,7 +200,7 @@ The operator's `ClusterRole` (`files/operator-rules.yaml`, generated from the re
 
 The `ClusterRole` today grants none of these. They land with the A42 implementation and the generated file, not before.
 
-### A5.9 The admission policies that make the labels the operator's
+### A5.9 The admission policies that make the labels the operator's (ADR-0029)
 
 The binding record (design 02 A60) proves which namespace the operator created, and none of the three things that act on run-namespace labels reads it: SPIRE selects on `plume.dev/pods-by`, the Gateway admits on `plume.dev/run-namespace`, the operator's Namespace reconciler keys on both. A label is writable by whoever can create or update the namespace. So the chart reserves them. Two `ValidatingAdmissionPolicy` objects and their bindings, cluster-scoped and static, so the chart can render them today; `ValidatingAdmissionPolicy` is GA from Kubernetes 1.30, which is `Chart.yaml`'s floor:
 

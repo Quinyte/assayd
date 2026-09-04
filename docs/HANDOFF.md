@@ -55,16 +55,16 @@ from an older operator is cleared on upgrade.
    copies. Eight of its mutations survived; each now has a test and all
    thirteen re-run mutations are KILLED. Self-review caught none of this.
 
-## Decisions put to the user, not taken
+## Decisions taken 2026-09-04
 
-- **Tenant compute quotas are per namespace under A60's mirroring**, so a
-  tenant's `gpu: 1` bounds each of its two namespaces separately. Design 26 A1
-  states two resolutions — say so in the API, or build an aggregate — and takes
-  neither. Codex called the current text "two mirrors called one ceiling".
-- **ADRs.** A42/A60 (an operator-owned namespace and a cluster-wide binding
-  protocol) is a user decision no ADR records. Design 26 A1's routes-revoked
-  marker gives the compiler one tenant-side write, which ADR-0026's "read only"
-  forbids; a superseding ADR is owed before hard mode is built.
+- **Tenant compute quotas are per-namespace ceilings** (design 26 A1, ADR-0026
+  Amendment 1): the user chose the sentence over the controller.
+- **ADR-0029** records A42/A60/A61; **ADR-0026 Amendment 1** records the
+  compiler's one tenant-side write, the quota decision and
+  `GatesTenantAdminBypassable`.
+
+## Still open
+
 - **Design 02 is 61 amendments deep and none has passed review.** The rate at
   which rounds close N findings and open ~2 did not fall this session — three
   same-family rounds on A60 each found something the previous had introduced.
