@@ -123,7 +123,7 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 	}
 
 	var unreachable []string
-	leaves := revision.Leaves(reflect.TypeOf(plumev1alpha1.AgentSpec{}), "spec", nil)
+	leaves := revision.Leaves(t, reflect.TypeOf(plumev1alpha1.AgentSpec{}), "spec", nil)
 	if len(leaves) < 45 {
 		t.Fatalf("walked only %d leaves", len(leaves))
 	}

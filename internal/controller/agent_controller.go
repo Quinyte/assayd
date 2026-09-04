@@ -339,7 +339,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if isNamespaceTerminating(merr) {
 			// The run namespace went Terminating between ensureRunNamespace and
 			// this create. That is a wait, not an error to retry against: the next
-			// pass meets row 10 and the handler takes over.
+			// pass meets check 12 and the handler takes over.
 			msg := fmt.Sprintf("run namespace %s is being deleted; waiting for it to be gone: %v", runNS, merr)
 			conds.set(plumev1alpha1.CondRunNamespaceUnavailable, metav1.ConditionTrue, ReasonTerminating, msg)
 			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "RunNamespaceUnavailable", msg)
@@ -999,10 +999,6 @@ func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *plumev1a
 	return d.Status.AvailableReplicas > 0, nil
 }
 
-// gatesSatisfied reports whether this agent may take traffic. With no EvalSuite
-// CRD installed the gate requirement does not apply (§3.3 core tier); with it
-// installed, the gate controller does not exist yet, so nothing can pass and the
-// agent holds — which is the fail-closed direction.
 // gatesSatisfied reports whether this agent may take traffic.
 //
 // There is deliberately no separate branch for the unwired case: evalSuiteInstalled

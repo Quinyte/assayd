@@ -248,10 +248,10 @@ func isNamespaceTerminating(err error) bool {
 
 // lockRunNamespace serializes every writer of one binding within this process.
 // Leader election guarantees one operator process, so this is what makes the
-// protocol safe under more than one reconcile worker: without it a peer mid-row
-// 6 (namespace created, UID not yet recorded) is indistinguishable from a
-// crashed predecessor, and row 7 would delete its namespace. The
-// Terminating/Deleting fence does not need this; rows 6 and 7 do.
+// protocol safe under more than one reconcile worker: without it a peer mid-check-7
+// (namespace created, UID not yet recorded) is indistinguishable from a
+// crashed predecessor, and check 9 would delete its namespace. The
+// Terminating/Deleting fence does not need this; checks 7 and 9 do.
 func (r *AgentReconciler) lockRunNamespace(runName string) func() {
 	v, _ := r.runNamespaceLocks.LoadOrStore(runName, &sync.Mutex{})
 	m := v.(*sync.Mutex)
@@ -332,13 +332,13 @@ func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *plumev1
 		case err == nil && !existing.DeletionTimestamp.IsZero():
 			// A namespace of that name is on its way out — the operator's own,
 			// after its binding was removed, or someone else's. Either way it will
-			// be gone, and row 2 follows; refusing it terminally would wedge the
+			// be gone, and check 3 follows; refusing it terminally would wedge the
 			// operator's own handler path.
 			return "", &runNamespaceError{reason: ReasonTerminating,
 				message: fmt.Sprintf("a namespace named %s is being deleted; waiting for it to be gone "+
 					"before creating this Agent's run namespace", runName)}
 		case err == nil:
-			// Row 1. A binding is always written before its namespace, so a
+			// Check 2. A binding is always written before its namespace, so a
 			// namespace with no binding is one this operator did not make.
 			return "", &runNamespaceError{reason: ReasonNotCreatedByOperator, terminal: true,
 				message: fmt.Sprintf("run namespace %s exists and this operator holds no binding record for "+
@@ -354,7 +354,7 @@ func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *plumev1
 		case !apierrors.IsNotFound(err):
 			return "", fmt.Errorf("read run namespace %s: %w", runName, err)
 		}
-		// Row 2.
+		// Check 3.
 		nonce, err := newNonce()
 		if err != nil {
 			return "", err
@@ -379,21 +379,21 @@ func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *plumev1
 		}
 	}
 
-	// Row 3.
+	// Check 4.
 	if b.sourceNamespace != agent.Namespace {
 		return "", &runNamespaceError{reason: ReasonNameCollision, terminal: true,
 			message: fmt.Sprintf("namespaces %s and %s both map to run namespace %s; the first holds it "+
 				"and nothing of it is touched. To recover: rename this namespace",
 				b.sourceNamespace, agent.Namespace, runName)}
 	}
-	// Row 4.
+	// Check 5.
 	if b.sourceNamespaceUID != sUID {
 		if b.state == bindingCreating {
 			// Nothing was ever bound, so there is nothing to terminate: a
 			// Terminating record without a UID is one the strict decoder refuses.
 			// The crash-gap namespace, if one exists with this nonce, goes with the
-			// record (row 7's authority: shape and nonce), and the next pass meets
-			// row 2 once it is gone.
+			// record (check 9's authority: shape and nonce), and the next pass meets
+			// check 1's wait or check 3 once it is gone.
 			var ns corev1.Namespace
 			switch err := r.reader().Get(ctx, types.NamespacedName{Name: runName}, &ns); {
 			case err == nil && ns.Annotations[AnnotationBindingNonce] == b.nonce:
@@ -426,7 +426,7 @@ func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *plumev1
 				"the namespace that no longer exists and is being torn down; a fresh one follows",
 				agent.Namespace, runName)}
 	}
-	// Row 5.
+	// Check 6.
 	if b.state == bindingTerminating || b.state == bindingDeleting {
 		if err := r.runNamespaceHandler(ctx, b, nil); err != nil {
 			return "", err
@@ -443,16 +443,16 @@ func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *plumev1
 		return "", fmt.Errorf("read run namespace %s: %w", runName, nsErr)
 
 	case b.state == bindingCreating && !ns.DeletionTimestamp.IsZero():
-		// Rows 7 and 8, when the namespace is already going: row 7's own delete
+		// Check 8: the namespace is already going — check 9's own delete
 		// on the previous pass, or someone else's. Whichever nonce it carries,
-		// wait for it to be gone and row 6 follows — refusing here wedged the
+		// wait for it to be gone and check 7 follows — refusing here wedged the
 		// operator's own recovery terminally (found by the code review of A61).
 		return "", &runNamespaceError{reason: ReasonTerminating,
 			message: fmt.Sprintf("run namespace %s is being deleted; waiting for it to be gone before "+
 				"creating a fresh one", runName)}
 
 	case b.state == bindingCreating && apierrors.IsNotFound(nsErr):
-		// Row 6: create, then bind FROM THE CREATE RESPONSE, in this reconcile.
+		// Check 7: create, then bind FROM THE CREATE RESPONSE, in this reconcile.
 		installUID, err := r.installIdentity(ctx)
 		if err != nil {
 			return "", err
@@ -467,7 +467,7 @@ func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *plumev1
 		}
 		// Mirrors BEFORE Bound, so the first Pod cannot precede its quota; a
 		// mirror that fails leaves the record Creating and the next pass meets
-		// row 7, which deletes and retries rather than binding a namespace whose
+		// check 9, which deletes and retries rather than binding a namespace whose
 		// quota never landed.
 		if err := r.mirrorInto(ctx, &source, desired.Name); err != nil {
 			return "", err
@@ -480,7 +480,7 @@ func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *plumev1
 
 	case b.state == bindingCreating:
 		if ns.Annotations[AnnotationBindingNonce] == b.nonce {
-			// Row 7: the crash gap. A namespace this operator created and did not
+			// Check 9: the crash gap. A namespace this operator created and did not
 			// record, or a copy of it — never bound on the strength of being
 			// observed. Delete it, rotate the nonce, retry.
 			if err := r.deleteRunNamespace(ctx, &ns); err != nil {
@@ -498,12 +498,12 @@ func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *plumev1
 				message: fmt.Sprintf("run namespace %s was created but never recorded (a restart between "+
 					"the two writes); it is deleted rather than adopted and will be recreated", runName)}
 		}
-		// Row 8.
+		// Check 10.
 		return "", r.notCreatedByOperator(runName, agent.Namespace, "carries no nonce, or a nonce this "+
 			"operator's record does not know — it was created by someone else")
 
 	case b.state == bindingBound && apierrors.IsNotFound(nsErr):
-		// Row 9.
+		// Check 11.
 		nonce, err := newNonce()
 		if err != nil {
 			return "", err
@@ -518,7 +518,7 @@ func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *plumev1
 				"have drifted since it was gated cannot be reproduced (A41)", runName)}
 
 	case b.state == bindingBound && !ns.DeletionTimestamp.IsZero():
-		// Row 10.
+		// Check 12.
 		if err := r.swapBinding(ctx, b, bindingTerminating); err != nil {
 			return "", err
 		}
@@ -530,13 +530,13 @@ func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *plumev1
 				"gone before a fresh one is created", runName)}
 
 	case b.state == bindingBound && string(ns.UID) != b.runNamespaceUID:
-		// Row 11.
+		// Check 13.
 		return "", r.notCreatedByOperator(runName, agent.Namespace, fmt.Sprintf("has UID %s and this "+
 			"operator's record says it created UID %s — it was deleted and recreated by someone with "+
 			"cluster rights, whatever its labels say", ns.UID, b.runNamespaceUID))
 
 	case b.state == bindingBound:
-		// Row 12.
+		// Check 14.
 		installUID, err := r.installIdentity(ctx)
 		if err != nil {
 			return "", err

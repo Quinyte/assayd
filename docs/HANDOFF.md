@@ -55,6 +55,39 @@ from an older operator is cleared on upgrade.
    copies. Eight of its mutations survived; each now has a test and all
    thirteen re-run mutations are KILLED. Self-review caught none of this.
 
+## What happened 2026-09-04
+
+Three things, in order, each committed separately.
+
+1. **ADR-0029 and ADR-0026 Amendment 1** record the run namespace and the three
+   things design 26 A1 changed about hard mode. The quota question was the
+   user's and they chose the sentence over the controller: compute quotas are
+   **per-namespace ceilings**, and `QuotasEnforced` says so.
+2. **Design 02's body was consolidated** — 61 folded amendments rewritten into
+   one self-contained body that carries no amendment numbers of its own. The
+   inventory that drove it (`reviews/02-consolidation-inventory.md`) counted
+   **149 findings across 488 lines**, 92 of them pure sedimentation.
+3. **Three critique rounds on the consolidated body**, all in
+   `reviews/02-consolidation-critique.md`: 3 BLOCKER / 9 MAJOR / 15 MINOR, then
+   0 / 5 / 8, then 0 / 1 / 4. Every finding of all three is applied.
+
+**Design 02 is NOT approved.** No critique of it has ever returned PASS, and
+the status line and README now say "critique pending" rather than claiming
+otherwise — the previous status flip to "approved" was itself a round-1
+blocker, made in the same commit that deleted the sentence saying no round had
+passed.
+
+**Two code defects came out of documenting honestly**, both now fixed and
+mutation-checked:
+
+- the **leaf walker had no cycle guard** while the design said it did. A
+  self-recursive type hung until killed, which is an INVALID mutation rather
+  than a killed one — CI would time out instead of naming the field.
+- **`RevisionMaterialUnavailable` could never clear**: set by the operator, in
+  neither the owned nor the sticky set, so a recovered Agent reported
+  `Ready=True` beside it forever. The test now asserts over *every* condition
+  the operator solely writes, because this defect has appeared on three types.
+
 ## Decisions taken 2026-09-04
 
 - **Tenant compute quotas are per-namespace ceilings** (design 26 A1, ADR-0026
@@ -64,6 +97,16 @@ from an older operator is cleared on upgrade.
   `GatesTenantAdminBypassable`.
 
 ## Still open
+
+- **Design 02 §5's first table is the list of what is stated and unenforced** —
+  sixteen rows, including the three admission guarantees that are not
+  CEL-expressible, the NetworkPolicy, `plume logs`, SPIRE, the `Sandbox` API,
+  the scratchpad, events/metrics/alerts, and "≥1 gate required in prod", which
+  nothing requires: an Agent declaring no gate promotes with `GatesSkipped`.
+  Read that table before believing any guarantee this design states.
+- **The tool-name uniqueness rule is owed to design 11 §11**, which now records
+  it; ADR-0027 has retracted its "enforced at admission" claim. Four documents
+  depended on a rule no design wrote.
 
 - **Design 02 is 61 amendments deep and none has passed review.** The rate at
   which rounds close N findings and open ~2 did not fall this session — three

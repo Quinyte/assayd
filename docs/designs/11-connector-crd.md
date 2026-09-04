@@ -84,3 +84,17 @@ CRD validation table tests; e2e (k3d): catalog tool facet → agent calls tool t
 ## 10. Resulting ADRs
 
 Folded into ADR-0023 (P2 knowledge layer) after critique PASS.
+
+## 11. Owed to this design (2026-09-04, from design 02 §3.1 and ADR-0027)
+
+**This design must define the `MCPServer` kind and the name-uniqueness rule that three other documents already depend on, and nothing today enforces.**
+
+An Agent binds a tool by bare name (`tools: [{name: claims-system}]`) with **no kind discriminator and no namespace field**. Design 02 §3.1 and ADR-0027 decision 3 both justify that shape by asserting that a tool name is unique across Connector tool facets and `MCPServer` CRs within a namespace, "enforced at admission". Checked against this document: there is no such rule in §§1–10, the string `MCPServer` appears nowhere in them, and there is no admission policy or webhook anywhere in the repository that could carry it. Design 03 §3.1 resolves a tool reference "against a Connector facet or `MCPServer` (design 11)" on the same assumption, and design 05 §3 goes further still — it says binding a tool "requires the Connector/`MCPServer` CR path **with admission checks**", naming an admission check that does not exist. Four documents, one absent rule.
+
+So the binding shape currently rests on a premise no design states. Two consequences, and the second is a security one:
+
+- A Connector facet and an `MCPServer` may take the same name in one namespace. Which one an Agent's `tools[].name` resolves to is then undefined, and the compiler picks one.
+- The *absence* of a `namespace` field is a deliberate security property — design 24 §4 derives the `can_call` tuple from the binding, so a cross-namespace reference would authorize itself. That property is unaffected by the gap. What the gap touches is only whether a within-namespace name resolves to one thing.
+
+**Owed here**: the `MCPServer` kind (or an explicit statement that it is another design's), the uniqueness rule across both kinds, and the mechanism that enforces it — which cannot be CRD-level CEL, since it spans two kinds, so it is an admission policy or a controller-side refusal with a named condition. Until it lands, design 02 §5 and ADR-0027 both record the gap rather than asserting the enforcement.
+

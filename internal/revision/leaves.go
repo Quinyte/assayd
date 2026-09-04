@@ -39,12 +39,41 @@ type Leaf struct {
 	Typ   reflect.Type // the leaf field's own type, pointer and slice included
 }
 
-// leaves walks a struct type and returns every transitive leaf. A slice is
+// Leaves walks a struct type and returns every transitive leaf. A slice is
 // descended into as one element; a slice of non-structs is itself a leaf.
-func Leaves(t reflect.Type, prefix string, chain []int) []Leaf {
+//
+// It takes a Fataler and CARRIES A TYPE STACK, and both are load-bearing.
+// "AgentSpec must not gain a self-recursive type" is a precondition, not a
+// guard: nothing enforces it and the failure mode is a hang. That is not
+// hypothetical — apiextensions-apiserver is already a direct dependency and its
+// JSONSchemaProps has twelve self-recursion points, so one field of the wrong
+// type turns CI into a timeout rather than a message naming the field. A hang
+// is an INVALID mutation, not a killed one: it proves nothing and it tells
+// nobody what broke.
+//
+// So meeting a type already on the stack fails immediately, naming the path
+// that closed the cycle. Design 02 §3.3 states the rule; this is where it is
+// true.
+func Leaves(t Fataler, typ reflect.Type, prefix string, chain []int) []Leaf {
+	return leaves(t, typ, prefix, chain, nil)
+}
+
+func leaves(t Fataler, typ reflect.Type, prefix string, chain []int, stack []reflect.Type) []Leaf {
+	t.Helper()
+	for _, seen := range stack {
+		if seen == typ {
+			t.Fatalf("leaf walk: %s re-enters type %s, which is already on the walk — "+
+				"AgentSpec has gained a self-recursive type. Classify it and register a "+
+				"perturber for it explicitly; without that this walk hangs rather than "+
+				"naming the field.", prefix, typ)
+			return nil
+		}
+	}
+	stack = append(stack, typ)
+
 	var out []Leaf
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
 		if f.PkgPath != "" {
 			continue // unexported
 		}
@@ -57,7 +86,7 @@ func Leaves(t reflect.Type, prefix string, chain []int) []Leaf {
 			ft = ft.Elem()
 		}
 		if ft.Kind() == reflect.Struct && !LeafTypes[ft] && ft.PkgPath() != "time" && ft.NumField() > 0 {
-			out = append(out, Leaves(ft, path, next)...)
+			out = append(out, leaves(t, ft, path, next, stack)...)
 			continue
 		}
 		out = append(out, Leaf{Path: path, Chain: next, Typ: f.Type})

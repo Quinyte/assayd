@@ -63,6 +63,11 @@ var ownedTypes = map[plumev1alpha1.ConditionType]bool{
 	// this set, every Agent that ever waited carried it forever beside
 	// Ready=True (found by the code review of A61).
 	plumev1alpha1.CondRunNamespaceUnavailable: true,
+	// Owned for the same reason: the operator is its only writer, and an Agent
+	// whose material was restored would otherwise report Ready=True beside a
+	// stale RevisionMaterialUnavailable=True forever — merge()'s default arm
+	// carries an unowned type forward as "another controller's".
+	plumev1alpha1.CondRevisionMaterialUnavailable: true,
 }
 
 // stickyTypes are owned conditions that must stay in the list once set, flipped

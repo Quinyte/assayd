@@ -172,7 +172,7 @@ func TestTheGoldenSpecPopulatesEveryLeaf(t *testing.T) {
 	// one fixture cover every leaf would be unsatisfiable and the check would end
 	// up deleted instead of believed.
 	fixtures := append([]plumev1alpha1.AgentSpec{goldenSpec(), goldenExternalSpec()}, coverageSpecs()...)
-	for _, l := range Leaves(reflect.TypeOf(plumev1alpha1.AgentSpec{}), "spec", nil) {
+	for _, l := range Leaves(t, reflect.TypeOf(plumev1alpha1.AgentSpec{}), "spec", nil) {
 		covered := false
 		for _, spec := range fixtures {
 			if v, ok := readLeaf(reflect.ValueOf(spec), l); ok && !v.IsZero() {

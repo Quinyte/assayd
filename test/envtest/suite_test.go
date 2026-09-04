@@ -98,7 +98,7 @@ func labelAuthorityPresent(context.Context) (bool, error) { return true, nil }
 
 // provisionRunNamespace creates the run namespace for ns exactly as the operator
 // would — binding record first, then the namespace carrying the nonce, then the
-// record bound to the namespace's UID (design 02 A60 rows 2 and 6) — so a test
+// record bound to the namespace's UID (design 02 §3.2, checks 3 and 7) — so a test
 // can plant objects in it BEFORE the reconciler's first pass. Planting into a
 // namespace the operator has no record of would be the pre-creation attack, and
 // the operator refuses it; this is the operator's own state, reproduced.

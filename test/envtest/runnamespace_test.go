@@ -152,7 +152,7 @@ func TestWorkloadAndMaterialLiveInTheRunNamespace(t *testing.T) {
 	}
 }
 
-// Row 1: a run namespace with no binding is one this operator did not make.
+// Check 2: a run namespace with no binding is one this operator did not make.
 func TestAPreCreatedRunNamespaceIsRefused(t *testing.T) {
 	ns := newNamespace(t)
 	planted := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: runNS(ns),
@@ -183,7 +183,7 @@ func getBindingMaybe(ns string) (*corev1.ConfigMap, error) {
 	return &cm, err
 }
 
-// Row 8: the binding is Creating and a namespace with that name appeared
+// Check 10: the binding is Creating and a namespace with that name appeared
 // carrying no nonce, or someone else's — the pre-creation attack that raced the
 // binding write.
 func TestANamespaceWithTheWrongNonceIsRefusedWhileCreating(t *testing.T) {
@@ -194,7 +194,7 @@ func TestANamespaceWithTheWrongNonceIsRefusedWhileCreating(t *testing.T) {
 	// operator between the binding write and the namespace create by planting
 	// the namespace after the record exists and before the namespace does.
 	reconcileOnce(t, r, a)
-	// Write the record ourselves in Creating, as row 2 does.
+	// Write the record ourselves in Creating, as check 3 does.
 	rec := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
 		Name: controller.BindingName(runNS(ns)), Namespace: operatorNamespace,
 		Labels: map[string]string{controller.LabelBinding: "true"}},
@@ -226,7 +226,7 @@ func getNamespace(t *testing.T, name string) *corev1.Namespace {
 	return &n
 }
 
-// Row 7: the crash gap. The binding is Creating and a namespace carrying ITS
+// Check 9: the crash gap. The binding is Creating and a namespace carrying ITS
 // nonce exists — a namespace this operator created and did not record, or a
 // copy of it. It is never bound on the strength of being observed: it is
 // deleted, the nonce rotates, and a fresh one is created.
@@ -266,7 +266,7 @@ func TestANamespaceObservedWhileCreatingIsDeletedNotAdopted(t *testing.T) {
 	nothingWritten(t, a, runNS(ns))
 }
 
-// Row 11: the binding is Bound and the namespace's UID is not the one it
+// Check 13: the binding is Bound and the namespace's UID is not the one it
 // recorded. The nonce was copied — it is public once stamped — and that must
 // not matter: a recreator cannot reproduce a UID.
 func TestADeletedAndRecreatedRunNamespaceIsRefusedEvenWithTheNonceCopied(t *testing.T) {
@@ -295,7 +295,7 @@ func TestADeletedAndRecreatedRunNamespaceIsRefusedEvenWithTheNonceCopied(t *test
 	}
 }
 
-// Row 3: two source namespaces that map to one run name. The first tenant
+// Check 4: two source namespaces that map to one run name. The first tenant
 // holds it; the second is refused and nothing of the first is touched.
 func TestANameCollisionIsTerminalForTheSecondTenantOnly(t *testing.T) {
 	ns := newNamespace(t)
@@ -324,10 +324,10 @@ func TestANameCollisionIsTerminalForTheSecondTenantOnly(t *testing.T) {
 	}
 }
 
-// Row 4: the source namespace was deleted and recreated, so its old run
+// Check 5: the source namespace was deleted and recreated, so its old run
 // namespace belongs to a tenant that no longer exists. It is torn down and
 // the Agent waits — and the dead tenant's leftover workloads, which are why
-// this row is reachable at all, do not keep it alive.
+// this check is reachable at all, do not keep it alive.
 func TestARecreatedSourceNamespaceTearsDownTheOldRunNamespace(t *testing.T) {
 	ns := newNamespace(t)
 	a := agentWithPrompt(t, ns, "tenantv2")
@@ -451,7 +451,7 @@ func TestTheHandlerComparesTheUIDBeforeRestoringBound(t *testing.T) {
 		t.Fatalf("swap: %v", err)
 	}
 	settle(t, r, a)
-	// The binding is gone (step 1) and the next pass met row 1: a namespace
+	// The binding is gone (step 1) and the next pass met check 2: a namespace
 	// with no binding.
 	if _, err := getBindingMaybe(ns); err == nil {
 		t.Fatal("the handler kept a binding whose namespace no longer exists")
@@ -459,7 +459,7 @@ func TestTheHandlerComparesTheUIDBeforeRestoringBound(t *testing.T) {
 	runNamespaceCondition(t, a, controller.ReasonNotCreatedByOperator)
 }
 
-// Row 10: someone else deleted the run namespace; the operator waits rather
+// Check 12: someone else deleted the run namespace; the operator waits rather
 // than creating into a Terminating namespace, and says so.
 func TestARunNamespaceDeletedBySomeoneElseIsWaitedFor(t *testing.T) {
 	ns := newNamespace(t)
@@ -791,7 +791,7 @@ func TestADeletingBindingDoesNotFlipBack(t *testing.T) {
 	}
 }
 
-// Row 7's recovery must not wedge on its own Terminating namespace: the pass
+// Check 9's recovery must not wedge on its own Terminating namespace: the pass
 // after the delete sees a namespace with the OLD nonce and a deletion
 // timestamp, and that is a wait, not a refusal (found by the code review).
 func TestTheCrashGapRecoveryWaitsRatherThanWedging(t *testing.T) {
@@ -814,7 +814,7 @@ func TestTheCrashGapRecoveryWaitsRatherThanWedging(t *testing.T) {
 	if err := k8s.Create(context.Background(), planted); err != nil {
 		t.Fatalf("plant namespace: %v", err)
 	}
-	got := settle(t, r, a) // row 7, then the passes after it
+	got := settle(t, r, a) // check 9, then the passes after it
 	c := runNamespaceCondition(t, a, controller.ReasonTerminating)
 	if got.Status.Phase != plumev1alpha1.PhasePending {
 		t.Errorf("phase %s with %q; the recovery wedged terminally on the operator's own namespace",
@@ -825,7 +825,7 @@ func TestTheCrashGapRecoveryWaitsRatherThanWedging(t *testing.T) {
 	}
 }
 
-// Row 4 from Creating: nothing was bound, so there is nothing to terminate and
+// Check 5 from Creating: nothing was bound, so there is nothing to terminate and
 // a Terminating record without a UID is one the decoder refuses. The record is
 // discarded, the crash-gap namespace goes with it, and the Agent waits.
 func TestARecreatedSourceNamespaceWhileCreatingDiscardsTheRecord(t *testing.T) {
@@ -861,7 +861,7 @@ func TestARecreatedSourceNamespaceWhileCreatingDiscardsTheRecord(t *testing.T) {
 	}
 }
 
-// Row 9: a Bound record whose namespace no longer exists returns to Creating
+// Check 11: a Bound record whose namespace no longer exists returns to Creating
 // with a fresh nonce, and the next pass creates and binds anew.
 func TestABoundRecordWhoseNamespaceIsGoneIsRecreated(t *testing.T) {
 	ns := newNamespace(t)
@@ -881,7 +881,7 @@ func TestABoundRecordWhoseNamespaceIsGoneIsRecreated(t *testing.T) {
 	reconcileOnce(t, r, a)
 	b := getBinding(t, ns)
 	if b.Data["state"] != "Creating" || b.Data["nonce"] == "0123456789abcdef0123456789abcdef" {
-		t.Fatalf("binding is %s with the old nonce; row 9 must return to Creating with a rotated nonce", b.Data["state"])
+		t.Fatalf("binding is %s with the old nonce; check 11 must return to Creating with a rotated nonce", b.Data["state"])
 	}
 	settle(t, r, a)
 	run := getRunNamespace(t, ns)
@@ -1031,7 +1031,7 @@ func TestTheMirrorSweepDecidesByNameAndAnnotation(t *testing.T) {
 	}
 }
 
-// Row 6 mirrors BEFORE binding: if the mirror cannot be written, the record
+// Check 7 mirrors BEFORE binding: if the mirror cannot be written, the record
 // stays Creating rather than binding a namespace whose quota never landed.
 func TestMirrorsLandBeforeTheBindingIsBound(t *testing.T) {
 	ns := newNamespace(t)

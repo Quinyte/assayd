@@ -1,8 +1,11 @@
 package revision
 
 import (
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -25,7 +28,7 @@ import (
 // A leaf added by a dependency bump gets a case the day it appears.
 
 func TestEveryEnvVarSourceLeafMintsARevision(t *testing.T) {
-	ls := Leaves(reflect.TypeOf(corev1.EnvVarSource{}), "valueFrom", nil)
+	ls := Leaves(t, reflect.TypeOf(corev1.EnvVarSource{}), "valueFrom", nil)
 	if len(ls) < 8 {
 		t.Fatalf("walked only %d leaves of EnvVarSource; a partial walk would pass on the "+
 			"handful it happened to reach", len(ls))
@@ -62,7 +65,7 @@ func TestEveryEnvVarSourceLeafMintsARevision(t *testing.T) {
 }
 
 func TestEveryEnvFromSourceLeafMintsARevision(t *testing.T) {
-	ls := Leaves(reflect.TypeOf(corev1.EnvFromSource{}), "envFrom", nil)
+	ls := Leaves(t, reflect.TypeOf(corev1.EnvFromSource{}), "envFrom", nil)
 	if len(ls) < 5 {
 		t.Fatalf("walked only %d leaves of EnvFromSource", len(ls))
 	}
@@ -204,7 +207,7 @@ func TestEgressAllowlistChangesMintARevision(t *testing.T) {
 // projection cannot delete its own check.
 
 func TestEveryAgentSpecLeafBehavesAsClassified(t *testing.T) {
-	ls := Leaves(reflect.TypeOf(plumev1alpha1.AgentSpec{}), "spec", nil)
+	ls := Leaves(t, reflect.TypeOf(plumev1alpha1.AgentSpec{}), "spec", nil)
 	if len(ls) < 45 {
 		t.Fatalf("walked only %d leaves of AgentSpec; a partial walk would pass on the "+
 			"handful it happened to reach", len(ls))
@@ -257,5 +260,65 @@ func TestEveryAgentSpecLeafBehavesAsClassified(t *testing.T) {
 				"If the field moved, move its classification; do not leave a rule pointing at "+
 				"nothing.", path)
 		}
+	}
+}
+
+// fakeFataler records a Fatalf instead of ending the test, so a test can assert
+// that the walk REFUSES rather than asserting from a process that died.
+type fakeFataler struct{ msg string }
+
+func (f *fakeFataler) Helper()                        {}
+func (f *fakeFataler) Fatalf(format string, a ...any) { f.msg = fmt.Sprintf(format, a...) }
+
+// A self-recursive type must fail the walk immediately, naming the field that
+// closed the cycle.
+//
+// Without the guard this is not a failure but a HANG: the walk re-enters the
+// type forever and CI reports a timeout, which names nothing and proves
+// nothing — an INVALID mutation rather than a killed one. apiextensions-apiserver
+// is already a direct dependency and its JSONSchemaProps has twelve
+// self-recursion points, so this is one wrong field away rather than
+// hypothetical.
+func TestASelfRecursiveTypeFailsTheWalkRatherThanHanging(t *testing.T) {
+	type cyc struct {
+		Name string
+		Next *cyc
+	}
+	f := &fakeFataler{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Leaves(f, reflect.TypeOf(cyc{}), "spec", nil)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the leaf walk did not terminate on a self-recursive type. It hangs, so CI reports a " +
+			"timeout instead of naming the field that introduced the cycle — which is the failure mode " +
+			"the guard exists to convert into a message")
+	}
+	if f.msg == "" {
+		t.Fatal("the walk terminated without refusing a self-recursive type")
+	}
+	if !strings.Contains(f.msg, "self-recursive") || !strings.Contains(f.msg, "spec.Next") {
+		t.Errorf("the refusal does not name the cycle and the field that closed it:\n%s", f.msg)
+	}
+}
+
+// The guard must not fire on a type that merely APPEARS twice on different
+// branches — AgentSpec has several — or every real walk fails.
+func TestATypeReachedTwiceOnDifferentBranchesIsNotACycle(t *testing.T) {
+	type inner struct{ A string }
+	type outer struct {
+		Left  inner
+		Right inner
+	}
+	f := &fakeFataler{}
+	ls := Leaves(f, reflect.TypeOf(outer{}), "spec", nil)
+	if f.msg != "" {
+		t.Fatalf("a type reached on two sibling branches was refused as a cycle:\n%s", f.msg)
+	}
+	if len(ls) != 2 {
+		t.Errorf("want 2 leaves, got %d: %v", len(ls), ls)
 	}
 }

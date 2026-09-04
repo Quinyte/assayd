@@ -473,3 +473,56 @@ func TestALabelledBystanderObjectIsNotDeleted(t *testing.T) {
 		}
 	}
 }
+
+// Every condition this operator SETS must be one it can also clear. A type in
+// neither the owned nor the sticky set is carried forward by merge() as
+// "another controller's" — forever — so an Agent that recovered would report
+// Ready=True beside a stale abnormal-true condition, which is what teaches an
+// operator that conditions mean nothing (design 02 §3.3).
+//
+// Asserted over the whole set rather than one condition, because the defect has
+// now appeared three times on three different types.
+func TestEveryConditionTheOperatorSetsCanAlsoClear(t *testing.T) {
+	ns := newNamespace(t)
+	a := agentWithPrompt(t, ns, "clears")
+	r := newReconciler(false)
+	settle(t, r, a)
+	// envtest schedules nothing, so the workload must be reported available or
+	// the agent never reaches Ready and the assertion below proves nothing.
+	markAvailable(t, ns, controller.WorkloadName("clears", revisionOf(t, ns, a.Spec)), 1)
+	settle(t, r, a)
+
+	var live plumev1alpha1.Agent
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
+		t.Fatal(err)
+	}
+	// Plant every abnormal-true condition the operator is the sole writer of.
+	planted := []plumev1alpha1.ConditionType{
+		plumev1alpha1.CondRevisionMaterialUnavailable,
+		plumev1alpha1.CondRunNamespaceUnavailable,
+		plumev1alpha1.CondRevisionHashCollision,
+		plumev1alpha1.CondEnvSourceUnresolved,
+		plumev1alpha1.CondEnvSourceProtectionUnavailable,
+	}
+	for _, c := range planted {
+		live.Status.Conditions = append(live.Status.Conditions, metav1.Condition{
+			Type: string(c), Status: metav1.ConditionTrue, Reason: "PlantedByTest",
+			Message: "set by an earlier operator build", LastTransitionTime: metav1.Now(),
+		})
+	}
+	if err := k8s.Status().Update(context.Background(), &live); err != nil {
+		t.Fatalf("plant: %v", err)
+	}
+	got := settle(t, r, &live)
+
+	for _, c := range planted {
+		if cond := condition(&got, c); cond != nil && cond.Status == metav1.ConditionTrue {
+			t.Errorf("%s survived a healthy reconcile. It is set by this operator and by no other, "+
+				"so it must be in conditions.go's owned set or it is carried forward forever and the "+
+				"Agent reports Ready beside a condition that no longer applies.", c)
+		}
+	}
+	if cond := condition(&got, plumev1alpha1.CondReady); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("setup: the agent is not Ready, so this proves nothing about clearing: %+v", got.Status.Conditions)
+	}
+}
