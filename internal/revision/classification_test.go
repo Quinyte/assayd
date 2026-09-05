@@ -23,6 +23,8 @@ import (
 
 var behaviourFields = map[string]string{
 	"Runtime.Image":           "different code",
+	"Runtime.Port":            "ADR-0031: one approved image may serve the evaluated A2A implementation on one port and a different handler on another",
+	"Loop":                    "ADR-0031: design 22 compiles allowReentry and maxVisits into in-proxy CEL that denies or admits each request; widening it past the gate is the hole the gate exists to close",
 	"Runtime.Env":             "configuration changes behaviour",
 	"Runtime.EnvFrom":         "configuration changes behaviour",
 	"Runtime.Sandbox":         "isolation boundary",
@@ -37,14 +39,11 @@ var behaviourFields = map[string]string{
 
 var policyFields = map[string]string{
 	"Runtime.Replicas":    "a scale operation",
-	"Runtime.Port":        "wiring; the operator dials it, the agent's behaviour does not change",
 	"Runtime.Resources":   "capacity regressions are caught by design 20's behavioural drift path, and gating them would block incident response",
 	"External.InlineCard": "a description, not a grant: §3.3's card-drift rule adjudicates card CONTENT, and a card advertising a skill the CR does not grant fails registration rather than reaching production",
 	"Card":                "a path change is re-registration, exactly as card drift is",
 
 	"Gates": "a gate that re-gated itself on edit could not converge",
-
-	"Loop": "lineage governance, enforced at the gateway",
 }
 
 // Fields whose sub-fields are classified individually rather than as a whole.
@@ -156,6 +155,12 @@ func mutateField(t *testing.T, path string) plumev1alpha1.AgentSpec {
 	case "External.OAuthClientRef":
 		s = baseFor(path)
 		s.External.OAuthClientRef = "client-b"
+	case "Runtime.Port":
+		s = baseFor(path)
+		s.Runtime.Port = 9090
+	case "Loop":
+		s = baseFor(path)
+		s.Loop = &plumev1alpha1.LoopSpec{AllowReentry: true, MaxVisits: 2}
 	default:
 		t.Fatalf("no mutation defined for %q — add one when classifying a new field", path)
 	}

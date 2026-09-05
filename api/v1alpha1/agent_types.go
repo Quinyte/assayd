@@ -67,6 +67,7 @@ type AgentSpec struct {
 // Deployment; setting Sandbox switches to an agent-sandbox Sandbox singleton.
 //
 // +kubebuilder:validation:XValidation:rule="!(has(self.sandbox) && self.replicas > 1)",message="spec.runtime.sandbox is a stateful singleton: set replicas to 1, or drop sandbox to scale out"
+// +kubebuilder:validation:XValidation:rule="!has(self.env) || self.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.resourceFieldRef))",message="spec.runtime.env[].valueFrom.resourceFieldRef is not supported. It reads a resource limit or request into the container, and spec.runtime.resources is editable in place without minting a revision — so a CPU or memory edit could change what the program reads while the revision digest, and the evaluation that gated it, stayed the same. The selector is hashed; the value it resolves to is not. Pass the value literally, or set spec.runtime.resources and read it from the downward API in a way that does not affect behaviour. See ADR-0031."
 type AgentRuntime struct {
 	// Image is digest-pinned: exactly one "@sha256:" followed by 64 lowercase hex
 	// characters (A21). A tag can be repointed at other bytes after a revision is

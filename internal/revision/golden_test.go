@@ -130,6 +130,15 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 // them as the same thing is how a genuine encoding change gets waved through as
 // "just the fixture".
 //
+// MIGRATION 3 (2026-09-05, ADR-0031). Two fields entered the projection:
+// runtime.port and the whole loop block. Both had been classified policy
+// surface, and both decide behaviour a gate evaluated — an image may serve the
+// evaluated A2A implementation on one port and a different handler on another,
+// and design 22 compiles allowReentry/maxVisits into the in-proxy CEL that
+// admits or denies each request by its lineage. Editing either in place
+// published capability the revision was never evaluated with. Free for the same
+// reason as the migrations below: P1 is unshipped, so the affected set is empty.
+//
 // MIGRATION 2 (2026-08-31, design 02 A37). The constant moved again because
 // the projection changed three ways, each closing a reproduced bypass:
 // llm.egressAllowlist entered it at all, the env selectors are now canonically
@@ -149,7 +158,7 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 // migration costs nothing today. Taken after the first install it would need a
 // carry-forward that maps old hashes to new ones. Design 02 §3.3 records the
 // same thing so an implementer does not rediscover it from this file.
-const goldenDigest = "6074745b5b"
+const goldenDigest = "bc8838ba7b"
 
 // goldenExternalDigest pins the external-agent shape, under the same rule.
 const goldenExternalDigest = "d998beaf43"

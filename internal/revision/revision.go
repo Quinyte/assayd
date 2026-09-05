@@ -60,7 +60,16 @@ const HashLength = 10
 // contract: encoding/json emits in declaration order, so a cosmetic reordering
 // would re-mint every revision in every cluster. TestGoldenDigest pins it.
 type behaviour struct {
-	Image     string          `json:"image,omitempty"`
+	Image string `json:"image,omitempty"`
+	// Port is behaviour, not wiring (ADR-0031). One image may serve the
+	// evaluated A2A implementation on 8080 and a different handler on 9090;
+	// Kubernetes does not require that two ports of one container serve the
+	// same program, route set or authorization.
+	Port int32 `json:"port,omitempty"`
+	// Loop is executable policy: design 22 compiles allowReentry and maxVisits
+	// into in-proxy CEL that admits or denies each request by its lineage
+	// (ADR-0031). Widening it is a capability widening like any other.
+	Loop      *loop           `json:"loop,omitempty"`
 	Env       []envVar        `json:"env,omitempty"`
 	EnvFrom   []envFromSource `json:"envFrom,omitempty"`
 	Sandbox   string          `json:"sandbox,omitempty"`
@@ -79,6 +88,11 @@ type behaviour struct {
 // Joining with "/" let {provider: azure, model: openai/gpt-4} and
 // {provider: azure/openai, model: gpt-4} hash identically — an ungated swap of
 // the model that answers requests.
+type loop struct {
+	AllowReentry bool  `json:"allowReentry,omitempty"`
+	MaxVisits    int32 `json:"maxVisits,omitempty"`
+}
+
 type envVar struct {
 	Name string `json:"name"`
 	// Value is hashed. ValueFrom is represented by its referent HERE, and the
@@ -310,6 +324,7 @@ func project(spec plumev1alpha1.AgentSpec) behaviour {
 
 	if r := spec.Runtime; r != nil {
 		b.Image = r.Image
+		b.Port = r.Port
 		if r.Sandbox != nil {
 			b.Sandbox = r.Sandbox.Profile
 		}
@@ -324,6 +339,10 @@ func project(spec plumev1alpha1.AgentSpec) behaviour {
 
 	if e := spec.External; e != nil {
 		b.External = &external{Endpoint: e.Endpoint, OAuthClientRef: e.OAuthClientRef}
+	}
+
+	if l := spec.Loop; l != nil {
+		b.Loop = &loop{AllowReentry: l.AllowReentry, MaxVisits: l.MaxVisits}
 	}
 
 	for _, k := range spec.Knowledge {

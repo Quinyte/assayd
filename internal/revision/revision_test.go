@@ -232,10 +232,6 @@ func TestPolicySurfaceDoesNotMintARevision(t *testing.T) {
 		{"card.path", func(s *plumev1alpha1.AgentSpec) {
 			s.Card.Path = "/custom-card.json"
 		}, "a path change is re-registration, exactly as card drift is (A12/A4)"},
-
-		{"loop", func(s *plumev1alpha1.AgentSpec) {
-			s.Loop = &plumev1alpha1.LoopSpec{AllowReentry: true, MaxVisits: 2}
-		}, "lineage governance, enforced at the gateway"},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			before, after := baseSpec(), baseSpec()

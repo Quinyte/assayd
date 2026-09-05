@@ -812,9 +812,14 @@ func TestEachContainerFieldIsIndividuallyReconciled(t *testing.T) {
 	}
 }
 
-// m9 — spec.runtime.port is the second of A12's policy-surface fields that
-// reaches the template, and nothing covered editing it.
-func TestPortEditReachesTheWorkloadWithoutANewRevision(t *testing.T) {
+// ADR-0031 — a port edit MINTS a revision. This test asserted the inverse until
+// 2026-09-05: it pinned "a port edit reaches the running workload without a new
+// revision" as correct, so the bypass it describes was covered by a passing
+// test. An approved image may serve the evaluated A2A implementation on 8080
+// and an administrative or simply different handler on 9090; Kubernetes does
+// not require two ports of one container to serve the same program. Editing the
+// port under an unchanged digest published code the gate never exercised.
+func TestPortEditMintsARevision(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "portedit", nil)
 	r := newReconciler(false)
@@ -830,18 +835,22 @@ func TestPortEditReachesTheWorkloadWithoutANewRevision(t *testing.T) {
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if revision.MustHash(a.Spec) != rev {
-		t.Fatal("fixture: a port edit minted a revision; A12 says port is policy-surface")
+	next := revision.MustHash(a.Spec)
+	if next == rev {
+		t.Fatal("a port edit did not mint a revision: an approved image can serve a " +
+			"different program on a different port, so this reaches production through no gate")
 	}
 	settle(t, r, a)
 
+	// The evaluated revision keeps its own workload on its own port: the edit
+	// produced a candidate, it did not rewrite what was gated.
 	var d appsv1.Deployment
 	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("portedit", rev)}
 	if err := k8s.Get(context.Background(), key, &d); err != nil {
-		t.Fatalf("get: %v", err)
+		t.Fatalf("get gated workload: %v", err)
 	}
-	if p := d.Spec.Template.Spec.Containers[0].Ports; len(p) != 1 || p[0].ContainerPort != 9090 {
-		t.Errorf("container port is %v after an in-place edit to 9090", p)
+	if p := d.Spec.Template.Spec.Containers[0].Ports; len(p) != 1 || p[0].ContainerPort != 8080 {
+		t.Errorf("the gated revision's container port is %v; the in-place edit rewrote it", p)
 	}
 }
 

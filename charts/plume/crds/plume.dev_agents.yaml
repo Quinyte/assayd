@@ -853,6 +853,16 @@ spec:
                 - message: 'spec.runtime.sandbox is a stateful singleton: set replicas
                     to 1, or drop sandbox to scale out'
                   rule: '!(has(self.sandbox) && self.replicas > 1)'
+                - message: spec.runtime.env[].valueFrom.resourceFieldRef is not supported.
+                    It reads a resource limit or request into the container, and spec.runtime.resources
+                    is editable in place without minting a revision — so a CPU or
+                    memory edit could change what the program reads while the revision
+                    digest, and the evaluation that gated it, stayed the same. The
+                    selector is hashed; the value it resolves to is not. Pass the
+                    value literally, or set spec.runtime.resources and read it from
+                    the downward API in a way that does not affect behaviour. See
+                    ADR-0031.
+                  rule: '!has(self.env) || self.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.resourceFieldRef))'
               tools:
                 description: |-
                   Tools grants MCP tool servers. This is the only agent-facing connector

@@ -178,7 +178,12 @@ const (
 
 var specLeafClass = map[string]leafClass{
 	// Behaviour: what the agent can do, produce, or reach.
-	"spec.Runtime.Image":                                                     mints,
+	"spec.Runtime.Image": mints,
+	// ADR-0031: one image may serve a different program on a different port.
+	"spec.Runtime.Port": mints,
+	// ADR-0031: design 22 compiles these into the gateway's per-request CEL.
+	"spec.Loop.AllowReentry":                                                 mints,
+	"spec.Loop.MaxVisits":                                                    mints,
 	"spec.Runtime.Sandbox.Profile":                                           mints,
 	"spec.Runtime.Env[].Name":                                                mints,
 	"spec.Runtime.Env[].Value":                                               mints,
@@ -254,15 +259,12 @@ var specLeafClass = map[string]leafClass{
 
 	// Policy: how much, how fast, who may call, or pure wiring.
 	"spec.Runtime.Replicas":                   inPlace,
-	"spec.Runtime.Port":                       inPlace,
 	"spec.Runtime.Resources.Limits":           inPlace,
 	"spec.Runtime.Resources.Requests":         inPlace,
 	"spec.Runtime.Resources.Claims[].Name":    inPlace,
 	"spec.Runtime.Resources.Claims[].Request": inPlace,
 	"spec.External.InlineCard":                inPlace,
 	"spec.Card.Path":                          inPlace,
-	"spec.Loop.AllowReentry":                  inPlace,
-	"spec.Loop.MaxVisits":                     inPlace,
 	"spec.Gates[].EvalSuiteRef":               inPlace,
 }
 

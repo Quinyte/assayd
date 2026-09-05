@@ -128,6 +128,18 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 		t.Fatalf("walked only %d leaves", len(leaves))
 	}
 
+	// Leaves the API refuses on purpose. Each entry is a decision, and the loop
+	// below proves the refusal still holds rather than counting the leaf as an
+	// unproven gap. ADR-0031: resourceFieldRef reads a resource limit or request
+	// into the container while spec.runtime.resources stays editable in place,
+	// so a capacity edit could change what the program reads under an unchanged
+	// revision digest. The selector is projected; the value it resolves to is not.
+	refusedByDesign := map[string]string{
+		"spec.Runtime.Env[].ValueFrom.ResourceFieldRef.ContainerName": "ADR-0031",
+		"spec.Runtime.Env[].ValueFrom.ResourceFieldRef.Resource":      "ADR-0031",
+		"spec.Runtime.Env[].ValueFrom.ResourceFieldRef.Divisor":       "ADR-0031",
+	}
+
 	for i, l := range leaves {
 		t.Run(l.Path, func(t *testing.T) {
 			mk := func(n int) plumev1alpha1.AgentSpec {
@@ -142,6 +154,18 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 			a, b := mk(0), mk(1)
 			errA := admissible(t, fmt.Sprintf("leaf-a-%d", i), a)
 			errB := admissible(t, fmt.Sprintf("leaf-b-%d", i), b)
+			if why, refused := refusedByDesign[l.Path]; refused {
+				// This leaf is unreachable because a decision made it so. That is
+				// not a gap in coverage, but it is only true while admission
+				// actually refuses it — so assert the refusal rather than skipping.
+				// If the rule is ever relaxed, this fails here instead of silently
+				// restoring an ungated path.
+				if errA == nil || errB == nil {
+					t.Fatalf("%s is supposed to be refused at admission (%s) and the API accepted "+
+						"it: a=%v b=%v", l.Path, why, errA, errB)
+				}
+				return
+			}
 			if errA != nil || errB != nil {
 				// NOT a pass and NOT a failure: the perturbation this walker
 				// generates is not admissible, so this leaf's classification is

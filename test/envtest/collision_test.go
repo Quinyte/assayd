@@ -35,10 +35,12 @@ import (
 func pinnedCollidingSpecs() (safe, evil plumev1alpha1.AgentSpec) {
 	safe = plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{
 		Image: "ghcr.io/acme/agent@sha256:a100000000000000000000000000000000000000000000000000000000000001",
-		Env:   []corev1.EnvVar{{Name: "PAD", Value: "493725"}}}}
+		Port:  8080,
+		Env:   []corev1.EnvVar{{Name: "PAD", Value: "1917962"}}}}
 	evil = plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{
 		Image: "ghcr.io/attacker/backdoor@sha256:b200000000000000000000000000000000000000000000000000000000000002",
-		Env:   []corev1.EnvVar{{Name: "PAD", Value: "x504692"}}}}
+		Port:  8080,
+		Env:   []corev1.EnvVar{{Name: "PAD", Value: "x216079"}}}}
 	return safe, evil
 }
 
