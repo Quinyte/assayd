@@ -49,6 +49,7 @@ func main() {
 
 func run() error {
 	var (
+		gatewayURL        string
 		metricsAddr       string
 		probeAddr         string
 		leaderElect       bool
@@ -62,6 +63,11 @@ func run() error {
 	flag.StringVar(&operatorNamespace, "operator-namespace", saNamespace(),
 		"the namespace this operator runs in; run-namespace binding records are kept there "+
 			"(design 02 A60). Defaults to the mounted ServiceAccount namespace")
+	flag.StringVar(&gatewayURL, "gateway-url", "",
+		"base URL of the agentgateway that agent egress traverses, injected into every agent "+
+			"workload as PLUME_GATEWAY_URL (design 02 §11). Empty — the default — injects nothing, "+
+			"because the chart ships no gateway subchart yet and a placeholder address would look "+
+			"like an outage rather than an absent tier")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metric endpoint binds to")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "address the probe endpoint binds to")
 	flag.BoolVar(&leaderElect, "leader-elect", true,
@@ -143,7 +149,8 @@ func run() error {
 	// no cluster-wide informer on ValidatingAdmissionPolicy is started.
 	labelAuthority := controller.LabelAuthorityPresent(mgr.GetAPIReader())
 	agents, err := controller.NewAgentReconciler(mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme(),
-		operatorNamespace, func() bool { return detector.Installed() }, labelAuthority)
+		operatorNamespace, func() bool { return detector.Installed() }, labelAuthority,
+		controller.InjectedEnvConfig{GatewayURL: gatewayURL})
 	if err != nil {
 		return fmt.Errorf("build agent reconciler: %w", err)
 	}

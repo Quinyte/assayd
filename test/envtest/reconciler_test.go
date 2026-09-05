@@ -64,7 +64,14 @@ func settle(t *testing.T, r *controller.AgentReconciler, a *plumev1alpha1.Agent)
 }
 
 func newReconciler(gatesInstalled bool) *controller.AgentReconciler {
+	return newReconcilerWithEnv(gatesInstalled, controller.InjectedEnvConfig{})
+}
+
+// newReconcilerWithEnv builds one whose injected env contract is set, for the
+// tests that assert what reaches the container (A65).
+func newReconcilerWithEnv(gatesInstalled bool, injected controller.InjectedEnvConfig) *controller.AgentReconciler {
 	return &controller.AgentReconciler{
+		InjectedEnv:           injected,
 		Client:                k8s,
 		Scheme:                scheme,
 		EvalSuiteInstalled:    func() bool { return gatesInstalled },

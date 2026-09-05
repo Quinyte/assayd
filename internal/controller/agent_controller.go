@@ -89,6 +89,10 @@ type AgentReconciler struct {
 	// policies exist. The operator fail-closes without them. Required; see
 	// LabelAuthorityPresent for the production adapter.
 	LabelAuthorityPresent func(context.Context) (bool, error)
+	// InjectedEnv is what the operator knows and an Agent does not: the cluster's
+	// gateway address, and in time the KG and task-store coordinates. Operator
+	// configuration, so one cluster has one answer (A65).
+	InjectedEnv InjectedEnvConfig
 
 	installMu  sync.Mutex
 	installUID string
@@ -101,7 +105,7 @@ type AgentReconciler struct {
 // wiring a manager cannot silently decide ADR-0006's fate by omission.
 func NewAgentReconciler(c client.Client, reader client.Reader, scheme *runtime.Scheme,
 	operatorNamespace string, evalSuiteInstalled func() bool,
-	labelAuthority func(context.Context) (bool, error)) (*AgentReconciler, error) {
+	labelAuthority func(context.Context) (bool, error), injected InjectedEnvConfig) (*AgentReconciler, error) {
 	switch {
 	case c == nil:
 		return nil, fmt.Errorf("agent reconciler: client is required")
@@ -123,7 +127,8 @@ func NewAgentReconciler(c client.Client, reader client.Reader, scheme *runtime.S
 			"installed must be checked rather than assumed")
 	}
 	return &AgentReconciler{Client: c, Reader: reader, Scheme: scheme, OperatorNamespace: operatorNamespace,
-		EvalSuiteInstalled: evalSuiteInstalled, LabelAuthorityPresent: labelAuthority}, nil
+		EvalSuiteInstalled: evalSuiteInstalled, LabelAuthorityPresent: labelAuthority,
+		InjectedEnv: injected}, nil
 }
 
 // installIdentity is the operator namespace's UID, stamped on run namespaces
@@ -975,7 +980,7 @@ func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, runNS, rev s
 						Name:      "agent",
 						Image:     rt.Image,
 						Resources: rt.Resources,
-						Env:       rewriteEnv(rt.Env, material),
+						Env:       withInjectedEnv(rewriteEnv(rt.Env, material), r.InjectedEnv),
 						EnvFrom:   rewriteEnvFrom(rt.EnvFrom, material),
 						Ports: []corev1.ContainerPort{{
 							Name:          "a2a",
