@@ -2,7 +2,11 @@
 
 plume ("graphene" in early drafts) is a lightweight, Kubernetes-native agent platform.
 
-**Phase: implementing P1.** All 27 designs are approved and critique-passed. The agent-operator, its CRD, the chart and CI exist and pass on k3d and kind. Next by the build order is design 03, the policy compiler.
+**Phase: implementing P1, under the scope reset of ADR-0030.** The agent-operator, its CRD, the chart and CI exist and pass on k3d and kind.
+
+**Do not read "approved" as "settled."** An earlier version of this line said all 27 designs were approved and critique-passed. That was false, and it was the first thing every contributor read. Design 02's own header says it "is not approved and must not be cited as such"; design 03's says "RE-OPENED, do not implement." Check the Status line of the design you are about to touch, and trust that over any summary — including this one. `docs/designs/README.md` carries the table.
+
+**What is actually true of the system today**: no test in this repository sends a request to an agent, the e2e runs `registry.k8s.io/pause`, `gateway.enabled` defaults to `false`, and the policy compiler does not exist. The platform's central claim — that governance becomes real at the gateway — has never been exercised. The next work is the narrow end-to-end slice in ADR-0030, not the next design.
 
 ## Skills — use them, do not paraphrase them
 

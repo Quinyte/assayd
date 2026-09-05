@@ -402,7 +402,7 @@ Two loops, separated: the **inner loop** (user-owned scaffold) and the **governa
 | Footprint | moderate | heavy (16GB/4c dev) | Dapr runtime | **≤8 pods, Postgres+NATS only** |
 | UI stance | UI early | UI-led | n/a | CLI + security first |
 
-kagent answers "how do I run an agent on k8s"; plume answers "how do I run an agent I can trust with my business" — and kagent agents can register on plume (they speak A2A). Palantir AIP validates ontology-first at $-scale; plume is its open, lightweight, k8s-native expression. Eval-gated rollout is 2026 best-practice *as SaaS + scripts*; nobody ships it as a k8s primitive — 12–18-month window.
+kagent answers "how do I run an agent on k8s"; plume answers "how do I run an agent I can trust with my business" — and kagent agents can register on plume (they speak A2A). **Checked against the tag, 2026-09-05**: kagent v0.10.0 (released 2026-09-04) carries a `BYO` arm on its `AgentSpec` — "a user-provided container image … expects it to serve the agent over the A2A protocol on port 8080" — so framework neutrality and BYO A2A containers are **shared capability, not a moat**. kagent is a prospective integration target, not a straw man. Whatever plume is for has to survive that sentence. Palantir AIP validates ontology-first at $-scale; plume is its open, lightweight, k8s-native expression. Eval-gated rollout is 2026 best-practice *as SaaS + scripts*; nobody ships it as a k8s primitive — 12–18-month window.
 
 ### Open source and enterprise — the split
 
@@ -442,7 +442,7 @@ Discipline: the differentiation only exists once P2/P3 ship — never polish the
 | kro young | App layer last; plain CRs work without it |
 | Rossoctl convergence on security layer | compose it if it stabilizes; moat is §04+§08+§09 |
 | DBOS ceiling | Temporal is the known escape hatch — a wall to hit, not pre-build for |
-| Eval-gating idea in the air | 12–18-month first-mover window → build order discipline |
+| Eval-gating idea in the air | **No first-mover window is claimed.** An earlier row here sold 12–18 months; ADR-0006 had already retracted exactly that, recording eval-gating as "**Not a differentiator** — describe it externally as eval-gated progressive delivery in the Flagger/Argo lineage." The roadmap was selling urgency its own decision record rejected. Build order discipline stands on its own merits |
 | Two reviews not fully independent | Designs 01 and 02 were critiqued in the session that authored them; both carry the caveat and are flagged for re-critique before implementation |
 | Research has a shelf life | Notes are dated 2026-08 with re-verify dates; pinned versions (agentgateway minimum, semconv SHA, Unsloth BuiltinTrainer status) will move — open item R1 tracks the gateway version wording |
 | Design ≠ validated | These plans survived adversarial review, not execution. First implementation will test what no review can: agentgateway policy-overlap behavior (research item R1, reproducing test), DBOS-in-Job resume, interpreter determinism |

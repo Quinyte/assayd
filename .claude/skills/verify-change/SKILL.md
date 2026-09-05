@@ -9,17 +9,40 @@ finding forward as "addressed" without evidence.
 
 ## The loop
 
-1. **Write the change.** Amend the design first — code that diverges from an approved
+**The spike comes first. This is the ordering, and it is the fix for a real failure.**
+Until 2026-09-05 the spike was step 5, behind two critique stages, under this file's own
+"stop at the first stage that fails". A design that kept failing critique therefore never
+reached the measurement that would have settled it — which is exactly what happened to
+design 03: three rounds returned six, then five, then five blockers, each finding the
+previous fix's defect one field over, while the premise under five amendments sat unchecked
+in another design's CRD schema. One person opening design 11 §3 ended it. Critique is for
+reasoning you cannot measure; it is not a substitute for looking.
+
+1. **Read the producing document, and measure the load-bearing claim.** Before writing:
+   for every claim your change makes about another design, an ADR, a dependency or the
+   cluster, open that source and quote it — a claim about a document is checked *in that
+   document*, never inferred from a citing one. Pin dependency claims to the released tag,
+   not `main` or a docs page. If it can be run, run it. See "Spiking" below.
+2. **Write the change.** Amend the design first — code that diverges from an approved
    design is drift. Record it as a numbered amendment in the same commit.
-2. **Run the gate.** `make test`. The docs gate (`test/docs/`) fails on any superseded
+3. **Run the gate.** `make test`. The docs gate (`test/docs/`) fails on any superseded
    guarantee surviving in an authoritative body. If you retracted something, add its rule
    *and its independent fixture* in the same change.
-3. **Critique independently** — `/critique-design`, which forks its own context.
-4. **Critique cross-family** — hand the same target to the Codex peer. Give it the changed
+4. **Critique independently** — `/critique-design`, which forks its own context.
+5. **Critique cross-family** — hand the same target to the Codex peer. Give it the changed
    state as *facts* and never your conclusions; anchoring it spends the only thing it is
    for. See `docs/agent-protocol.md`.
-5. **Spike every load-bearing claim you cannot already fail a test on.** See below.
-6. **Correct, and propagate.** Then re-run from 2.
+6. **Correct, and propagate.** Then re-run from 3.
+
+**Two failed passes on one contract ends the loop.** Do not open a third round on another
+prose patch. Stop and take one of three decisions instead: run the experiment that settles
+the premise, cut the scope, or redesign the interface. Record which you chose. A falling
+blocker count is neither necessary nor sufficient for a working system.
+
+**A finding is closed by implementing the contract or by withdrawing the promise.** An
+"owed to design NN" note, a new condition, or a registry entry is not closure — it is the
+finding restated. If no producer exists, the capability is unsupported: say so in §5 and
+reject it at the boundary. Never withdraw the underlying failure scenario to obtain a PASS.
 
 ## The rules this loop exists because of
 
@@ -39,6 +62,12 @@ Each one cost a real defect in this repo.
 - **A test that derives its cases from production data is vacuous.** Deleting a rule from the
   docs gate left the suite green; deleting a mandatory entry from an emitter registry deletes
   its own generated test. Cases must be written independently of the thing they pin.
+- **A claim about another document is the single most common defect here.** Five design-03
+  amendments rested on an input said to come from "the resolved tool server's advertised set";
+  it is a declared field on the Connector CR, and the cited anchor said so. The critique that
+  caught it then made the same error one table row below, citing a `KnowledgeGraph` CR that
+  exists in no design. Two independent reviewers found that missing CR separately. Open the
+  producing file. Quote it. Every time.
 - **Propagation is the recurring failure, not reasoning.** Three consecutive rounds fixed the
   amended paragraph and left the mapping table, the ADR title, the index row or the consumer
   design asserting the withdrawn claim. Grep the whole corpus for every restatement, including
