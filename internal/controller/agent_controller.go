@@ -146,6 +146,10 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 // +kubebuilder:rbac:groups=plume.dev,resources=agents/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=plume.dev,resources=agents/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// Services are per revision and share the workload's name shape; the operator
+// creates one with each revision and collects it when that revision leaves the
+// retained set, so it needs delete as well as create.
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // Leader election. Without these the elector retries a forbidden lease forever:
 // the pod runs, reports Ready, and reconciles nothing — the silence NFR-8 forbids.
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch
@@ -393,6 +397,25 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
+	// The Service is part of materializing a revision, not a later step: a Pod
+	// that reports Ready with no Service has no address, and design 03's route
+	// backendRef names this object. It is created with the workload and before
+	// readiness is judged, so a revision is never "available" without one.
+	if err := r.ensureService(ctx, &agent, runNS, desired, desiredDigest); err != nil {
+		if collision := (*revisionCollisionError)(nil); errors.As(err, &collision) {
+			return ctrl.Result{}, r.reportCollision(ctx, &agent, status, conds, collision)
+		}
+		if apierrors.IsInvalid(err) {
+			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "ServiceRejected", err.Error())
+			conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "ServiceRejected", err.Error())
+			status.Phase = plumev1alpha1.PhaseDegraded
+			status.Conditions = conds.merge(agent.Status.Conditions)
+			status.ObservedGeneration = agent.Generation
+			return ctrl.Result{}, r.writeStatus(ctx, &agent, status)
+		}
+		return ctrl.Result{}, err
+	}
+
 	ready, err := r.workloadAvailable(ctx, &agent, runNS, desired, desiredDigest)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -557,6 +580,10 @@ const RevisionDigestAnnotation = "plume.dev/revision-digest"
 // workload name. It is terminal by design: see ensureWorkload.
 type revisionCollisionError struct {
 	name, existing, desired string
+	// kind names the object when it is not a Deployment, so a Service collision
+	// does not report itself as a workload one and send an operator to the wrong
+	// object. Empty means workload.
+	kind string
 	// role is set when the collision was found in STATUS rather than on a
 	// workload, so the message can say "the active revision …" instead of
 	// rendering a role name into a "workload %s" slot.
@@ -564,6 +591,12 @@ type revisionCollisionError struct {
 }
 
 func (e *revisionCollisionError) Error() string {
+	if e.kind == "service" {
+		return fmt.Sprintf("service %s carries revision digest %s and this revision is %s. Two "+
+			"different projections claim one revision name, so converging it would point this "+
+			"revision's route at another projection's Pods. Refusing. To recover: delete that "+
+			"Service and let the operator recreate it.", e.name, e.existing, e.desired)
+	}
 	if e.existing == "(another agent's)" {
 		return fmt.Sprintf("workload %s exists in the run namespace and does not carry this Agent's UID, "+
 			"so this operator did not create it for this Agent. Refusing to converge. To recover: delete "+
@@ -1136,6 +1169,11 @@ func (r *AgentReconciler) collectGarbage(
 	if err := r.collectRevisionMaterial(ctx, agent, runNS, keep); err != nil {
 		return err
 	}
+	// The Service goes with its revision for the same reason: no ownerReference,
+	// so nothing else will collect it.
+	if err := r.collectRevisionServices(ctx, agent, runNS, keep); err != nil {
+		return err
+	}
 	return r.collectPreA42Leftovers(ctx, agent)
 }
 
@@ -1237,6 +1275,15 @@ func (r *AgentReconciler) finalize(ctx context.Context, agent *plumev1alpha1.Age
 		for i := range owned {
 			if err := r.Delete(ctx, &owned[i]); err != nil && !apierrors.IsNotFound(err) {
 				return ctrl.Result{}, fmt.Errorf("delete workload %s: %w", owned[i].Name, err)
+			}
+		}
+		ownedSvc, err := r.ownedServices(ctx, agent, runNS)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		for i := range ownedSvc {
+			if err := r.Delete(ctx, &ownedSvc[i]); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("delete service %s: %w", ownedSvc[i].Name, err)
 			}
 		}
 		if err := r.deleteMaterial(ctx, agent, runNS,
