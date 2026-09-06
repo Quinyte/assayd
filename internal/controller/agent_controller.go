@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -89,6 +90,15 @@ type AgentReconciler struct {
 	// policies exist. The operator fail-closes without them. Required; see
 	// LabelAuthorityPresent for the production adapter.
 	LabelAuthorityPresent func(context.Context) (bool, error)
+	// CardFetchTimeout bounds one card fetch. Zero means
+	// DefaultCardFetchTimeout, which is sized for a cold in-cluster lookup;
+	// envtest sets it short because there is no cluster network there to wait for.
+	CardFetchTimeout time.Duration
+	// CardClient fetches the agent card (§3.4). Injected so a test can supply a
+	// transport; nil means a plain client.
+	CardClient interface {
+		Do(*http.Request) (*http.Response, error)
+	}
 	// InjectedEnv is what the operator knows and an Agent does not: the cluster's
 	// gateway address, and in time the KG and task-store coordinates. Operator
 	// configuration, so one cluster has one answer (A65).
@@ -461,6 +471,54 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
+	// §3.4: the card is fetched AFTER the revision is available, because the
+	// container is the source of truth (ADR-0019) and there is nothing to read
+	// until it is running. A failure here is a REGISTRATION failure, never a
+	// serving one — the design's remedy for an unregistrable card is the
+	// 30-minute deadline, which §5 records as uncounted, so withholding traffic
+	// here would invent an enforcement the design does not describe.
+	var cardRequeue time.Duration
+	if ready && cardFetchDue(status, desiredDigest, time.Now()) {
+		card, cerr := r.fetchAndValidateCard(ctx, &agent, runNS, desired)
+		switch {
+		case cerr != nil:
+			ce := (*cardError)(nil)
+			if !errors.As(cerr, &ce) {
+				return ctrl.Result{}, cerr
+			}
+			conds.set(plumev1alpha1.CondRegistered, metav1.ConditionFalse, ce.reason, ce.Error())
+			// Retries live BETWEEN reconciles, not inside one: the work queue is
+			// shared, so blocking here would let one unreachable agent delay every
+			// other agent's reconcile.
+		default:
+			status.Cards = upsertCard(status.Cards, *card, desiredDigest)
+			conds.set(plumev1alpha1.CondRegistered, metav1.ConditionTrue, "CardValidated",
+				fmt.Sprintf("revision %s serves a valid A2A card (digest %s)", desired, card.Digest[:12]))
+			// Loud rather than silent, per design 09: nothing in this repository
+			// signs a card, so every agent is the unsigned BYO case that rule was
+			// written for. Clearing this would claim a verification that no code
+			// performs.
+			conds.set(plumev1alpha1.CondCardUnsigned, metav1.ConditionTrue, "NoSigningConfigured",
+				"the card is not signature-verified: design 09's Sigstore card signing is not "+
+					"implemented, so no card in this cluster is signed or checked")
+		}
+	}
+
+	// Keep coming back until this revision HAS a card, whether or not an attempt
+	// was made just now.
+	//
+	// Setting the requeue only on a failed attempt was a real bug, found by
+	// running it: reconcile 1 fails and schedules +15s, the status write it
+	// performs immediately triggers reconcile 2, reconcile 2 skips because the
+	// retry interval has not elapsed and returns RequeueAfter=0 — and the queue's
+	// pending delayed add is consumed by that early run. Nothing ever came back,
+	// so a card that was merely fetched a second too early stayed unfetched
+	// forever. Forcing one reconcile by hand registered it instantly, which is
+	// what showed the fetch had never been the problem.
+	if ready && !hasCardFor(status, desiredDigest) {
+		cardRequeue = CardRetryInterval
+	}
+
 	switch {
 	case !ready && status.ActiveRevision != "" && status.ActiveRevisionDigest != desiredDigest &&
 		r.revisionAvailable(ctx, &agent, runNS, status.ActiveRevision, status.ActiveRevisionDigest):
@@ -578,7 +636,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	// Collect AFTER the status that authorizes it is durable: a destructive act
 	// ordered ahead of its own record is backwards, even when it converges.
-	return ctrl.Result{}, r.collectGarbage(ctx, &agent, runNS, owned, status)
+	if err := r.collectGarbage(ctx, &agent, runNS, owned, status); err != nil {
+		return ctrl.Result{}, err
+	}
+	// A card that could not be fetched is retried here rather than in a sleep
+	// inside the fetch, so one unreachable agent cannot delay another's reconcile.
+	return ctrl.Result{RequeueAfter: cardRequeue}, nil
 }
 
 // reportUnreconcilable records why an Agent cannot be acted on, rather than

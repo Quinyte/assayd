@@ -243,3 +243,84 @@ func httpInCluster(t *testing.T, ctx context.Context, tag, url, postBody string)
 	t.Fatalf("the probe pod never completed")
 	return ""
 }
+
+// §3.4 end to end: the OPERATOR fetches the card the container serves, and says
+// so on the object. The container's half was proven above; this is the half
+// that was owed, and the two are separate tests on purpose — a single one would
+// pass if either side were faked.
+func TestTheOperatorRegistersTheCardItFetched(t *testing.T) {
+	requireCluster(t)
+	requireOperator(t)
+	img := responderImage(t)
+	ctx := context.Background()
+	ensureNamespace(t, ctx, "plume-e2e")
+
+	const name = "registered"
+	a := &plumev1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "plume-e2e"},
+		Spec: plumev1alpha1.AgentSpec{
+			Runtime: &plumev1alpha1.AgentRuntime{
+				Image: img,
+				Env:   []corev1.EnvVar{{Name: "AGENT_NAME", Value: name}},
+			},
+		},
+	}
+	_ = k8s.Delete(ctx, a)
+	if err := k8s.Create(ctx, a); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(context.Background(), a) })
+
+	rev := revision.MustHash(a.Spec)
+	waitAvailable(t, ctx, controller.WorkloadName(name, rev), 4*time.Minute)
+
+	// Registration happens after readiness, so poll for it rather than assuming
+	// the reconcile that made it available also fetched.
+	var live plumev1alpha1.Agent
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		if err := k8s.Get(ctx, types.NamespacedName{Namespace: "plume-e2e", Name: name}, &live); err == nil {
+			if len(live.Status.Cards) > 0 {
+				break
+			}
+		}
+		time.Sleep(3 * time.Second)
+	}
+	if len(live.Status.Cards) == 0 {
+		t.Fatalf("the operator never recorded a card; phase=%q conditions=%+v",
+			live.Status.Phase, live.Status.Conditions)
+	}
+
+	c := live.Status.Cards[0]
+	if c.Name != name {
+		t.Errorf("the recorded card names %q", c.Name)
+	}
+	if len(c.Digest) != 64 {
+		t.Errorf("card digest %q is not a full SHA-256; drift detection compares it", c.Digest)
+	}
+	if c.RevisionDigest == "" {
+		t.Error("the card is not bound to a revision digest, so a chosen 40-bit collision " +
+			"could attach it to another projection")
+	}
+	if c.Signed {
+		t.Error("the card is recorded as signed and nothing in this repository signs one")
+	}
+
+	var registered, unsigned *metav1.Condition
+	for i := range live.Status.Conditions {
+		switch live.Status.Conditions[i].Type {
+		case string(plumev1alpha1.CondRegistered):
+			registered = &live.Status.Conditions[i]
+		case string(plumev1alpha1.CondCardUnsigned):
+			unsigned = &live.Status.Conditions[i]
+		}
+	}
+	if registered == nil || registered.Status != metav1.ConditionTrue {
+		t.Errorf("Registered is %+v, want True after a valid card was fetched", registered)
+	}
+	// Loud rather than silent: nothing signs a card here, and clearing this would
+	// claim a verification no code performs.
+	if unsigned == nil || unsigned.Status != metav1.ConditionTrue {
+		t.Errorf("CardUnsigned is %+v, want True — no card in this cluster is signed", unsigned)
+	}
+}

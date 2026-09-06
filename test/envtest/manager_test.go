@@ -53,6 +53,9 @@ func startManager(t *testing.T) manager.Manager {
 	if err != nil {
 		t.Fatalf("build reconciler: %v", err)
 	}
+	// No cluster network here, so a card fetch can only fail; wait 100ms for that
+	// rather than the production timeout, which made these tests exceed their own.
+	r.CardFetchTimeout = 100 * time.Millisecond
 	if err := r.SetupWithManager(mgr); err != nil {
 		t.Fatalf("SetupWithManager: %v", err)
 	}
@@ -246,6 +249,9 @@ func TestReconcilerIsSafeUnderGenerationChangedPredicate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build reconciler: %v", err)
 	}
+	// No cluster network here, so a card fetch can only fail; wait 100ms for that
+	// rather than the production timeout, which made these tests exceed their own.
+	r.CardFetchTimeout = 100 * time.Millisecond
 	// The wiring plume does NOT ship, deliberately: if the reconciler only works
 	// without this, it is one refactor from breaking.
 	if err := ctrl.NewControllerManagedBy(mgr).

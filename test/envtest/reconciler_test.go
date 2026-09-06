@@ -71,7 +71,12 @@ func newReconciler(gatesInstalled bool) *controller.AgentReconciler {
 // tests that assert what reaches the container (A65).
 func newReconcilerWithEnv(gatesInstalled bool, injected controller.InjectedEnvConfig) *controller.AgentReconciler {
 	return &controller.AgentReconciler{
-		InjectedEnv:           injected,
+		InjectedEnv: injected,
+		// There is no cluster network here, so every card fetch fails. Waiting the
+		// production timeout for a name that cannot resolve made the suite seven
+		// minutes long; the fetch's WIRING is what these tests pin, and it is
+		// reached just as well in 100ms.
+		CardFetchTimeout:      100 * time.Millisecond,
 		Client:                k8s,
 		Scheme:                scheme,
 		EvalSuiteInstalled:    func() bool { return gatesInstalled },
