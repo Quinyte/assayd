@@ -21,12 +21,48 @@ CLUSTER="${CLUSTER:-plume-local}"
 IMAGE_TAG="e2e-$(date +%s)"
 IMAGE="plume-operator:${IMAGE_TAG}"
 
+# The agent image the suite deploys, and why it needs a registry at all.
+#
+# Until 2026-09-06 every e2e ran `registry.k8s.io/pause` — a container that
+# serves nothing — so no test in this repository ever sent a request to an
+# agent. Replacing it with a real responder runs into two rules the operator
+# enforces on purpose: the CRD refuses an image that is not digest-pinned, and
+# the rendered workload sets imagePullPolicy: Always. Together they mean a
+# locally-built image cannot be `k3d image import`ed and referenced — the
+# kubelet will contact a registry regardless of what is already in its store.
+#
+# So the suite runs its own registry. This is not scaffolding around the rules;
+# it is the fixture being held to the same rules a real agent image is.
+REG_NAME="plume-e2e-registry"
+REG_PORT="5111"
+RESPONDER_REPO="plume-responder"
+
 case "${DISTRO}" in
 k3d)
   command -v k3d >/dev/null || { echo "k3d is not installed"; exit 1; }
+  if ! k3d registry list -o json 2>/dev/null | grep -q "\"k3d-${REG_NAME}\""; then
+    echo "==> creating registry k3d-${REG_NAME}"
+    k3d registry create "${REG_NAME}" --port "${REG_PORT}" >/dev/null
+  fi
   if ! k3d cluster list -o json | grep -q "\"${CLUSTER}\""; then
     echo "==> creating k3d cluster ${CLUSTER}"
-    k3d cluster create "${CLUSTER}" --agents 0 --wait
+    k3d cluster create "${CLUSTER}" --agents 0 --wait \
+      --registry-use "k3d-${REG_NAME}:${REG_PORT}"
+  elif ! docker exec "k3d-${CLUSTER}-server-0" \
+        cat /etc/rancher/k3s/registries.yaml 2>/dev/null \
+      | grep -q "k3d-${REG_NAME}:${REG_PORT}"; then
+    # Direct evidence, not an inference. k3d writes the mirror into the node's
+    # registries.yaml at cluster-create time, so its presence is exactly the
+    # thing that decides whether a pull by digest will resolve. A first version
+    # of this check walked docker networks inside a pipeline subshell, where the
+    # grep's exit status could not propagate — it reported a correctly wired
+    # cluster as unwired, and a mutation run that never reached the tests then
+    # read as SURVIVED.
+    echo "ERROR: cluster ${CLUSTER} has no mirror for k3d-${REG_NAME}:${REG_PORT}, so the" >&2
+    echo "       agent image cannot be pulled and the responder tests would not run." >&2
+    echo "       The registry is wired in at cluster-create time and cannot be added here." >&2
+    echo "       Recreate it:  k3d cluster delete ${CLUSTER}" >&2
+    exit 1
   fi
   # Merge explicitly rather than assume `cluster create` left a context behind.
   # A cluster outlives its kubeconfig entry — restarting the Docker VM, or
@@ -62,6 +98,25 @@ echo "==> building the operator image"
 # a build that needs the host network is a build that is not isolated.
 docker build ${DOCKER_BUILD_NETWORK:+--network "${DOCKER_BUILD_NETWORK}"} \
   -t "${IMAGE}" -f Dockerfile .
+
+echo "==> building and pushing the responder (the e2e's agent image)"
+# Pushed rather than imported, so the reference the Agent CR carries is a REAL
+# repo digest resolved from a registry — the same path a production agent image
+# takes, and the only one imagePullPolicy: Always will accept.
+docker build ${DOCKER_BUILD_NETWORK:+--network "${DOCKER_BUILD_NETWORK}"} \
+  -t "localhost:${REG_PORT}/${RESPONDER_REPO}:${IMAGE_TAG}" \
+  -f test/responder/Dockerfile .
+docker push "localhost:${REG_PORT}/${RESPONDER_REPO}:${IMAGE_TAG}" >/dev/null
+RESPONDER_DIGEST="$(docker inspect \
+  --format '{{index .RepoDigests 0}}' \
+  "localhost:${REG_PORT}/${RESPONDER_REPO}:${IMAGE_TAG}" | cut -d@ -f2)"
+if [ -z "${RESPONDER_DIGEST}" ]; then
+  echo "ERROR: could not read the responder's repo digest after pushing" >&2
+  exit 1
+fi
+# The NODE resolves the registry by its container name, not by localhost.
+export PLUME_E2E_RESPONDER_IMAGE="k3d-${REG_NAME}:${REG_PORT}/${RESPONDER_REPO}@${RESPONDER_DIGEST}"
+echo "    responder: ${PLUME_E2E_RESPONDER_IMAGE}"
 
 echo "==> loading the image into ${DISTRO}"
 case "${DISTRO}" in

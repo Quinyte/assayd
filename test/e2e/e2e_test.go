@@ -156,9 +156,11 @@ func TestWorkloadActuallyRuns(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "runs", Namespace: "plume-e2e"},
 		Spec: plumev1alpha1.AgentSpec{
 			Runtime: &plumev1alpha1.AgentRuntime{
-				// A real image that starts, serves a port and stays up. The agent
-				// contract (an A2A card) is not exercised here — card fetch is
-				// unimplemented — so this asserts the workload story only.
+				// A real image that starts, serves a port and stays up. This test
+				// asserts the WORKLOAD story only, deliberately: `pause` keeps it
+				// independent of the responder image and its registry, so a broken
+				// fixture cannot make the workload path look broken. The agent
+				// contract is exercised in responder_test.go.
 				Image: pauseImage,
 			},
 		},
