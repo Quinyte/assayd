@@ -303,6 +303,28 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
+	// A rollback request overrides which revision serves, and it does so by
+	// SELECTING a retained one rather than recomputing from spec (ADR-0031).
+	// Placed after the run namespace exists — the retained workloads live there —
+	// and before the collision guard, so the pinned revision is what everything
+	// downstream is checked against.
+	pin, perr := r.resolveReleasePin(ctx, &agent, runNS)
+	if perr != nil {
+		if u := (*unresolvablePinError)(nil); errors.As(perr, &u) {
+			return ctrl.Result{}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
+		}
+		return ctrl.Result{}, perr
+	}
+	if pin != nil {
+		// The pinned revision's material was written when it was minted and is
+		// immutable, so nothing is re-resolved here. That is the property under
+		// source drift: re-resolving would read the CHANGED ConfigMap and either
+		// collide with the immutable copy or serve bytes the revision was never
+		// evaluated with.
+		desired, desiredDigest = pin.Revision, pin.Digest
+		logger = logger.WithValues("revision", desired, "pinned", true)
+	}
+
 	// STATUS is the authority on which revision a name belongs to, and it is
 	// checked before the workload is touched.
 	//
@@ -336,7 +358,20 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// A35: create the revision's own immutable copies BEFORE the workload, and
 	// point the workload at them. Order matters — publishing a workload that
 	// reads the user's object, even briefly, is the window this closes.
-	material, merr := r.ensureRevisionMaterial(ctx, &agent, runNS, desired, desiredDigest, buffers)
+	// A pinned revision's material is RESOLVED, never rewritten: ensureRevision-
+	// Material writes the buffers read from the user's current objects, which
+	// after a drift are not the bytes this revision was evaluated with, and the
+	// immutable copy correctly refuses them (ADR-0031).
+	var material map[revision.SourceRef]string
+	var merr error
+	if pin != nil {
+		material, merr = r.retainedMaterial(ctx, &agent, runNS, desired, desiredDigest)
+		if u := (*unresolvablePinError)(nil); merr != nil && errors.As(merr, &u) {
+			return ctrl.Result{}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
+		}
+	} else {
+		material, merr = r.ensureRevisionMaterial(ctx, &agent, runNS, desired, desiredDigest, buffers)
+	}
 	if merr != nil {
 		// EVERY error here reaches the object, not only the typed one. The
 		// earlier version returned a bare error for a Forbidden create, an

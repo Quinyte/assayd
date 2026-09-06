@@ -266,6 +266,10 @@ var specLeafClass = map[string]leafClass{
 	"spec.External.InlineCard":                inPlace,
 	"spec.Card.Path":                          inPlace,
 	"spec.Gates[].EvalSuiteRef":               inPlace,
+	// ADR-0031: control intent, not behaviour. It SELECTS which evaluated
+	// revision serves; it does not change what any revision does. Hashing it
+	// would make asking for a rollback mint a new revision to roll back from.
+	"spec.Release.TargetRevisionDigest": inPlace,
 }
 
 // ClassifiedAsBehaviour reports whether a leaf is on the behaviour surface.

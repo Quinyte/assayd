@@ -2,6 +2,7 @@ package revision
 
 import (
 	"reflect"
+	"strings"
 	"time"
 
 	"testing"
@@ -90,6 +91,10 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 		Gates:  []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}},
 		Loop:   &plumev1alpha1.LoopSpec{AllowReentry: true, MaxVisits: 2},
 		Expose: &plumev1alpha1.ExposeSpec{A2A: &plumev1alpha1.ExposeProtocol{Visibility: "org", Auth: "oauth"}},
+		// Set so a change to how this leaf encodes would move a golden digest —
+		// and, because it is policy surface, the digest must NOT move for it. The
+		// two golden constants below are what prove that.
+		Release: &plumev1alpha1.ReleaseSpec{TargetRevisionDigest: strings.Repeat("a", 64)},
 	}
 }
 

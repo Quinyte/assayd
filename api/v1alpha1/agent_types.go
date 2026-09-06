@@ -21,6 +21,11 @@ type AgentSpec struct {
 	// +optional
 	External *ExternalAgent `json:"external,omitempty"`
 
+	// Release selects which revision serves, when that is not simply the one
+	// this spec computes to (ADR-0031 decision 2).
+	// +optional
+	Release *ReleaseSpec `json:"release,omitempty"`
+
 	// Card locates the A2A Agent Card. The container is the source of truth
 	// (ADR-0019): the operator fetches, validates and digests it per revision.
 	// +optional
@@ -327,6 +332,33 @@ type LoopSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	MaxVisits int32 `json:"maxVisits,omitempty"`
+}
+
+// ReleaseSpec is the rollback request surface. Design 02 promised instant
+// rollback and retention delivered it — a retained revision's workload, Service
+// and immutable material all survive — but until ADR-0031 nothing could ask for
+// one. Reapplying the old YAML is not the same operation: env-source CONTENT is
+// part of the revision identity, so once a referenced ConfigMap has drifted the
+// same spec computes a NEW digest and mints a new revision rather than
+// returning to the evaluated one. Status is operator-owned, so a user cannot
+// set activeRevisionDigest either.
+//
+// A field rather than a request CR, because rollback is durable desired state:
+// a transient request object races the spec and is reverted by the next
+// reconcile, while a field survives GitOps. The consequence GitOps users must
+// know is the same one: the pin belongs in the source of truth, or their
+// reconciler will revert a manual patch.
+type ReleaseSpec struct {
+	// TargetRevisionDigest pins the release to a retained revision, named by its
+	// FULL SHA-256 — never the 40-bit workload name, which a chosen collision can
+	// forge (A57). Unset means follow the ordinary desired spec.
+	//
+	// The pinned revision is SELECTED, never recomputed: the operator serves the
+	// retained material that revision was evaluated with, which is the whole
+	// point under source drift.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
+	TargetRevisionDigest string `json:"targetRevisionDigest,omitempty"`
 }
 
 type GateRef struct {

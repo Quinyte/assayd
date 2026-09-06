@@ -44,6 +44,8 @@ var policyFields = map[string]string{
 	"Card":                "a path change is re-registration, exactly as card drift is",
 
 	"Gates": "a gate that re-gated itself on edit could not converge",
+
+	"Release": "ADR-0031: control intent. It selects which already-evaluated revision serves; hashing it would make asking for a rollback mint a new revision to roll back from",
 }
 
 // Fields whose sub-fields are classified individually rather than as a whole.

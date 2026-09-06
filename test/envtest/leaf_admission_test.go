@@ -103,9 +103,13 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 		"spec.Runtime.Image": {digest, "ghcr.io/acme/other@sha256:" +
 			"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"},
 		"spec.Runtime.Sandbox.Profile": {"gvisor", "kata"},
-		"spec.External.Endpoint":       {"https://a.example.com", "https://b.example.com"},
-		"spec.Expose.A2A.Visibility":   {"cluster", "org"},
-		"spec.Expose.A2A.Auth":         {"none", "oauth"},
+		// Two full SHA-256s. The generic walker writes "leaf-a"/"leaf-b", which the
+		// pattern refuses, so without this pair the leaf is classified only against
+		// a specimen the API would reject.
+		"spec.Release.TargetRevisionDigest": {strings.Repeat("a", 64), strings.Repeat("b", 64)},
+		"spec.External.Endpoint":            {"https://a.example.com", "https://b.example.com"},
+		"spec.Expose.A2A.Visibility":        {"cluster", "org"},
+		"spec.Expose.A2A.Auth":              {"none", "oauth"},
 		// The arm is an enum, and switching it must keep the instance block valid
 		// — so the pair is the two arms that carry no instance block at all.
 		"spec.LLM.Providers[].Arm":       {"anthropic", "openai"},
