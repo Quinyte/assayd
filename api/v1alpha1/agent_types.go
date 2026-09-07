@@ -567,6 +567,12 @@ type CardStatus struct {
 	Digest string `json:"digest,omitempty"`
 	// +optional
 	Signed bool `json:"signed,omitempty"`
+	// SharedTaskState is what the card DECLARED. §3.2 makes the card the
+	// declaration point for shared task state, and TaskStateUnverified is keyed
+	// off it — so the value has to be recorded rather than re-derived, and a
+	// condition that claims to key on it must have something to read.
+	// +optional
+	SharedTaskState bool `json:"sharedTaskState,omitempty"`
 }
 
 // EvalStatus is the last gate result for whichever revision was gated most

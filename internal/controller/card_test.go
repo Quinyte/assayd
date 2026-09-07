@@ -200,13 +200,15 @@ func TestCardFetchDueDecidesWhenToGoToTheNetwork(t *testing.T) {
 		return &plumev1alpha1.AgentStatus{Cards: []plumev1alpha1.CardStatus{
 			{RevisionDigest: rev, FetchedAt: &at}}}
 	}
+	// A failed ATTEMPT, which is an entry with an empty digest. It is not a
+	// condition: keying the gate on Registered.LastTransitionTime meant the gate
+	// opened permanently after its first interval, because merge() freezes that
+	// timestamp while the status stays False — five reconciles, five dials, each
+	// able to block the shared work queue for the fetch timeout.
 	withFailure := func(age time.Duration) *plumev1alpha1.AgentStatus {
-		return &plumev1alpha1.AgentStatus{Conditions: []metav1.Condition{{
-			Type:               string(plumev1alpha1.CondRegistered),
-			Status:             metav1.ConditionFalse,
-			Reason:             "CardUnreachable",
-			LastTransitionTime: metav1.NewTime(now.Add(-age)),
-		}}}
+		at := metav1.NewTime(now.Add(-age))
+		return &plumev1alpha1.AgentStatus{Cards: []plumev1alpha1.CardStatus{
+			{RevisionDigest: rev, FetchedAt: &at}}}
 	}
 
 	for _, tc := range []struct {
@@ -225,6 +227,9 @@ func TestCardFetchDueDecidesWhenToGoToTheNetwork(t *testing.T) {
 			"an unreachable agent must not be dialled on every reconcile — the work queue is shared"},
 		{"failed long ago", withFailure(CardRetryInterval + time.Second), true,
 			"a failure must be retried or a card fetched a second too early stays unfetched forever"},
+		{"failed long ago, then retried just now", withFailure(time.Second), false,
+			"the gate must CLOSE again after each retry. Keyed on a condition timestamp it did " +
+				"not: once open it stayed open, and every reconcile dialled"},
 		{"another revision's card", &plumev1alpha1.AgentStatus{Cards: []plumev1alpha1.CardStatus{
 			{RevisionDigest: "other", FetchedAt: ptrTime(now)}}}, true,
 			"this revision has no card of its own"},

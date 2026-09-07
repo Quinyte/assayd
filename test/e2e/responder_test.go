@@ -289,15 +289,19 @@ func TestTheOperatorRegistersTheCardItFetched(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		if err := k8s.Get(ctx, types.NamespacedName{Namespace: "plume-e2e", Name: name}, &live); err == nil {
-			if len(live.Status.Cards) > 0 {
+			// A REGISTERED card, not merely an entry. A failed attempt also writes
+			// one, with an empty digest, so that the retry gate has something that
+			// moves to measure from — breaking on any entry meant this test read the
+			// first failed attempt and called it a registration.
+			if len(live.Status.Cards) > 0 && live.Status.Cards[0].Digest != "" {
 				break
 			}
 		}
 		time.Sleep(3 * time.Second)
 	}
-	if len(live.Status.Cards) == 0 {
-		t.Fatalf("the operator never recorded a card; phase=%q conditions=%+v",
-			live.Status.Phase, live.Status.Conditions)
+	if len(live.Status.Cards) == 0 || live.Status.Cards[0].Digest == "" {
+		t.Fatalf("the operator never registered a card; cards=%+v phase=%q conditions=%+v",
+			live.Status.Cards, live.Status.Phase, live.Status.Conditions)
 	}
 
 	c := live.Status.Cards[0]

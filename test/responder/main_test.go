@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,9 +64,14 @@ func TestTheCardIsByteStableAcrossFetches(t *testing.T) {
 			t.Fatalf("fetch: %v", err)
 		}
 		defer r.Body.Close()
-		b := make([]byte, 4096)
-		n, _ := r.Body.Read(b)
-		return string(b[:n])
+		// io.ReadAll, not one Read: a single Read is correct for this card and
+		// silently truncates a longer one, which would make two different cards
+		// compare equal.
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		return string(b)
 	}
 	if a, b := get(), get(); a != b {
 		t.Errorf("the card changed between two fetches, which the operator reads as drift:\n%s\n%s", a, b)

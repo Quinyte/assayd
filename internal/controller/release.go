@@ -106,7 +106,12 @@ func (r *AgentReconciler) resolveReleasePin(ctx context.Context, agent *plumev1a
 // retrying forever against a digest that will never appear writes nothing.
 func (r *AgentReconciler) reportUnresolvablePin(ctx context.Context, agent *plumev1alpha1.Agent,
 	status *plumev1alpha1.AgentStatus, conds *conditionSet, e *unresolvablePinError) error {
-	conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "ReleasePinUnresolvable", e.Error())
+	// Degraded, not Ready=False. The message says the current release is
+	// untouched and it is — so setting the canonical condition False would page
+	// the on-call for a typo in a 64-character digest while the agent serves
+	// normally. A13's rule, written into agent_controller.go: Ready=False on an
+	// agent whose active revision is serving "would trip every alert keyed on the
+	// canonical condition".
 	conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "ReleasePinUnresolvable", e.Error())
 	status.Phase = plumev1alpha1.PhaseDegraded
 	status.Conditions = conds.merge(agent.Status.Conditions)

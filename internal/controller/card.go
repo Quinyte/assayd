@@ -82,6 +82,15 @@ const (
 // registration failure rather than a shrug: the operator cannot know what an
 // unknown protocol's card means, and treating it as valid would register an
 // agent whose contract nothing understood.
+//
+// **The value in it is unverified.** A review pointed out that this set was
+// written to match the string the repository's own test fixture serves, and no
+// document here states what a real A2A v1.0 card carries in `protocolVersion` —
+// the two sides were written by one hand to agree, so nothing about the
+// protocol has been checked. Design 09 describes A2A v1.0 as JSON-RPC + SSE and
+// the fixture answers a bespoke HTTP JSON endpoint. `/research-latest` must pin
+// the real card and task shapes before design 03's route assumes them; §5
+// carries this.
 var supportedA2AVersions = map[string]bool{"1.0": true}
 
 type fetchedCard struct {
@@ -91,6 +100,13 @@ type fetchedCard struct {
 	Skills          []struct {
 		ID string `json:"id"`
 	} `json:"skills"`
+	// Parsed because §3.2 keys TaskStateUnverified off it. It was NOT parsed
+	// until a review measured the consequence: an agent whose card asserted the
+	// capability carried Registered=True beside a condition saying the card had
+	// not been fetched.
+	Capabilities struct {
+		SharedTaskState bool `json:"sharedTaskState"`
+	} `json:"capabilities"`
 }
 
 // cardError is a registration failure with a reason an operator can act on.
@@ -138,7 +154,7 @@ func (r *AgentReconciler) fetchAndValidateCard(ctx context.Context, agent *plume
 	url := fmt.Sprintf("http://%s%s",
 		net.JoinHostPort(svc.Spec.ClusterIP, fmt.Sprint(port(agent.Spec.Runtime))), path)
 
-	body, err := r.getWithRetries(ctx, url)
+	body, err := r.fetchOnce(ctx, url)
 	if err != nil {
 		return nil, &cardError{reason: "CardUnreachable", msg: fmt.Sprintf(
 			"could not fetch the agent card from %s: %v. Retrying every %s; this does not "+
@@ -176,11 +192,14 @@ func (r *AgentReconciler) fetchAndValidateCard(ctx context.Context, agent *plume
 		FetchedAt: &now,
 		// Nothing in this repository signs a card, so this is false for every
 		// agent today and CardUnsigned is raised alongside it.
-		Signed: false,
+		Signed:          false,
+		SharedTaskState: c.Capabilities.SharedTaskState,
 	}, nil
 }
 
-func (r *AgentReconciler) getWithRetries(ctx context.Context, url string) ([]byte, error) {
+// fetchOnce makes exactly one attempt. It was called getWithRetries when it
+// looped; the loop moved between reconciles and the name did not follow it.
+func (r *AgentReconciler) fetchOnce(ctx context.Context, url string) ([]byte, error) {
 	client := r.CardClient
 	if client == nil {
 		client = &http.Client{}
@@ -235,31 +254,60 @@ func upsertCard(cards []plumev1alpha1.CardStatus, c plumev1alpha1.CardStatus,
 // re-fetching and comparing the digest, and something has to say how often.
 const CardDriftInterval = 5 * time.Minute
 
-// cardFetchDue decides whether to go to the network at all.
+// cardFetchDue decides whether to go to the network at all, and when to come
+// back.
 //
-// Fetching on every reconcile was the first implementation and it was wrong
-// twice over. `TestReconcileIsIdempotent` caught it immediately — five
-// reconciles of a converged agent issued four status writes, which is the churn
-// that test exists to forbid — and the envtest suite went from about a minute to
-// seven, because each reconcile spent its timeout failing to resolve a name.
-// Both are the same mistake: a card is not a per-reconcile input. It is fetched
-// once per revision and re-read on an interval to catch drift.
+// It keys on the per-revision entry in status.cards[], including one written
+// for a FAILED attempt with an empty Digest. That entry is the attempt record,
+// and it exists because a review measured the alternative failing: keying the
+// retry gate on the Registered condition's LastTransitionTime meant the gate
+// opened permanently after its first interval, because merge() correctly
+// freezes that timestamp while the status stays False — five back-to-back
+// reconciles produced five dials, each able to block the shared work queue for
+// the fetch timeout.
+//
+// Fetching on every reconcile was the first implementation and was wrong twice
+// over: TestReconcileIsIdempotent caught five reconciles of a converged agent
+// issuing four status writes, and the envtest suite went from about a minute to
+// seven. A card is not a per-reconcile input.
 func cardFetchDue(status *plumev1alpha1.AgentStatus, revDigest string, now time.Time) bool {
-	for _, c := range status.Cards {
-		if c.RevisionDigest != revDigest {
-			continue
+	c := cardEntry(status, revDigest)
+	if c == nil {
+		return true // never attempted
+	}
+	if c.FetchedAt == nil {
+		return true
+	}
+	if c.Digest == "" {
+		// An attempt that failed. Retry on the retry interval.
+		return now.Sub(c.FetchedAt.Time) >= CardRetryInterval
+	}
+	// Registered. Re-read only to check for drift.
+	return now.Sub(c.FetchedAt.Time) >= CardDriftInterval
+}
+
+// cardRequeueAfter says when to come back, and it is what makes CardDriftInterval
+// mean anything.
+//
+// A review measured the previous behaviour: after a successful registration
+// Reconcile returned RequeueAfter 0, no SyncPeriod is set, so the manager's
+// ~10h default applied and a converged agent was never re-read. The constant's
+// comment described a schedule that did not exist — a bound nothing enforced.
+func cardRequeueAfter(status *plumev1alpha1.AgentStatus, revDigest string) time.Duration {
+	c := cardEntry(status, revDigest)
+	if c == nil || c.Digest == "" {
+		return CardRetryInterval
+	}
+	return CardDriftInterval
+}
+
+func cardEntry(status *plumev1alpha1.AgentStatus, revDigest string) *plumev1alpha1.CardStatus {
+	for i := range status.Cards {
+		if status.Cards[i].RevisionDigest == revDigest {
+			return &status.Cards[i]
 		}
-		// Already have this revision's card: only re-read to check for drift.
-		return c.FetchedAt == nil || now.Sub(c.FetchedAt.Time) >= CardDriftInterval
 	}
-	// No card for this revision. If the last attempt FAILED recently, wait —
-	// otherwise an agent whose card is unreachable would be dialled on every
-	// reconcile, and its failures would ride the shared work queue.
-	if c := findCondition(status.Conditions, string(plumev1alpha1.CondRegistered)); c != nil &&
-		c.Status == metav1.ConditionFalse {
-		return now.Sub(c.LastTransitionTime.Time) >= CardRetryInterval
-	}
-	return true
+	return nil
 }
 
 func findCondition(conds []metav1.Condition, t string) *metav1.Condition {
@@ -271,12 +319,45 @@ func findCondition(conds []metav1.Condition, t string) *metav1.Condition {
 	return nil
 }
 
-// hasCardFor reports whether this revision's card has been fetched.
+// hasCardFor reports whether this revision is REGISTERED — an entry with an
+// empty digest is a failed attempt, not a card.
 func hasCardFor(status *plumev1alpha1.AgentStatus, revDigest string) bool {
+	c := cardEntry(status, revDigest)
+	return c != nil && c.Digest != ""
+}
+
+// recordCardAttempt stamps a failed attempt so the retry gate has something to
+// measure from that does not freeze the way a condition timestamp does.
+func recordCardAttempt(status *plumev1alpha1.AgentStatus, rev, revDigest string, at time.Time) {
+	t := metav1.NewTime(at)
+	if c := cardEntry(status, revDigest); c != nil {
+		c.FetchedAt = &t
+		c.Digest = ""
+		c.Revision = rev
+		return
+	}
+	// Revision is set even though this is not a card: pruneCards collects by
+	// revision name, so an attempt record without one would be the one thing in
+	// status that never gets collected.
+	status.Cards = append(status.Cards, plumev1alpha1.CardStatus{
+		Revision: rev, RevisionDigest: revDigest, FetchedAt: &t,
+	})
+}
+
+// pruneCards drops entries for revisions that have left the retained set.
+// §3.4 says a card is "collected with revisions"; nothing collected them, so an
+// Agent accumulated one entry per revision it had ever registered, forever.
+func pruneCards(status *plumev1alpha1.AgentStatus, keep map[string]bool) bool {
+	if len(status.Cards) == 0 {
+		return false
+	}
+	before := len(status.Cards)
+	kept := status.Cards[:0]
 	for _, c := range status.Cards {
-		if c.RevisionDigest == revDigest {
-			return true
+		if keep[c.Revision] {
+			kept = append(kept, c)
 		}
 	}
-	return false
+	status.Cards = kept
+	return len(kept) != before
 }

@@ -2,7 +2,12 @@ package envtest
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,8 +54,18 @@ func TestTheOperatorAttemptsACardFetchOnceTheRevisionIsAvailable(t *testing.T) {
 		t.Errorf("Registered is %s/%s; envtest has no cluster network, so the only honest "+
 			"outcome is CardUnreachable", c.Status, c.Reason)
 	}
-	if len(got.Status.Cards) != 0 {
-		t.Errorf("a card was recorded despite the fetch failing: %+v", got.Status.Cards)
+	// A failed attempt DOES leave an entry — with an empty Digest, which is the
+	// attempt record the retry gate measures from. What must not appear is a
+	// registered card: an entry with a digest would mean the operator recorded a
+	// card it could not read.
+	for _, c := range got.Status.Cards {
+		if c.Digest != "" {
+			t.Errorf("a card was recorded despite the fetch failing: %+v", c)
+		}
+	}
+	if len(got.Status.Cards) != 1 || got.Status.Cards[0].Revision != rev {
+		t.Errorf("no attempt record for revision %s, so the retry gate has nothing to "+
+			"measure from and reopens on every reconcile: %+v", rev, got.Status.Cards)
 	}
 }
 
@@ -111,3 +126,97 @@ func TestAnUnregisteredReadyRevisionKeepsBeingRequeued(t *testing.T) {
 }
 
 var _ = context.Background
+
+// The SUCCESS path, in envtest. It was reachable all along and was covered only
+// by a three-minute k3d run, which is why two defects lived here: the drift
+// re-read was never scheduled, and a drifted card replaced its digest in
+// silence. One case shows both (reviews/02-step2-fable-review.md MINOR 6).
+func TestARegisteredCardIsRereadAndDriftIsSignalled(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "drifty", nil)
+
+	served := `{"name":"drifty","version":"1","protocolVersion":"1.0","skills":[{"id":"echo"}],` +
+		`"capabilities":{"sharedTaskState":true}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(served))
+	}))
+	defer srv.Close()
+
+	r := newReconciler(false)
+	r.CardClient = redirect{srv.URL}
+	rev := revision.MustHash(a.Spec)
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("drifty", rev), 1)
+	got := settle(t, r, a)
+
+	c := meta.FindStatusCondition(got.Status.Conditions, string(plumev1alpha1.CondRegistered))
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != "CardValidated" {
+		t.Fatalf("the card was not registered: %+v", c)
+	}
+	if len(got.Status.Cards) != 1 || got.Status.Cards[0].Digest == "" {
+		t.Fatalf("no card recorded: %+v", got.Status.Cards)
+	}
+	first := got.Status.Cards[0].Digest
+	if !got.Status.Cards[0].SharedTaskState {
+		t.Error("the card asserts capabilities.sharedTaskState and status did not record it, " +
+			"so TaskStateUnverified has nothing to key on and says whatever it was written to say")
+	}
+
+	// The re-read must be SCHEDULED. Returning zero here is what made
+	// CardDriftInterval a bound nothing enforced: no SyncPeriod is set, so a
+	// converged agent would not be re-read for the manager's ~10h default.
+	res, err := r.Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if res.RequeueAfter != controller.CardDriftInterval {
+		t.Errorf("a registered revision requeues after %v, want the drift interval %v — "+
+			"otherwise the card is never re-read and drift is undetectable in practice",
+			res.RequeueAfter, controller.CardDriftInterval)
+	}
+
+	// Now drift: same revision, different bytes.
+	served = `{"name":"drifty","version":"2","protocolVersion":"1.0",` +
+		`"skills":[{"id":"echo"},{"id":"delete-everything"}],"capabilities":{"sharedTaskState":true}}`
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	// Age the fetch past the drift interval so the re-read is due.
+	live := a.DeepCopy()
+	old := metav1.NewTime(time.Now().Add(-controller.CardDriftInterval - time.Minute))
+	live.Status.Cards[0].FetchedAt = &old
+	if err := k8s.Status().Update(context.Background(), live); err != nil {
+		t.Fatalf("age the card: %v", err)
+	}
+	got = settle(t, r, a)
+
+	c = meta.FindStatusCondition(got.Status.Conditions, string(plumev1alpha1.CondRegistered))
+	if c == nil || c.Reason != "CardDrifted" {
+		t.Errorf("the agent replaced its card — a new skill and a new version — and the only "+
+			"trace was the digest changing in place. Registered reason is %q, want CardDrifted",
+			cond(c))
+	}
+	if got.Status.Cards[0].Digest == first {
+		t.Error("the digest did not change, so the drift was not observed at all")
+	}
+}
+
+func cond(c *metav1.Condition) string {
+	if c == nil {
+		return "<absent>"
+	}
+	return c.Reason
+}
+
+// redirect sends the operator's request to the test server whatever in-cluster
+// address it built. The address construction is exercised by the e2e.
+type redirect struct{ base string }
+
+func (d redirect) Do(req *http.Request) (*http.Response, error) {
+	out, err := http.NewRequestWithContext(req.Context(), req.Method, d.base+req.URL.Path, nil)
+	if err != nil {
+		return nil, err
+	}
+	return http.DefaultClient.Do(out)
+}

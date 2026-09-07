@@ -276,7 +276,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// degraded, not less.
 	r.assessGates(&agent, conds)
 	r.assessSandbox(&agent, conds)
-	r.assessTaskState(&agent, conds)
+	r.assessTaskState(&agent, status, conds)
 
 	// A42/A60: everything below goes into the operator-owned run namespace, and
 	// the operator must be able to prove it created that namespace before it
@@ -513,13 +513,34 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				return ctrl.Result{}, cerr
 			}
 			conds.set(plumev1alpha1.CondRegistered, metav1.ConditionFalse, ce.reason, ce.Error())
+			// Stamp the ATTEMPT, so the retry gate measures from something that
+			// moves. Keying it on the condition's LastTransitionTime meant the gate
+			// opened permanently after its first interval.
+			recordCardAttempt(status, desired, desiredDigest, time.Now())
 			// Retries live BETWEEN reconciles, not inside one: the work queue is
 			// shared, so blocking here would let one unreachable agent delay every
 			// other agent's reconcile.
 		default:
+			// Drift, §3.4: the same revision now serves different bytes. Say so
+			// rather than replacing the digest in silence — "detectable" previously
+			// meant a human diffing two status dumps, which is not a signal.
+			prev := cardEntry(status, desiredDigest)
+			drifted := prev != nil && prev.Digest != "" && prev.Digest != card.Digest
 			status.Cards = upsertCard(status.Cards, *card, desiredDigest)
-			conds.set(plumev1alpha1.CondRegistered, metav1.ConditionTrue, "CardValidated",
-				fmt.Sprintf("revision %s serves a valid A2A card (digest %s)", desired, card.Digest[:12]))
+			switch {
+			case drifted:
+				logger.Info("agent card drifted", "revision", desired,
+					"from", prev.Digest[:12], "to", card.Digest[:12])
+				conds.set(plumev1alpha1.CondRegistered, metav1.ConditionTrue, "CardDrifted",
+					fmt.Sprintf("revision %s now serves a different card: digest %s, was %s. "+
+						"The new card is valid and the revision keeps serving; a card change "+
+						"without a spec change is the agent redescribing itself, which nothing "+
+						"gates. No event is emitted — no EventRecorder is wired (§5)",
+						desired, card.Digest[:12], prev.Digest[:12]))
+			default:
+				conds.set(plumev1alpha1.CondRegistered, metav1.ConditionTrue, "CardValidated",
+					fmt.Sprintf("revision %s serves a valid A2A card (digest %s)", desired, card.Digest[:12]))
+			}
 			// Loud rather than silent, per design 09: nothing in this repository
 			// signs a card, so every agent is the unsigned BYO case that rule was
 			// written for. Clearing this would claim a verification that no code
@@ -541,8 +562,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// so a card that was merely fetched a second too early stayed unfetched
 	// forever. Forcing one reconcile by hand registered it instantly, which is
 	// what showed the fetch had never been the problem.
-	if ready && !hasCardFor(status, desiredDigest) {
-		cardRequeue = CardRetryInterval
+	// Always come back while this revision is ready: on the retry interval until
+	// it registers, and on the DRIFT interval once it has. Returning zero after a
+	// successful registration is what made CardDriftInterval a bound nothing
+	// enforced — no SyncPeriod is set, so a converged agent was not re-read for
+	// the manager's ~10h default.
+	if ready {
+		cardRequeue = cardRequeueAfter(status, desiredDigest)
 	}
 
 	switch {
@@ -850,7 +876,7 @@ func (r *AgentReconciler) reportUnresolvedSources(ctx context.Context, agent *pl
 	conds := newConditionSet(agent.Generation)
 	r.assessGates(agent, conds)
 	r.assessSandbox(agent, conds)
-	r.assessTaskState(agent, conds)
+	r.assessTaskState(agent, status, conds)
 
 	names := make([]string, 0, len(unresolved))
 	for _, u := range unresolved {
@@ -1236,14 +1262,28 @@ func (r *AgentReconciler) assessSandbox(agent *plumev1alpha1.Agent, c *condition
 // assessTaskState implements §3.2's detected-not-assumed rule. The A2A card is
 // the declaration point, and card fetch is unimplemented, so replicas>1 cannot
 // currently be verified and the condition names that rather than assuming.
-func (r *AgentReconciler) assessTaskState(agent *plumev1alpha1.Agent, c *conditionSet) {
+func (r *AgentReconciler) assessTaskState(agent *plumev1alpha1.Agent, status *plumev1alpha1.AgentStatus, c *conditionSet) {
 	if agent.Spec.Runtime == nil || agent.Spec.Runtime.Replicas <= 1 {
 		return
 	}
+	// The card that IS registered decides this, which is what §3.2 says and what
+	// the condition previously only claimed. It reads the card recorded by an
+	// earlier reconcile — the fetch happens later in this one — which is ordinary
+	// level-triggered behaviour, not a staleness bug.
+	if c2 := cardEntry(status, status.ActiveRevisionDigest); c2 != nil && c2.Digest != "" {
+		if c2.SharedTaskState {
+			return // the agent declared it; nothing to warn about
+		}
+		c.set(plumev1alpha1.CondTaskStateUnverified, metav1.ConditionTrue,
+			"CardDoesNotAssertSharedTaskState",
+			fmt.Sprintf("replicas=%d and the registered A2A card does not assert "+
+				"capabilities.sharedTaskState, so concurrent replicas may lose task state",
+				agent.Spec.Runtime.Replicas))
+		return
+	}
 	c.set(plumev1alpha1.CondTaskStateUnverified, metav1.ConditionTrue, "CardNotFetched",
-		fmt.Sprintf("replicas=%d requires the A2A card to assert shared task state. The card is "+
-			"fetched and validated (§3.4), but its capabilities are not parsed, so nothing has "+
-			"checked whether this agent asserts shared task state; concurrent replicas may lose it",
+		fmt.Sprintf("replicas=%d requires the A2A card to assert shared task state, and no card "+
+			"is registered for the active revision yet; concurrent replicas may lose task state",
 			agent.Spec.Runtime.Replicas))
 }
 
@@ -1303,6 +1343,18 @@ func (r *AgentReconciler) collectGarbage(
 	// so nothing else will collect it.
 	if err := r.collectRevisionServices(ctx, agent, runNS, keep); err != nil {
 		return err
+	}
+	// And the card entry, which §3.4 says is "collected with revisions" and which
+	// nothing collected — one entry per revision the agent had ever registered.
+	//
+	// This runs AFTER the reconcile's status write, so a prune that changes
+	// something must write again or it is simply lost. It is rare — only when a
+	// revision leaves the retained set — and the alternative, dropping the write,
+	// would make the pruning code look like it worked while nothing persisted.
+	if pruneCards(status, keep) {
+		if err := r.writeStatus(ctx, agent, status); err != nil {
+			return fmt.Errorf("persist pruned cards: %w", err)
+		}
 	}
 	return r.collectPreA42Leftovers(ctx, agent)
 }
