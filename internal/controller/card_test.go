@@ -59,7 +59,18 @@ func (d redirectTo) Do(req *http.Request) (*http.Response, error) {
 	return http.DefaultClient.Do(out)
 }
 
-const goodCard = `{"name":"pa-reviewer","version":"0.1.0","protocolVersion":"1.0","skills":[{"id":"echo"}]}`
+// A real A2A v1.0 card. protocolVersion lives inside supportedInterfaces[];
+// there is no top-level one, which is the defect this fixture used to encode.
+const goodCard = `{"name":"pa-reviewer","description":"d","version":"0.1.0",` +
+	`"supportedInterfaces":[{"url":"http://x/","protocolBinding":"JSONRPC","protocolVersion":"1.0"}],` +
+	`"capabilities":{"streaming":false},"defaultInputModes":["text/plain"],` +
+	`"defaultOutputModes":["text/plain"],"skills":[{"id":"echo"}]}`
+
+// The pre-1.0 shape, kept as a fixture on purpose. plume parsed exactly this and
+// called it v1.0; a conformant card has no top-level protocolVersion, so the
+// operator would have refused every real agent while accepting this one.
+const v0Card = `{"name":"pa-reviewer","version":"0.1.0","protocolVersion":"1.0",` +
+	`"url":"http://x/","skills":[{"id":"echo"}]}`
 
 func TestAValidCardIsAccepted(t *testing.T) {
 	r, a := cardFixture(t, goodCard, 200)
@@ -89,8 +100,12 @@ func TestEachCardDefectIsRefusedByItsOwnRule(t *testing.T) {
 		status                 int
 	}{
 		{"unparseable", `{not json`, "CardUnparseable", 200},
-		{"name mismatch", `{"name":"someone-else","protocolVersion":"1.0"}`, "CardNameMismatch", 200},
-		{"unsupported protocol", `{"name":"pa-reviewer","protocolVersion":"9.9"}`, "CardProtocolUnsupported", 200},
+		{"name mismatch", `{"name":"someone-else","supportedInterfaces":[{"protocolVersion":"1.0"}]}`,
+			"CardNameMismatch", 200},
+		{"unsupported protocol", `{"name":"pa-reviewer","supportedInterfaces":[{"protocolVersion":"9.9"}]}`,
+			"CardProtocolUnsupported", 200},
+		// The regression guard for A71. A v0.x card decodes with no interfaces.
+		{"a pre-1.0 card", v0Card, "CardNoInterfaces", 200},
 		{"not served", `nope`, "CardUnreachable", 503},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,7 +130,10 @@ func TestEachCardDefectIsRefusedByItsOwnRule(t *testing.T) {
 // detects drift by comparing it, and normalising would hide a change the agent
 // actually made.
 func TestTheDigestIsOverTheServedBytes(t *testing.T) {
-	spaced := `{"name":"pa-reviewer",  "version":"0.1.0","protocolVersion":"1.0","skills":[{"id":"echo"}]}`
+	spaced := `{"name":"pa-reviewer",  "description":"d","version":"0.1.0",` +
+		`"supportedInterfaces":[{"url":"http://x/","protocolBinding":"JSONRPC","protocolVersion":"1.0"}],` +
+		`"capabilities":{"streaming":false},"defaultInputModes":["text/plain"],` +
+		`"defaultOutputModes":["text/plain"],"skills":[{"id":"echo"}]}`
 	r1, a1 := cardFixture(t, goodCard, 200)
 	r2, a2 := cardFixture(t, spaced, 200)
 	c1, err1 := r1.fetchAndValidateCard(context.Background(), a1, "plume-run-team", "abc123")
@@ -243,3 +261,37 @@ func TestCardFetchDueDecidesWhenToGoToTheNetwork(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *metav1.Time { m := metav1.NewTime(t); return &m }
+
+// supportedInterfaces[] is ORDERED BY THE AGENT'S PREFERENCE and an agent may
+// expose several bindings, so a supported version anywhere in the list is
+// enough. Checking only the first entry survived as a mutation: no fixture had
+// more than one interface, so nothing noticed that an agent preferring a
+// binding plume does not speak would be refused outright.
+func TestAnySupportedInterfaceIsEnoughNotOnlyTheFirst(t *testing.T) {
+	multi := `{"name":"pa-reviewer","description":"d","version":"0.1.0","supportedInterfaces":[` +
+		`{"url":"grpc://x/","protocolBinding":"GRPC","protocolVersion":"0.3"},` +
+		`{"url":"http://x/","protocolBinding":"JSONRPC","protocolVersion":"1.0"}],` +
+		`"capabilities":{"streaming":false},"defaultInputModes":["text/plain"],` +
+		`"defaultOutputModes":["text/plain"],"skills":[{"id":"echo"}]}`
+	r, a := cardFixture(t, multi, 200)
+	if _, err := r.fetchAndValidateCard(context.Background(), a, "plume-run-team", "abc123"); err != nil {
+		t.Errorf("an agent offering an unsupported binding FIRST and a supported one second "+
+			"was refused: %v.\nThe array is the agent's preference order, not a single "+
+			"declaration, so refusing on the first entry rejects conformant agents.", err)
+	}
+}
+
+// And the inverse, so the check is not simply "there is an interface".
+func TestACardWhoseInterfacesAreAllUnsupportedIsRefused(t *testing.T) {
+	old := `{"name":"pa-reviewer","description":"d","version":"0.1.0","supportedInterfaces":[` +
+		`{"url":"grpc://x/","protocolBinding":"GRPC","protocolVersion":"0.3"},` +
+		`{"url":"http://x/","protocolBinding":"JSONRPC","protocolVersion":"0.2"}],` +
+		`"capabilities":{"streaming":false},"defaultInputModes":["text/plain"],` +
+		`"defaultOutputModes":["text/plain"],"skills":[{"id":"echo"}]}`
+	r, a := cardFixture(t, old, 200)
+	_, err := r.fetchAndValidateCard(context.Background(), a, "plume-run-team", "abc123")
+	ce, ok := err.(*cardError)
+	if !ok || ce.reason != "CardProtocolUnsupported" {
+		t.Errorf("a card offering only 0.3 and 0.2 was not refused as unsupported: %v", err)
+	}
+}

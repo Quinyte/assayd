@@ -1266,25 +1266,24 @@ func (r *AgentReconciler) assessTaskState(agent *plumev1alpha1.Agent, status *pl
 	if agent.Spec.Runtime == nil || agent.Spec.Runtime.Replicas <= 1 {
 		return
 	}
-	// The card that IS registered decides this, which is what §3.2 says and what
-	// the condition previously only claimed. It reads the card recorded by an
-	// earlier reconcile — the fetch happens later in this one — which is ordinary
-	// level-triggered behaviour, not a staleness bug.
-	if c2 := cardEntry(status, status.ActiveRevisionDigest); c2 != nil && c2.Digest != "" {
-		if c2.SharedTaskState {
-			return // the agent declared it; nothing to warn about
-		}
-		c.set(plumev1alpha1.CondTaskStateUnverified, metav1.ConditionTrue,
-			"CardDoesNotAssertSharedTaskState",
-			fmt.Sprintf("replicas=%d and the registered A2A card does not assert "+
-				"capabilities.sharedTaskState, so concurrent replicas may lose task state",
-				agent.Spec.Runtime.Replicas))
-		return
-	}
-	c.set(plumev1alpha1.CondTaskStateUnverified, metav1.ConditionTrue, "CardNotFetched",
-		fmt.Sprintf("replicas=%d requires the A2A card to assert shared task state, and no card "+
-			"is registered for the active revision yet; concurrent replicas may lose task state",
-			agent.Spec.Runtime.Replicas))
+	// §3.2 says "the A2A card is the declaration point" for shared task state,
+	// and A2A v1.0 has no such declaration. `AgentCapabilities` is exactly four
+	// fields — streaming, pushNotifications, extensions, extendedAgentCard — and
+	// `grep -ci shared` over a2a.proto returns 0 (A71). So no conformant agent
+	// can ever clear this, and saying so is the honest reading.
+	//
+	// It is deliberately NOT keyed off the registered card any more. Doing that
+	// meant keying off a field that could only be absent — a check that looks
+	// like one and is a constant, which is worse than no check because it reads
+	// as verified. The sanctioned vehicle would be capabilities.extensions[]
+	// under a plume-owned URI; that is a design decision, not one to take inside
+	// an assessor.
+	c.set(plumev1alpha1.CondTaskStateUnverified, metav1.ConditionTrue,
+		"ProtocolHasNoDeclaration",
+		fmt.Sprintf("replicas=%d, and A2A v1.0 gives a card no way to assert shared task "+
+			"state: AgentCapabilities carries streaming, pushNotifications, extensions and "+
+			"extendedAgentCard, and nothing else. Concurrent replicas may lose task state "+
+			"and this operator cannot tell (design 02 A71)", agent.Spec.Runtime.Replicas))
 }
 
 // collectGarbage deletes revisions beyond the retention window. The window is N

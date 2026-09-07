@@ -93,20 +93,55 @@ const (
 // carries this.
 var supportedA2AVersions = map[string]bool{"1.0": true}
 
+// fetchedCard is the A2A **v1.0** Agent Card, as far as this operator reads it.
+// Pinned to `a2aproject/A2A` @ `v1.0.1` `specification/a2a.proto`; see
+// `docs/research/a2a-v1.0-card-and-transport-2026-09.md`.
+//
+// The previous version of this struct was a **v0.x** card — top-level `url` and
+// `protocolVersion` — which v1.0 removed and folded into `supportedInterfaces`.
+// Nothing caught it because the repository's own fixture served the same wrong
+// shape: both sides were written by one hand to agree, and the supported-version
+// check was written to match the fixture's string rather than any spec. The
+// consequence was not cosmetic. A conformant v1.0 card has no top-level
+// `protocolVersion`, so it decoded as "" and failed the check — **registration
+// would have failed for every real A2A agent**, which is the one population this
+// code exists to serve.
 type fetchedCard struct {
-	Name            string `json:"name"`
-	Version         string `json:"version"`
-	ProtocolVersion string `json:"protocolVersion"`
-	Skills          []struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Version     string `json:"version"`
+	// SupportedInterfaces is REQUIRED and ordered. Each entry carries its own
+	// protocol version, because one agent may expose several bindings.
+	SupportedInterfaces []agentInterface  `json:"supportedInterfaces"`
+	Capabilities        agentCapabilities `json:"capabilities"`
+	Skills              []struct {
 		ID string `json:"id"`
 	} `json:"skills"`
-	// Parsed because §3.2 keys TaskStateUnverified off it. It was NOT parsed
-	// until a review measured the consequence: an agent whose card asserted the
-	// capability carried Registered=True beside a condition saying the card had
-	// not been fetched.
-	Capabilities struct {
-		SharedTaskState bool `json:"sharedTaskState"`
-	} `json:"capabilities"`
+}
+
+type agentInterface struct {
+	URL string `json:"url"`
+	// ProtocolBinding is an open string; the spec names JSONRPC, GRPC and
+	// HTTP+JSON as the officially supported ones.
+	ProtocolBinding string `json:"protocolBinding"`
+	// ProtocolVersion is MAJOR.MINOR — the proto's own examples are "0.3" and
+	// "1.0", so the string this operator supports was right at the wrong key.
+	ProtocolVersion string `json:"protocolVersion"`
+}
+
+// agentCapabilities is the whole of it: four fields, verified against the proto.
+// `sharedTaskState` is NOT among them and appears nowhere in the specification —
+// `grep -ci shared` over a2a.proto returns 0. Design 02 §3.2 keys
+// TaskStateUnverified off that invented field, so the condition could never
+// clear for a conformant agent; §5 and A71 record it.
+type agentCapabilities struct {
+	Streaming         bool `json:"streaming"`
+	PushNotifications bool `json:"pushNotifications"`
+	ExtendedAgentCard bool `json:"extendedAgentCard"`
+	Extensions        []struct {
+		URI      string `json:"uri"`
+		Required bool   `json:"required"`
+	} `json:"extensions"`
 }
 
 // cardError is a registration failure with a reason an operator can act on.
@@ -172,10 +207,27 @@ func (r *AgentReconciler) fetchAndValidateCard(ctx context.Context, agent *plume
 				"description of itself, so a mismatch means this workload is not the agent "+
 				"this CR describes", c.Name, agent.Name)}
 	}
-	if !supportedA2AVersions[c.ProtocolVersion] {
+	// At least one interface must speak a version this operator supports. The
+	// array is ordered by the agent's preference and an agent may expose several
+	// bindings, so this is an ANY check, not a check of the first entry.
+	if len(c.SupportedInterfaces) == 0 {
+		return nil, &cardError{reason: "CardNoInterfaces", msg: fmt.Sprintf(
+			"the agent card at %s declares no supportedInterfaces, which A2A v1.0 requires. "+
+				"A v0.x card carrying a top-level url and protocolVersion decodes this way",
+			url)}
+	}
+	var versions []string
+	supported := false
+	for _, iface := range c.SupportedInterfaces {
+		versions = append(versions, iface.ProtocolVersion)
+		if supportedA2AVersions[iface.ProtocolVersion] {
+			supported = true
+		}
+	}
+	if !supported {
 		return nil, &cardError{reason: "CardProtocolUnsupported", msg: fmt.Sprintf(
-			"the agent card declares A2A protocol version %q, which this operator does not "+
-				"support", c.ProtocolVersion)}
+			"the agent card declares A2A protocol versions %v and this operator supports none "+
+				"of them", versions)}
 	}
 
 	// The digest is over the exact bytes served. Design 02 §3.4 detects drift by
@@ -192,8 +244,7 @@ func (r *AgentReconciler) fetchAndValidateCard(ctx context.Context, agent *plume
 		FetchedAt: &now,
 		// Nothing in this repository signs a card, so this is false for every
 		// agent today and CardUnsigned is raised alongside it.
-		Signed:          false,
-		SharedTaskState: c.Capabilities.SharedTaskState,
+		Signed: false,
 	}, nil
 }
 

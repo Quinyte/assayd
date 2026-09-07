@@ -38,18 +38,41 @@ func TestTheCardCarriesWhatTheOperatorValidates(t *testing.T) {
 		t.Errorf("card name is %q; §3.4 fails registration when it does not match the CR, so "+
 			"the fixture must take it from the environment the operator sets", c.Name)
 	}
-	if c.ProtocolVersion != "1.0" {
-		t.Errorf("protocolVersion is %q, want an A2A version the operator supports", c.ProtocolVersion)
+	// The version lives inside supportedInterfaces[], not at the top level. This
+	// fixture served the v0.x shape and the operator parsed the same wrong shape,
+	// so both agreed and neither was right (A71).
+	if len(c.SupportedInterfaces) == 0 {
+		t.Fatal("no supportedInterfaces: A2A v1.0 requires it, and a card without one is the " +
+			"pre-1.0 shape this fixture used to serve")
+	}
+	if got := c.SupportedInterfaces[0].ProtocolVersion; got != "1.0" {
+		t.Errorf("protocolVersion is %q, want 1.0", got)
+	}
+	if got := c.SupportedInterfaces[0].ProtocolBinding; got == "" {
+		t.Error("protocolBinding is required")
+	}
+	for _, f := range []struct {
+		name string
+		ok   bool
+	}{
+		{"description", c.Description != ""},
+		{"version", c.Version != ""},
+		{"defaultInputModes", len(c.DefaultInputModes) > 0},
+		{"defaultOutputModes", len(c.DefaultOutputModes) > 0},
+	} {
+		if !f.ok {
+			t.Errorf("%s is required by A2A v1.0 and is empty", f.name)
+		}
 	}
 	if len(c.Skills) == 0 {
 		t.Error("no skills: §3.4 cross-checks advertised skills against the CR's grants, and a " +
 			"card with none cannot exercise that check")
 	}
-	// Asserted false on purpose. Design 02 §3.2 raises TaskStateUnverified unless
-	// the card claims shared task state, and this fixture keeps none — claiming
-	// it would make the operator clear a condition that exists to catch this.
-	if c.Capabilities.SharedTaskState {
-		t.Error("the fixture claims shared task state and keeps none")
+	// There is no sharedTaskState capability in A2A — AgentCapabilities is four
+	// fields and none of them is it (A71). The struct no longer has one, so this
+	// asserts the shape rather than a value.
+	if c.Capabilities.Streaming {
+		t.Error("the fixture claims streaming and does not stream")
 	}
 }
 
@@ -86,7 +109,7 @@ func TestItAnswersATask(t *testing.T) {
 	srv := httptest.NewServer(handler())
 	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/v1/tasks", "application/json",
+	resp, err := http.Post(srv.URL+"/plume-test/echo", "application/json",
 		strings.NewReader(`{"message":{"parts":[{"text":"hello"}]}}`))
 	if err != nil {
 		t.Fatalf("post task: %v", err)
@@ -104,7 +127,7 @@ func TestItAnswersATask(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.Status.State != "completed" {
+	if out.Status.State != "ok" {
 		t.Errorf("task state %q", out.Status.State)
 	}
 	// Naming the responder is what lets a rollout test prove WHICH revision

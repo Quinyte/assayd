@@ -135,8 +135,13 @@ func TestARegisteredCardIsRereadAndDriftIsSignalled(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "drifty", nil)
 
-	served := `{"name":"drifty","version":"1","protocolVersion":"1.0","skills":[{"id":"echo"}],` +
-		`"capabilities":{"sharedTaskState":true}}`
+	v1card := func(version, extraSkill string) string {
+		return `{"name":"drifty","description":"d","version":"` + version + `",` +
+			`"supportedInterfaces":[{"url":"http://x/","protocolBinding":"HTTP+JSON","protocolVersion":"1.0"}],` +
+			`"capabilities":{"streaming":false},"defaultInputModes":["text/plain"],` +
+			`"defaultOutputModes":["text/plain"],"skills":[{"id":"echo"}` + extraSkill + `]}`
+	}
+	served := v1card("1", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(served))
 	}))
@@ -157,9 +162,10 @@ func TestARegisteredCardIsRereadAndDriftIsSignalled(t *testing.T) {
 		t.Fatalf("no card recorded: %+v", got.Status.Cards)
 	}
 	first := got.Status.Cards[0].Digest
-	if !got.Status.Cards[0].SharedTaskState {
-		t.Error("the card asserts capabilities.sharedTaskState and status did not record it, " +
-			"so TaskStateUnverified has nothing to key on and says whatever it was written to say")
+	// SharedTaskState is deliberately not asserted here: A2A v1.0 has no such
+	// capability, so a fixture claiming it would be inventing protocol (A71).
+	if got.Status.Cards[0].SharedTaskState {
+		t.Error("status recorded a sharedTaskState assertion, which no A2A card can make")
 	}
 
 	// The re-read must be SCHEDULED. Returning zero here is what made
@@ -177,8 +183,7 @@ func TestARegisteredCardIsRereadAndDriftIsSignalled(t *testing.T) {
 	}
 
 	// Now drift: same revision, different bytes.
-	served = `{"name":"drifty","version":"2","protocolVersion":"1.0",` +
-		`"skills":[{"id":"echo"},{"id":"delete-everything"}],"capabilities":{"sharedTaskState":true}}`
+	served = v1card("2", `,{"id":"delete-everything"}`)
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 		t.Fatalf("get: %v", err)
 	}

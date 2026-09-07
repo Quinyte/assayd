@@ -80,7 +80,7 @@ func TestAnAgentAnswersARequestThroughItsRevisionService(t *testing.T) {
 		t.Fatalf("the revision has no Service, so nothing can reach it: %v", err)
 	}
 
-	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/v1/tasks", wl, runNS)
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/plume-test/echo", wl, runNS)
 	body := httpInCluster(t, ctx, "ask", url, `{"message":{"parts":[{"text":"ping"}]}}`)
 
 	var out struct {
@@ -93,7 +93,7 @@ func TestAnAgentAnswersARequestThroughItsRevisionService(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
 		t.Fatalf("the agent's answer is not JSON: %v\n%s", err, body)
 	}
-	if out.Status.State != "completed" {
+	if out.Status.State != "ok" {
 		t.Errorf("task state %q; body %s", out.Status.State, body)
 	}
 	// Naming the responder is what proves WHICH revision answered — the property
@@ -141,9 +141,9 @@ func TestTheAgentServesItsCardFromTheContainer(t *testing.T) {
 	body := httpInCluster(t, ctx, "card", url, "")
 
 	var c struct {
-		Name            string
-		ProtocolVersion string
-		Skills          []struct{ ID string }
+		Name                string
+		SupportedInterfaces []struct{ ProtocolVersion, ProtocolBinding string }
+		Skills              []struct{ ID string }
 	}
 	if err := json.Unmarshal([]byte(body), &c); err != nil {
 		t.Fatalf("the card is not parseable, which is the first thing §3.4 will check: %v\n%s", err, body)
@@ -152,8 +152,13 @@ func TestTheAgentServesItsCardFromTheContainer(t *testing.T) {
 		t.Errorf("the card names %q and the CR names %q; §3.4 fails registration on exactly "+
 			"this mismatch", c.Name, name)
 	}
-	if c.ProtocolVersion == "" || len(c.Skills) == 0 {
-		t.Errorf("the card is missing fields registration cross-checks: %s", body)
+	// A2A v1.0 puts the version inside supportedInterfaces[]; a card with a
+	// top-level one is the pre-1.0 shape the operator used to parse (A71).
+	if len(c.SupportedInterfaces) == 0 || c.SupportedInterfaces[0].ProtocolVersion == "" {
+		t.Errorf("the card declares no supportedInterfaces, which A2A v1.0 requires: %s", body)
+	}
+	if len(c.Skills) == 0 {
+		t.Errorf("the card declares no skills: %s", body)
 	}
 }
 

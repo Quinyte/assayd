@@ -28,18 +28,35 @@ import (
 	"time"
 )
 
-// card is the A2A Agent Card subset design 02 §3.4 validates: it must be
-// parseable, its name must match the CR, and its version must be a supported
-// A2A one. Everything the operator cross-checks lives here; nothing else does,
-// so a field appearing in this struct means some plume code reads it.
+// card is the A2A **v1.0** Agent Card, pinned to `a2aproject/A2A` @ `v1.0.1`
+// (`specification/a2a.proto`) — see
+// `docs/research/a2a-v1.0-card-and-transport-2026-09.md`.
+//
+// The first version of this fixture served a **v0.x** card: top-level `url` and
+// `protocolVersion`, plus a `sharedTaskState` capability that has never existed
+// in any version. It agreed with the operator because one hand wrote both, and
+// the agreement was mistaken for verification. A conformant card puts the
+// version inside `supportedInterfaces[]`, and `AgentCapabilities` has exactly
+// four fields.
 type card struct {
-	Name            string   `json:"name"`
-	Description     string   `json:"description"`
-	Version         string   `json:"version"`
-	ProtocolVersion string   `json:"protocolVersion"`
-	URL             string   `json:"url"`
-	Skills          []skill  `json:"skills"`
-	Capabilities    capsSpec `json:"capabilities"`
+	Name                string           `json:"name"`
+	Description         string           `json:"description"`
+	Version             string           `json:"version"`
+	SupportedInterfaces []agentInterface `json:"supportedInterfaces"`
+	Capabilities        capsSpec         `json:"capabilities"`
+	DefaultInputModes   []string         `json:"defaultInputModes"`
+	DefaultOutputModes  []string         `json:"defaultOutputModes"`
+	Skills              []skill          `json:"skills"`
+}
+
+// agentInterface is where the protocol version actually lives. protocolBinding
+// is an open string; JSONRPC, GRPC and HTTP+JSON are the officially supported
+// values. This fixture declares HTTP+JSON and does NOT implement the JSON-RPC
+// method set — see the task handler.
+type agentInterface struct {
+	URL             string `json:"url"`
+	ProtocolBinding string `json:"protocolBinding"`
+	ProtocolVersion string `json:"protocolVersion"`
 }
 
 type skill struct {
@@ -49,15 +66,15 @@ type skill struct {
 	Tags        []string `json:"tags"`
 }
 
-// capsSpec carries the one capability design 02 §3.2 keys a condition off:
-// TaskStateUnverified is raised unless the card asserts shared task state.
-// This responder asserts FALSE, and that is deliberate rather than an omission
-// — it keeps no shared state, and a fixture that claimed otherwise would make
-// the operator clear a condition that exists to catch exactly this.
+// capsSpec is the whole of AgentCapabilities. `sharedTaskState` and
+// `stateTransitionHistory` are NOT in it and never were in v1.0 — the first
+// version of this fixture invented the first and carried the second from v0.x.
+// Design 02 §3.2 keyed a condition off the invented one; A71 records that.
 type capsSpec struct {
-	Streaming              bool `json:"streaming"`
-	StateTransitionHistory bool `json:"stateTransitionHistory"`
-	SharedTaskState        bool `json:"sharedTaskState"`
+	Streaming         bool     `json:"streaming"`
+	PushNotifications bool     `json:"pushNotifications"`
+	ExtendedAgentCard bool     `json:"extendedAgentCard"`
+	Extensions        []string `json:"extensions,omitempty"`
 }
 
 func main() {
@@ -86,17 +103,22 @@ func handler() http.Handler {
 	gateway := os.Getenv("PLUME_GATEWAY_URL")
 
 	self := card{
-		Name:            name,
-		Description:     "minimal A2A responder — plume e2e fixture",
-		Version:         "0.1.0",
-		ProtocolVersion: "1.0",
-		URL:             fmt.Sprintf("http://%s:%s/", name, port),
+		Name:        name,
+		Description: "minimal HTTP responder — plume e2e fixture",
+		Version:     "0.1.0",
+		SupportedInterfaces: []agentInterface{{
+			URL:             fmt.Sprintf("http://%s:%s/", name, port),
+			ProtocolBinding: "HTTP+JSON",
+			ProtocolVersion: "1.0",
+		}},
+		Capabilities:       capsSpec{Streaming: false},
+		DefaultInputModes:  []string{"text/plain"},
+		DefaultOutputModes: []string{"text/plain"},
 		Skills: []skill{{
 			ID: "echo", Name: "echo",
 			Description: "returns the text it was sent",
 			Tags:        []string{"test"},
 		}},
-		Capabilities: capsSpec{SharedTaskState: false},
 	}
 
 	mux := http.NewServeMux()
@@ -111,11 +133,17 @@ func handler() http.Handler {
 		}
 	})
 
-	// The A2A task endpoint, reduced to what a first slice measures: a request
-	// arrives, a task completes, and the response says which agent answered.
-	// Naming the responder is the point — it is how a test proves traffic
-	// reached THIS revision and not another one during a rollout.
-	mux.HandleFunc("/v1/tasks", func(w http.ResponseWriter, r *http.Request) {
+	// NOT an A2A method. A2A v1.0 defines three bindings and a PascalCase method
+	// set — SendMessage, SendStreamingMessage, GetTask, ListTasks, CancelTask,
+	// SubscribeToTask — and no binding has a `POST /v1/tasks`. This endpoint is
+	// this repository's own, and it is named honestly rather than dressed up: it
+	// exists so a test can prove a request reached THIS revision's Service and
+	// got an answer naming the revision, which is what ADR-0030 step 2 needed.
+	//
+	// Implementing the real method set belongs with the client that will call it
+	// — design 03's route — not with a fixture that would then be the only thing
+	// in the repository claiming to speak A2A.
+	mux.HandleFunc("/plume-test/echo", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
@@ -134,7 +162,10 @@ func handler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status":  map[string]string{"state": "completed"},
+			// Not an A2A TaskState either. protojson serialises enums by proto
+			// name, so a real one is "TASK_STATE_COMPLETED"; the lowercase
+			// lifecycle in docs/research/a2a-2026-08.md is wrong and superseded.
+			"status":  map[string]string{"state": "ok"},
 			"agent":   name,
 			"gateway": gateway,
 			"artifacts": []map[string]any{{
