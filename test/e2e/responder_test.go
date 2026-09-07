@@ -25,6 +25,15 @@ import (
 // top of hack/e2e.sh, is that a skipped e2e is an untested feature.
 func responderImage(t *testing.T) string {
 	t.Helper()
+	// A skip here is a recorded coverage gap, not a shrug. hack/e2e.sh sets this
+	// only for a distro whose cluster it did not create and therefore could not
+	// wire a registry into — today that is kind, whose cluster CI's kind-action
+	// makes before this script runs. Design 02 §5 carries the gap. Every other
+	// absence is still a failure, because this suite's rule is that a skipped
+	// e2e is an untested feature.
+	if why := os.Getenv("PLUME_E2E_RESPONDER_SKIP"); why != "" {
+		t.Skipf("responder tests not run: %s", why)
+	}
 	img := os.Getenv("PLUME_E2E_RESPONDER_IMAGE")
 	if img == "" {
 		t.Fatal("PLUME_E2E_RESPONDER_IMAGE is unset. Run `make e2e`, which builds the responder " +

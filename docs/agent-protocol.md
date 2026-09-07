@@ -12,13 +12,30 @@ So the rule is: **anything that would change a reviewer's mind must be a fact, n
 
 ## Who exists
 
-| name | model | role |
-|---|---|---|
-| `plume` | Claude | implementation — writes code and designs |
-| `critic2` | Claude | review — same family, fresh context |
-| `codex-critic` | Codex | review — different family, deliberately orthogonal |
+| name | model | role | independence it actually buys |
+|---|---|---|---|
+| `plume` | Claude Opus | implementation — writes code and designs | — |
+| `critic2` | Claude, same model, fresh context | review | unanchored by the conversation, anchored by the model's priors |
+| `fable` | Claude, **different model** | review | the above, plus different priors |
+| `codex-critic` | Codex / GPT | review — deliberately orthogonal | the most, and the only one that is cross-family |
 
 `herdr agent list` is authoritative; names change.
+
+**Independence is a gradient, not a flag, and a review is worth what its
+reviewer's independence is worth.** Ranked by the last column, and the ranking
+is earned rather than assumed: a fresh reviewer of the *same* model found three
+blockers in code that had passed five rounds with an anchored one, and a
+cross-family review then found thirteen in a body two same-family rounds had
+called closed. Reach for the most independent reviewer available, and when you
+settle for less, **write down which you used** — a finding count means nothing
+without it, and "reviewed" in a status line that hides a weaker reviewer is how
+this project talked itself into "approved and critique-passed" for 27 designs
+while two of them said otherwise in their own headers.
+
+A model can also simply be unavailable — exhausted budget, a rate limit, an
+outage. That is a normal condition, not a reason to skip review or to quietly
+promote a weaker one into the same sentence. Use what you have, and say what it
+was.
 
 ## What travels as a file, and what travels as a message
 

@@ -99,6 +99,18 @@ echo "==> building the operator image"
 docker build ${DOCKER_BUILD_NETWORK:+--network "${DOCKER_BUILD_NETWORK}"} \
   -t "${IMAGE}" -f Dockerfile .
 
+# The responder needs a registry the cluster can pull from, and the registry is
+# wired into a cluster at CREATE time. This script creates the k3d cluster and
+# can do that; the kind cluster is created by CI's kind-action before this script
+# runs, so it cannot. Rather than push to a registry that is not there — which is
+# what a first version did, breaking the kind lane outright — the responder tests
+# are k3d-only and say so where it is visible.
+if [ "${DISTRO}" != "k3d" ]; then
+  export PLUME_E2E_RESPONDER_SKIP="the responder needs a registry wired into the cluster at create time; ${DISTRO} clusters are created outside this script, so only the k3d lane runs them (design 02 §5)"
+  echo "==> responder tests: NOT RUN on ${DISTRO} — ${PLUME_E2E_RESPONDER_SKIP}"
+fi
+
+if [ "${DISTRO}" = "k3d" ]; then
 echo "==> building and pushing the responder (the e2e's agent image)"
 # Pushed rather than imported, so the reference the Agent CR carries is a REAL
 # repo digest resolved from a registry — the same path a production agent image
@@ -117,6 +129,7 @@ fi
 # The NODE resolves the registry by its container name, not by localhost.
 export PLUME_E2E_RESPONDER_IMAGE="k3d-${REG_NAME}:${REG_PORT}/${RESPONDER_REPO}@${RESPONDER_DIGEST}"
 echo "    responder: ${PLUME_E2E_RESPONDER_IMAGE}"
+fi
 
 echo "==> loading the image into ${DISTRO}"
 case "${DISTRO}" in

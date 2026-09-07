@@ -58,10 +58,13 @@ func (e *unresolvablePinError) Error() string {
 // collision (A57), the name shape because ownedWorkloads is the authority on
 // what this operator created for this Agent.
 //
-// **What this does not do yet, and §5 says so.** ADR-0031 decision 2 also
+// **What this does not do yet, and §5 says so.** ADR-0031 **Amendment 1** also
 // requires refusing a revision that lacks the gate evidence a governed install
 // demands, and rechecking current security constraints — a rollback is not
-// authorization to restore a revoked credential. Neither is implementable
+// authorization to restore a revoked credential. An earlier version of this
+// comment attributed those to decision 2 itself, which does not contain them;
+// they were accepted from the direction review and never recorded, and the
+// amendment records them. Neither is implementable
 // against what exists: status.revisions[] is not on the CRD, so there is no
 // record carrying a revision's gate verdict to consult. This resolves the
 // selection half and leaves the eligibility half owed, rather than implying a
@@ -111,8 +114,13 @@ func (r *AgentReconciler) reportUnresolvablePin(ctx context.Context, agent *plum
 	return r.writeStatus(ctx, agent, status)
 }
 
-// retainedMaterial resolves the immutable copies a PINNED revision already has,
-// without writing anything and without reading the user's sources.
+// verifyRetainedMaterial checks that a PINNED revision's immutable copies are
+// still there and are the ones it was minted with. It returns no names, and
+// that is the point: since the BLOCKER fix, a pinned revision's workload is not
+// re-rendered at all, so there is nothing to point at a copy — the Deployment
+// already references them. What remains is a REFUSAL: a revision whose material
+// has been collected, or whose spec has since changed shape, cannot be served,
+// and saying so beats serving something adjacent to what was asked for.
 //
 // This is the operation that makes a rollback a rollback. ensureRevisionMaterial
 // takes buffers resolved from the CURRENT objects and writes them; run against a
@@ -130,9 +138,8 @@ func (r *AgentReconciler) reportUnresolvablePin(ctx context.Context, agent *plum
 // does not name the ref the current spec has at i, the pin is refused. The
 // record that would answer this properly is status.revisions[], which is not on
 // the CRD (§5) — so this checks what it can and refuses what it cannot.
-func (r *AgentReconciler) retainedMaterial(ctx context.Context, agent *plumev1alpha1.Agent,
-	runNS, rev, revDigest string) (map[revision.SourceRef]string, error) {
-	names := map[revision.SourceRef]string{}
+func (r *AgentReconciler) verifyRetainedMaterial(ctx context.Context, agent *plumev1alpha1.Agent,
+	runNS, rev, revDigest string) error {
 	for i, ref := range revision.EnvSources(agent.Spec) {
 		name := MaterialName(agent.Name, rev, i)
 		var obj client.Object
@@ -143,20 +150,19 @@ func (r *AgentReconciler) retainedMaterial(ctx context.Context, agent *plumev1al
 		}
 		err := r.Get(ctx, types.NamespacedName{Namespace: runNS, Name: name}, obj)
 		if err != nil {
-			return nil, &unresolvablePinError{digest: revDigest, reason: fmt.Sprintf(
+			return &unresolvablePinError{digest: revDigest, reason: fmt.Sprintf(
 				"its immutable copy %q of %s is missing or unreadable (%v). A revision whose "+
 					"material has been collected cannot be served: the bytes it was evaluated "+
 					"with no longer exist and reading the user's object instead would serve "+
 					"content that revision never saw", name, ref, err)}
 		}
 		if got := obj.GetAnnotations()[MaterialSourceAnnotation]; got != ref.Kind+"."+ref.Name {
-			return nil, &unresolvablePinError{digest: revDigest, reason: fmt.Sprintf(
+			return &unresolvablePinError{digest: revDigest, reason: fmt.Sprintf(
 				"its immutable copy %q was made from %q but this spec's source at that position "+
 					"is %q. The pinned revision declared a different set of sources, and nothing "+
 					"records which copy belongs to which — status.revisions[] is not on the CRD. "+
 					"Refusing rather than mapping them by position", name, got, ref.Kind+"."+ref.Name)}
 		}
-		names[ref] = name
 	}
-	return names, nil
+	return nil
 }

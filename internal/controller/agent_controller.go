@@ -375,7 +375,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	var material map[revision.SourceRef]string
 	var merr error
 	if pin != nil {
-		material, merr = r.retainedMaterial(ctx, &agent, runNS, desired, desiredDigest)
+		// Verified, not rewritten and not re-pointed: the pinned Deployment already
+		// references its own copies and is not re-rendered, so this only refuses a
+		// revision whose material is gone or whose spec has changed shape.
+		merr = r.verifyRetainedMaterial(ctx, &agent, runNS, desired, desiredDigest)
 		if u := (*unresolvablePinError)(nil); merr != nil && errors.As(merr, &u) {
 			return ctrl.Result{}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
 		}
@@ -427,43 +430,66 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, merr
 	}
 
-	if err := r.ensureWorkload(ctx, &agent, runNS, desired, desiredDigest, status, material); err != nil {
-		if collision := (*revisionCollisionError)(nil); errors.As(err, &collision) {
-			return ctrl.Result{}, r.reportCollision(ctx, &agent, status, conds, collision)
+	// A PINNED revision's workload and Service are not re-rendered. This is the
+	// difference between selecting a release and recomputing one, and getting it
+	// wrong was a BLOCKER (reviews/02-step2-fable-review.md T7): every renderer
+	// below reads `agent.Spec`, so a pin only redirected which NAME was written
+	// while the pod template still came from the current spec. Measured: pin R1
+	// after an image change and R1's Deployment ran R2's image, stamped with R1's
+	// digest — the annotation that exists to prove which projection a workload
+	// came from certifying the opposite, and the collision guard defending it on
+	// the next pass.
+	//
+	// The retained objects already hold that revision's rendering, and the pin
+	// resolved against that very Deployment, so they exist by construction.
+	// Leaving them alone IS the rollback.
+	//
+	// The cost is stated rather than hidden, and is in §5: while pinned, this
+	// revision's workload is NOT drift-corrected. The operator cannot converge
+	// what it has no record of — rebuilding R1's pod template needs R1's spec,
+	// and `status.revisions[]` is not on the CRD. Correcting it from the current
+	// spec is exactly the defect above.
+	if pin == nil {
+		if err := r.ensureWorkload(ctx, &agent, runNS, desired, desiredDigest, status, material); err != nil {
+			if collision := (*revisionCollisionError)(nil); errors.As(err, &collision) {
+				return ctrl.Result{}, r.reportCollision(ctx, &agent, status, conds, collision)
+			}
+			if apierrors.IsInvalid(err) {
+				// The API server rejected the rendered workload. Returning a bare error
+				// here retried forever and wrote NO status, so the Agent sat at an empty
+				// phase with nothing said — the silent degraded path NFR-8 forbids, and
+				// the one an operator is least able to diagnose because the reason lives
+				// only in operator logs. A rejected render is a spec the user can fix.
+				conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadRejected", err.Error())
+				conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "WorkloadRejected", err.Error())
+				status.Phase = plumev1alpha1.PhaseDegraded
+				status.Conditions = conds.merge(agent.Status.Conditions)
+				status.ObservedGeneration = agent.Generation
+				return ctrl.Result{}, r.writeStatus(ctx, &agent, status)
+			}
+			return ctrl.Result{}, err
 		}
-		if apierrors.IsInvalid(err) {
-			// The API server rejected the rendered workload. Returning a bare error
-			// here retried forever and wrote NO status, so the Agent sat at an empty
-			// phase with nothing said — the silent degraded path NFR-8 forbids, and
-			// the one an operator is least able to diagnose because the reason lives
-			// only in operator logs. A rejected render is a spec the user can fix.
-			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadRejected", err.Error())
-			conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "WorkloadRejected", err.Error())
-			status.Phase = plumev1alpha1.PhaseDegraded
-			status.Conditions = conds.merge(agent.Status.Conditions)
-			status.ObservedGeneration = agent.Generation
-			return ctrl.Result{}, r.writeStatus(ctx, &agent, status)
-		}
-		return ctrl.Result{}, err
 	}
 
 	// The Service is part of materializing a revision, not a later step: a Pod
 	// that reports Ready with no Service has no address, and design 03's route
 	// backendRef names this object. It is created with the workload and before
 	// readiness is judged, so a revision is never "available" without one.
-	if err := r.ensureService(ctx, &agent, runNS, desired, desiredDigest); err != nil {
-		if collision := (*revisionCollisionError)(nil); errors.As(err, &collision) {
-			return ctrl.Result{}, r.reportCollision(ctx, &agent, status, conds, collision)
+	if pin == nil {
+		if err := r.ensureService(ctx, &agent, runNS, desired, desiredDigest); err != nil {
+			if collision := (*revisionCollisionError)(nil); errors.As(err, &collision) {
+				return ctrl.Result{}, r.reportCollision(ctx, &agent, status, conds, collision)
+			}
+			if apierrors.IsInvalid(err) {
+				conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "ServiceRejected", err.Error())
+				conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "ServiceRejected", err.Error())
+				status.Phase = plumev1alpha1.PhaseDegraded
+				status.Conditions = conds.merge(agent.Status.Conditions)
+				status.ObservedGeneration = agent.Generation
+				return ctrl.Result{}, r.writeStatus(ctx, &agent, status)
+			}
+			return ctrl.Result{}, err
 		}
-		if apierrors.IsInvalid(err) {
-			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "ServiceRejected", err.Error())
-			conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "ServiceRejected", err.Error())
-			status.Phase = plumev1alpha1.PhaseDegraded
-			status.Conditions = conds.merge(agent.Status.Conditions)
-			status.ObservedGeneration = agent.Generation
-			return ctrl.Result{}, r.writeStatus(ctx, &agent, status)
-		}
-		return ctrl.Result{}, err
 	}
 
 	ready, err := r.workloadAvailable(ctx, &agent, runNS, desired, desiredDigest)
@@ -1215,8 +1241,9 @@ func (r *AgentReconciler) assessTaskState(agent *plumev1alpha1.Agent, c *conditi
 		return
 	}
 	c.set(plumev1alpha1.CondTaskStateUnverified, metav1.ConditionTrue, "CardNotFetched",
-		fmt.Sprintf("replicas=%d requires the A2A card to assert shared task state, but card fetch "+
-			"(§3.4) is not implemented; concurrent replicas may lose task state",
+		fmt.Sprintf("replicas=%d requires the A2A card to assert shared task state. The card is "+
+			"fetched and validated (§3.4), but its capabilities are not parsed, so nothing has "+
+			"checked whether this agent asserts shared task state; concurrent replicas may lose it",
 			agent.Spec.Runtime.Replicas))
 }
 

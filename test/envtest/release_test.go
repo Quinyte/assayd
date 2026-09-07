@@ -184,3 +184,165 @@ func TestTheShortRevisionNameIsNotAcceptedAsAPin(t *testing.T) {
 		t.Errorf("refused by something other than the digest pattern: %v", err)
 	}
 }
+
+// BLOCKER, found by review (reviews/02-step2-fable-review.md, T7) and missed
+// here. A66 claims a pinned revision is "selected, never recomputed". The test
+// above proved that for ConfigMap CONTENT — the one case it covered — and it is
+// false for everything else in the spec, because the workload is still rendered
+// from `agent.Spec` whatever the pin says.
+//
+// The failure is worse than not rolling back. Status reports R1 active at R1's
+// digest while R1's Deployment runs R2's IMAGE, stamped with R1's digest
+// annotation — so the annotation that exists to prove which projection a
+// workload came from now certifies a lie, and the operator's own collision
+// guard would defend that lie on the next reconcile.
+func TestARollbackServesThePinnedRevisionsImage(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "imgroll", nil)
+	r := newReconciler(false)
+	r1 := revision.MustHash(a.Spec)
+	imageR1 := a.Spec.Runtime.Image
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("imgroll", r1), 1)
+	got := settle(t, r, a)
+
+	var d1 appsv1.Deployment
+	if err := k8s.Get(context.Background(), types.NamespacedName{
+		Namespace: runNS(ns), Name: controller.WorkloadName("imgroll", r1)}, &d1); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	r1Digest := d1.Annotations[controller.RevisionDigestAnnotation]
+
+	// R2: a different image, promoted.
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	imageR2 := "ghcr.io/acme/agent@sha256:" + strings.Repeat("e", 64)
+	a.Spec.Runtime.Image = imageR2
+	if err := k8s.Update(context.Background(), a); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	r2 := revision.MustHash(a.Spec)
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("imgroll", r2), 1)
+	got = settle(t, r, a)
+	if got.Status.ActiveRevision != r2 {
+		t.Fatalf("fixture: R2 did not promote; active=%q", got.Status.ActiveRevision)
+	}
+
+	// Roll back to R1.
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	a.Spec.Release = &plumev1alpha1.ReleaseSpec{TargetRevisionDigest: r1Digest}
+	if err := k8s.Update(context.Background(), a); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	settle(t, r, a)
+
+	var after appsv1.Deployment
+	if err := k8s.Get(context.Background(), types.NamespacedName{
+		Namespace: runNS(ns), Name: controller.WorkloadName("imgroll", r1)}, &after); err != nil {
+		t.Fatalf("get R1 workload after rollback: %v", err)
+	}
+	if img := after.Spec.Template.Spec.Containers[0].Image; img != imageR1 {
+		t.Errorf("after rolling back to R1, its workload runs %q; R1 was evaluated with %q.\n"+
+			"The rollback re-rendered the pinned revision from the CURRENT spec, so it serves "+
+			"the revision it was rolling back FROM — while status and the digest annotation "+
+			"both say R1.", img, imageR1)
+	}
+	if img := after.Spec.Template.Spec.Containers[0].Image; img == imageR2 {
+		t.Errorf("R1's workload is running R2's image %q", img)
+	}
+}
+
+// The two refusals A66 claims and that nothing pinned until review found it
+// (reviews/02-step2-fable-review.md X2/T5/T6, both SURVIVED as mutations).
+// Measured behaviour was correct; the point is that no test would have noticed
+// if it stopped being.
+func TestAPinIsRefusedWhenItsMaterialCannotVouchForIt(t *testing.T) {
+	mk := func(t *testing.T, name, cmName string) (string, string, *plumev1alpha1.Agent, string) {
+		t.Helper()
+		ns := newNamespace(t)
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: cmName},
+			Data:       map[string]string{"MODE": "safe"},
+		}
+		if err := k8s.Create(context.Background(), cm); err != nil {
+			t.Fatalf("create cm: %v", err)
+		}
+		a := mustCreateAgent(t, ns, name, func(a *plumev1alpha1.Agent) {
+			a.Spec.Runtime.Env = []corev1.EnvVar{{Name: "MODE", ValueFrom: &corev1.EnvVarSource{
+				ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: cmName}, Key: "MODE"}}}}
+		})
+		r := newReconciler(false)
+		got := settle(t, r, a)
+		rev := got.Status.ActiveRevision
+		if rev == "" {
+			rev = got.Status.CandidateRevision
+		}
+		var d appsv1.Deployment
+		if err := k8s.Get(context.Background(), types.NamespacedName{
+			Namespace: runNS(ns), Name: controller.WorkloadName(name, rev)}, &d); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		return ns, rev, a, d.Annotations[controller.RevisionDigestAnnotation]
+	}
+
+	t.Run("its immutable copy has been collected", func(t *testing.T) {
+		ns, rev, a, dig := mk(t, "gonecopy", "cfg")
+		r := newReconciler(false)
+		var copies corev1.ConfigMapList
+		if err := k8s.List(context.Background(), &copies, client.InNamespace(runNS(ns)),
+			client.MatchingLabels{controller.MaterialRevisionLabel: rev}); err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(copies.Items) == 0 {
+			t.Fatal("setup: no immutable copy to delete")
+		}
+		if err := k8s.Delete(context.Background(), &copies.Items[0]); err != nil {
+			t.Fatalf("delete copy: %v", err)
+		}
+		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		a.Spec.Release = &plumev1alpha1.ReleaseSpec{TargetRevisionDigest: dig}
+		if err := k8s.Update(context.Background(), a); err != nil {
+			t.Fatalf("pin: %v", err)
+		}
+		got := settle(t, r, a)
+		c := meta.FindStatusCondition(got.Status.Conditions, string(plumev1alpha1.CondDegraded))
+		if c == nil || c.Reason != "ReleasePinUnresolvable" {
+			t.Errorf("a revision whose evaluated bytes no longer exist was not refused: %+v.\n"+
+				"Reading the user's object instead would serve content that revision never saw.", c)
+		}
+	})
+
+	t.Run("the spec's source list changed shape", func(t *testing.T) {
+		ns, _, a, dig := mk(t, "shapechange", "cfg1")
+		r := newReconciler(false)
+		other := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cfg2"},
+			Data:       map[string]string{"MODE": "other"},
+		}
+		if err := k8s.Create(context.Background(), other); err != nil {
+			t.Fatalf("create cfg2: %v", err)
+		}
+		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		a.Spec.Runtime.Env[0].ValueFrom.ConfigMapKeyRef.Name = "cfg2"
+		a.Spec.Release = &plumev1alpha1.ReleaseSpec{TargetRevisionDigest: dig}
+		if err := k8s.Update(context.Background(), a); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		got := settle(t, r, a)
+		c := meta.FindStatusCondition(got.Status.Conditions, string(plumev1alpha1.CondDegraded))
+		if c == nil || c.Reason != "ReleasePinUnresolvable" {
+			t.Errorf("a pin whose spec declares different sources was not refused: %+v.\n"+
+				"Copies are named by POSITION, so mapping them across a changed list would "+
+				"hand the revision somebody else's bytes.", c)
+		}
+	})
+}
