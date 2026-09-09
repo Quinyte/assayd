@@ -17,7 +17,7 @@ import (
 
 func agentCRD(t *testing.T) map[string]any {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "config", "crd", "plume.dev_agents.yaml"))
+	b, err := os.ReadFile(filepath.Join("..", "..", "config", "crd", "assayd.dev_agents.yaml"))
 	if err != nil {
 		t.Fatalf("read generated CRD (run `make manifests`): %v", err)
 	}
@@ -133,7 +133,7 @@ func TestOnlyTheUnavoidableFieldsAreRequired(t *testing.T) {
 		}
 	}
 
-	// Only plume's own fields; corev1 EnvVar and ResourceRequirements carry their
+	// Only assayd's own fields; corev1 EnvVar and ResourceRequirements carry their
 	// own required leaves and are not ours to police.
 	for _, top := range []string{"runtime", "external", "knowledge", "tools", "gates", "llm", "card", "loop", "expose"} {
 		walk(descend(t, agentSchema(t), "spec."+top), top)

@@ -9,7 +9,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/Quinyte/plume/internal/controller"
+	"github.com/Quinyte/assayd/internal/controller"
 )
 
 // Whether the EvalSuite CRD is installed decides whether rollouts are eval-gated
@@ -76,9 +76,9 @@ func TestEvalSuiteDetectorHoldsWhenDiscoveryFails(t *testing.T) {
 func evalSuiteCRD(version string) *apiextensionsv1.CustomResourceDefinition {
 	preserve := true
 	return &apiextensionsv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "evalsuites.plume.dev"},
+		ObjectMeta: metav1.ObjectMeta{Name: "evalsuites.assayd.dev"},
 		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
-			Group: "plume.dev",
+			Group: "assayd.dev",
 			Names: apiextensionsv1.CustomResourceDefinitionNames{
 				Plural: "evalsuites", Singular: "evalsuite", Kind: "EvalSuite", ListKind: "EvalSuiteList",
 			},
@@ -139,7 +139,7 @@ func ensureEvalSuiteAbsent(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
 	crd := &apiextensionsv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "evalsuites.plume.dev"},
+		ObjectMeta: metav1.ObjectMeta{Name: "evalsuites.assayd.dev"},
 	}
 	if err := k8s.Delete(ctx, crd); err != nil && !apierrors.IsNotFound(err) {
 		t.Fatalf("delete EvalSuite CRD: %v", err)

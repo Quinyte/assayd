@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Structured dataset from the plume review corpus.
+"""Structured dataset from the assayd review corpus.
 
 One row per critique pass. Findings appear in three layouts across the corpus:
   A: "### 3. MAJOR — title"        (most reviews)

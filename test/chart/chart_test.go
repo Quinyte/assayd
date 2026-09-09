@@ -17,7 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 )
 
-const chartPath = "../../charts/plume"
+const chartPath = "../../charts/assayd"
 
 // render runs `helm template` and returns the documents it produced.
 func render(t *testing.T, extraArgs ...string) []map[string]any {
@@ -26,7 +26,7 @@ func render(t *testing.T, extraArgs ...string) []map[string]any {
 		t.Fatalf("helm is required to test the chart, and a skipped chart test is an " +
 			"untested deployment: install helm")
 	}
-	args := append([]string{"template", "plume", chartPath}, extraArgs...)
+	args := append([]string{"template", "assayd", chartPath}, extraArgs...)
 	out, err := exec.Command("helm", args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template failed: %v\n%s", err, out)
@@ -145,8 +145,8 @@ func TestOperatorRBACCoversWhatTheOperatorNeeds(t *testing.T) {
 	}
 
 	for _, need := range []struct{ perm, why string }{
-		{"plume.dev/agents", "the object this operator exists to reconcile"},
-		{"plume.dev/agents/status", "conditions and phase are how it reports anything"},
+		{"assayd.dev/agents", "the object this operator exists to reconcile"},
+		{"assayd.dev/agents/status", "conditions and phase are how it reports anything"},
 		{"apps/deployments", "the workload it materializes"},
 		{"coordination.k8s.io/leases", "leader election defaults on, and a forbidden lease " +
 			"is retried forever rather than reported — the operator would run, report Ready, " +
@@ -203,16 +203,16 @@ func TestOperatorPodIsHardened(t *testing.T) {
 // The CRD ships in crds/, and it must be the one the operator was built against.
 // A chart carrying a stale CRD installs a cluster the operator cannot serve.
 func TestChartShipsTheGeneratedCRD(t *testing.T) {
-	shipped, err := os.ReadFile(filepath.Join(chartPath, "crds", "plume.dev_agents.yaml"))
+	shipped, err := os.ReadFile(filepath.Join(chartPath, "crds", "assayd.dev_agents.yaml"))
 	if err != nil {
 		t.Fatalf("the chart ships no Agent CRD: %v", err)
 	}
-	generated, err := os.ReadFile(filepath.Join("..", "..", "config", "crd", "plume.dev_agents.yaml"))
+	generated, err := os.ReadFile(filepath.Join("..", "..", "config", "crd", "assayd.dev_agents.yaml"))
 	if err != nil {
 		t.Fatalf("read generated CRD: %v", err)
 	}
 	if string(shipped) != string(generated) {
-		t.Error("the CRD in charts/plume/crds differs from config/crd. The chart would " +
+		t.Error("the CRD in charts/assayd/crds differs from config/crd. The chart would " +
 			"install a schema the operator was not built against; re-copy it in the same " +
 			"change that regenerates it.")
 	}
@@ -321,7 +321,7 @@ func TestChartRBACMatchesGeneratedRules(t *testing.T) {
 		t.Fatal("the generated role has no rules block")
 	}
 	if string(vendored) != string(generated)[idx:] {
-		t.Error("charts/plume/files/operator-rules.yaml has drifted from config/rbac/role.yaml. " +
+		t.Error("charts/assayd/files/operator-rules.yaml has drifted from config/rbac/role.yaml. " +
 			"The chart would grant permissions that do not match the markers in the code — " +
 			"re-copy it in the same change that regenerates the role.")
 	}
@@ -333,7 +333,7 @@ func TestUnimplementedTierIsRefusedNotIgnored(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Fatal("helm is required")
 	}
-	out, err := exec.Command("helm", "template", "plume", chartPath, "--set", "tier=plus").CombinedOutput()
+	out, err := exec.Command("helm", "template", "assayd", chartPath, "--set", "tier=plus").CombinedOutput()
 	if err == nil {
 		t.Error("tier: plus rendered successfully, so an operator would believe they had " +
 			"installed Argo Workflows, Phoenix, OpenFGA and eval runners. None exist.")
@@ -346,7 +346,7 @@ func TestUnimplementedTierIsRefusedNotIgnored(t *testing.T) {
 // A floating tag makes a rollout irreproducible, which is the opposite of what
 // a platform built on content-addressed revisions is for.
 func TestFloatingImageTagIsRefused(t *testing.T) {
-	out, err := exec.Command("helm", "template", "plume", chartPath,
+	out, err := exec.Command("helm", "template", "assayd", chartPath,
 		"--set", "operator.image.tag=latest").CombinedOutput()
 	if err == nil {
 		t.Error("operator.image.tag=latest rendered successfully")
@@ -432,7 +432,7 @@ func toNum(v any) int {
 }
 
 // A digest pins content; a tag pins a name that can be moved to point at other
-// content after it was signed. plume's own admission rejects agent images that
+// content after it was signed. assayd's own admission rejects agent images that
 // are not digest-pinned and cosign-signed (ADR-0019), so the chart has to be
 // able to express the same thing about the operator.
 func TestChartSupportsDigestPinning(t *testing.T) {
@@ -509,7 +509,7 @@ func TestRegistryPathsAreLowercase(t *testing.T) {
 	}
 }
 
-// Design 07 A5.9: the chart reserves the plume.dev namespace labels to the
+// Design 07 A5.9: the chart reserves the assayd.dev namespace labels to the
 // operator identity, because SPIRE and the Gateway act on those labels and
 // neither reads the operator's binding record. The operator fail-closes when
 // the policies are absent, so a chart that dropped them would take every Agent
@@ -524,7 +524,7 @@ func TestChartShipsTheLabelReservingAdmissionPolicies(t *testing.T) {
 	for _, d := range kindsOf(docs, "ValidatingAdmissionPolicyBinding") {
 		bindings[nameOf(d)] = true
 	}
-	for _, name := range []string{"plume-namespace-labels", "plume-gateway-routes"} {
+	for _, name := range []string{"assayd-namespace-labels", "assayd-gateway-routes"} {
 		if policies[name] == nil {
 			t.Errorf("the chart renders no ValidatingAdmissionPolicy %s; the operator refuses to create "+
 				"run namespaces without it", name)
@@ -544,17 +544,17 @@ func TestChartShipsTheLabelReservingAdmissionPolicies(t *testing.T) {
 	// operator's ServiceAccount: every extra identity is a principal that can
 	// mint a SPIFFE-selected namespace.
 	for _, d := range kindsOf(docs, "ConfigMap") {
-		if nameOf(d) == "plume-operators" {
-			t.Error("the chart renders a plume-operators params ConfigMap; deleting it would deny every " +
+		if nameOf(d) == "assayd-operators" {
+			t.Error("the chart renders a assayd-operators params ConfigMap; deleting it would deny every " +
 				"namespace write in the cluster")
 		}
 	}
-	for _, name := range []string{"plume-namespace-labels", "plume-gateway-routes"} {
+	for _, name := range []string{"assayd-namespace-labels", "assayd-gateway-routes"} {
 		spec, _ := policies[name]["spec"].(map[string]any)
 		if _, has := spec["paramKind"]; has {
 			t.Errorf("policy %s declares a paramKind; identities must be inline", name)
 		}
-		want := `request.userInfo.username in ["system:serviceaccount:plume-system:plume-agent-operator"]`
+		want := `request.userInfo.username in ["system:serviceaccount:assayd-system:assayd-agent-operator"]`
 		found := false
 		for _, v := range toList(spec["variables"]) {
 			vm, _ := v.(map[string]any)
@@ -568,7 +568,7 @@ func TestChartShipsTheLabelReservingAdmissionPolicies(t *testing.T) {
 		}
 	}
 	// Labels can be written through the status and finalize subresources too.
-	spec, _ := policies["plume-namespace-labels"]["spec"].(map[string]any)
+	spec, _ := policies["assayd-namespace-labels"]["spec"].(map[string]any)
 	rules := toList(dig(spec, "matchConstraints")["resourceRules"])
 	var resources []string
 	for _, r := range rules {
@@ -583,11 +583,11 @@ func TestChartShipsTheLabelReservingAdmissionPolicies(t *testing.T) {
 	// A parentRef without a namespace refers to the route's own namespace, so
 	// the route policy must resolve it that way or a bare-name ref from inside
 	// the Gateway's namespace bypasses it.
-	rspec, _ := policies["plume-gateway-routes"]["spec"].(map[string]any)
+	rspec, _ := policies["assayd-gateway-routes"]["spec"].(map[string]any)
 	for _, v := range toList(rspec["variables"]) {
 		vm, _ := v.(map[string]any)
-		if vm["name"] == "targetsPlume" && !strings.Contains(toStr(vm["expression"]), "request.namespace") {
-			t.Errorf("targetsPlume does not resolve a bare-name parentRef to the route's namespace: %s", vm["expression"])
+		if vm["name"] == "targetsAssayd" && !strings.Contains(toStr(vm["expression"]), "request.namespace") {
+			t.Errorf("targetsAssayd does not resolve a bare-name parentRef to the route's namespace: %s", vm["expression"])
 		}
 	}
 }

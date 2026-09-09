@@ -59,7 +59,7 @@ Comparing a bare `revision` name would let a colliding projection be promoted on
 Datasets are **content-addressed artifacts** — a report always names the exact dataset digest it ran against (reproducibility is a first-class property):
 
 - **Ontology-derived seeds**: design 12 §3.8 — one case per probe, `via` + matchers carried verbatim. These are *floor* cases (the graph's known answers, asked through the agent).
-- **Curated cases**: `golden/` files in the agent's repo (the design-09 golden-task test is the seed), promoted via `plume eval promote <session>`.
+- **Curated cases**: `golden/` files in the agent's repo (the design-09 golden-task test is the seed), promoted via `assayd eval promote <session>`.
 - **Session-derived cases** (17): stratified sample of recorded production tasks (inputs replayed; recorded outcomes as reference). Sampling is pinned at build time — the dataset artifact embeds the chosen sessions, so reruns are stable.
 - Builder runs as part of the eval Job's first step (no standing pod); rebuilt when refs change or `since:` windows roll; `DatasetReady=False` names what's missing (e.g. zero sessions matching strata — loud, not empty-pass).
 
@@ -81,7 +81,7 @@ Datasets are **content-addressed artifacts** — a report always names the exact
 
 ## 8. The `evalrunner/v1` slot
 
-A runner is a Job image implementing: input `(dataset artifact ref, target endpoint + credentials, metric config, budget)` → output `(report JSON schema evalreport/v1: per-case {id, input_digest, outcome, per-metric scores, receipts refs}, summary scores)`. DeepEval adapter first (its `evaluate()` API maps directly); Inspect AI second; `byo` = any image honoring the contract. **`evalrunner/v1` and `evalreport/v1` join the `plume-contracts` ledger** (design 07 §4 — r1 f3; the ledger carries every socket contract, and doctor/upgrade checks cover them). Conformance: a fixture dataset + mock agent where expected scores are known; parity across runners on the mechanical metrics (judged metrics are runner-specific by nature — documented, not hidden).
+A runner is a Job image implementing: input `(dataset artifact ref, target endpoint + credentials, metric config, budget)` → output `(report JSON schema evalreport/v1: per-case {id, input_digest, outcome, per-metric scores, receipts refs}, summary scores)`. DeepEval adapter first (its `evaluate()` API maps directly); Inspect AI second; `byo` = any image honoring the contract. **`evalrunner/v1` and `evalreport/v1` join the `assayd-contracts` ledger** (design 07 §4 — r1 f3; the ledger carries every socket contract, and doctor/upgrade checks cover them). Conformance: a fixture dataset + mock agent where expected scores are known; parity across runners on the mechanical metrics (judged metrics are runner-specific by nature — documented, not hidden).
 
 ## 9. Failure modes
 
@@ -100,7 +100,7 @@ Eval Jobs hold: the candidate-route credential (gate-controller SVID), read acce
 
 ## 11. Testing
 
-Fixture agent (scripted A2A responder) + fixture suite: pass/fail/floor-breach/empty-dataset/judge-down/budget-exhausted paths; report reproducibility (same digests ⇒ same verdict); e2e on k3d: the flagship demo — `plume deploy` streams `HELD → eval 0.89 ✓ → canary 10% → 100%`, then a deliberately-broken revision fails with the report in the PR annotation.
+Fixture agent (scripted A2A responder) + fixture suite: pass/fail/floor-breach/empty-dataset/judge-down/budget-exhausted paths; report reproducibility (same digests ⇒ same verdict); e2e on k3d: the flagship demo — `assayd deploy` streams `HELD → eval 0.89 ✓ → canary 10% → 100%`, then a deliberately-broken revision fails with the report in the PR annotation.
 
 ## 12. Decisions for async review
 

@@ -10,12 +10,12 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // evalSuiteGK is the kind whose presence decides whether rollouts are eval-gated
 // (design 02 §3.3, core tier).
-var evalSuiteGK = schema.GroupKind{Group: plumev1alpha1.GroupVersion.Group, Kind: "EvalSuite"}
+var evalSuiteGK = schema.GroupKind{Group: assaydv1alpha1.GroupVersion.Group, Kind: "EvalSuite"}
 
 // EvalSuiteDetector answers "is the EvalSuite CRD installed?" by asking the
 // cluster.
@@ -114,7 +114,7 @@ func (d *EvalSuiteDetector) Installed() bool {
 
 // lookup asks for the KIND, not a group-version.
 //
-// Asking for plume.dev/v1alpha1 pinned detection to one version: when EvalSuite
+// Asking for assayd.dev/v1alpha1 pinned detection to one version: when EvalSuite
 // ships at v1beta1 the call still succeeds (Agent lives in v1alpha1), EvalSuite
 // is absent from that list, and the answer is a confident "not installed" —
 // failing OPEN on an ordinary API bump.
@@ -122,14 +122,14 @@ func (d *EvalSuiteDetector) lookup() (bool, error) {
 	groups, resources, err := d.client.ServerGroupsAndResources()
 	if err != nil {
 		// A partial discovery failure still carries usable results: some
-		// aggregated API being down must not decide whether plume gates rollouts.
+		// aggregated API being down must not decide whether assayd gates rollouts.
 		if !discovery.IsGroupDiscoveryFailedError(err) {
 			return false, fmt.Errorf("discover server resources: %w", err)
 		}
 		if failed, ok := err.(*discovery.ErrGroupDiscoveryFailed); ok {
 			for gv := range failed.Groups {
 				if gv.Group == evalSuiteGK.Group {
-					// The group plume itself lives in failed to discover. That is not
+					// The group assayd itself lives in failed to discover. That is not
 					// an answer; hold.
 					return false, fmt.Errorf("discover %s: %w", evalSuiteGK.Group, err)
 				}

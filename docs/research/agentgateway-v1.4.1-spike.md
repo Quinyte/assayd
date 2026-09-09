@@ -23,24 +23,24 @@ The dataplane chart `oci://ghcr.io/agentgateway/charts/agentgateway:1.4.1` repor
 |---|---|---|
 | Which CRDs ship? | `agentgatewaybackends`, `agentgatewaymodels`, `agentgatewayparameters`, `agentgatewaypolicies` — **four** | `AgentgatewayModel` is real; ADR-0028's "fourth CRD" holds |
 | `LocalRateLimit` numeric widths | `requests`, `tokens`, `burst` all `format: int32` | Design 03 §3.5's int32 clamp is required, not defensive |
-| Does `burst` have a minimum? | **No `minimum` at all.** `requests` and `tokens` both carry `minimum: 1`; `burst` carries none | A negative burst is schema-valid at the tag. The `main` commit the first Codex review pinned has `minimum: 0`, so **that finding was right for `main` and wrong for the release** — plume must validate `burst >= 0` itself (A10) |
+| Does `burst` have a minimum? | **No `minimum` at all.** `requests` and `tokens` both carry `minimum: 1`; `burst` carries none | A negative burst is schema-valid at the tag. The `main` commit the first Codex review pinned has `minimum: 0`, so **that finding was right for `main` and wrong for the release** — assayd must validate `burst >= 0` itself (A10) |
 | Is a per-day window expressible? | `unit` is `required`, `enum: [Hours, Minutes, Seconds]` | A daily budget cannot be emitted directly; §3.5's hourly emission is forced, not chosen |
 | Can one policy carry both limits? | `x-kubernetes-validations`: `[has(self.requests),has(self.tokens)].filter(x,x==true).size() == 1` | ExactlyOneOf confirmed |
 | What does the CRD say about *when* token limits act? | Verbatim: *"token counts are not known until the request completes. As a result, token-based rate limits will apply to future requests only."* | The withdrawn "cuts early, never late" is contradicted by the schema the cluster installs, not merely by a docs page |
 | Is there any egress/allowlist field on `AgentgatewayBackend`? | **No.** One grep hit in the whole file, and it is the unrelated MCP JSON-RPC `methods` allowlist | Codex BLOCKER 6 and design 03 §3.4.1 confirmed: the control is Backend *construction* |
-| Backend arms | `ExactlyOneOf: ai static dynamicForwardProxy mcp aws a2a` | `dynamicForwardProxy` exists and must be forbidden by plume (§3.4.1) |
-| LLM provider arms | `ExactlyOneOf: openai azureopenai azure anthropic gemini vertexai bedrock custom` | The provider→endpoint catalog plume owes has exactly these arms to resolve into |
+| Backend arms | `ExactlyOneOf: ai static dynamicForwardProxy mcp aws a2a` | `dynamicForwardProxy` exists and must be forbidden by assayd (§3.4.1) |
+| LLM provider arms | `ExactlyOneOf: openai azureopenai azure anthropic gemini vertexai bedrock custom` | The provider→endpoint catalog assayd owes has exactly these arms to resolve into |
 | MCP `matchExpressions` bounds | `minItems: 1`, `maxItems: 256`, per-item `maxLength: 16384` | **Codex r2 MAJOR 8 confirmed**: an empty allowed-tool set has no representation, and 257 tools overflows. Both need a stated mapping before emission |
 
 **One hazard the CRD does not prevent.** `burst` is documented as an allowance above
 the *request*-per-unit, and the published guide says it "only works with `requests`,
 not with `token` rate limits" — but the schema permits `tokens` and `burst` together.
-A policy setting both is schema-valid and its burst is silently inert. Plume must
+A policy setting both is schema-valid and its burst is silently inert. Assayd must
 never emit that pair.
 
 ## 2. Measured on a real v1.4.1 cluster
 
-k3d `plume-spike`, Gateway API v1.6.0 standard, `agentgateway-crds` and `agentgateway`
+k3d `assayd-spike`, Gateway API v1.6.0 standard, `agentgateway-crds` and `agentgateway`
 Helm charts at 1.4.1, controller `agentgateway.dev/agentgateway`. Every result below is an
 observation, not a reading.
 
@@ -81,14 +81,14 @@ current-generation check is available.
 
 `burst: -1` with `tokens: 100, unit: Hours` was admitted by the API server, and the controller
 then reported `Accepted=True`. Nothing rejects it anywhere. This settles the research §9 gap in
-the direction that requires plume to validate `burst >= 0` itself, and confirms the first Codex
+the direction that requires assayd to validate `burst >= 0` itself, and confirms the first Codex
 review's `minimum: 0` reading was true of `main` and false of the tag.
 
 ### 2.4 `tokens` + `burst` together is accepted, and silently inert
 
 The published guide says `burst` "only works with `requests`, not with `token` rate limits".
 The schema permits both and the cluster accepts the pair: it is valid, it converges, and its
-burst does nothing. **plume must never emit that combination** — no error will catch it.
+burst does nothing. **assayd must never emit that combination** — no error will catch it.
 
 ### 2.5 A daily window is not expressible
 
@@ -139,9 +139,9 @@ dispatch and a decrement after the response, so every request that starts while 
 positive is admitted. Serial traffic is limited correctly; concurrent traffic is not limited
 at all until the first response lands.
 
-**Consequence**: design 03 may not publish an overshoot figure. Either plume enforces a
+**Consequence**: design 03 may not publish an overshoot figure. Either assayd enforces a
 per-replica concurrency cap and a request-size maximum — neither of which exists in the CRD
-surface, so both would have to be plume-side — or the honest statement is that gateway-tier
+surface, so both would have to be assayd-side — or the honest statement is that gateway-tier
 excess is unbounded at v1.4.1 and the receipt tier is the only real limit. That is the third
 budget guarantee this design has had to retract, and the first one retracted by measurement
 rather than by review.
@@ -188,7 +188,7 @@ Three findings, each load-bearing for design 03:
    `AgentGatewayNackError` is therefore **mandatory**, not belt-and-braces.
 3. **Correlation is partial — better than "uncorrelated", worse than sufficient.** The event key
    `policy/traffic/default/p:rl-local:default/llm-route` names the **policy** (`default/p`) and
-   the **route** (`default/llm-route`), so plume can attribute a NACK to a resource it emitted.
+   the **route** (`default/llm-route`), so assayd can attribute a NACK to a resource it emitted.
    It carries **no generation and no UID**, so an old NACK cannot be distinguished from a new
    one, and absence of an Event cannot be read as success. A bounded wait plus resource
    attribution is workable for *raising* degradation; it is not a success barrier.
@@ -205,9 +205,9 @@ publication) or accept that a silent NACK leaves the old rule serving.
 |---|---|---|
 | What is the real evaluation order (authn → rate limit → guards)? | design 03 §3.4 asserts an order inherited from a blog | Needs a policy set that can observe which stage rejected first |
 
-**Reproduce**: `k3d cluster create plume-spike`, Gateway API v1.6.0 standard-install,
+**Reproduce**: `k3d cluster create assayd-spike`, Gateway API v1.6.0 standard-install,
 `helm install` both 1.4.1 charts into `agentgateway-system`. **Tear down**:
-`k3d cluster delete plume-spike`. It is separate from `plume-local`, so `make e2e` is unaffected.
+`k3d cluster delete assayd-spike`. It is separate from `assayd-local`, so `make e2e` is unaffected.
 
 ---
 
@@ -216,10 +216,10 @@ publication) or accept that a silent NACK leaves the old rule serving.
 Not agentgateway. Recorded here because it is the same practice: a proposed Kubernetes
 transaction measured before it becomes design. Codex's B3 review prescribed sealing generic env
 sources in place rather than snapshotting them, and attached its own caveat — *"a proposed
-Kubernetes transaction, not yet measured in plume. It must be spiked before becoming the
+Kubernetes transaction, not yet measured in assayd. It must be spiked before becoming the
 design."* This is that spike. k3d, Kubernetes v1.33, `ValidatingAdmissionPolicy` (stable v1.30+).
 
-**Setup.** A ConfigMap carrying `plume.dev/env-source-protection: held` and a matching
+**Setup.** A ConfigMap carrying `assayd.dev/env-source-protection: held` and a matching
 finalizer; a `ValidatingAdmissionPolicy` with `failurePolicy: Fail` denying `UPDATE`/`DELETE`
 unless the requester is the operator ServiceAccount; a second ServiceAccount with **full
 configmap rights**, standing in for the threat actor B3 describes — someone who cannot edit the

@@ -12,7 +12,7 @@ Gallery artifact: https://claude.ai/code/artifact/90cd9501-5d83-4921-8822-4fce4c
 | `04-kg-ingestion` | Flow | acquire → normalize → extract → resolve → Gate A → write → Gate B → Ready, both failures quarantined | `Gate A` — before any write | designs 12 + 14 |
 | `05-governance-ring` | Concept | The user-owned agent loop inside the platform-enforced governance ring | the dashed ring | architecture §14 · design 22 |
 | `06-api-surface` | Relationship map | The six CRDs and how they reference each other | `Agent` — the front door | architecture §03 |
-| `07-what-runs` | Stack | Core (8 pods) / plus / enterprise, itemized | `agent-operator` — the only plume code in core | architecture §17 · design 07 |
+| `07-what-runs` | Stack | Core (8 pods) / plus / enterprise, itemized | `agent-operator` — the only assayd code in core | architecture §17 · design 07 |
 | `08-rollout-lifecycle` | State machine | Pending → Held → Canary → Ready, with Degraded and Killed guards | `Held` — the admission state | design 02 §3.3 · designs 20+22 |
 
 `.webp` variants (1600px) are the embed-sized copies used by the gallery.

@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
 
 # Pinned by digest, not by tag. `:nonroot` is rebuilt upstream, so the same
 # source would otherwise produce different bytes over time — which is the exact
-# property plume refuses to accept from agent images (ADR-0019). Renovate bumps
+# property assayd refuses to accept from agent images (ADR-0019). Renovate bumps
 # this; a human reads the diff.
 #
 # nonroot rather than static: the operator runs as UID 65532 and the chart

@@ -11,9 +11,9 @@
 
 `05-agent-directory.md:50`. Three problems in one sentence. (a) Design 03 r2's concern-mapping table emits no card-serving route — "static route emitted by design 03" is a claim about another design's output that that design doesn't make. (b) Serving the well-known path "from the embedded card" means the gateway answers with a **directory snapshot**, but ADR-0019 fixed the card's source of truth as *the container*; a snapshot served at the discovery URL can diverge from the live card between card-drift re-registrations (design 02 §3.4), so A2A clients and the platform would disagree about what the agent's card *is*. (c) Even if snapshot-serving were chosen deliberately, a gateway "direct response with payload" capability is asserted without a source — nothing in `docs/research/agentgateway-2.2-2026-08.md` covers it.
 
-**Fix**: simplest and SoT-preserving — the gateway *routes* `/.well-known/agent-card.json` to the agent container (which already serves it, design 02 §3.4); the directory's embedded card remains the validated, digest-pinned discovery copy for `plume dir` / OASF export, not the wire answer. If snapshot-serving is genuinely wanted (e.g. to serve cards for scaled-to-zero or external agents), decide it explicitly: add the mapping row to design 03 §3.4, verify the direct-response capability with a citation, and state the freshness guarantee (digest match enforced at re-registration). Either way, design 03 needs the route row — record it there, not here.
+**Fix**: simplest and SoT-preserving — the gateway *routes* `/.well-known/agent-card.json` to the agent container (which already serves it, design 02 §3.4); the directory's embedded card remains the validated, digest-pinned discovery copy for `assayd dir` / OASF export, not the wire answer. If snapshot-serving is genuinely wanted (e.g. to serve cards for scaled-to-zero or external agents), decide it explicitly: add the mapping row to design 03 §3.4, verify the direct-response capability with a citation, and state the freshness guarantee (digest match enforced at re-registration). Either way, design 03 needs the route row — record it there, not here.
 
-### 2. MAJOR — MCP Registry federation has no trust story: unverified third-party records flow into the `plume init` picker
+### 2. MAJOR — MCP Registry federation has no trust story: unverified third-party records flow into the `assayd init` picker
 
 `05-agent-directory.md:57`. `dir import` of OASF records gets cosign verification, but the MCP Registry federation path — "read-only import into `tools.*`" — states no verification at all beyond a provenance label. Public-registry entries are third-party content; a typosquatted or malicious tool entry imported into the catalog surfaces in the CLI wizard's tool picker (architecture §11: the wizard is how users choose tools), steering users toward binding a hostile MCP server. The directory being "discovery, never authz" (D2) does not defuse this: discovery *is* the attack surface when a human picks from it — D2 protects against stale grants, not poisoned suggestions.
 
@@ -31,9 +31,9 @@
 
 **Fix**: state the bucket history config (e.g. 10); rephrase as "bounded recent-change history"; if directory changes need real audit, emit a change event/receipt on registration writes (the operator is the single writer — one line of code) and say audit lives there.
 
-### 5. MINOR — `plume.status.phase` in the record has no stated write trigger, so it will routinely lie
+### 5. MINOR — `assayd.status.phase` in the record has no stated write trigger, so it will routinely lie
 
-`05-agent-directory.md:32,78`. Records are written at registration (design 02 §3.4), but `phase` changes at runtime (Ready → Degraded → Ready). Either the operator re-writes the record on every phase transition (write amplification and a new write path — unstated) or the field goes stale immediately. §7's "staleness shown in `plume dir list`" acknowledges the symptom without fixing the cause; a picker showing `Ready` for a Degraded agent misleads exactly the users the directory serves.
+`05-agent-directory.md:32,78`. Records are written at registration (design 02 §3.4), but `phase` changes at runtime (Ready → Degraded → Ready). Either the operator re-writes the record on every phase transition (write amplification and a new write path — unstated) or the field goes stale immediately. §7's "staleness shown in `assayd dir list`" acknowledges the symptom without fixing the cause; a picker showing `Ready` for a Degraded agent misleads exactly the users the directory serves.
 
 **Fix**: pick one and state it — (a) operator updates the record on phase transitions (cheap: single writer, per-agent key), or (b) drop `phase` from the stored record and have read paths join live CR status. Given the wizard is the consumer, (a) is recommended.
 
@@ -51,7 +51,7 @@
 
 ### 9. MINOR — public-visibility ↔ Outshift linkage is ambiguous about *when* records leave the cluster
 
-`05-agent-directory.md:55`. §3.4 ties the hosted Outshift directory to `expose.visibility: public` in a parenthetical, which can be read as "public agents get published to the hosted directory". Publishing a record externally is an outward-facing act; if it ever became automatic on a spec field, that's a consent problem. **Fix**: one sentence — external publication happens *only* via explicit `plume dir export` (+ push); `expose.visibility: public` never publishes a record anywhere by itself.
+`05-agent-directory.md:55`. §3.4 ties the hosted Outshift directory to `expose.visibility: public` in a parenthetical, which can be read as "public agents get published to the hosted directory". Publishing a record externally is an outward-facing act; if it ever became automatic on a spec field, that's a consent problem. **Fix**: one sentence — external publication happens *only* via explicit `assayd dir export` (+ push); `expose.visibility: public` never publishes a record anywhere by itself.
 
 ## Lens summary
 

@@ -23,7 +23,7 @@ This is the blocker because it is silent: nothing errors, nothing alerts, and th
 
 **Fix** — any one closes it, and (a) is the design's own trick applied where it was omitted:
 - **(a) Version-scope the admin path**: `/kgp/<graph>/admin/<version>/mcp`. The gateway then enforces per-version grants by route, exactly as it enforces per-version query binding. `begin_version` (which has no version yet) stays on a graph-level path with platform-only authz.
-- **(b) Inject an admin-scope header** (`X-Plume-Admin-Scope: write_batch@vN+1`) and have the provider enforce it — the A1 pattern, reused.
+- **(b) Inject an admin-scope header** (`X-Assayd-Admin-Scope: write_batch@vN+1`) and have the provider enforce it — the A1 pattern, reused.
 - **(c) Regardless of the above**: state that `write_batch`/`load_artifact` accept only versions in `staging` state and reject otherwise with a new closed error (see finding 6). Defense in depth, and it is the provider-side invariant that makes the whole model true rather than conventional.
 
 ### 2. MAJOR — no version state, so an agent can bind an unpromoted or quarantined version
@@ -36,7 +36,7 @@ Consequences: an agent can be routed to a version that has not passed `commit_ve
 
 ### 3. MAJOR — nothing enumerates versions, though three consumers require it
 
-`01-…md:78` and design 08 §3. The contract offers `drop_version` and assigns retention to the operator ("retention policy enforced by operator"), and design 08 ships a `plume kg versions` verb — but **no tool lists versions**. The operator cannot compute what to retain or drop; the CLI verb has no contract behind it; and design 13's fallback ("version routing table rebuilt from namespace listing at startup") is adapter-internal, not contract surface, so it works only for that one provider.
+`01-…md:78` and design 08 §3. The contract offers `drop_version` and assigns retention to the operator ("retention policy enforced by operator"), and design 08 ships a `assayd kg versions` verb — but **no tool lists versions**. The operator cannot compute what to retain or drop; the CLI verb has no contract behind it; and design 13's fallback ("version routing table rebuilt from namespace listing at startup") is adapter-internal, not contract surface, so it works only for that one provider.
 
 Answering "what versions exist" from KG CR status instead would put the operator's record in competition with the provider's reality (design 13 states "namespaces are the truth"), and breaks entirely for BYO providers whose versions were created out of band.
 

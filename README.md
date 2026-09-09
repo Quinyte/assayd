@@ -1,6 +1,6 @@
-# plume 🪶
+# assayd 🪶
 
-> **plume** is a neutral internal codename. Renaming before any public release is a tracked task (`docs/decisions/0001`). Early drafts used "graphene".
+> **assayd** is a neutral internal codename. Renaming before any public release is a tracked task (`docs/decisions/0001`). Early drafts used "graphene".
 
 A radically lightweight, Kubernetes-native agent platform. The domain is supplied as a pluggable, versioned knowledge graph; everything else is an open standard (A2A, MCP, OASF, SPIFFE, OTel GenAI, Gateway API, OCI) with a thin binding.
 

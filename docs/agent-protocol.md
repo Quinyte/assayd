@@ -1,10 +1,10 @@
 # Agent-to-agent protocol
 
-Several agents work on plume at once, from different models. They can already reach each other — `herdr` is on PATH and any of them can run `herdr agent prompt <name> "..."`. This document is about **when not to**.
+Several agents work on assayd at once, from different models. They can already reach each other — `herdr` is on PATH and any of them can run `herdr agent prompt <name> "..."`. This document is about **when not to**.
 
 ## Why this is constrained rather than open
 
-The reason a second model reviews plume at all is that it has *not* been anchored by the first one's reasoning. Two agents that talk freely converge: the reviewer softens a finding after hearing the rationale, the implementer adopts the reviewer's framing, and what looked like independent agreement is an echo. That failure is invisible — it produces a clean review and a bug in production.
+The reason a second model reviews assayd at all is that it has *not* been anchored by the first one's reasoning. Two agents that talk freely converge: the reviewer softens a finding after hearing the rationale, the implementer adopts the reviewer's framing, and what looked like independent agreement is an echo. That failure is invisible — it produces a clean review and a bug in production.
 
 The evidence is already in this repo. A reviewer of the **same** model, given a fresh context, found three blockers in code that had passed five rounds with a reviewer that had been in the conversation the whole time. Same model, same rules; the only variable was whether it had been anchored. Cross-model review buys more of that, and chat spends it.
 
@@ -14,7 +14,7 @@ So the rule is: **anything that would change a reviewer's mind must be a fact, n
 
 | name | model | role | independence it actually buys |
 |---|---|---|---|
-| `plume` | Claude Opus | implementation — writes code and designs | — |
+| `assayd` | Claude Opus | implementation — writes code and designs | — |
 | `critic2` | Claude, same model, fresh context | review | unanchored by the conversation, anchored by the model's priors |
 | `fable` | Claude, **different model** | review | the above, plus different priors |
 | `codex-critic` | Codex / GPT | review — deliberately orthogonal | the most, and the only one that is cross-family |

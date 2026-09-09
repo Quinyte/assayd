@@ -28,9 +28,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 var (
@@ -41,7 +41,7 @@ var (
 
 // runNS is where an Agent's workload and material actually live (design 02
 // A42): the operator-owned run namespace, not the Agent's.
-const runNS = "plume-run-plume-e2e"
+const runNS = "assayd-run-assayd-e2e"
 
 // pauseImage is a REAL, PULLABLE digest — `docker manifest inspect
 // registry.k8s.io/pause:3.10`. It is a constant because A21's digest migration
@@ -56,7 +56,7 @@ func TestMain(m *testing.M) {
 	// current context names — on a laptop pointed at a shared cluster that is not
 	// a test, it is a write. `make e2e` sets this after creating a k3d cluster;
 	// a bare `go test ./...` skips rather than writing somewhere real.
-	if os.Getenv("PLUME_E2E") != "1" {
+	if os.Getenv("ASSAYD_E2E") != "1" {
 		// Exit 0 would print "ok" for a suite that ran nothing, which is one env
 		// var away from silently green. Registering a failing placeholder instead
 		// keeps `go test ./...` honest about what did not run, while still not
@@ -81,7 +81,7 @@ func TestMain(m *testing.M) {
 		println("e2e: scheme:", err.Error())
 		os.Exit(1)
 	}
-	if err := plumev1alpha1.AddToScheme(scheme); err != nil {
+	if err := assaydv1alpha1.AddToScheme(scheme); err != nil {
 		println("e2e: scheme:", err.Error())
 		os.Exit(1)
 	}
@@ -91,15 +91,15 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	// Verify plume is installed BEFORE creating anything. Without this, a cluster
+	// Verify assayd is installed BEFORE creating anything. Without this, a cluster
 	// that simply lacks the CRD reports "the CRD did not accept a minimal Agent"
 	// — an environment problem misattributed as a product defect.
 	var crd apiextensionsv1.CustomResourceDefinition
 	if err := k8s.Get(context.Background(),
-		types.NamespacedName{Name: "agents.plume.dev"}, &crd); err != nil {
-		println("e2e: the agents.plume.dev CRD is not installed on the current context — " +
+		types.NamespacedName{Name: "agents.assayd.dev"}, &crd); err != nil {
+		println("e2e: the agents.assayd.dev CRD is not installed on the current context — " +
 			"run `make install-crds` or `make e2e`. Refusing to create objects in a " +
-			"cluster that is not a plume cluster.")
+			"cluster that is not a assayd cluster.")
 		os.Exit(1)
 	}
 
@@ -108,16 +108,16 @@ func TestMain(m *testing.M) {
 
 // The CRD is installed and accepts the minimal Agent. This is deliberately the
 // smallest possible real-cluster assertion: it proves the manifests apply to a
-// distribution plume actually targets, which nothing else in the suite does.
+// distribution assayd actually targets, which nothing else in the suite does.
 func TestCRDInstallsAndAcceptsTheMinimalAgent(t *testing.T) {
 	requireCluster(t)
 	ctx := context.Background()
-	ensureNamespace(t, ctx, "plume-e2e")
+	ensureNamespace(t, ctx, "assayd-e2e")
 
-	a := &plumev1alpha1.Agent{
-		ObjectMeta: metav1.ObjectMeta{Name: "smoke", Namespace: "plume-e2e"},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
+	a := &assaydv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "smoke", Namespace: "assayd-e2e"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
 		},
 	}
 	_ = k8s.Delete(ctx, a)
@@ -127,7 +127,7 @@ func TestCRDInstallsAndAcceptsTheMinimalAgent(t *testing.T) {
 	t.Cleanup(func() { _ = k8s.Delete(context.Background(), a) })
 
 	// Defaulting is the API server's job, so it must hold here too.
-	var got plumev1alpha1.Agent
+	var got assaydv1alpha1.Agent
 	if err := k8s.Get(ctx, client.ObjectKeyFromObject(a), &got); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestCRDInstallsAndAcceptsTheMinimalAgent(t *testing.T) {
 	}
 }
 
-// The claim envtest cannot make: a plume-created pod actually runs.
+// The claim envtest cannot make: a assayd-created pod actually runs.
 //
 // envtest has no kubelet, so every availability assertion there is made against
 // a Deployment status the test itself wrote. Here a real scheduler places a real
@@ -150,12 +150,12 @@ func TestWorkloadActuallyRuns(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
 	ctx := context.Background()
-	ensureNamespace(t, ctx, "plume-e2e")
+	ensureNamespace(t, ctx, "assayd-e2e")
 
-	a := &plumev1alpha1.Agent{
-		ObjectMeta: metav1.ObjectMeta{Name: "runs", Namespace: "plume-e2e"},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{
+	a := &assaydv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "runs", Namespace: "assayd-e2e"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{
 				// A real image that starts, serves a port and stays up. This test
 				// asserts the WORKLOAD story only, deliberately: `pause` keeps it
 				// independent of the responder image and its registry, so a broken
@@ -188,7 +188,7 @@ func TestWorkloadActuallyRuns(t *testing.T) {
 	// Say what went wrong, not just that it did.
 	var d appsv1.Deployment
 	if err := k8s.Get(ctx, types.NamespacedName{Namespace: runNS, Name: name}, &d); err != nil {
-		var live plumev1alpha1.Agent
+		var live assaydv1alpha1.Agent
 		_ = k8s.Get(ctx, client.ObjectKeyFromObject(a), &live)
 		t.Fatalf("the operator never created a workload for revision %s in %s: %v\nphase=%q conditions=%+v",
 			rev, runNS, err, live.Status.Phase, live.Status.Conditions)
@@ -205,12 +205,12 @@ func TestOperatorDoesNotChurnAgainstRealAdmission(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
 	ctx := context.Background()
-	ensureNamespace(t, ctx, "plume-e2e")
+	ensureNamespace(t, ctx, "assayd-e2e")
 
-	a := &plumev1alpha1.Agent{
-		ObjectMeta: metav1.ObjectMeta{Name: "nochurn", Namespace: "plume-e2e"},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: pauseImage},
+	a := &assaydv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "nochurn", Namespace: "assayd-e2e"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{Image: pauseImage},
 		},
 	}
 	_ = k8s.Delete(ctx, a)
@@ -258,7 +258,7 @@ func requireOperator(t *testing.T) {
 	t.Helper()
 	var d appsv1.Deployment
 	err := k8s.Get(context.Background(),
-		types.NamespacedName{Namespace: "plume-system", Name: "plume-agent-operator"}, &d)
+		types.NamespacedName{Namespace: "assayd-system", Name: "assayd-agent-operator"}, &d)
 	if err != nil {
 		t.Fatalf("the agent-operator is not installed: %v. Run `make e2e`, which helm-installs "+
 			"the chart. Without it these tests would time out and read as operator bugs.", err)
@@ -280,13 +280,13 @@ func ensureNamespace(t *testing.T, ctx context.Context, name string) {
 }
 
 // TestE2EWasNotRun fails loudly when the suite was skipped, so a green `go test
-// ./...` cannot be mistaken for e2e coverage. `make e2e` sets PLUME_E2E=1 and
+// ./...` cannot be mistaken for e2e coverage. `make e2e` sets ASSAYD_E2E=1 and
 // this never runs.
 func TestE2EWasNotRun(t *testing.T) {
 	if !notRun {
 		t.Skip("the suite ran")
 	}
-	t.Fatal("e2e did not run: set PLUME_E2E=1, or use `make e2e`, which creates a " +
+	t.Fatal("e2e did not run: set ASSAYD_E2E=1, or use `make e2e`, which creates a " +
 		"disposable k3d cluster first. This suite writes to the current kube context, " +
 		"so it does not opt itself in.")
 }
@@ -316,14 +316,14 @@ func TestAnAgentWithEnvSourcesDeploysAndCanBeDeleted(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
 	ctx := context.Background()
-	ensureNamespace(t, ctx, "plume-e2e")
+	ensureNamespace(t, ctx, "assayd-e2e")
 
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "e2e-prompt", Namespace: "plume-e2e"},
+		ObjectMeta: metav1.ObjectMeta{Name: "e2e-prompt", Namespace: "assayd-e2e"},
 		Data:       map[string]string{"SYSTEM_PROMPT": "you are helpful"},
 	}
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "e2e-creds", Namespace: "plume-e2e"},
+		ObjectMeta: metav1.ObjectMeta{Name: "e2e-creds", Namespace: "assayd-e2e"},
 		Data:       map[string][]byte{"TOKEN": []byte("s3cret")},
 	}
 	for _, o := range []client.Object{cm, sec} {
@@ -334,10 +334,10 @@ func TestAnAgentWithEnvSourcesDeploysAndCanBeDeleted(t *testing.T) {
 		t.Cleanup(func() { _ = k8s.Delete(context.Background(), o) })
 	}
 
-	a := &plumev1alpha1.Agent{
-		ObjectMeta: metav1.ObjectMeta{Name: "envsrc", Namespace: "plume-e2e"},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{
+	a := &assaydv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "envsrc", Namespace: "assayd-e2e"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{
 				Image: pauseImage,
 				EnvFrom: []corev1.EnvFromSource{
 					{ConfigMapRef: &corev1.ConfigMapEnvSource{
@@ -348,7 +348,7 @@ func TestAnAgentWithEnvSourcesDeploysAndCanBeDeleted(t *testing.T) {
 			},
 		},
 	}
-	key := client.ObjectKey{Namespace: "plume-e2e", Name: "envsrc"}
+	key := client.ObjectKey{Namespace: "assayd-e2e", Name: "envsrc"}
 	_ = k8s.Delete(ctx, a)
 	if !waitGone(t, ctx, key, 2*time.Minute) {
 		t.Fatal("a previous run's Agent is still being deleted after 2m; if its finalizer is " +
@@ -370,7 +370,7 @@ func TestAnAgentWithEnvSourcesDeploysAndCanBeDeleted(t *testing.T) {
 		time.Sleep(3 * time.Second)
 	}
 	if len(copies.Items) == 0 {
-		var live plumev1alpha1.Agent
+		var live assaydv1alpha1.Agent
 		_ = k8s.Get(ctx, client.ObjectKeyFromObject(a), &live)
 		t.Fatalf("the operator created no revision material. If this is Forbidden, the RBAC in "+
 			"config/rbac/role.yaml does not match what the material code calls.\nphase=%q conditions=%+v",
@@ -400,7 +400,7 @@ func TestAnAgentWithEnvSourcesDeploysAndCanBeDeleted(t *testing.T) {
 		time.Sleep(3 * time.Second)
 	}
 	if !ready {
-		var live plumev1alpha1.Agent
+		var live assaydv1alpha1.Agent
 		_ = k8s.Get(ctx, client.ObjectKeyFromObject(a), &live)
 		t.Fatalf("no workload became available. A Pod referencing material that does not exist "+
 			"cannot start, and A41 made those references non-optional on purpose.\nconditions=%+v",
@@ -413,7 +413,7 @@ func TestAnAgentWithEnvSourcesDeploysAndCanBeDeleted(t *testing.T) {
 		t.Fatalf("delete agent: %v", err)
 	}
 	if !waitGone(t, ctx, key, 3*time.Minute) {
-		var live plumev1alpha1.Agent
+		var live assaydv1alpha1.Agent
 		_ = k8s.Get(ctx, key, &live)
 		t.Fatalf("the Agent still exists 3m after deletion, finalizers=%v. Teardown cannot "+
 			"complete if the operator may not delete the material it created.", live.Finalizers)
@@ -436,7 +436,7 @@ func waitGone(t *testing.T, ctx context.Context, key client.ObjectKey, d time.Du
 	t.Helper()
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
-		var scratch plumev1alpha1.Agent
+		var scratch assaydv1alpha1.Agent
 		if err := k8s.Get(ctx, key, &scratch); err != nil {
 			return true
 		}
@@ -458,14 +458,14 @@ func waitGone(t *testing.T, ctx context.Context, key client.ObjectKey, d time.Du
 func TestTheOperatorUnderTestIsTheOneJustBuilt(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
-	want := os.Getenv("PLUME_E2E_IMAGE")
+	want := os.Getenv("ASSAYD_E2E_IMAGE")
 	if want == "" {
-		t.Fatal("PLUME_E2E_IMAGE is unset, so this run cannot tell which binary it is testing. " +
+		t.Fatal("ASSAYD_E2E_IMAGE is unset, so this run cannot tell which binary it is testing. " +
 			"hack/e2e.sh exports it; a hand-run suite must too.")
 	}
 	var d appsv1.Deployment
 	if err := k8s.Get(context.Background(),
-		types.NamespacedName{Namespace: "plume-system", Name: "plume-agent-operator"}, &d); err != nil {
+		types.NamespacedName{Namespace: "assayd-system", Name: "assayd-agent-operator"}, &d); err != nil {
 		t.Fatalf("get operator deployment: %v", err)
 	}
 	if got := d.Spec.Template.Spec.Containers[0].Image; got != want {
@@ -473,7 +473,7 @@ func TestTheOperatorUnderTestIsTheOneJustBuilt(t *testing.T) {
 			"Every assertion in this suite is about the wrong binary.", got, want)
 	}
 	var pods corev1.PodList
-	if err := k8s.List(context.Background(), &pods, client.InNamespace("plume-system")); err != nil {
+	if err := k8s.List(context.Background(), &pods, client.InNamespace("assayd-system")); err != nil {
 		t.Fatalf("list operator pods: %v", err)
 	}
 	for _, p := range pods.Items {
@@ -498,15 +498,15 @@ func TestANamespaceEditorCannotReplaceTheRevisionsCopy(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
 	ctx := context.Background()
-	ensureNamespace(t, ctx, "plume-e2e")
+	ensureNamespace(t, ctx, "assayd-e2e")
 
 	// A principal with create/delete/get/list on ConfigMaps in the Agent's
 	// namespace — the editor A42 is built to exclude.
-	const editor = "plume-e2e-editor"
-	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: editor, Namespace: "plume-e2e"},
+	const editor = "assayd-e2e-editor"
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: editor, Namespace: "assayd-e2e"},
 		Rules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"},
 			Verbs: []string{"create", "delete", "get", "list"}}}}
-	rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: editor, Namespace: "plume-e2e"},
+	rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: editor, Namespace: "assayd-e2e"},
 		RoleRef:  rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: editor},
 		Subjects: []rbacv1.Subject{{Kind: "User", Name: editor}}}
 	for _, o := range []client.Object{role, rb} {
@@ -523,16 +523,16 @@ func TestANamespaceEditorCannotReplaceTheRevisionsCopy(t *testing.T) {
 		t.Fatalf("impersonating client: %v", err)
 	}
 
-	src := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "editor-prompt", Namespace: "plume-e2e"},
+	src := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "editor-prompt", Namespace: "assayd-e2e"},
 		Data: map[string]string{"SYSTEM_PROMPT": "you are helpful"}}
 	_ = k8s.Delete(ctx, src)
 	if err := k8s.Create(ctx, src); err != nil {
 		t.Fatalf("create source: %v", err)
 	}
 	t.Cleanup(func() { _ = k8s.Delete(context.Background(), src) })
-	a := &plumev1alpha1.Agent{
-		ObjectMeta: metav1.ObjectMeta{Name: "editorproof", Namespace: "plume-e2e"},
-		Spec: plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{Image: pauseImage,
+	a := &assaydv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "editorproof", Namespace: "assayd-e2e"},
+		Spec: assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{Image: pauseImage,
 			EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "editor-prompt"}}}}}}}
 	key := client.ObjectKeyFromObject(a)
@@ -556,14 +556,14 @@ func TestANamespaceEditorCannotReplaceTheRevisionsCopy(t *testing.T) {
 		time.Sleep(3 * time.Second)
 	}
 	if len(copies.Items) != 1 {
-		var live plumev1alpha1.Agent
+		var live assaydv1alpha1.Agent
 		_ = k8s.Get(ctx, key, &live)
 		t.Fatalf("no copy appeared in %s. phase=%q conditions=%+v", runNS, live.Status.Phase, live.Status.Conditions)
 	}
 	copyName := copies.Items[0].Name
 
 	// CONTROL: the editor can delete a ConfigMap in its own namespace.
-	scratch := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "editor-scratch", Namespace: "plume-e2e"}}
+	scratch := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "editor-scratch", Namespace: "assayd-e2e"}}
 	_ = k8s.Delete(ctx, scratch)
 	if err := k8s.Create(ctx, scratch); err != nil {
 		t.Fatalf("create scratch: %v", err)
@@ -593,7 +593,7 @@ func TestANamespaceEditorCannotReplaceTheRevisionsCopy(t *testing.T) {
 	}
 }
 
-// Design 07 A5.9: the plume.dev namespace labels are reserved to the operator
+// Design 07 A5.9: the assayd.dev namespace labels are reserved to the operator
 // by admission policy. This client is cluster-admin, and admission policies
 // are not bypassed by system:masters — which is the point: the labels SPIRE
 // and the Gateway act on are not writable by anyone the operator did not name.
@@ -601,20 +601,20 @@ func TestNamespaceLabelsAreReservedToTheOperator(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
 	ctx := context.Background()
-	forged := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "plume-run-forged",
+	forged := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "assayd-run-forged",
 		Labels: map[string]string{controller.LabelPodsBy: controller.PodsByAgentOperator}}}
 	_ = k8s.Delete(ctx, forged)
 	err := k8s.Create(ctx, forged)
 	if err == nil {
 		_ = k8s.Delete(ctx, forged)
-		t.Fatal("a namespace carrying plume.dev/pods-by was admitted from a non-operator identity; " +
+		t.Fatal("a namespace carrying assayd.dev/pods-by was admitted from a non-operator identity; " +
 			"the ClusterSPIFFEID would select it and issue any agent's identity to its Pods")
 	}
 	if !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("refused for a reason other than the label reservation: %v", err)
 	}
-	// CONTROL: a namespace without plume labels is admitted from the same identity.
-	plain := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "plume-e2e-plain"}}
+	// CONTROL: a namespace without assayd labels is admitted from the same identity.
+	plain := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "assayd-e2e-plain"}}
 	_ = k8s.Delete(ctx, plain)
 	if err := k8s.Create(ctx, plain); err != nil && !apierrors.IsAlreadyExists(err) {
 		t.Fatalf("a plain namespace was refused too, so the refusal above is not about the label: %v", err)
@@ -643,7 +643,7 @@ func TestOperatorRoleGrantsWhatTheRunNamespaceCodeCalls(t *testing.T) {
 		{"", "namespaces", "create", ""},
 		{"", "namespaces", "update", ""},
 		{"", "namespaces", "delete", ""},
-		{"", "configmaps", "update", "plume-system"},
+		{"", "configmaps", "update", "assayd-system"},
 		{"", "configmaps", "update", runNS},
 		{"", "secrets", "update", runNS},
 		{"", "resourcequotas", "create", runNS},
@@ -651,7 +651,7 @@ func TestOperatorRoleGrantsWhatTheRunNamespaceCodeCalls(t *testing.T) {
 		{"admissionregistration.k8s.io", "validatingadmissionpolicies", "get", ""},
 	} {
 		sar := &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
-			User: "system:serviceaccount:plume-system:plume-agent-operator",
+			User: "system:serviceaccount:assayd-system:assayd-agent-operator",
 			ResourceAttributes: &authorizationv1.ResourceAttributes{
 				Group: need.group, Resource: need.resource, Verb: need.verb, Namespace: need.ns}}}
 		if err := k8s.Create(ctx, sar); err != nil {

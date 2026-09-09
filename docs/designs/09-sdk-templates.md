@@ -7,7 +7,7 @@
 
 ## 1. Purpose & scope
 
-The ~100 lines a user owns: per-SDK templates that turn "my agent logic" into a plume-conformant container — A2A server, card, Dockerfile/`project.toml`, and the reference inner loop with skills. In scope: template contract, the per-SDK matrix, the reference loop's shape, card signing, task-state convention. Out of scope: the wizard (08), pack manifest mechanics (18). **P1 delivery (r1 f1)**: templates ship as a **versioned, cosign-signed OCI artifact** at a well-known ref — machinery that fully exists in P1; the CLI fetches + verifies it directly. This is deliberately a *degenerate pack* (template facet only): design 18 later formalizes the manifest around the same artifact without moving it — a recorded constraint on design 18.
+The ~100 lines a user owns: per-SDK templates that turn "my agent logic" into a assayd-conformant container — A2A server, card, Dockerfile/`project.toml`, and the reference inner loop with skills. In scope: template contract, the per-SDK matrix, the reference loop's shape, card signing, task-state convention. Out of scope: the wizard (08), pack manifest mechanics (18). **P1 delivery (r1 f1)**: templates ship as a **versioned, cosign-signed OCI artifact** at a well-known ref — machinery that fully exists in P1; the CLI fetches + verifies it directly. This is deliberately a *degenerate pack* (template facet only): design 18 later formalizes the manifest around the same artifact without moving it — a recorded constraint on design 18.
 
 ## 2. Doctrine & charter gates
 
@@ -16,15 +16,15 @@ The ~100 lines a user owns: per-SDK templates that turn "my agent logic" into a 
 
 ## 3. The template contract (what every template must produce)
 
-A scaffold that, untouched, passes `plume dev` + registration:
+A scaffold that, untouched, passes `assayd dev` + registration:
 
 1. **A2A v1.0 server** on `runtime.port` using the SDK's official A2A lib where one exists (python `a2a-sdk`, js, go); the template pins the lib version. **Which binding, stated (design 02 A71)**: v1.0 defines `JSONRPC`, `GRPC` and `HTTP+JSON`, the card's `supportedInterfaces[]` declares which are served, and the method set is PascalCase — `SendMessage`, `SendStreamingMessage`, `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`. "JSON-RPC + SSE" named one binding and its streaming mode as though they were the protocol; streaming is JSON-RPC over SSE, where each `data:` frame is a full JSON-RPC envelope. Pinned at tag `v1.0.1` in `research/a2a-v1.0-card-and-transport-2026-09.md`.
-2. **Agent Card** served at `/.well-known/agent-card.json`, generated from one `card.yaml` the user edits (name/skills/description) — **signed at build time** (r1 f2): `plume build` signs the card via **Sigstore keyless with the same OIDC builder identity as image signing** — one trust root, no key custody; **publisher-domain signing** (A2A v1.0's cross-org trust model) is offered additionally at `expose: public` time, where it actually applies. **Verification policy**: required for plume-built agents; BYO/external agents with unsigned cards register with a loud `CardUnsigned` condition (the BYO promise holds; the gap is visible) — recorded with the registration-gate change as design 02 §11 A6.
-3. **The reference inner loop** (architecture §14), SDK-idiomatic: `assemble (card + KG bundles + skills) → act → observe → stop-check` with **named termination reasons**. The **operator-injected env contract** (`PLUME_GATEWAY_URL`, `PLUME_KG_ENDPOINTS`, `PLUME_NATS_URL`, tenant creds) is **owned by design 02** (injection is reconcile behavior — §11 A7 records the table, r1 f5); templates only consume it. Interior OTel spans via the SDK's OpenLLMetry integration are pre-wired but optional.
+2. **Agent Card** served at `/.well-known/agent-card.json`, generated from one `card.yaml` the user edits (name/skills/description) — **signed at build time** (r1 f2): `assayd build` signs the card via **Sigstore keyless with the same OIDC builder identity as image signing** — one trust root, no key custody; **publisher-domain signing** (A2A v1.0's cross-org trust model) is offered additionally at `expose: public` time, where it actually applies. **Verification policy**: required for assayd-built agents; BYO/external agents with unsigned cards register with a loud `CardUnsigned` condition (the BYO promise holds; the gap is visible) — recorded with the registration-gate change as design 02 §11 A6.
+3. **The reference inner loop** (architecture §14), SDK-idiomatic: `assemble (card + KG bundles + skills) → act → observe → stop-check` with **named termination reasons**. The **operator-injected env contract** (`ASSAYD_GATEWAY_URL`, `ASSAYD_KG_ENDPOINTS`, `ASSAYD_NATS_URL`, tenant creds) is **owned by design 02** (injection is reconcile behavior — §11 A7 records the table, r1 f5); templates only consume it. Interior OTel spans via the SDK's OpenLLMetry integration are pre-wired but optional.
 4. **Skills directory** (`skills/*.md`, frontmatter + instructions) + the tiny router (load-per-task by declared relevance) — behavior as reviewable data, the genie lesson.
-5. **Task-state store + its declaration**: JetStream-KV-backed A2A task store wired by default, **and the card asserts the shared-task-state capability** — design 02 §3.2 keys `TaskStateUnverified` off that assertion, so without it every template-built agent with `replicas>1` would raise the condition the store exists to prevent (02-recritique R7) (`PLUME_NATS_URL`, tenant creds injected) so `replicas>1` works out of the box (design 02 §3.2); in-memory fallback flag for pure-local runs.
+5. **Task-state store + its declaration**: JetStream-KV-backed A2A task store wired by default, **and the card asserts the shared-task-state capability** — design 02 §3.2 keys `TaskStateUnverified` off that assertion, so without it every template-built agent with `replicas>1` would raise the condition the store exists to prevent (02-recritique R7) (`ASSAYD_NATS_URL`, tenant creds injected) so `replicas>1` works out of the box (design 02 §3.2); in-memory fallback flag for pure-local runs.
 6. **Typed-pending retry** (design 22 r2): loops honor `APPROVAL_PENDING {retry_after}` bounded by `taskTimeout` — contract item, shipped as a pack release.
-7. **Tests**: a golden-task test (`invoke fixture → expected termination reason + tool-call shape`) runnable by `plume workflow test`-style fixture injection — the seed of the agent's own eval set.
+7. **Tests**: a golden-task test (`invoke fixture → expected termination reason + tool-call shape`) runnable by `assayd workflow test`-style fixture injection — the seed of the agent's own eval set.
 8. `project.toml` (buildpacks) or Dockerfile; non-root, read-only rootfs, port from env.
 
 ## 4. The SDK matrix (initial pack content)
@@ -60,7 +60,7 @@ The template conformance suite (§4) is the test. Golden scaffolds (rendered out
 ## 8. Decisions for async review
 
 - **D1 — Templates live in a builtin pack from day one** (fast-plane; CLI carries none).
-- **D2 — Card signing (A2A v1.0) rides `plume build`**; registration verifies signature + digest — two independent tamper checks.
+- **D2 — Card signing (A2A v1.0) rides `assayd build`**; registration verifies signature + digest — two independent tamper checks.
 - **D3 — JetStream task store default-on** in templates (not platform-mandated — design 02 D5 honored).
 - **D4 — No runtime skill fetching in v1**; skills ship in the image, updates = rebuild.
 

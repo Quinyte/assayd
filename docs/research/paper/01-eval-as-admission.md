@@ -36,7 +36,7 @@ Fixed set of agent revisions with ground truth (K known-good, K seeded-regressed
 
 The claim survives only if (a) shows materially higher false-admit — i.e. threshold-retry really does launder a stochastic gate — at comparable cost. **If eval variance is near zero, the contribution evaporates and we are back to Flagger.**
 
-## Consequence for plume
+## Consequence for assayd
 
 None architecturally — the design is *validated* by this, not weakened: it is doing the thing the mature tools do, which is the "bind, don't build" doctrine working as intended. It should stop being described as a differentiator in any external writing. ADR-0006 and architecture §06 need their novelty language softened to "eval-gated progressive delivery, in the Flagger/Argo lineage, with the gate content being an agent eval suite."
 

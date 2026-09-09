@@ -11,8 +11,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // Design 02 A35: a revision reads its own immutable copy of every env source.
@@ -33,19 +33,19 @@ const (
 	// objects to another namespace, where a cross-namespace owner reference is
 	// treated as absent — so using labels from the start means the move does not
 	// change the invariant.
-	MaterialAgentUIDLabel = "plume.dev/agent-uid"
-	MaterialRevisionLabel = "plume.dev/revision"
+	MaterialAgentUIDLabel = "assayd.dev/agent-uid"
+	MaterialRevisionLabel = "assayd.dev/revision"
 	// The source reference is an ANNOTATION for the same reason as the digest: a
 	// label value is capped at 63 bytes and a ConfigMap NAME may be 253. Labels
 	// carry only what is selected on — the agent UID and the 10-character
 	// revision name, both bounded.
-	MaterialSourceAnnotation = "plume.dev/source"
+	MaterialSourceAnnotation = "assayd.dev/source"
 	// The full digest is an ANNOTATION, not a label: a label VALUE is capped at
 	// 63 bytes and a SHA-256 is 64. The label carries the 40-bit revision NAME so
 	// the sweep can select on it; the annotation carries the identity that is
 	// actually verified. Selecting on the name is safe because the check that
 	// follows compares the digest.
-	MaterialDigestAnnotation = "plume.dev/revision-digest"
+	MaterialDigestAnnotation = "assayd.dev/revision-digest"
 )
 
 // MaterialName is derived from inputs, so a re-reconcile converges rather than
@@ -77,7 +77,7 @@ type sourceBuffer struct {
 
 // ensureRevisionMaterial creates the copies for a revision and returns the name
 // each source was copied to.
-func (r *AgentReconciler) ensureRevisionMaterial(ctx context.Context, agent *plumev1alpha1.Agent,
+func (r *AgentReconciler) ensureRevisionMaterial(ctx context.Context, agent *assaydv1alpha1.Agent,
 	runNS, rev, revDigest string, buffers map[revision.SourceRef]*sourceBuffer,
 ) (map[revision.SourceRef]string, error) {
 	names := map[revision.SourceRef]string{}
@@ -96,7 +96,7 @@ func (r *AgentReconciler) ensureRevisionMaterial(ctx context.Context, agent *plu
 	return names, nil
 }
 
-func (r *AgentReconciler) ensureOneCopy(ctx context.Context, agent *plumev1alpha1.Agent,
+func (r *AgentReconciler) ensureOneCopy(ctx context.Context, agent *assaydv1alpha1.Agent,
 	runNS, name, rev, revDigest string, ref revision.SourceRef, buf *sourceBuffer) error {
 	labels := map[string]string{
 		MaterialAgentUIDLabel: string(agent.UID),
@@ -241,7 +241,7 @@ func rewriteEnvFrom(in []corev1.EnvFromSource, material map[revision.SourceRef]s
 // The NAME is what an attacker cannot forge. Kubernetes names are immutable, so
 // renaming a victim object into this shape requires the delete they are trying
 // to obtain. Everything else is corroboration.
-func isRevisionMaterial(agent *plumev1alpha1.Agent, o client.Object) bool {
+func isRevisionMaterial(agent *assaydv1alpha1.Agent, o client.Object) bool {
 	rev := o.GetLabels()[MaterialRevisionLabel]
 	if rev == "" || o.GetLabels()[MaterialAgentUIDLabel] != string(agent.UID) {
 		return false
@@ -270,7 +270,7 @@ func isRevisionMaterial(agent *plumev1alpha1.Agent, o client.Object) bool {
 // either: the copies hold a snapshot of a Secret's bytes, so leaking them is
 // leaking credential material, which is the cost A23 warned about when it
 // declined copying in the first place.
-func (r *AgentReconciler) deleteMaterial(ctx context.Context, agent *plumev1alpha1.Agent, ns string,
+func (r *AgentReconciler) deleteMaterial(ctx context.Context, agent *assaydv1alpha1.Agent, ns string,
 	sel client.MatchingLabels) error {
 	for _, list := range []client.ObjectList{&corev1.ConfigMapList{}, &corev1.SecretList{}} {
 		if err := r.List(ctx, list, client.InNamespace(ns), sel); err != nil {
@@ -310,7 +310,7 @@ func (r *AgentReconciler) deleteMaterial(ctx context.Context, agent *plumev1alph
 // enumerates retired revisions misses any the operator never saw — a crash
 // between creating material and publishing the revision leaves copies no status
 // names, and those are exactly the ones nothing else would ever remove.
-func (r *AgentReconciler) collectRevisionMaterial(ctx context.Context, agent *plumev1alpha1.Agent,
+func (r *AgentReconciler) collectRevisionMaterial(ctx context.Context, agent *assaydv1alpha1.Agent,
 	runNS string, keep map[string]bool) error {
 	var cms corev1.ConfigMapList
 	var secs corev1.SecretList

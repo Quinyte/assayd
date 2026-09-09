@@ -1,10 +1,10 @@
-# plume — Requirements
+# assayd — Requirements
 
 Derived from architecture v0.1 (2026-08-20). FR = functional, NFR = non-functional. Each requirement is testable; NFRs are release gates.
 
 ## Non-functional (the identity of the platform)
 
-- **NFR-1 Weight**: core control plane ≤ 8 pods; exactly one pod of plume-authored code in core. Every added pod requires a written justification in an ADR.
+- **NFR-1 Weight**: core control plane ≤ 8 pods; exactly one pod of assayd-authored code in core. Every added pod requires a written justification in an ADR.
 - **NFR-2 Stateful deps**: Postgres and NATS JetStream are the only stateful dependencies, ever.
 - **NFR-3 Runs anywhere**: unmodified `helm install` on minikube, k3d, kind, k3s and any conformant cluster. CI runs full e2e on k3d + kind on every merge. No LoadBalancer/cloud-storage/managed-identity assumptions in core.
 - **NFR-4 Time-to-first-agent**: empty directory → agent answering from a knowledge graph on a local cluster in **< 15 minutes**.

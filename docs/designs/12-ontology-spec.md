@@ -11,7 +11,7 @@ The full, normative definition of the `ontology/v1` document — the domain cont
 
 ## 2. Doctrine & charter gates
 
-- **Plane**: this is a **contract** (like kgp) — slow by nature, deliberately small; everything expressed *in* it is fast-plane data. Versioned `ontology/v1`, N/N−1, listed in the `plume-contracts` ledger (design 07).
+- **Plane**: this is a **contract** (like kgp) — slow by nature, deliberately small; everything expressed *in* it is fast-plane data. Versioned `ontology/v1`, N/N−1, listed in the `assayd-contracts` ledger (design 07).
 - **Pods/stateful deps**: none. **Primitives**: Artifact (the document), Resource (referenced by KG CR). ✓
 
 ## 3. The document, normatively
@@ -96,13 +96,13 @@ probes:
 
 ### 3.7 Pattern lineage
 
-`pattern: <name>@<version>` records instantiation from a knowledge pack. The instantiated doc is **self-contained** (the pack's template is copied in, then edited) — no runtime pack dependency; lineage exists for diffing (`plume kg diff --against-pattern`) and upgrade tooling (a pattern upgrade proposes a doc diff, human reviews — never auto-applied).
+`pattern: <name>@<version>` records instantiation from a knowledge pack. The instantiated doc is **self-contained** (the pack's template is copied in, then edited) — no runtime pack dependency; lineage exists for diffing (`assayd kg diff --against-pattern`) and upgrade tooling (a pattern upgrade proposes a doc diff, human reviews — never auto-applied).
 
 ### 3.8 Derivations (contracts, not conveniences)
 
 | Derived artifact | From | Consumer |
 |---|---|---|
-| JSON Schema validation | this spec (shipped `ontology-v1.schema.json`) | `plume kg push`, admission on the ConfigMap/artifact |
+| JSON Schema validation | this spec (shipped `ontology-v1.schema.json`) | `assayd kg push`, admission on the ConfigMap/artifact |
 | **Pydantic entity/edge models** | entities+relations (+descriptions as docstrings) | Graphiti extraction (design 13) — mechanical, golden-tested |
 | Invariant queries | invariants | `kg.admin.commit_version` gate (designs 01/14) |
 | Probe set | probes (incl. `generate:` expansions) | probe engine (15), semantic readiness |

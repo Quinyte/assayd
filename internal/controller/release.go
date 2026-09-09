@@ -9,8 +9,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // releasePin is a resolved rollback request: which retained revision the user
@@ -53,7 +53,7 @@ func (e *unresolvablePinError) Error() string {
 // still exist, which is a selection and not a computation.
 //
 // The retained workload is the evidence. It carries the full digest under
-// plume.dev/revision-digest and its name embeds the revision, and both are
+// assayd.dev/revision-digest and its name embeds the revision, and both are
 // checked: the annotation because the 40-bit name is forgeable by a chosen
 // collision (A57), the name shape because ownedWorkloads is the authority on
 // what this operator created for this Agent.
@@ -69,7 +69,7 @@ func (e *unresolvablePinError) Error() string {
 // record carrying a revision's gate verdict to consult. This resolves the
 // selection half and leaves the eligibility half owed, rather than implying a
 // check it does not make.
-func (r *AgentReconciler) resolveReleasePin(ctx context.Context, agent *plumev1alpha1.Agent, runNS string) (*releasePin, error) {
+func (r *AgentReconciler) resolveReleasePin(ctx context.Context, agent *assaydv1alpha1.Agent, runNS string) (*releasePin, error) {
 	if agent.Spec.Release == nil || agent.Spec.Release.TargetRevisionDigest == "" {
 		return nil, nil
 	}
@@ -104,16 +104,16 @@ func (r *AgentReconciler) resolveReleasePin(ctx context.Context, agent *plumev1a
 // reportUnresolvablePin puts the refusal on the object. It is Degraded rather
 // than a bare error: the request failed, the user needs to see why, and
 // retrying forever against a digest that will never appear writes nothing.
-func (r *AgentReconciler) reportUnresolvablePin(ctx context.Context, agent *plumev1alpha1.Agent,
-	status *plumev1alpha1.AgentStatus, conds *conditionSet, e *unresolvablePinError) error {
+func (r *AgentReconciler) reportUnresolvablePin(ctx context.Context, agent *assaydv1alpha1.Agent,
+	status *assaydv1alpha1.AgentStatus, conds *conditionSet, e *unresolvablePinError) error {
 	// Degraded, not Ready=False. The message says the current release is
 	// untouched and it is — so setting the canonical condition False would page
 	// the on-call for a typo in a 64-character digest while the agent serves
 	// normally. A13's rule, written into agent_controller.go: Ready=False on an
 	// agent whose active revision is serving "would trip every alert keyed on the
 	// canonical condition".
-	conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "ReleasePinUnresolvable", e.Error())
-	status.Phase = plumev1alpha1.PhaseDegraded
+	conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ReleasePinUnresolvable", e.Error())
+	status.Phase = assaydv1alpha1.PhaseDegraded
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation
 	return r.writeStatus(ctx, agent, status)
@@ -143,7 +143,7 @@ func (r *AgentReconciler) reportUnresolvablePin(ctx context.Context, agent *plum
 // does not name the ref the current spec has at i, the pin is refused. The
 // record that would answer this properly is status.revisions[], which is not on
 // the CRD (§5) — so this checks what it can and refuses what it cannot.
-func (r *AgentReconciler) verifyRetainedMaterial(ctx context.Context, agent *plumev1alpha1.Agent,
+func (r *AgentReconciler) verifyRetainedMaterial(ctx context.Context, agent *assaydv1alpha1.Agent,
 	runNS, rev, revDigest string) error {
 	for i, ref := range revision.EnvSources(agent.Spec) {
 		name := MaterialName(agent.Name, rev, i)

@@ -9,7 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // Codex r7 BLOCKER 3: every explicitly named arm of the env selectors dropped
@@ -35,7 +35,7 @@ func TestEveryEnvVarSourceLeafMintsARevision(t *testing.T) {
 	}
 	for _, l := range ls {
 		t.Run(l.Path, func(t *testing.T) {
-			mk := func(n int) plumev1alpha1.AgentSpec {
+			mk := func(n int) assaydv1alpha1.AgentSpec {
 				var src corev1.EnvVarSource
 				SetLeaf(t, reflect.ValueOf(&src).Elem(), l, n)
 				s := baseSpec()
@@ -71,7 +71,7 @@ func TestEveryEnvFromSourceLeafMintsARevision(t *testing.T) {
 	}
 	for _, l := range ls {
 		t.Run(l.Path, func(t *testing.T) {
-			mk := func(n int) plumev1alpha1.AgentSpec {
+			mk := func(n int) assaydv1alpha1.AgentSpec {
 				var src corev1.EnvFromSource
 				SetLeaf(t, reflect.ValueOf(&src).Elem(), l, n)
 				s := baseSpec()
@@ -97,7 +97,7 @@ func TestEveryEnvFromSourceLeafMintsARevision(t *testing.T) {
 // Pointer PRESENCE is a leaf too: absent and explicitly-false are different
 // documents and Kubernetes treats them differently, so they must not collapse.
 func TestOptionalAbsentDiffersFromExplicitFalse(t *testing.T) {
-	mk := func(opt *bool) plumev1alpha1.AgentSpec {
+	mk := func(opt *bool) assaydv1alpha1.AgentSpec {
 		s := baseSpec()
 		s.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "prompt"}, Optional: opt}}}
@@ -114,19 +114,19 @@ func TestOptionalAbsentDiffersFromExplicitFalse(t *testing.T) {
 // lists — so hashing their order would re-gate on a no-op diff. The allowlist
 // was sorted and providers were not, which no test noticed.
 func TestReorderingProvidersDoesNotMintARevision(t *testing.T) {
-	mk := func(eps ...plumev1alpha1.LLMEndpoint) plumev1alpha1.AgentSpec {
+	mk := func(eps ...assaydv1alpha1.LLMEndpoint) assaydv1alpha1.AgentSpec {
 		s := baseSpec()
-		s.LLM = &plumev1alpha1.LLMSpec{Providers: eps}
+		s.LLM = &assaydv1alpha1.LLMSpec{Providers: eps}
 		return s
 	}
-	a := plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmAnthropic, Model: "claude"}
-	b := plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmOpenAI, Model: "gpt-4o"}
+	a := assaydv1alpha1.LLMEndpoint{Arm: assaydv1alpha1.ArmAnthropic, Model: "claude"}
+	b := assaydv1alpha1.LLMEndpoint{Arm: assaydv1alpha1.ArmOpenAI, Model: "gpt-4o"}
 	if HashWith(mk(a, b), "fixed") != HashWith(mk(b, a), "fixed") {
 		t.Error("reordering providers minted a revision; a re-serialized manifest would pay for " +
 			"an eval and canary cycle for a diff that changed nothing")
 	}
 	// And the set is still injective: two DIFFERENT sets must not collapse.
-	c := plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmOpenAI, Model: "gpt-4o-mini"}
+	c := assaydv1alpha1.LLMEndpoint{Arm: assaydv1alpha1.ArmOpenAI, Model: "gpt-4o-mini"}
 	if HashWith(mk(a, b), "fixed") == HashWith(mk(a, c), "fixed") {
 		t.Error("two different provider sets hash identically; sorting must canonicalise order, " +
 			"not erase content")
@@ -137,21 +137,21 @@ func TestReorderingProvidersDoesNotMintARevision(t *testing.T) {
 // this cannot pass on providers changing — the vacuity that hid the omission
 // behind the aggregate `LLM` mutation for two rounds.
 func TestEgressAllowlistChangesMintARevision(t *testing.T) {
-	arm := func(a plumev1alpha1.LLMArm) plumev1alpha1.LLMAllowEntry {
-		return plumev1alpha1.LLMAllowEntry{Arm: a}
+	arm := func(a assaydv1alpha1.LLMArm) assaydv1alpha1.LLMAllowEntry {
+		return assaydv1alpha1.LLMAllowEntry{Arm: a}
 	}
-	mk := func(allow ...plumev1alpha1.LLMAllowEntry) plumev1alpha1.AgentSpec {
+	mk := func(allow ...assaydv1alpha1.LLMAllowEntry) assaydv1alpha1.AgentSpec {
 		s := baseSpec()
-		s.LLM = &plumev1alpha1.LLMSpec{
-			Providers:       []plumev1alpha1.LLMEndpoint{{Arm: plumev1alpha1.ArmAnthropic, Model: "pa"}},
+		s.LLM = &assaydv1alpha1.LLMSpec{
+			Providers:       []assaydv1alpha1.LLMEndpoint{{Arm: assaydv1alpha1.ArmAnthropic, Model: "pa"}},
 			EgressAllowlist: allow,
-			Fallback:        &plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmAnthropic, Model: "pa"},
+			Fallback:        &assaydv1alpha1.LLMEndpoint{Arm: assaydv1alpha1.ArmAnthropic, Model: "pa"},
 		}
 		return s
 	}
 	for _, tc := range []struct {
 		name     string
-		a, b     plumev1alpha1.AgentSpec
+		a, b     assaydv1alpha1.AgentSpec
 		wantSame bool
 		why      string
 	}{
@@ -159,7 +159,7 @@ func TestEgressAllowlistChangesMintARevision(t *testing.T) {
 			why: "widening egress is the ADR-0014 control; it must never reach production ungated"},
 		{name: "remove", a: mk(arm("anthropic"), arm("openai")), b: mk(arm("anthropic")),
 			why: "the gate is symmetric (A16): narrowing changes what the agent can reach too"},
-		{name: "absent vs empty", a: mk(), b: mk([]plumev1alpha1.LLMAllowEntry{}...),
+		{name: "absent vs empty", a: mk(), b: mk([]assaydv1alpha1.LLMAllowEntry{}...),
 			why: "nothing defines whether an empty allowlist means no narrowing or reach nothing, " +
 				"so collapsing them would make one of those an ungated grant change"},
 		{name: "reorder", a: mk(arm("anthropic"), arm("openai")), b: mk(arm("openai"), arm("anthropic")),
@@ -171,16 +171,16 @@ func TestEgressAllowlistChangesMintARevision(t *testing.T) {
 		// them, so a HIPAA agent could be repointed at an endpoint with different
 		// BAA posture with no revision minted.
 		{name: "same arm, different Azure endpoint",
-			a: mk(plumev1alpha1.LLMAllowEntry{Arm: plumev1alpha1.ArmAzureOpenAI,
-				AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{Endpoint: "a.openai.azure.com"}}),
-			b: mk(plumev1alpha1.LLMAllowEntry{Arm: plumev1alpha1.ArmAzureOpenAI,
-				AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{Endpoint: "b.openai.azure.com"}}),
+			a: mk(assaydv1alpha1.LLMAllowEntry{Arm: assaydv1alpha1.ArmAzureOpenAI,
+				AzureOpenAI: &assaydv1alpha1.AzureOpenAIInstance{Endpoint: "a.openai.azure.com"}}),
+			b: mk(assaydv1alpha1.LLMAllowEntry{Arm: assaydv1alpha1.ArmAzureOpenAI,
+				AzureOpenAI: &assaydv1alpha1.AzureOpenAIInstance{Endpoint: "b.openai.azure.com"}}),
 			why: "two Azure resources differ in endpoint and BAA posture; (provider, model) collapsed them"},
 		{name: "same arm and endpoint, different deployment",
-			a: mk(plumev1alpha1.LLMAllowEntry{Arm: plumev1alpha1.ArmAzureOpenAI,
-				AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{Endpoint: "a.openai.azure.com", DeploymentName: "gpt4o-prod"}}),
-			b: mk(plumev1alpha1.LLMAllowEntry{Arm: plumev1alpha1.ArmAzureOpenAI,
-				AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{Endpoint: "a.openai.azure.com", DeploymentName: "gpt4o-dev"}}),
+			a: mk(assaydv1alpha1.LLMAllowEntry{Arm: assaydv1alpha1.ArmAzureOpenAI,
+				AzureOpenAI: &assaydv1alpha1.AzureOpenAIInstance{Endpoint: "a.openai.azure.com", DeploymentName: "gpt4o-prod"}}),
+			b: mk(assaydv1alpha1.LLMAllowEntry{Arm: assaydv1alpha1.ArmAzureOpenAI,
+				AzureOpenAI: &assaydv1alpha1.AzureOpenAIInstance{Endpoint: "a.openai.azure.com", DeploymentName: "gpt4o-dev"}}),
 			why: "the deployment IS the model identity on this arm (design 03 §3.4.1.1)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -207,7 +207,7 @@ func TestEgressAllowlistChangesMintARevision(t *testing.T) {
 // projection cannot delete its own check.
 
 func TestEveryAgentSpecLeafBehavesAsClassified(t *testing.T) {
-	ls := Leaves(t, reflect.TypeOf(plumev1alpha1.AgentSpec{}), "spec", nil)
+	ls := Leaves(t, reflect.TypeOf(assaydv1alpha1.AgentSpec{}), "spec", nil)
 	if len(ls) < 45 {
 		t.Fatalf("walked only %d leaves of AgentSpec; a partial walk would pass on the "+
 			"handful it happened to reach", len(ls))
@@ -223,8 +223,8 @@ func TestEveryAgentSpecLeafBehavesAsClassified(t *testing.T) {
 					"unclassified one reaches production through whichever the projection "+
 					"happens to do, which is how a SystemPrompt field once shipped ungated.", l.Path)
 			}
-			mk := func(n int) plumev1alpha1.AgentSpec {
-				var s plumev1alpha1.AgentSpec
+			mk := func(n int) assaydv1alpha1.AgentSpec {
+				var s assaydv1alpha1.AgentSpec
 				SetLeaf(t, reflect.ValueOf(&s).Elem(), l, n)
 				return s
 			}

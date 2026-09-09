@@ -40,7 +40,7 @@ status:
   runs: {active: n, lastOutcome: …}
 ```
 
-Step kinds v1 (**closed**, like every plume vocabulary): `tool · agent · branch · approval · event · transform` (pure data mapping, CEL-expressions over prior step outputs). No loops in declarative v1 (bounded fan-out via `forEach: {over, limit}` only) — unbounded control flow belongs in code-first; stated to keep declarative workflows *analyzable* (the CLI can render them; budgets are boundable).
+Step kinds v1 (**closed**, like every assayd vocabulary): `tool · agent · branch · approval · event · transform` (pure data mapping, CEL-expressions over prior step outputs). No loops in declarative v1 (bounded fan-out via `forEach: {over, limit}` only) — unbounded control flow belongs in code-first; stated to keep declarative workflows *analyzable* (the CLI can render them; budgets are boundable).
 
 ## 4. Interpreter, not codegen (the decision)
 
@@ -58,11 +58,11 @@ The declarative compiler produces a **step-graph document** (content-addressed),
 | cron | `wf-<name>-<scheduled-instant>` | replayed/rescheduled tick ⇒ no-op |
 | http | `wf-<name>-<Idempotency-Key>` when the header is present (design 23's projection forwards it; the generated client sends one by default); absent ⇒ fresh run id — each POST is a new run, documented |
 | manual | `wf-<name>-<cli-generated-key>` (the CLI always sends one) |
-- **`deadLetter`**: exhausted runs park in a DLQ subject + `plume workflow dlq` verbs; never silent loss.
+- **`deadLetter`**: exhausted runs park in a DLQ subject + `assayd workflow dlq` verbs; never silent loss.
 
 ## 6. Code-first (`runtime: external`)
 
-A user's own DBOS app (any language DBOS supports), deployed as *their* workload Deployment, registered by a Workflow CR pointing at its queue name: the operator wires triggers → **enqueue into the app's DBOS queue** (dynamic queues make this registration-time, no redeploy) and compiles the same principal/budget/expose posture. The platform never runs user code in the shared interpreter; the shared runtime is for declarative graphs only. `plume workflow test --event fixture.json` drives either path locally (dev cluster).
+A user's own DBOS app (any language DBOS supports), deployed as *their* workload Deployment, registered by a Workflow CR pointing at its queue name: the operator wires triggers → **enqueue into the app's DBOS queue** (dynamic queues make this registration-time, no redeploy) and compiles the same principal/budget/expose posture. The platform never runs user code in the shared interpreter; the shared runtime is for declarative graphs only. `assayd workflow test --event fixture.json` drives either path locally (dev cluster).
 
 ## 7. Failure modes
 

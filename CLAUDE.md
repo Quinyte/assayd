@@ -1,6 +1,6 @@
-# CLAUDE.md — plume
+# CLAUDE.md — assayd
 
-plume ("graphene" in early drafts) is a lightweight, Kubernetes-native agent platform.
+assayd ("graphene" in early drafts) is a lightweight, Kubernetes-native agent platform.
 
 **Phase: implementing P1, under the scope reset of ADR-0030.** The agent-operator, its CRD, the chart and CI exist and pass on k3d and kind.
 

@@ -1,4 +1,4 @@
-// Command operator runs the plume agent-operator.
+// Command operator runs the assayd agent-operator.
 //
 // The wiring here is deliberately small and deliberately unforgiving: every
 // dependency the reconciler needs is constructed explicitly and every failure to
@@ -29,15 +29,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
 )
 
 var scheme = runtime.NewScheme()
 
 func init() {
 	utilruntimeMust(clientgoscheme.AddToScheme(scheme))
-	utilruntimeMust(plumev1alpha1.AddToScheme(scheme))
+	utilruntimeMust(assaydv1alpha1.AddToScheme(scheme))
 }
 
 func main() {
@@ -65,7 +65,7 @@ func run() error {
 			"(design 02 A60). Defaults to the mounted ServiceAccount namespace")
 	flag.StringVar(&gatewayURL, "gateway-url", "",
 		"base URL of the agentgateway that agent egress traverses, injected into every agent "+
-			"workload as PLUME_GATEWAY_URL (design 02 §11). Empty — the default — injects nothing, "+
+			"workload as ASSAYD_GATEWAY_URL (design 02 §11). Empty — the default — injects nothing, "+
 			"because the chart ships no gateway subchart yet and a placeholder address would look "+
 			"like an outage rather than an absent tier")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metric endpoint binds to")
@@ -118,7 +118,7 @@ func run() error {
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         leaderElect,
-		LeaderElectionID:       "agent-operator.plume.dev",
+		LeaderElectionID:       "agent-operator.assayd.dev",
 		// Release the lease on graceful shutdown so a rolling update does not wait
 		// out the full lease duration before the new pod can reconcile.
 		LeaderElectionReleaseOnCancel: true,

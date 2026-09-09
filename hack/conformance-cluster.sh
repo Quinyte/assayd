@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Provision a throwaway cluster, install the pinned agentgateway, run the cluster
-# conformance suite, tear down. Separate from CLUSTER=plume-local so `make e2e`
+# conformance suite, tear down. Separate from CLUSTER=assayd-local so `make e2e`
 # is unaffected.
 #
 # A skipped conformance run is an unverified dependency contract, so this fails
 # loudly rather than skipping when a prerequisite is missing.
 set -euo pipefail
 
-CLUSTER="${CONF_CLUSTER:-plume-conformance}"
+CLUSTER="${CONF_CLUSTER:-assayd-conformance}"
 AGW_VERSION="${AGW_VERSION:-1.4.1}"
 GWAPI_VERSION="${GWAPI_VERSION:-v1.6.0}"
 KEEP="${KEEP:-0}"

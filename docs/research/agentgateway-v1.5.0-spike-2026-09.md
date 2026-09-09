@@ -6,7 +6,7 @@
 
 Why this exists: `agentgateway-v1.5.0-delta-2026-09.md` diffed the two API surfaces at their tags and said plainly what it could not settle — §2.1 (the apply barrier) and §2.8 (a NACK'd tightening reporting converged) are behavioural, and an API diff cannot reach them. ADR-0030 blocks reopening design 03 until they are measured. **This measures §2.1 and not §2.8**, for the reason the §2.8 section gives.
 
-**Cluster**: k3d `plume-spike150`, Kubernetes v1.33.6, Gateway API v1.6.0 standard, `agentgateway-crds` and `agentgateway` Helm charts at **1.5.0**, controller image `cr.agentgateway.dev/controller:v1.5.0` read back from the running Deployment. Same shape as the v1.4.1 spike — but note that comparability requires the same *stimulus* too, which is where this note's first version went wrong. Every result below is an observation.
+**Cluster**: k3d `assayd-spike150`, Kubernetes v1.33.6, Gateway API v1.6.0 standard, `agentgateway-crds` and `agentgateway` Helm charts at **1.5.0**, controller image `cr.agentgateway.dev/controller:v1.5.0` read back from the running Deployment. Same shape as the v1.4.1 spike — but note that comparability requires the same *stimulus* too, which is where this note's first version went wrong. Every result below is an observation.
 
 ## Results against the v1.4.1 spike
 

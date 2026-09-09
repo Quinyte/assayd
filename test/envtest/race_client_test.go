@@ -13,9 +13,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // hideOnce makes one Get of one Deployment report NotFound, which is the only
@@ -90,7 +90,7 @@ func TestAnAlreadyExistsRaceDoesNotAcceptAnUnvalidatedWorkload(t *testing.T) {
 			"read and the create was accepted without being validated")
 	}
 
-	var after plumev1alpha1.Agent
+	var after assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestAnAlreadyExistsRaceDoesNotAcceptAnUnvalidatedWorkload(t *testing.T) {
 	if img := d.Spec.Template.Spec.Containers[0].Image; img != squatter.Spec.Template.Spec.Containers[0].Image {
 		return // converged over it; acceptable, the squatter did not win
 	}
-	if c := condition(&after, plumev1alpha1.CondRevisionHashCollision); c == nil ||
+	if c := condition(&after, assaydv1alpha1.CondRevisionHashCollision); c == nil ||
 		c.Status != metav1.ConditionTrue {
 		t.Error("the squatting workload was neither converged nor reported; the operator accepted " +
 			"AlreadyExists as success and moved on")
@@ -138,7 +138,7 @@ func TestAnUnstampedActiveWorkloadIsNotReportedAsServing(t *testing.T) {
 	}
 	markAvailable(t, ns, active, 1)
 
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -148,11 +148,11 @@ func TestAnUnstampedActiveWorkloadIsNotReportedAsServing(t *testing.T) {
 	}
 	reconcileOnce(t, r, &live)
 
-	var after plumev1alpha1.Agent
+	var after assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
-	if c := condition(&after, plumev1alpha1.CondReady); c != nil && c.Status == metav1.ConditionTrue &&
+	if c := condition(&after, assaydv1alpha1.CondReady); c != nil && c.Status == metav1.ConditionTrue &&
 		c.Reason == "Available" {
 		t.Errorf("Ready=True/Available claims the active revision is serving, but its workload "+
 			"carries no stamp from this operator — availability alone was the evidence. %s", c.Message)

@@ -12,14 +12,14 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
 )
 
-func agentWithPrompt(t *testing.T, ns, name string) *plumev1alpha1.Agent {
+func agentWithPrompt(t *testing.T, ns, name string) *assaydv1alpha1.Agent {
 	t.Helper()
 	mustCreateSource(t, ns, "ConfigMap", "prompt", map[string]string{"SYSTEM_PROMPT": "you are helpful"})
-	return mustCreateAgent(t, ns, name, func(a *plumev1alpha1.Agent) {
+	return mustCreateAgent(t, ns, name, func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "prompt"}}}}
 	})
@@ -81,7 +81,7 @@ func TestTheCopyIsImmutableAndCarriesProvenance(t *testing.T) {
 	if cm.Data["SYSTEM_PROMPT"] != "you are helpful" {
 		t.Errorf("the copy does not carry the source's content: %v", cm.Data)
 	}
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -172,11 +172,11 @@ func TestMetadataIsRepairedWhenTheContentMatches(t *testing.T) {
 
 			settle(t, r, a)
 
-			var after plumev1alpha1.Agent
+			var after assaydv1alpha1.Agent
 			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 				t.Fatalf("get agent: %v", err)
 			}
-			if c := condition(&after, plumev1alpha1.CondRevisionMaterialUnavailable); c != nil &&
+			if c := condition(&after, assaydv1alpha1.CondRevisionMaterialUnavailable); c != nil &&
 				c.Status == metav1.ConditionTrue {
 				t.Errorf("metadata a principal with `update` can rewrite put the agent into a "+
 					"terminal state: %s\nThe bytes are what the Pod reads, and they were untouched.",
@@ -201,7 +201,7 @@ func onlyLetters(s string) string {
 	}, s)
 }
 
-func withPromptRef(a *plumev1alpha1.Agent) {
+func withPromptRef(a *assaydv1alpha1.Agent) {
 	a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 		LocalObjectReference: corev1.LocalObjectReference{Name: "prompt"}}}}
 }
@@ -251,11 +251,11 @@ func TestNonImmutableMaterialIsRecreated(t *testing.T) {
 func TestMaterialWithTheRightProvenanceAndWrongContentIsRefused(t *testing.T) {
 	ns := newNamespace(t)
 	mustCreateSource(t, ns, "ConfigMap", "prompt", map[string]string{"SYSTEM_PROMPT": "you are helpful"})
-	a := mustCreateAgent(t, ns, "wrongbytes", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "wrongbytes", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "prompt"}}}}
 	})
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -286,11 +286,11 @@ func TestMaterialWithTheRightProvenanceAndWrongContentIsRefused(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		reconcileOnce(t, r, a)
 	}
-	var after plumev1alpha1.Agent
+	var after assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
-	c := condition(&after, plumev1alpha1.CondRevisionMaterialUnavailable)
+	c := condition(&after, assaydv1alpha1.CondRevisionMaterialUnavailable)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatalf("material carrying different bytes than the source was accepted; the revision "+
 			"would run content nobody hashed. conditions=%+v", after.Status.Conditions)
@@ -307,7 +307,7 @@ func TestMaterialWithTheRightProvenanceAndWrongContentIsRefused(t *testing.T) {
 func TestMaterialIsCollectedWithItsRevision(t *testing.T) {
 	ns := newNamespace(t)
 	mustCreateSource(t, ns, "ConfigMap", "prompt", map[string]string{"P": "v0"})
-	a := mustCreateAgent(t, ns, "gcmat", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "gcmat", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "prompt"}}}}
 	})
@@ -325,7 +325,7 @@ func TestMaterialIsCollectedWithItsRevision(t *testing.T) {
 		if err := k8s.Update(context.Background(), &cm); err != nil {
 			t.Fatalf("edit source: %v", err)
 		}
-		var live plumev1alpha1.Agent
+		var live assaydv1alpha1.Agent
 		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 			t.Fatalf("get agent: %v", err)
 		}
@@ -360,7 +360,7 @@ func TestMaterialIsCollectedWithItsRevision(t *testing.T) {
 func TestMaterialIsCollectedWithTheAgent(t *testing.T) {
 	ns := newNamespace(t)
 	mustCreateSource(t, ns, "Secret", "creds", map[string]string{"TOKEN": "s3cret"})
-	a := mustCreateAgent(t, ns, "gcagent", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "gcagent", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "creds"}}}}
 	})
@@ -382,7 +382,7 @@ func TestMaterialIsCollectedWithTheAgent(t *testing.T) {
 	if err := k8s.Delete(context.Background(), a); err != nil {
 		t.Fatalf("delete agent: %v", err)
 	}
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestALabelledBystanderObjectIsNotDeleted(t *testing.T) {
 	r := newReconciler(false)
 	settle(t, r, a)
 
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -492,17 +492,17 @@ func TestEveryConditionTheOperatorSetsCanAlsoClear(t *testing.T) {
 	markAvailable(t, ns, controller.WorkloadName("clears", revisionOf(t, ns, a.Spec)), 1)
 	settle(t, r, a)
 
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatal(err)
 	}
 	// Plant every abnormal-true condition the operator is the sole writer of.
-	planted := []plumev1alpha1.ConditionType{
-		plumev1alpha1.CondRevisionMaterialUnavailable,
-		plumev1alpha1.CondRunNamespaceUnavailable,
-		plumev1alpha1.CondRevisionHashCollision,
-		plumev1alpha1.CondEnvSourceUnresolved,
-		plumev1alpha1.CondEnvSourceProtectionUnavailable,
+	planted := []assaydv1alpha1.ConditionType{
+		assaydv1alpha1.CondRevisionMaterialUnavailable,
+		assaydv1alpha1.CondRunNamespaceUnavailable,
+		assaydv1alpha1.CondRevisionHashCollision,
+		assaydv1alpha1.CondEnvSourceUnresolved,
+		assaydv1alpha1.CondEnvSourceProtectionUnavailable,
 	}
 	for _, c := range planted {
 		live.Status.Conditions = append(live.Status.Conditions, metav1.Condition{
@@ -522,7 +522,7 @@ func TestEveryConditionTheOperatorSetsCanAlsoClear(t *testing.T) {
 				"Agent reports Ready beside a condition that no longer applies.", c)
 		}
 	}
-	if cond := condition(&got, plumev1alpha1.CondReady); cond == nil || cond.Status != metav1.ConditionTrue {
+	if cond := condition(&got, assaydv1alpha1.CondReady); cond == nil || cond.Status != metav1.ConditionTrue {
 		t.Fatalf("setup: the agent is not Ready, so this proves nothing about clearing: %+v", got.Status.Conditions)
 	}
 }

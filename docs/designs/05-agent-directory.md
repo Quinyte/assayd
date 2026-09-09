@@ -7,7 +7,7 @@
 
 ## 1. Purpose & scope
 
-Where agents and tools are *found*: the queryable catalog behind `plume init`'s tool/agent pickers, A2A discovery, and App composition. **In scope**: record format, storage layout, read/write paths, external exchange. **Out of scope**: registration flow (design 02 owns), MCP tool catalogs' content (Connector packs).
+Where agents and tools are *found*: the queryable catalog behind `assayd init`'s tool/agent pickers, A2A discovery, and App composition. **In scope**: record format, storage layout, read/write paths, external exchange. **Out of scope**: registration flow (design 02 owns), MCP tool catalogs' content (Connector packs).
 
 ## 2. Doctrine & charter gates
 
@@ -18,7 +18,7 @@ Where agents and tools are *found*: the queryable catalog behind `plume init`'s 
 
 ### 3.1 Record: OASF-wrapped, A2A-derived
 
-One record per registered agent revision, JSON, OASF `Agent` root object with plume extensions:
+One record per registered agent revision, JSON, OASF `Agent` root object with assayd extensions:
 
 ```json
 {
@@ -28,9 +28,9 @@ One record per registered agent revision, JSON, OASF `Agent` root object with pl
   "skills": [...],                       // enriched from A2A card skills
   "locators": [{"type": "a2a", "url": "https://gw…/agents/claims/pa-reviewer"}],
   "extensions": [
-    {"name": "plume.card",   "data": { /* verbatim A2A Agent Card */ }},
-    {"name": "plume.status", "data": {"phase": "Ready", "knowledge": ["payer-policies@v12"]}},   // operator RE-WRITES on phase transitions (r1 f5) — single writer, per-agent key, cheap
-    {"name": "plume.provenance", "data": {"imageDigest": "…", "cardDigest": "…", "sigstore": "…"}}
+    {"name": "assayd.card",   "data": { /* verbatim A2A Agent Card */ }},
+    {"name": "assayd.status", "data": {"phase": "Ready", "knowledge": ["payer-policies@v12"]}},   // operator RE-WRITES on phase transitions (r1 f5) — single writer, per-agent key, cheap
+    {"name": "assayd.provenance", "data": {"imageDigest": "…", "cardDigest": "…", "sigstore": "…"}}
   ]
 }
 ```
@@ -47,15 +47,15 @@ Conversion A2A card → OASF record is deterministic (golden-tested); the card i
 ### 3.3 Read paths
 
 - **CLI / operators**: direct KV reads (NATS client, tenant-scoped credentials).
-- **Agents** (A2A discovery): the gateway **routes** `/.well-known/agent-card.json` to the *agent container*, which already serves it — SoT preserved per ADR-0019 (r1 f1; route row added to design 03 §3.4). The directory's embedded card is the validated, digest-pinned discovery copy for `plume dir`/export — never the wire answer. External/scaled-to-zero agents: the CR-inline card override (design 02 §3.4) is served by the gateway as the documented exception, digest-checked at registration.
+- **Agents** (A2A discovery): the gateway **routes** `/.well-known/agent-card.json` to the *agent container*, which already serves it — SoT preserved per ADR-0019 (r1 f1; route row added to design 03 §3.4). The directory's embedded card is the validated, digest-pinned discovery copy for `assayd dir`/export — never the wire answer. External/scaled-to-zero agents: the CR-inline card override (design 02 §3.4) is served by the gateway as the documented exception, digest-checked at registration.
 - **Search**: v1 is key-prefix + client-side filter over OASF skills (dozens–hundreds of records; fine). A search index is explicitly deferred until a measured need (>5k records or >100ms p95 list).
 
 ### 3.4 External exchange (OCI + Sigstore, ADS-compatible)
 
-- `plume dir export <agent>` → OASF record as an OCI artifact, cosign-signed — the same registry + signing machinery as packs/ModelKits; layout follows AGNTCY ADS conventions so records are portable to any ADS-compatible directory (including the hosted Outshift directory for `expose.visibility: public`).
-- `plume dir import <ref>` → verify signature → register as an **external agent** (design 02 path).
-- **MCP Registry federation is explicit and curated** (r1 f2): `plume dir import-tools --namespace <allowlisted>` — never a background sync; entries are schema-validated, provenance-marked, and the wizard *displays* provenance with its recommendation (never silent). **An imported record alone is not bindable**: binding a tool still requires the Connector/MCPServer CR path with admission checks — the directory suggests, CRs grant.
-- **External publication is explicit-only** (r1 f9): records leave the cluster solely via `plume dir export` + push. `expose.visibility: public` exposes an *endpoint*; it never publishes a directory record anywhere by itself.
+- `assayd dir export <agent>` → OASF record as an OCI artifact, cosign-signed — the same registry + signing machinery as packs/ModelKits; layout follows AGNTCY ADS conventions so records are portable to any ADS-compatible directory (including the hosted Outshift directory for `expose.visibility: public`).
+- `assayd dir import <ref>` → verify signature → register as an **external agent** (design 02 path).
+- **MCP Registry federation is explicit and curated** (r1 f2): `assayd dir import-tools --namespace <allowlisted>` — never a background sync; entries are schema-validated, provenance-marked, and the wizard *displays* provenance with its recommendation (never silent). **An imported record alone is not bindable**: binding a tool still requires the Connector/MCPServer CR path with admission checks — the directory suggests, CRs grant.
+- **External publication is explicit-only** (r1 f9): records leave the cluster solely via `assayd dir export` + push. `expose.visibility: public` exposes an *endpoint*; it never publishes a directory record anywhere by itself.
 
 ## 4. Behavior
 
@@ -77,7 +77,7 @@ Per-tenant buckets via NATS accounts; writer = operator identity only; exported 
 
 ## 7. Observability
 
-Registration/GC counters, KV bucket size, import/export events. `plume dir list` shows staleness (record ts vs agent status).
+Registration/GC counters, KV bucket size, import/export events. `assayd dir list` shows staleness (record ts vs agent status).
 
 ## 8. Testing
 

@@ -7,7 +7,7 @@
 set -euo pipefail
 
 DISTRO="${DISTRO:-k3d}"
-CLUSTER="${CLUSTER:-plume-local}"
+CLUSTER="${CLUSTER:-assayd-local}"
 # The tag is UNIQUE PER RUN, and that is not cosmetic.
 #
 # With a fixed tag and pullPolicy: Never, `helm upgrade` sees an unchanged
@@ -19,7 +19,7 @@ CLUSTER="${CLUSTER:-plume-local}"
 # A unique tag changes the pod template, so Kubernetes must roll it, and
 # `--wait` then means what it appears to mean.
 IMAGE_TAG="e2e-$(date +%s)"
-IMAGE="plume-operator:${IMAGE_TAG}"
+IMAGE="assayd-operator:${IMAGE_TAG}"
 
 # The agent image the suite deploys, and why it needs a registry at all.
 #
@@ -33,16 +33,37 @@ IMAGE="plume-operator:${IMAGE_TAG}"
 #
 # So the suite runs its own registry. This is not scaffolding around the rules;
 # it is the fixture being held to the same rules a real agent image is.
-REG_NAME="plume-e2e-registry"
+REG_NAME="assayd-e2e-registry"
 REG_PORT="5111"
-RESPONDER_REPO="plume-responder"
+RESPONDER_REPO="assayd-responder"
 
 case "${DISTRO}" in
 k3d)
   command -v k3d >/dev/null || { echo "k3d is not installed"; exit 1; }
+  # EXISTS is not RUNNING, and the difference is a 240s ImagePullBackOff.
+  # An interrupted run left the registry container in state `Created`: k3d
+  # listed it, this check passed, the cluster was wired to a mirror pointing at
+  # a name docker would not resolve, and every responder test failed with
+  # "no such host" while the harness reported the registry was fine.
   if ! k3d registry list -o json 2>/dev/null | grep -q "\"k3d-${REG_NAME}\""; then
     echo "==> creating registry k3d-${REG_NAME}"
     k3d registry create "${REG_NAME}" --port "${REG_PORT}" >/dev/null
+  fi
+  if [ "$(docker inspect -f '{{.State.Running}}' "k3d-${REG_NAME}" 2>/dev/null)" != "true" ]; then
+    echo "==> registry k3d-${REG_NAME} exists but is not running; starting it"
+    docker start "k3d-${REG_NAME}" >/dev/null
+  fi
+  # Prove it answers before anything depends on it. A registry that is "Up" but
+  # not yet serving fails the same way, one race later.
+  for _ in $(seq 1 20); do
+    curl -sf "http://localhost:${REG_PORT}/v2/" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  if ! curl -sf "http://localhost:${REG_PORT}/v2/" >/dev/null 2>&1; then
+    echo "ERROR: registry k3d-${REG_NAME} is not answering on localhost:${REG_PORT}." >&2
+    echo "       The responder image cannot be pushed or pulled. Try:" >&2
+    echo "         k3d registry delete k3d-${REG_NAME} && re-run" >&2
+    exit 1
   fi
   if ! k3d cluster list -o json | grep -q "\"${CLUSTER}\""; then
     echo "==> creating k3d cluster ${CLUSTER}"
@@ -106,8 +127,8 @@ docker build ${DOCKER_BUILD_NETWORK:+--network "${DOCKER_BUILD_NETWORK}"} \
 # what a first version did, breaking the kind lane outright — the responder tests
 # are k3d-only and say so where it is visible.
 if [ "${DISTRO}" != "k3d" ]; then
-  export PLUME_E2E_RESPONDER_SKIP="the responder needs a registry wired into the cluster at create time; ${DISTRO} clusters are created outside this script, so only the k3d lane runs them (design 02 §5)"
-  echo "==> responder tests: NOT RUN on ${DISTRO} — ${PLUME_E2E_RESPONDER_SKIP}"
+  export ASSAYD_E2E_RESPONDER_SKIP="the responder needs a registry wired into the cluster at create time; ${DISTRO} clusters are created outside this script, so only the k3d lane runs them (design 02 §5)"
+  echo "==> responder tests: NOT RUN on ${DISTRO} — ${ASSAYD_E2E_RESPONDER_SKIP}"
 fi
 
 if [ "${DISTRO}" = "k3d" ]; then
@@ -127,8 +148,8 @@ if [ -z "${RESPONDER_DIGEST}" ]; then
   exit 1
 fi
 # The NODE resolves the registry by its container name, not by localhost.
-export PLUME_E2E_RESPONDER_IMAGE="k3d-${REG_NAME}:${REG_PORT}/${RESPONDER_REPO}@${RESPONDER_DIGEST}"
-echo "    responder: ${PLUME_E2E_RESPONDER_IMAGE}"
+export ASSAYD_E2E_RESPONDER_IMAGE="k3d-${REG_NAME}:${REG_PORT}/${RESPONDER_REPO}@${RESPONDER_DIGEST}"
+echo "    responder: ${ASSAYD_E2E_RESPONDER_IMAGE}"
 fi
 
 echo "==> loading the image into ${DISTRO}"
@@ -139,16 +160,16 @@ esac
 
 echo "==> installing the chart"
 # CRDs ship in the chart's crds/ directory, so this installs them too.
-helm upgrade --install plume charts/plume \
-  -f charts/plume/values-local.yaml \
-  --set operator.image.repository=plume-operator \
+helm upgrade --install assayd charts/assayd \
+  -f charts/assayd/values-local.yaml \
+  --set operator.image.repository=assayd-operator \
   --set operator.image.tag="${IMAGE_TAG}" \
   --set operator.image.pullPolicy=Never \
   --wait --timeout 5m
 
 # The suite asserts it is talking to THIS build, so a stale pod can never again
 # look like a passing run.
-export PLUME_E2E_IMAGE="${IMAGE}"
+export ASSAYD_E2E_IMAGE="${IMAGE}"
 
 echo "==> running e2e suite"
-PLUME_E2E=1 go test ./test/e2e/... -count=1 -timeout 20m -v
+ASSAYD_E2E=1 go test ./test/e2e/... -count=1 -timeout 20m -v

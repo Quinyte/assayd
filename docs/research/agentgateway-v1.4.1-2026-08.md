@@ -9,7 +9,7 @@ Section 9 lists what could **not** be established from a primary source — thos
 inferences.
 
 **Pinned reading points**
-- Release tag **`v1.4.1`** (2026-07-29) — the current stable, and the version plume should pin.
+- Release tag **`v1.4.1`** (2026-07-29) — the current stable, and the version assayd should pin.
 - Commit **`3d74b332afcaae70479a030439c1d854df16abd2`** (2026-08-26) — `main`, cited only where
   it differs from v1.4.1 and the difference matters.
 - Commit **`53f395260c66edae58857485765d5724680e8567`** (2026-08-26) — the commit the Codex review
@@ -25,7 +25,7 @@ inferences.
 | Sourced from `agentgateway.dev/docs/kubernetes/2.2.x/...` | **Wrong — stale docs** | `2.2.x` is a frozen old doc version that still returns HTTP 200. It predates `AgentgatewayModel`, `virtualModel` and `oauthTokenExchange` entirely (§1). The whole note was written against documentation older than the features it claimed to pin. |
 | Pin a minimum version for "OSS token exchange and virtual models" | **Right idea, no version given** | Both landed in **v1.4.0** (2026-07-27). The floor is v1.4.0; pin **v1.4.1**. |
 | CRDs are `AgentgatewayBackend`, `AgentgatewayParameters`, `AgentgatewayPolicy` | **Incomplete** | A fourth kind, **`AgentgatewayModel`**, shipped in v1.4.0 — and it is **experimental and off by default**. |
-| Budget/spend limits are "Solo Enterprise — OSS designs must not depend on them" | **Now wrong, but still unusable** | OSS API-key-scoped budgets ($ and token) landed on `main` after v1.5.0-beta.1. They are **standalone-mode only** (Postgres/SQLite dependency), not on the Kubernetes CRD surface, and unreleased. Conclusion for plume is unchanged; the *reason* is different. |
+| Budget/spend limits are "Solo Enterprise — OSS designs must not depend on them" | **Now wrong, but still unusable** | OSS API-key-scoped budgets ($ and token) landed on `main` after v1.5.0-beta.1. They are **standalone-mode only** (Postgres/SQLite dependency), not on the Kubernetes CRD surface, and unreleased. Conclusion for assayd is unchanged; the *reason* is different. |
 | Token-based limits: "token-based limiting for LLM traffic exists in OSS" | **True but dangerously incomplete** | It exists and it **cannot reject the crossing request** on the Kubernetes path. `tokenize` is hardcoded off there. §3. |
 | OTLP tracing configured via `frontendPolicies` | **Wrong field path** | The field is `AgentgatewayPolicy.spec.frontend.tracing`. There is no `frontendPolicies`. §7. |
 | MCP tool filtering via `Mcp-Name`/`Mcp-Method` headers | **Superseded** | A first-class CEL tool-filter exists: `spec.backend.mcp.authorization`, which filters `tools/list` items and rejects `tools/call`. §6. |
@@ -59,7 +59,7 @@ inferences.
   `AgentgatewayPolicy` (`agpol`), `AgentgatewayBackend` (`agbe`), `AgentgatewayParameters`,
   and — new in v1.4.0 — **`AgentgatewayModel`** (`agmodel`).
 
-- **Version floor for the two features plume's architecture pins (`docs/architecture.md:492`):
+- **Version floor for the two features assayd's architecture pins (`docs/architecture.md:492`):
   v1.4.0.** Verified by fetching the CRD types at each tag:
 
   | tag | `AgentgatewayModel` type file | `oauthTokenExchange` | `virtualModel` |
@@ -78,11 +78,11 @@ inferences.
 - ⚠️ **`AgentgatewayModel` is experimental and off by default.** From the v1.4.0 release notes:
   *"The Kubernetes deployment has a new (off by default) experimental `AgentgatewayModel` API"*.
   https://github.com/agentgateway/agentgateway/releases/tag/v1.4.0
-  **Virtual models are therefore an experimental, opt-in surface.** Any plume design that treats
+  **Virtual models are therefore an experimental, opt-in surface.** Any assayd design that treats
   virtual models as a stable traffic-shifting mechanism (architecture §272 does) must say so and
-  carry a fallback. This is a change plume has not absorbed.
+  carry a fallback. This is a change assayd has not absorbed.
 
-- **v1.4.0 breaking changes plume's chart must absorb:** Gateway API **v1.6** is now the build
+- **v1.4.0 breaking changes assayd's chart must absorb:** Gateway API **v1.6** is now the build
   target and the controller uses **`TCPRoute` v1** (was `v1alpha2`) — *"Re-apply the Gateway API
   CRDs that match this release before you upgrade."* Also: MCP request-phase guardrail rejections
   now return **HTTP 200** with a JSON-RPC error body, not a non-200 status.
@@ -91,7 +91,7 @@ inferences.
   `cr.agentgateway.dev/agentgateway:v1.4.1`, `cr.agentgateway.dev/controller:v1.4.1`,
   charts `cr.agentgateway.dev/charts/agentgateway:v1.4.1` and
   `cr.agentgateway.dev/charts/agentgateway-crds:v1.4.1` (CRDs are a **separate chart** — relevant
-  to plume's tiered install).
+  to assayd's tiered install).
 
 - ⚠️ **The Codex review pinned `53f3952`, which is a `main` commit dated 2026-08-26 — one day
   before this note and never part of any release.** Its citations are accurate *for main*. Where
@@ -152,9 +152,9 @@ predicate is defined in §2.5; it is strictly weaker than "enforcing", and desig
    `attachmentErrors`. `MergeAncestors` then prunes the controller's stale ancestors. The policy
    ends up with an **empty `status.ancestors`**. Absence of conditions is a distinct failure state
    — a poller that waits for `Attached=False` to detect failure will hang forever.
-2. ⚠️ **Ancestors are capped at 16, and plume's entry can be evicted.** Past 16, `MergeAncestors`
+2. ⚠️ **Ancestors are capped at 16, and assayd's entry can be evicted.** Past 16, `MergeAncestors`
    truncates and inserts a synthetic ancestor with condition type **`StatusSummarized`** and
-   message `"%d AncestorRefs ignored due to max status size"`. A busy Gateway can push plume's
+   message `"%d AncestorRefs ignored due to max status size"`. A busy Gateway can push assayd's
    ancestor out of its own policy status.
 3. `Accepted=True` also covers **`PartiallyValid`** — translation errors occurred but *some*
    policies were produced. `Accepted=True` alone therefore does not mean the policy is whole.
@@ -327,7 +327,7 @@ https://github.com/agentgateway/agentgateway/blob/v1.4.1/controller/api/v1alpha1
   just the marker: at v1.4.1 `burst` is `{format: int32, type: integer}` with no `minimum`; on
   `main` it is `{format: int32, minimum: 0, type: integer}`.
   https://raw.githubusercontent.com/agentgateway/agentgateway/v1.4.1/controller/install/helm/agentgateway-crds/templates/agentgateway.dev_agentgatewaypolicies.yaml
-  **A negative `burst` is schema-valid at v1.4.1.** Plume must validate `burst >= 0` itself rather
+  **A negative `burst` is schema-valid at v1.4.1.** Assayd must validate `burst >= 0` itself rather
   than rely on the CRD. (The downstream effect of a negative burst is *not* verified — see §9.)
 
 **The emitted mapping — this settles the burst arithmetic.** In
@@ -355,7 +355,7 @@ Therefore, definitively:
 - **`Burst` is an allowance ABOVE the base — confirmed.** Bucket capacity = `base + burst`.
 - **The bucket starts FULL at `base + burst`**, because `initial_available == max_tokens`. This
   confirms Codex BLOCKER 4's warning verbatim: emitting `tokens=rate, burst=capacity` yields a
-  **starting ceiling of `rate + capacity`**, not `capacity`. Any plume proof that reasons about
+  **starting ceiling of `rate + capacity`**, not `capacity`. Any assayd proof that reasons about
   initial capacity must use `base + burst`.
 - **Refill adds `base` per interval**, clamped to `base + burst`; surplus is counted as `dropped`.
   First refill occurs one full interval after construction (`refill_at = now + fill_interval`).
@@ -408,11 +408,11 @@ Consequences for design 03:
   provider list contains exactly the allowed endpoints, and ensure the route can reach no other
   Backend.* The witness is the emitted Backend's provider set plus route reachability — not a
   boolean predicate on a CR.
-- ⚠️ **`dynamicForwardProxy` is the anti-control and must be forbidden by plume.** Its own doc
+- ⚠️ **`dynamicForwardProxy` is the anti-control and must be forbidden by assayd.** Its own doc
   comment: *"Warning: this backend type can send requests to arbitrary destinations. Proper access
   controls must be put in place when using this backend type."*
 - ⚠️ **`host`/`port` override managed-provider defaults.** A Backend naming `openai` is not pinned
-  to OpenAI's endpoint; a `host` override silently redirects it. Any plume predicate claiming
+  to OpenAI's endpoint; a `host` override silently redirects it. Any assayd predicate claiming
   `egressRestricted` must read the *effective* host, not the provider name.
 - For a `Custom` provider, translation errors unless `providerBackend` or `hostOverride` is set —
   so custom providers are at least forced to be explicit.
@@ -488,7 +488,7 @@ policy.**
   `traffic.jwtAuthentication` and `backend.mcp.authentication` **may not appear in the same
   policy** — and `backend.mcp.authentication` is now **deprecated** in favour of
   `traffic.jwtAuthentication.mcp`, *"which ensures authentication runs before other policies such
-  as transformation and rate limiting."* That ordering note is directly relevant to plume's
+  as transformation and rate limiting."* That ordering note is directly relevant to assayd's
   mandatory-auth-before-toolfilter requirement.
 
 ---
@@ -505,7 +505,7 @@ policy.**
   blocks more-specific policies from contributing that field. Valid **only on traffic policies**
   (CEL-enforced); frontend and backend merging does not use inheritance.
   https://github.com/agentgateway/agentgateway/blob/v1.4.1/controller/api/v1alpha1/agentgateway/agentgateway_policy_types.go#L146-L182
-  This is new relative to the old note and gives plume a real mechanism for "the platform's policy
+  This is new relative to the old note and gives assayd a real mechanism for "the platform's policy
   wins over a tenant's".
 - **Merging is field-level replacement, not deep merge or union.**
   `merge_with_inheritance` is literally `if self.inheritance_locked { return } *self = policy.clone()`.
@@ -536,7 +536,7 @@ policy.**
   `path` (HTTP only, defaults `/v1/traces`), `attributes` (`LogTracingAttributes`), `resources[]`.
   https://github.com/agentgateway/agentgateway/blob/v1.4.1/controller/api/v1alpha1/agentgateway/agentgateway_policy_types.go#L3273
 - ⚠️ **A `frontend` policy can only target a `Gateway`** — CEL-enforced, for both `targetRefs` and
-  `targetSelectors`. Tracing is therefore a **gateway-scoped** concern in plume's policy model and
+  `targetSelectors`. Tracing is therefore a **gateway-scoped** concern in assayd's policy model and
   cannot be attached per-route or per-Agent. Several other frontend sub-fields (`tcp`,
   `networkAuthorization`, `tls`, `http`, `proxyProtocol`, `connect`) additionally forbid a
   `sectionName`; `tracing` is **not** in that list, so a listener `sectionName` is permitted for
@@ -548,7 +548,7 @@ policy.**
   (RFC 8693) / jwt-bearer (RFC 7523) authentication."*
 - `BackendAuth` is `AtMostOneOf=key;secretRef;passthrough;aws;azure;gcp;oauthTokenExchange`
   (plus `crossAppAccess`), so token exchange is **mutually exclusive** with the other backend auth
-  kinds — plume cannot combine it with a static secret on the same Backend.
+  kinds — assayd cannot combine it with a static secret on the same Backend.
 - Also new in v1.4.0 and adjacent: **`crossAppAccess`** (Cross App Access / Identity Assertion,
   ID-JAG) — MCP "Enterprise-Managed Authorization". Relevant to design 06 (identity glue), not
   previously noted.
@@ -568,8 +568,8 @@ policy.**
   `PodDisruptionBudget`). **Not reachable from Kubernetes.**
 - Enforcement is `used >= limit` checked *before* a request, with `Block` or `Audit` actions — so
   it also **cuts late** by one request, plus a 5s flush window, plus admitted multi-replica
-  overshoot. Even when it reaches Kubernetes it will not give plume a hard USD ceiling.
-- **Conclusion for plume is unchanged: design 03 must not depend on gateway budgets.** But the
+  overshoot. Even when it reaches Kubernetes it will not give assayd a hard USD ceiling.
+- **Conclusion for assayd is unchanged: design 03 must not depend on gateway budgets.** But the
   old note's stated reason ("Enterprise-only") is now wrong, and ADR-0020 should cite the real one.
 
 ---
@@ -585,8 +585,8 @@ policy.**
 3. **Withdraw "cuts early, never late."** On Kubernetes, OSS agentgateway cannot reserve tokens
    pre-dispatch. State a measured overshoot bound per request per replica instead.
 4. **Fix the emitted rate-limit arithmetic for `initial = base + burst`**, clamp to int32, validate
-   `burst >= 0` in plume (the v1.4.1 CRD does not), and reject `gatewayReplicas < 1`.
-5. **Redefine `egressAllowlist` as Backend *construction*, not restriction** — with a plume-owned
+   `burst >= 0` in assayd (the v1.4.1 CRD does not), and reject `gatewayReplicas < 1`.
+5. **Redefine `egressAllowlist` as Backend *construction*, not restriction** — with a assayd-owned
    provider→endpoint catalog, a ban on `dynamicForwardProxy`, and an effective-host predicate.
 6. **Switch the MCP tool filter to `backend.mcp.authorization` with `Allow`/`Require` CEL over
    `mcp.tool.name`**, and move MCP auth to `traffic.jwtAuthentication.mcp` (the `backend.mcp.
@@ -608,7 +608,7 @@ policy.**
 - **Negative `burst` behaviour at v1.4.1.** That `burst: -1` is *schema-valid* is verified from the
   shipped CRD YAML. What the controller then emits is **not executed or verified** — by inspection
   `uint64(int32(-1))` would make `MaxTokens < TokensPerFill` and trip the dataplane builder's
-  `MaxTokensTooLow`, but I did not run it. Plume should validate `burst >= 0` regardless.
+  `MaxTokensTooLow`, but I did not run it. Assayd should validate `burst >= 0` regardless.
 - **Whether a NACK'd policy leaves the *previous* config serving or fails open.** Not traced.
   Material to BLOCKER 2 (tightening updates) — worth a follow-up before that fix is designed.
 - **Doc-version label that `latest` resolves to.** `2.3.x` and `1.4.x` both 404; `latest` and

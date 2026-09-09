@@ -1,7 +1,7 @@
 // Package controller holds the agent-operator's reconcilers.
 //
 // Design 02 §4 states the loop; this file implements the slice that needs no
-// other plume component: observe → compute the desired revision → materialize
+// other assayd component: observe → compute the desired revision → materialize
 // its workload → track rollout state → report conditions and phase.
 //
 // Deliberately absent, because the components do not exist yet: card fetch and
@@ -36,20 +36,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 const (
 	// LabelAgent and LabelRevision let the operator find the workloads it owns
 	// without trusting names, and let a human find them with kubectl.
-	LabelAgent    = "plume.dev/agent"
-	LabelRevision = "plume.dev/revision"
+	LabelAgent    = "assayd.dev/agent"
+	LabelRevision = "assayd.dev/revision"
 
 	// Finalizer gates the ordered teardown of §3.7. The teardown steps that need
 	// the gateway and directory are not implemented; the finalizer is installed
 	// now so that agents created today do not need a migration to acquire it.
-	Finalizer = "plume.dev/agent-teardown"
+	Finalizer = "assayd.dev/agent-teardown"
 
 	// DefaultRevisionHistoryLimit is the number of revisions retained IN ADDITION
 	// TO the active one and any in-flight candidate (design 02 §3.3). Counting
@@ -133,7 +133,7 @@ func NewAgentReconciler(c client.Client, reader client.Reader, scheme *runtime.S
 			"(ADR-0006), and it must be an explicit decision rather than a zero value")
 	case labelAuthority == nil:
 		return nil, fmt.Errorf("agent reconciler: labelAuthority is required — without design 07 A5.9's " +
-			"admission policies the plume.dev namespace labels are forgeable, and whether they are " +
+			"admission policies the assayd.dev namespace labels are forgeable, and whether they are " +
 			"installed must be checked rather than assumed")
 	}
 	return &AgentReconciler{Client: c, Reader: reader, Scheme: scheme, OperatorNamespace: operatorNamespace,
@@ -142,7 +142,7 @@ func NewAgentReconciler(c client.Client, reader client.Reader, scheme *runtime.S
 }
 
 // installIdentity is the operator namespace's UID, stamped on run namespaces
-// as plume.dev/owned-by. Observability only, never evidence.
+// as assayd.dev/owned-by. Observability only, never evidence.
 func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 	r.installMu.Lock()
 	defer r.installMu.Unlock()
@@ -157,9 +157,9 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 	return r.installUID, nil
 }
 
-// +kubebuilder:rbac:groups=plume.dev,resources=agents,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=plume.dev,resources=agents/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=plume.dev,resources=agents/finalizers,verbs=update
+// +kubebuilder:rbac:groups=assayd.dev,resources=agents,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=assayd.dev,resources=agents/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=assayd.dev,resources=agents/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // Services are per revision and share the workload's name shape; the operator
 // creates one with each revision and collects it when that revision leaves the
@@ -187,11 +187,11 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 // A42/A60: the operator creates, labels and — when the last Agent of a source
 // namespace goes — deletes run namespaces. RBAC cannot bound a dynamic name, so
 // every write verb here is cluster-wide; the code writes only to a namespace
-// whose name has the plume-run- shape AND whose UID the binding record
+// whose name has the assayd-run- shape AND whose UID the binding record
 // vouches for (design 07 A5.7). A real escalation, named rather than buried.
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;delete
 // ResourceQuota and LimitRange are mirrored from the source namespace into the
-// run namespace (A60); mirrors are named plume-mirror-<name> and only those are
+// run namespace (A60); mirrors are named assayd-mirror-<name> and only those are
 // ever written or deleted.
 // +kubebuilder:rbac:groups="",resources=resourcequotas;limitranges,verbs=get;list;watch;create;update;delete
 // The operator checks that design 07 A5.9's label-reserving policies exist
@@ -204,7 +204,7 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	var agent plumev1alpha1.Agent
+	var agent assaydv1alpha1.Agent
 	if err := r.Get(ctx, req.NamespacedName, &agent); err != nil {
 		// A deleted Agent is not an error. Its workloads and material do NOT go
 		// with it by ownerReference — they live in the run namespace (A42) and a
@@ -287,13 +287,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if !errors.As(err, &rerr) {
 			return ctrl.Result{}, err
 		}
-		conds.set(plumev1alpha1.CondRunNamespaceUnavailable, metav1.ConditionTrue, rerr.reason, rerr.message)
-		conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "RunNamespaceUnavailable", rerr.message)
+		conds.set(assaydv1alpha1.CondRunNamespaceUnavailable, metav1.ConditionTrue, rerr.reason, rerr.message)
+		conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "RunNamespaceUnavailable", rerr.message)
 		if rerr.terminal {
-			conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "RunNamespaceUnavailable", rerr.message)
-			status.Phase = plumev1alpha1.PhaseDegraded
+			conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "RunNamespaceUnavailable", rerr.message)
+			status.Phase = assaydv1alpha1.PhaseDegraded
 		} else {
-			status.Phase = plumev1alpha1.PhasePending
+			status.Phase = assaydv1alpha1.PhasePending
 		}
 		status.Conditions = conds.merge(agent.Status.Conditions)
 		status.ObservedGeneration = agent.Generation
@@ -338,7 +338,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// STATUS is the authority on which revision a name belongs to, and it is
 	// checked before the workload is touched.
 	//
-	// The first version of this guard read a plume.dev/revision-digest annotation
+	// The first version of this guard read a assayd.dev/revision-digest annotation
 	// off the Deployment. That closed the collision against an agents/update
 	// principal and left it wide open to a WEAKER one: anyone with
 	// deployments/patch could set the annotation to the digest of the spec they
@@ -398,9 +398,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			// this create. That is a wait, not an error to retry against: the next
 			// pass meets check 12 and the handler takes over.
 			msg := fmt.Sprintf("run namespace %s is being deleted; waiting for it to be gone: %v", runNS, merr)
-			conds.set(plumev1alpha1.CondRunNamespaceUnavailable, metav1.ConditionTrue, ReasonTerminating, msg)
-			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "RunNamespaceUnavailable", msg)
-			status.Phase = plumev1alpha1.PhasePending
+			conds.set(assaydv1alpha1.CondRunNamespaceUnavailable, metav1.ConditionTrue, ReasonTerminating, msg)
+			conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "RunNamespaceUnavailable", msg)
+			status.Phase = assaydv1alpha1.PhasePending
 			status.Conditions = conds.merge(agent.Status.Conditions)
 			status.ObservedGeneration = agent.Generation
 			if err := r.writeStatus(ctx, &agent, status); err != nil {
@@ -412,11 +412,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if me := (*materialError)(nil); errors.As(merr, &me) {
 			reason = "MaterialInvalid"
 		}
-		conds.set(plumev1alpha1.CondRevisionMaterialUnavailable, metav1.ConditionTrue,
+		conds.set(assaydv1alpha1.CondRevisionMaterialUnavailable, metav1.ConditionTrue,
 			reason, merr.Error())
-		conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse,
+		conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse,
 			"RevisionMaterialUnavailable", merr.Error())
-		status.Phase = plumev1alpha1.PhaseDegraded
+		status.Phase = assaydv1alpha1.PhaseDegraded
 		status.Conditions = conds.merge(agent.Status.Conditions)
 		status.ObservedGeneration = agent.Generation
 		if err := r.writeStatus(ctx, &agent, status); err != nil {
@@ -460,9 +460,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				// phase with nothing said — the silent degraded path NFR-8 forbids, and
 				// the one an operator is least able to diagnose because the reason lives
 				// only in operator logs. A rejected render is a spec the user can fix.
-				conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadRejected", err.Error())
-				conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "WorkloadRejected", err.Error())
-				status.Phase = plumev1alpha1.PhaseDegraded
+				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "WorkloadRejected", err.Error())
+				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "WorkloadRejected", err.Error())
+				status.Phase = assaydv1alpha1.PhaseDegraded
 				status.Conditions = conds.merge(agent.Status.Conditions)
 				status.ObservedGeneration = agent.Generation
 				return ctrl.Result{}, r.writeStatus(ctx, &agent, status)
@@ -481,9 +481,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				return ctrl.Result{}, r.reportCollision(ctx, &agent, status, conds, collision)
 			}
 			if apierrors.IsInvalid(err) {
-				conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "ServiceRejected", err.Error())
-				conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "ServiceRejected", err.Error())
-				status.Phase = plumev1alpha1.PhaseDegraded
+				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "ServiceRejected", err.Error())
+				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ServiceRejected", err.Error())
+				status.Phase = assaydv1alpha1.PhaseDegraded
 				status.Conditions = conds.merge(agent.Status.Conditions)
 				status.ObservedGeneration = agent.Generation
 				return ctrl.Result{}, r.writeStatus(ctx, &agent, status)
@@ -512,7 +512,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			if !errors.As(cerr, &ce) {
 				return ctrl.Result{}, cerr
 			}
-			conds.set(plumev1alpha1.CondRegistered, metav1.ConditionFalse, ce.reason, ce.Error())
+			conds.set(assaydv1alpha1.CondRegistered, metav1.ConditionFalse, ce.reason, ce.Error())
 			// Stamp the ATTEMPT, so the retry gate measures from something that
 			// moves. Keying it on the condition's LastTransitionTime meant the gate
 			// opened permanently after its first interval.
@@ -531,21 +531,21 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			case drifted:
 				logger.Info("agent card drifted", "revision", desired,
 					"from", prev.Digest[:12], "to", card.Digest[:12])
-				conds.set(plumev1alpha1.CondRegistered, metav1.ConditionTrue, "CardDrifted",
+				conds.set(assaydv1alpha1.CondRegistered, metav1.ConditionTrue, "CardDrifted",
 					fmt.Sprintf("revision %s now serves a different card: digest %s, was %s. "+
 						"The new card is valid and the revision keeps serving; a card change "+
 						"without a spec change is the agent redescribing itself, which nothing "+
 						"gates. No event is emitted — no EventRecorder is wired (§5)",
 						desired, card.Digest[:12], prev.Digest[:12]))
 			default:
-				conds.set(plumev1alpha1.CondRegistered, metav1.ConditionTrue, "CardValidated",
+				conds.set(assaydv1alpha1.CondRegistered, metav1.ConditionTrue, "CardValidated",
 					fmt.Sprintf("revision %s serves a valid A2A card (digest %s)", desired, card.Digest[:12]))
 			}
 			// Loud rather than silent, per design 09: nothing in this repository
 			// signs a card, so every agent is the unsigned BYO case that rule was
 			// written for. Clearing this would claim a verification that no code
 			// performs.
-			conds.set(plumev1alpha1.CondCardUnsigned, metav1.ConditionTrue, "NoSigningConfigured",
+			conds.set(assaydv1alpha1.CondCardUnsigned, metav1.ConditionTrue, "NoSigningConfigured",
 				"the card is not signature-verified: design 09's Sigstore card signing is not "+
 					"implemented, so no card in this cluster is signed or checked")
 		}
@@ -580,15 +580,15 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// edit; reporting Canary would claim a weighted shift that §3.3 defines
 		// and that no gateway is performing yet (A13).
 		status.CandidateRevision, status.CandidateRevisionDigest = desired, desiredDigest
-		status.Phase = plumev1alpha1.PhaseReady
-		conds.set(plumev1alpha1.CondReady, metav1.ConditionTrue, "Available",
+		status.Phase = assaydv1alpha1.PhaseReady
+		conds.set(assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", status.ActiveRevision))
 		// The guard on this case now CHECKS that. `ready` is computed for the
 		// DESIRED revision only, so this branch used to report "revision X is
 		// serving" from the mere presence of a name in status — true of an agent
 		// whose active workload had been deleted, which then read as a healthy
 		// rollout instead of an outage.
-		conds.set(plumev1alpha1.CondProgressing, metav1.ConditionTrue, "CandidateNotAvailable",
+		conds.set(assaydv1alpha1.CondProgressing, metav1.ConditionTrue, "CandidateNotAvailable",
 			fmt.Sprintf("revision %s is rolling out; %s continues to serve",
 				desired, status.ActiveRevision))
 
@@ -600,7 +600,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// workload serving nothing, and Progressing about a revision rolling out
 		// over itself.
 		status.CandidateRevision, status.CandidateRevisionDigest = desired, desiredDigest
-		conds.set(plumev1alpha1.CondProgressing, metav1.ConditionFalse, "NoRolloutInFlight",
+		conds.set(assaydv1alpha1.CondProgressing, metav1.ConditionFalse, "NoRolloutInFlight",
 			"no other revision is coming up")
 		// EQUIVALENT to comparing names here, and the argument is worth writing
 		// down because a mutation shows this line is unpinned. This branch is
@@ -614,20 +614,20 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if status.ActiveRevisionDigest == desiredDigest {
 			// It was serving and is not any more. Say so; do not silently keep the
 			// promotion from a healthier moment.
-			status.Phase = plumev1alpha1.PhaseDegraded
+			status.Phase = assaydv1alpha1.PhaseDegraded
 			status.CandidateRevision, status.CandidateRevisionDigest = "", ""
 			// Assert Degraded, do not merely set the phase. CondDegraded is owned and
 			// non-sticky, so a path that sets the phase without the condition actively
 			// CLEARS it — and an alert keyed on the condition would miss the worst
 			// case in this machine.
-			conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "WorkloadUnavailable",
+			conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "WorkloadUnavailable",
 				fmt.Sprintf("revision %s is the active revision but has no available replicas", desired))
-			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadUnavailable",
+			conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "WorkloadUnavailable",
 				fmt.Sprintf("revision %s is the active revision but has no available replicas", desired))
 			break
 		}
-		status.Phase = plumev1alpha1.PhasePending
-		conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "WorkloadNotAvailable",
+		status.Phase = assaydv1alpha1.PhasePending
+		conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "WorkloadNotAvailable",
 			fmt.Sprintf("revision %s has no available replicas yet", desired))
 
 	case !r.gatesSatisfied(&agent) && status.ActiveRevisionDigest != desiredDigest:
@@ -643,18 +643,18 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// whether the CANDIDATE may promote — if an active revision is still
 		// serving, saying Ready=False would page the on-call for adding gates to a
 		// healthy agent, which is the same defect A13 fixed in the branch below.
-		status.Phase = plumev1alpha1.PhaseHeld
+		status.Phase = assaydv1alpha1.PhaseHeld
 		status.CandidateRevision, status.CandidateRevisionDigest = desired, desiredDigest
 		// Progressing must be asserted here too: it is sticky, so a branch that
 		// stays silent leaves the previous reason in place — and "CandidateNotAvailable"
 		// is false once the candidate is available and merely held.
-		conds.set(plumev1alpha1.CondProgressing, metav1.ConditionTrue, "AwaitingGates",
+		conds.set(assaydv1alpha1.CondProgressing, metav1.ConditionTrue, "AwaitingGates",
 			fmt.Sprintf("revision %s is available and held at zero traffic pending its eval gates", desired))
 		if status.ActiveRevision != "" {
-			conds.set(plumev1alpha1.CondReady, metav1.ConditionTrue, "Available",
+			conds.set(assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available",
 				fmt.Sprintf("revision %s is serving", status.ActiveRevision))
 		} else {
-			conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "AwaitingGates",
+			conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "AwaitingGates",
 				fmt.Sprintf("revision %s is held at zero traffic pending its eval gates, "+
 					"and no earlier revision is serving", desired))
 		}
@@ -674,10 +674,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// Rolling A -> B -> A leaves A in the superseded list, where a revision
 		// that is currently serving reads as one that was abandoned.
 		status.SupersededCandidates = removeString(status.SupersededCandidates, desired+"@"+desiredDigest)
-		status.Phase = plumev1alpha1.PhaseReady
-		conds.set(plumev1alpha1.CondProgressing, metav1.ConditionFalse, "RolloutComplete",
+		status.Phase = assaydv1alpha1.PhaseReady
+		conds.set(assaydv1alpha1.CondProgressing, metav1.ConditionFalse, "RolloutComplete",
 			fmt.Sprintf("revision %s is the active revision", desired))
-		conds.set(plumev1alpha1.CondReady, metav1.ConditionTrue, "Available",
+		conds.set(assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", desired))
 	}
 
@@ -698,14 +698,14 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 // reportUnreconcilable records why an Agent cannot be acted on, rather than
 // error-looping with an empty status that says nothing.
-func (r *AgentReconciler) reportUnreconcilable(ctx context.Context, agent *plumev1alpha1.Agent) error {
+func (r *AgentReconciler) reportUnreconcilable(ctx context.Context, agent *assaydv1alpha1.Agent) error {
 	status := agent.Status.DeepCopy()
-	status.Phase = plumev1alpha1.PhaseDegraded
+	status.Phase = assaydv1alpha1.PhaseDegraded
 	conds := newConditionSet(agent.Generation)
-	conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "NoWorkloadSpecified",
+	conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "NoWorkloadSpecified",
 		"neither spec.runtime nor spec.external is set, so there is nothing to reconcile; "+
 			"set exactly one of them")
-	conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "NoWorkloadSpecified",
+	conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "NoWorkloadSpecified",
 		"the agent specifies no workload")
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation
@@ -713,11 +713,11 @@ func (r *AgentReconciler) reportUnreconcilable(ctx context.Context, agent *plume
 }
 
 // reconcileExternal handles an agent that runs outside this cluster.
-func (r *AgentReconciler) reconcileExternal(ctx context.Context, agent *plumev1alpha1.Agent) (ctrl.Result, error) {
+func (r *AgentReconciler) reconcileExternal(ctx context.Context, agent *assaydv1alpha1.Agent) (ctrl.Result, error) {
 	status := agent.Status.DeepCopy()
-	status.Phase = plumev1alpha1.PhasePending
+	status.Phase = assaydv1alpha1.PhasePending
 	conds := newConditionSet(agent.Generation)
-	conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "ExternalRegistrationUnimplemented",
+	conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "ExternalRegistrationUnimplemented",
 		"external agents need OAuth client provisioning (design 06) and card fetch (§3.4), "+
 			"neither of which is implemented; the agent is held rather than reported ready")
 	status.Conditions = conds.merge(agent.Status.Conditions)
@@ -729,7 +729,7 @@ func (r *AgentReconciler) reconcileExternal(ctx context.Context, agent *plumev1a
 // RevisionDigestAnnotation records which projection a workload was rendered
 // from. The Deployment's NAME carries only 40 bits, so the name alone cannot
 // answer "is this the same revision?" — this can.
-const RevisionDigestAnnotation = "plume.dev/revision-digest"
+const RevisionDigestAnnotation = "assayd.dev/revision-digest"
 
 // revisionCollisionError reports two different projections claiming one
 // workload name. It is terminal by design: see ensureWorkload.
@@ -758,7 +758,7 @@ func (e *revisionCollisionError) Error() string {
 			"that Deployment and let the operator recreate it.", e.name)
 	}
 	if e.existing == "(no stamp)" {
-		return fmt.Sprintf("workload %s carries no plume.dev/revision-digest and nothing in status "+
+		return fmt.Sprintf("workload %s carries no assayd.dev/revision-digest and nothing in status "+
 			"vouches for it, so this operator cannot establish that it created it. Refusing to "+
 			"converge. To recover: delete that Deployment and let the operator recreate it.", e.name)
 	}
@@ -779,7 +779,7 @@ func (e *revisionCollisionError) Error() string {
 // recorded one while its identity does not. Status is written only by this
 // controller through the status subresource, so it is the non-forgeable side of
 // the comparison.
-func collisionAgainstStatus(st *plumev1alpha1.AgentStatus, rev, digest string) *revisionCollisionError {
+func collisionAgainstStatus(st *assaydv1alpha1.AgentStatus, rev, digest string) *revisionCollisionError {
 	for _, r := range []struct{ role, name, dig string }{
 		{"active", st.ActiveRevision, st.ActiveRevisionDigest},
 		{"candidate", st.CandidateRevision, st.CandidateRevisionDigest},
@@ -793,17 +793,17 @@ func collisionAgainstStatus(st *plumev1alpha1.AgentStatus, rev, digest string) *
 
 // reportCollision is the single exit for every collision path, so none of them
 // can drift into asserting a different set of conditions than the others.
-func (r *AgentReconciler) reportCollision(ctx context.Context, agent *plumev1alpha1.Agent,
-	status *plumev1alpha1.AgentStatus, conds *conditionSet, c *revisionCollisionError) error {
-	conds.set(plumev1alpha1.CondRevisionHashCollision, metav1.ConditionTrue, "DigestMismatch", c.Error())
-	conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "RevisionHashCollision", c.Error())
+func (r *AgentReconciler) reportCollision(ctx context.Context, agent *assaydv1alpha1.Agent,
+	status *assaydv1alpha1.AgentStatus, conds *conditionSet, c *revisionCollisionError) error {
+	conds.set(assaydv1alpha1.CondRevisionHashCollision, metav1.ConditionTrue, "DigestMismatch", c.Error())
+	conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "RevisionHashCollision", c.Error())
 	// Degraded is asserted, not merely implied by the phase. CondDegraded is
 	// owned and non-sticky, so a path that sets the phase and stays silent
 	// actively CLEARS the condition — and a suspected chosen collision is the
 	// worst state this machine has, which is exactly when an alert keyed on the
 	// condition must not go quiet.
-	conds.set(plumev1alpha1.CondDegraded, metav1.ConditionTrue, "RevisionHashCollision", c.Error())
-	status.Phase = plumev1alpha1.PhaseDegraded
+	conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "RevisionHashCollision", c.Error())
+	status.Phase = assaydv1alpha1.PhaseDegraded
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation
 	return r.writeStatus(ctx, agent, status)
@@ -813,7 +813,7 @@ func (r *AgentReconciler) reportCollision(ctx context.Context, agent *plumev1alp
 // as opposed to workloadAvailable, which only ever answers for the desired one.
 // An error is reported as unavailable: claiming a revision is serving because
 // the API server did not answer is the loud-and-wrong of rule 8.
-func (r *AgentReconciler) revisionAvailable(ctx context.Context, agent *plumev1alpha1.Agent, runNS, rev, digest string) bool {
+func (r *AgentReconciler) revisionAvailable(ctx context.Context, agent *assaydv1alpha1.Agent, runNS, rev, digest string) bool {
 	ok, err := r.workloadAvailable(ctx, agent, runNS, rev, digest)
 	return err == nil && ok
 }
@@ -823,7 +823,7 @@ func (r *AgentReconciler) revisionAvailable(ctx context.Context, agent *plumev1a
 // operator may not read, is returned as unresolved rather than as an error: the
 // two are the same fact to an Agent — its behaviour is not knowable — and both
 // must stop the revision rather than produce a partial identity.
-func (r *AgentReconciler) resolveEnvSources(ctx context.Context, agent *plumev1alpha1.Agent) (
+func (r *AgentReconciler) resolveEnvSources(ctx context.Context, agent *assaydv1alpha1.Agent) (
 	revision.Resolved, map[revision.SourceRef]*sourceBuffer, []revision.SourceRef, error) {
 	refs := revision.EnvSources(agent.Spec)
 	if len(refs) == 0 {
@@ -870,7 +870,7 @@ func (r *AgentReconciler) resolveEnvSources(ctx context.Context, agent *plumev1a
 
 // reportUnresolvedSources is the A20 failure path: no revision, no workload, and
 // a condition naming what could not be read.
-func (r *AgentReconciler) reportUnresolvedSources(ctx context.Context, agent *plumev1alpha1.Agent,
+func (r *AgentReconciler) reportUnresolvedSources(ctx context.Context, agent *assaydv1alpha1.Agent,
 	unresolved []revision.SourceRef, cause error) error {
 	status := agent.Status.DeepCopy()
 	conds := newConditionSet(agent.Generation)
@@ -887,16 +887,16 @@ func (r *AgentReconciler) reportUnresolvedSources(ctx context.Context, agent *pl
 		msg = fmt.Sprintf("%s: %s. Create them, or remove the reference from spec.runtime",
 			strings.Join(names, ", "), cause)
 	}
-	conds.set(plumev1alpha1.CondEnvSourceUnresolved, metav1.ConditionTrue, "Unresolved", msg)
-	conds.set(plumev1alpha1.CondReady, metav1.ConditionFalse, "EnvSourceUnresolved", msg)
-	status.Phase = plumev1alpha1.PhasePending
+	conds.set(assaydv1alpha1.CondEnvSourceUnresolved, metav1.ConditionTrue, "Unresolved", msg)
+	conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "EnvSourceUnresolved", msg)
+	status.Phase = assaydv1alpha1.PhasePending
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation
 	return r.writeStatus(ctx, agent, status)
 }
 
-func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alpha1.Agent, runNS, rev, digest string,
-	status *plumev1alpha1.AgentStatus, material map[revision.SourceRef]string) error {
+func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *assaydv1alpha1.Agent, runNS, rev, digest string,
+	status *assaydv1alpha1.AgentStatus, material map[revision.SourceRef]string) error {
 	desired := r.deploymentFor(agent, runNS, rev, material)
 	if desired.Annotations == nil {
 		desired.Annotations = map[string]string{}
@@ -904,7 +904,7 @@ func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alph
 	desired.Annotations[RevisionDigestAnnotation] = digest
 	// No ownerReference: the Deployment is in the run namespace and the Agent is
 	// not, and a cross-namespace owner reference is treated as absent (A44/A60).
-	// Provenance is the name, the plume.dev/agent-uid label and the
+	// Provenance is the name, the assayd.dev/agent-uid label and the
 	// status-vouched digest; the finalizer collects it.
 
 	var existing appsv1.Deployment
@@ -950,7 +950,7 @@ func (r *AgentReconciler) ensureWorkload(ctx context.Context, agent *plumev1alph
 	//
 	// An earlier version adopted it and stamped it from the current spec, on the
 	// reasoning that a workload predating the field would otherwise wedge an
-	// upgraded cluster. There is no such workload: plume is unreleased, so the
+	// upgraded cluster. There is no such workload: assayd is unreleased, so the
 	// migration had nothing to migrate and was purely an attack surface —
 	// stripping the annotation made the operator rewrite the pod template from
 	// whatever spec was current and stamp the result as legitimate. Legacy
@@ -1066,7 +1066,7 @@ func podSpecEquivalent(existing, desired corev1.PodSpec) bool {
 // deploymentFor renders one revision's workload. Design 02 §6: non-root,
 // read-only rootfs, seccomp — applied to every agent, not only sandboxed ones,
 // since the sandbox fallback path must be no weaker than the default path.
-func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, runNS, rev string,
+func (r *AgentReconciler) deploymentFor(agent *assaydv1alpha1.Agent, runNS, rev string,
 	material map[revision.SourceRef]string) *appsv1.Deployment {
 	rt := agent.Spec.Runtime
 	// The selector is {agent, revision}; the object and its Pods additionally
@@ -1143,7 +1143,7 @@ func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, runNS, rev s
 						// The sharp one is the pull policy: `Never` tells the kubelet to use
 						// whatever local image already carries this tag, so reverting the tag
 						// corrects nothing, and nothing pulls so nothing is signature-checked
-						// (ADR-0019). Always is deliberate — plume permits tags, and a tag
+						// (ADR-0019). Always is deliberate — assayd permits tags, and a tag
 						// does not identify content.
 						ImagePullPolicy: corev1.PullAlways,
 						// The kubelet reads up to 4KB from this path into pod status, which
@@ -1167,7 +1167,7 @@ func (r *AgentReconciler) deploymentFor(agent *plumev1alpha1.Agent, runNS, rev s
 // replica. Availability, not readiness of a single pod: a Deployment reporting
 // availableReplicas is the closest signal the operator has to "this revision can
 // serve" before the card fetch of §3.4 exists.
-func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *plumev1alpha1.Agent, runNS, rev, digest string) (bool, error) {
+func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *assaydv1alpha1.Agent, runNS, rev, digest string) (bool, error) {
 	var d appsv1.Deployment
 	key := types.NamespacedName{Namespace: runNS, Name: WorkloadName(agent.Name, rev)}
 	if err := r.Get(ctx, key, &d); err != nil {
@@ -1195,7 +1195,7 @@ func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *plumev1a
 // would read as load-bearing while never changing an outcome — and defensive
 // code no test can pin is worse than none, because it invites the next reader to
 // trust it.
-func (r *AgentReconciler) gatesSatisfied(agent *plumev1alpha1.Agent) bool {
+func (r *AgentReconciler) gatesSatisfied(agent *assaydv1alpha1.Agent) bool {
 	if !r.evalSuiteInstalled() {
 		return true
 	}
@@ -1211,26 +1211,26 @@ func (r *AgentReconciler) evalSuiteInstalled() bool {
 	return r.EvalSuiteInstalled()
 }
 
-func (r *AgentReconciler) assessGates(agent *plumev1alpha1.Agent, c *conditionSet) {
+func (r *AgentReconciler) assessGates(agent *assaydv1alpha1.Agent, c *conditionSet) {
 	switch {
 	// The no-gates case comes FIRST, and deliberately. With nothing declared to
 	// gate, detection cannot change the outcome — the agent promotes either way —
 	// so reporting "holding rather than promoting ungated" on an agent that just
 	// promoted would be loud and wrong, which is exactly what NFR-8 forbids.
 	case len(agent.Spec.Gates) == 0:
-		c.set(plumev1alpha1.CondGatesSkipped, metav1.ConditionTrue, "NoGatesDeclared",
+		c.set(assaydv1alpha1.CondGatesSkipped, metav1.ConditionTrue, "NoGatesDeclared",
 			"no spec.gates are declared, so this rollout is not eval-gated")
 	case r.EvalSuiteInstalled == nil:
 		// Gates ARE declared and we cannot tell whether the CRD is present. Hold,
 		// and say exactly that.
-		c.set(plumev1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateDetectionUnwired",
+		c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateDetectionUnwired",
 			"the operator was built without EvalSuite detection, so it cannot tell whether "+
 				"this rollout should be eval-gated; holding rather than promoting ungated")
 	case !r.evalSuiteInstalled():
-		c.set(plumev1alpha1.CondGatesSkipped, metav1.ConditionTrue, "EvalSuiteCRDAbsent",
+		c.set(assaydv1alpha1.CondGatesSkipped, metav1.ConditionTrue, "EvalSuiteCRDAbsent",
 			"the EvalSuite CRD is not installed, so this rollout is NOT eval-gated (design 02 §3.3, core tier)")
 	default:
-		c.set(plumev1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateControllerUnimplemented",
+		c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateControllerUnimplemented",
 			"spec.gates are declared but the gate controller (design 16) is not implemented; "+
 				"the revision holds at zero traffic rather than promoting ungated")
 	}
@@ -1249,11 +1249,11 @@ func (r *AgentReconciler) assessGates(agent *plumev1alpha1.Agent, c *conditionSe
 // operator before A42 is CLEARED on the first reconcile after upgrade — an
 // abnormal-true condition that no longer applies is what teaches operators to
 // ignore conditions.
-func (r *AgentReconciler) assessSandbox(agent *plumev1alpha1.Agent, c *conditionSet) {
+func (r *AgentReconciler) assessSandbox(agent *assaydv1alpha1.Agent, c *conditionSet) {
 	if agent.Spec.Runtime == nil || agent.Spec.Runtime.Sandbox == nil {
 		return
 	}
-	c.set(plumev1alpha1.CondSandboxDowngraded, metav1.ConditionTrue, "SandboxRuntimeUnavailable",
+	c.set(assaydv1alpha1.CondSandboxDowngraded, metav1.ConditionTrue, "SandboxRuntimeUnavailable",
 		fmt.Sprintf("spec.runtime.sandbox.profile=%q was requested, but no sandbox runtime is bound; "+
 			"running a hardened Deployment instead (non-root, read-only rootfs, seccomp, no capabilities)",
 			agent.Spec.Runtime.Sandbox.Profile))
@@ -1262,7 +1262,7 @@ func (r *AgentReconciler) assessSandbox(agent *plumev1alpha1.Agent, c *condition
 // assessTaskState implements §3.2's detected-not-assumed rule. The A2A card is
 // the declaration point, and card fetch is unimplemented, so replicas>1 cannot
 // currently be verified and the condition names that rather than assuming.
-func (r *AgentReconciler) assessTaskState(agent *plumev1alpha1.Agent, status *plumev1alpha1.AgentStatus, c *conditionSet) {
+func (r *AgentReconciler) assessTaskState(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus, c *conditionSet) {
 	if agent.Spec.Runtime == nil || agent.Spec.Runtime.Replicas <= 1 {
 		return
 	}
@@ -1276,9 +1276,9 @@ func (r *AgentReconciler) assessTaskState(agent *plumev1alpha1.Agent, status *pl
 	// meant keying off a field that could only be absent — a check that looks
 	// like one and is a constant, which is worse than no check because it reads
 	// as verified. The sanctioned vehicle would be capabilities.extensions[]
-	// under a plume-owned URI; that is a design decision, not one to take inside
+	// under a assayd-owned URI; that is a design decision, not one to take inside
 	// an assessor.
-	c.set(plumev1alpha1.CondTaskStateUnverified, metav1.ConditionTrue,
+	c.set(assaydv1alpha1.CondTaskStateUnverified, metav1.ConditionTrue,
 		"ProtocolHasNoDeclaration",
 		fmt.Sprintf("replicas=%d, and A2A v1.0 gives a card no way to assert shared task "+
 			"state: AgentCapabilities carries streaming, pushNotifications, extensions and "+
@@ -1290,8 +1290,8 @@ func (r *AgentReconciler) assessTaskState(agent *plumev1alpha1.Agent, status *pl
 // revisions IN ADDITION TO the active one and any in-flight candidate, so a
 // rollout can never GC its own rollback target.
 func (r *AgentReconciler) collectGarbage(
-	ctx context.Context, agent *plumev1alpha1.Agent, runNS string,
-	owned []appsv1.Deployment, status *plumev1alpha1.AgentStatus,
+	ctx context.Context, agent *assaydv1alpha1.Agent, runNS string,
+	owned []appsv1.Deployment, status *assaydv1alpha1.AgentStatus,
 ) error {
 	protected := map[string]bool{}
 	if status.ActiveRevision != "" {
@@ -1366,7 +1366,7 @@ func (r *AgentReconciler) collectGarbage(
 // the pre-A42 kind — a same-namespace controller reference, which nobody can
 // forge by labelling — and the copies are decided by isRevisionMaterial's name
 // authority as everywhere else.
-func (r *AgentReconciler) collectPreA42Leftovers(ctx context.Context, agent *plumev1alpha1.Agent) error {
+func (r *AgentReconciler) collectPreA42Leftovers(ctx context.Context, agent *assaydv1alpha1.Agent) error {
 	var list appsv1.DeploymentList
 	if err := r.List(ctx, &list, client.InNamespace(agent.Namespace),
 		client.MatchingLabels{LabelAgent: agent.Name}); err != nil {
@@ -1387,15 +1387,15 @@ func (r *AgentReconciler) collectPreA42Leftovers(ctx context.Context, agent *plu
 
 // ownedWorkloads returns the Deployments this Agent actually controls.
 //
-// Selecting on the label alone was a defect with teeth: a stray plume.dev/agent
+// Selecting on the label alone was a defect with teeth: a stray assayd.dev/agent
 // label — copied from an example, applied by a Kustomize commonLabels, or set by
 // anyone with deployment-create in the namespace — made this operator a deleter
 // of other people's workloads. Ownership used to be the controller reference;
 // under A42 the Agent is in another namespace and that reference is treated as
 // absent (A44/A60). So ownership is the NAME — `<agent>-<revision>`, immutable,
 // so a victim object cannot be renamed into the shape (A57) — corroborated by
-// the plume.dev/agent-uid label. Nothing here is deleted for wearing a label.
-func (r *AgentReconciler) ownedWorkloads(ctx context.Context, agent *plumev1alpha1.Agent, runNS string) ([]appsv1.Deployment, error) {
+// the assayd.dev/agent-uid label. Nothing here is deleted for wearing a label.
+func (r *AgentReconciler) ownedWorkloads(ctx context.Context, agent *assaydv1alpha1.Agent, runNS string) ([]appsv1.Deployment, error) {
 	var list appsv1.DeploymentList
 	if err := r.List(ctx, &list,
 		client.InNamespace(runNS),
@@ -1416,7 +1416,7 @@ func (r *AgentReconciler) ownedWorkloads(ctx context.Context, agent *plumev1alph
 
 // isRevisionWorkload decides whether a Deployment is one THIS operator created
 // for THIS Agent: name shape, revision label, and the Agent's UID.
-func isRevisionWorkload(agent *plumev1alpha1.Agent, d *appsv1.Deployment) bool {
+func isRevisionWorkload(agent *assaydv1alpha1.Agent, d *appsv1.Deployment) bool {
 	rev := d.Labels[LabelRevision]
 	// A workload with no revision label cannot be placed in the retention
 	// window, so it must never be a GC candidate.
@@ -1429,7 +1429,7 @@ func isRevisionWorkload(agent *plumev1alpha1.Agent, d *appsv1.Deployment) bool {
 // finalize runs §3.7's ordered teardown. Only the steps whose components exist
 // are implemented; the rest are named here so that adding them is an edit to a
 // stated sequence rather than a rediscovery of it.
-func (r *AgentReconciler) finalize(ctx context.Context, agent *plumev1alpha1.Agent) (ctrl.Result, error) {
+func (r *AgentReconciler) finalize(ctx context.Context, agent *assaydv1alpha1.Agent) (ctrl.Result, error) {
 	// TODO(design 03/06/05): drain traffic to weight 0 respecting taskTimeout,
 	// revoke gateway routes in reverse apply order, deactivate (never delete) the
 	// agent-actor OAuth client, GC directory entries.
@@ -1485,7 +1485,7 @@ func (r *AgentReconciler) finalize(ctx context.Context, agent *plumev1alpha1.Age
 	return ctrl.Result{}, nil
 }
 
-func (r *AgentReconciler) writeStatus(ctx context.Context, agent *plumev1alpha1.Agent, status *plumev1alpha1.AgentStatus) error {
+func (r *AgentReconciler) writeStatus(ctx context.Context, agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus) error {
 	if equalStatus(&agent.Status, status) {
 		return nil // no-op writes churn the API server and fight other controllers
 	}
@@ -1517,7 +1517,7 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// run namespace (A60): every Agent in that namespace is enqueued, and the
 	// first to reconcile mirrors it.
 	byNamespace := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
-		var agents plumev1alpha1.AgentList
+		var agents assaydv1alpha1.AgentList
 		if err := mgr.GetClient().List(ctx, &agents, client.InNamespace(o.GetNamespace())); err != nil {
 			return nil
 		}
@@ -1528,7 +1528,7 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return out
 	})
 	if err := ctrl.NewControllerManagedBy(mgr).
-		For(&plumev1alpha1.Agent{}).
+		For(&assaydv1alpha1.Agent{}).
 		Watches(&appsv1.Deployment{}, byAgentLabels).
 		Watches(&corev1.ResourceQuota{}, byNamespace).
 		Watches(&corev1.LimitRange{}, byNamespace).
@@ -1537,7 +1537,7 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	// The Namespace-keyed reconciler exists so the Terminating/Deleting handler
 	// runs when the source namespace holds no Agent at all (A60). It keys on the
-	// pods-by label and the name shape — not on plume.dev/run-namespace, which a
+	// pods-by label and the name shape — not on assayd.dev/run-namespace, which a
 	// vCluster's host sync namespace also carries (design 26 A1).
 	isRun := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return strings.HasPrefix(o.GetName(), RunNamespacePrefix) &&
@@ -1590,7 +1590,7 @@ func (n *RunNamespaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 func ptr[T any](v T) *T { return &v }
 
-func port(rt *plumev1alpha1.AgentRuntime) int32 {
+func port(rt *assaydv1alpha1.AgentRuntime) int32 {
 	if rt.Port == 0 {
 		return 8080
 	}

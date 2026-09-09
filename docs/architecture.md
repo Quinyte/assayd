@@ -1,6 +1,6 @@
-# plume — Architecture v1.0
+# assayd — Architecture v1.0
 
-> **plume** is a neutral internal codename (previously "graphene" in early drafts — same project; rename before any public release is a tracked task, ADR-0001). A rendered version with figures lives at `docs/architecture.html`; the generated plates live in `docs/diagrams/`.
+> **assayd** is a neutral internal codename (previously "graphene" in early drafts — same project; rename before any public release is a tracked task, ADR-0001). A rendered version with figures lives at `docs/architecture.html`; the generated plates live in `docs/diagrams/`.
 
 - **Status**: **design phase complete** · 2026-08-20 — 27/27 component designs approved, each through independent adversarial critique; 26 ADRs recorded. Implementation may begin.
 - **Thesis**: A radically lightweight, Kubernetes-native agent platform. The domain is a pluggable knowledge graph; everything else is an open standard with a thin binding.
@@ -35,12 +35,12 @@ Everything else in v0.1 survived critique. The full decision record is indexed i
 
 ## 01 · The lightweight doctrine
 
-Every design decision passes six rules. This is the product: competitors ship platforms; plume ships a control plane.
+Every design decision passes six rules. This is the product: competitors ship platforms; assayd ships a control plane.
 
 1. **Bind, don't build.** CRDs + operators + a CLI. Zero proprietary protocols, zero bundled agent framework, zero bundled UI.
 2. **Two stateful deps, ever.** Postgres + NATS. Durability, eval results, audit, KV, object store, queues — all in those two. No Kafka, no Redis, no Temporal cluster.
 3. **Library over server.** If a capability can run as a library inside an existing pod (DBOS, DeepEval, OTel SDK), it never becomes a service.
-4. **The reconcile loop is the product.** Versioning = CR generations + GitOps. Self-healing = conditions + controllers. plume adds *semantic* health to machinery Kubernetes already has.
+4. **The reconcile loop is the product.** Versioning = CR generations + GitOps. Self-healing = conditions + controllers. assayd adds *semantic* health to machinery Kubernetes already has.
 5. **Weight budget is a spec.** Core control plane ≤ 8 pods. One `helm install` on any conformant cluster — minikube, k3d, kind, k3s included; local distros are a CI target, not a courtesy.
 6. **Tiered install.** `core` (agents + KG + security + traces) → `plus` (evals, drift, modelhub). Each tier independently removable.
 
@@ -48,7 +48,7 @@ Every design decision passes six rules. This is the product: competitors ship pl
 
 Three planes:
 
-- **Control plane** (GitOps): Git repo of CRs → Argo CD/Flux → **three core plume operators** (agent, workflow, model) — plus the enterprise tenant-operator — which reconcile CRs into bindings — routes, identity, gates. The CLI is sugar over CRs.
+- **Control plane** (GitOps): Git repo of CRs → Argo CD/Flux → **three core assayd operators** (agent, workflow, model) — plus the enterprise tenant-operator — which reconcile CRs into bindings — routes, identity, gates. The CLI is sugar over CRs.
 - **Data plane**: **agentgateway** — one data plane for A2A · MCP · LLM · HTTP traffic. AuthN via SPIFFE + OAuth; guardrail filters; rate limits; **policy compiled from Agent CR budgets/tools/expose blocks**. Every hop crosses it — which is where guarantees live, so they hold for black-box agents regardless of SDK.
 - **Substrate**: **NATS JetStream** (events · KV directory · object store · session receipts) + **Postgres** (DBOS durable workflows · eval results · audit index).
 
@@ -56,7 +56,7 @@ Identity: SPIRE issues SVIDs to agent pods and the gateway; the platform IdP (Zi
 
 **BYO-SDK contract**: an agent is any container that serves A2A and exposes an Agent Card. LangGraph, CrewAI, ADK, Pydantic AI, Claude Agent SDK, or a bash script. Registration = the operator reads the card, publishes to the OASF directory (JetStream KV), issues identity, wires gateway routes.
 
-**Color rule in all figures** (see architecture.html): accent = plume-built; grey = adopted open components. Very little is accent — that is the thesis.
+**Color rule in all figures** (see architecture.html): accent = assayd-built; grey = adopted open components. Very little is accent — that is the thesis.
 
 ## 03 · The API surface
 
@@ -81,7 +81,7 @@ Four more resources the design phase made concrete:
 ### Agent CR
 
 ```yaml
-apiVersion: plume.dev/v1alpha1        # API group TBD at rename
+apiVersion: assayd.dev/v1alpha1        # API group TBD at rename
 kind: Agent
 metadata: {name: prior-auth-reviewer}
 spec:
@@ -109,7 +109,7 @@ An App is a **shippable product**: frontend + API + agents/workflows/graphs, rel
 - **The backend mostly disappears.** Workflows exposed as `POST /api/<name>`; an agent's A2A task stream is the chat endpoint over SSE. BFF shrinks to nothing unless genuinely needed.
 - **Human auth with zero custom code.** IdP OIDC login; gateway exchanges the user token into on-behalf-of agent credentials → per-user receipts and budgets.
 - **Released as a unit.** Members pinned (agent v1.4.2, graph v12, frontend v2.1.0); agents inside still pass individual eval gates; rollback restores the coherent set.
-- **Scaffolded.** `plume init app` → frontend template + typed TS client generated from Agent Cards / MCP schemas.
+- **Scaffolded.** `assayd init app` → frontend template + typed TS client generated from Agent Cards / MCP schemas.
 
 ```yaml
 kind: App
@@ -269,19 +269,19 @@ Detectors write conditions; controllers act; humans see semantic health in `kube
 | Training | **Kubeflow Trainer v2** TrainJob (SFT/DPO/GRPO; Unsloth landing as BuiltinTrainer) |
 | Experiments | MLflow (tracking only) |
 
-**As designed (ADR-0026 + design 25 A1/A2)**: weighted model shifting uses Gateway API `backendRefs` weights, **not** `AgentgatewayModel`, which ADR-0028 records as experimental and disabled by default. KServe **split its API at v0.17**, and the generative path — `LLMInferenceService` — **is built on llm-d**. So the honest statement is that plume binds llm-d *transitively* through KServe **for generative serving** (the classic `InferenceService` path does not involve it), not "only for one giant model" as v0.1 had it. Generative pools bind at the gateway as a **GAIE `InferencePool`** (OSS in agentgateway), which means KV-cache-aware routing and prefill/decode disaggregation arrive by binding a contract rather than building anything — while budgets, receipts, authz and egress allowlists stay exactly where they always are. Because llm-d is Sandbox-stage and moving fast, plume pins the two **contracts** (`LLMInferenceService`, `InferencePool`) and never llm-d internals. **KServe runs in RawDeployment mode — a stated constraint, not a default.** It is what lets KServe run without Knative or Istio, which is the only reason binding it respects the pod budget (rule 5) and the meshless core (ADR-0012); Serverless mode is forbidden and CI asserts no Knative CRDs are required. Kits are the **only serving source** (signed, digest-pinned), resolved by a chart-shipped `ClusterStorageContainer` from `kit://` URIs. The shadow InferenceService gets a **candidate-only route admitting just the eval run principal**; general Backend registration happens only on pass. The operator **writes `internal/<model>` pricing rows** at serve time so agent policy compilation can never fail on an unpriced in-cluster model. Traffic shifts at the gateway via virtual models — never a second canary system. Models gate through design 16's flow with **their own metric family** (§08).
+**As designed (ADR-0026 + design 25 A1/A2)**: weighted model shifting uses Gateway API `backendRefs` weights, **not** `AgentgatewayModel`, which ADR-0028 records as experimental and disabled by default. KServe **split its API at v0.17**, and the generative path — `LLMInferenceService` — **is built on llm-d**. So the honest statement is that assayd binds llm-d *transitively* through KServe **for generative serving** (the classic `InferenceService` path does not involve it), not "only for one giant model" as v0.1 had it. Generative pools bind at the gateway as a **GAIE `InferencePool`** (OSS in agentgateway), which means KV-cache-aware routing and prefill/decode disaggregation arrive by binding a contract rather than building anything — while budgets, receipts, authz and egress allowlists stay exactly where they always are. Because llm-d is Sandbox-stage and moving fast, assayd pins the two **contracts** (`LLMInferenceService`, `InferencePool`) and never llm-d internals. **KServe runs in RawDeployment mode — a stated constraint, not a default.** It is what lets KServe run without Knative or Istio, which is the only reason binding it respects the pod budget (rule 5) and the meshless core (ADR-0012); Serverless mode is forbidden and CI asserts no Knative CRDs are required. Kits are the **only serving source** (signed, digest-pinned), resolved by a chart-shipped `ClusterStorageContainer` from `kit://` URIs. The shadow InferenceService gets a **candidate-only route admitting just the eval run principal**; general Backend registration happens only on pass. The operator **writes `internal/<model>` pricing rows** at serve time so agent policy compilation can never fail on an unpriced in-cluster model. Traffic shifts at the gateway via virtual models — never a second canary system. Models gate through design 16's flow with **their own metric family** (§08).
 
 ## 11 · Developer experience — the golden path
 
 Target: **empty directory → agent answering from a KG on a local cluster in under 15 minutes.** Lifecycle = five commands: `init → dev → invoke → build → deploy`.
 
-- **Scaffolded**: `plume init` interview (what/which graph/which tools/which SDK — recommendations with reasoning, never silent) → ~100-line agent **the user owns**.
+- **Scaffolded**: `assayd init` interview (what/which graph/which tools/which SDK — recommendations with reasoning, never silent) → ~100-line agent **the user owns**.
 - **BYO**: per-SDK templates wrap existing agents in A2A + card + Dockerfile.
-- **External**: `plume agent register --endpoint`.
-- **Dev loop**: `plume dev` — k3d/minikube, hot reload, live receipts in the terminal; `plume eval run --quick`.
-- **Deploy**: `plume build` (buildpacks/ko + cosign + SBOM) → `plume deploy` (GitOps commit; rollout streams the eval gate).
-- **Workflows**: declarative YAML (compiled to DBOS) or code-first DBOS; `plume workflow test --event fixtures/x.json`.
-- **Apps**: `plume init app` — frontend + typed client + IdP login wired.
+- **External**: `assayd agent register --endpoint`.
+- **Dev loop**: `assayd dev` — k3d/minikube, hot reload, live receipts in the terminal; `assayd eval run --quick`.
+- **Deploy**: `assayd build` (buildpacks/ko + cosign + SBOM) → `assayd deploy` (GitOps commit; rollout streams the eval gate).
+- **Workflows**: declarative YAML (compiled to DBOS) or code-first DBOS; `assayd workflow test --event fixtures/x.json`.
+- **Apps**: `assayd init app` — frontend + typed client + IdP login wired.
 
 Wizard rule everywhere: *the platform asks, you choose* — a blank field the user can't understand is a product failure.
 
@@ -307,7 +307,7 @@ Sizes: S <1wk · M 1–3wk · L 3–6wk (solo). Phases → §18.
 | Probe engine | semantic-readiness runner + conditions | — | M | P2 |
 | EvalSuite controller | eval Jobs, dataset builder, gate orchestration | DeepEval/Inspect | L | P3 |
 | Session replay | receipts → replayable fixtures | NATS | M | P3 |
-| Pack format + installer | signed OCI bundles; `plume pack` verbs; contract checks | OCI, cosign | M | P3 |
+| Pack format + installer | signed OCI bundles; `assayd pack` verbs; contract checks | OCI, cosign | M | P3 |
 | Knowledge pattern packs | sop-decision-tree, policy-rules, episodic-memory, entity-catalog, qa-corpus | packs | M | P2–P3 |
 | Drift controllers | canary prompts, SLO burn, embedding distance; remediations | OpenObserve | L | P4 |
 | workflow-operator | Workflow CR → DBOS/Argo; JetStream triggers | DBOS | M | P4 |
@@ -340,7 +340,7 @@ One reviewed YAML artifact per domain — entities, relations, invariants, probe
 
 **You bring documents and review an ontology; Kubernetes runs everything else.** Conditions: `Ingesting → Validating → ProbesPassing → Ready`.
 
-1. **From a knowledge pattern**: `plume kg init --pattern sop-decision-tree --from connector/sharepoint-sops`.
+1. **From a knowledge pattern**: `assayd kg init --pattern sop-decision-tree --from connector/sharepoint-sops`.
 2. **From scratch with a proposed ontology**: sample 20–50 docs → platform *proposes* (with reasoning) → human edits → lock v1. Never silently generated.
 3. **BYO graph**: wrap in a provider adapter; gains probes + versioning.
 
@@ -366,7 +366,7 @@ Six MCP tools: `search` · `neighbors` · `get_context_bundle` · `cite` · `sch
 
 ### Operations
 
-Snapshot per change (namespace-per-version); `plume kg diff v11 v12`; re-embedding = version bump; PII redacted at normalize; per-agent subgraph scoping injected by the gateway and enforced by the provider (design 01 A1).
+Snapshot per change (namespace-per-version); `assayd kg diff v11 v12`; re-embedding = version bump; PII redacted at normalize; per-agent subgraph scoping injected by the gateway and enforced by the provider (design 01 A1).
 
 ## 14 · Loop engineering
 
@@ -385,7 +385,7 @@ Two loops, separated: the **inner loop** (user-owned scaffold) and the **governa
 
 **Four sockets + triage**: capability → provider slot (shipped: KnowledgeGraphProvider, IdentityProvider, AuthzProvider, EvalRunner; reserved: MemoryProvider, DriftDetector, SandboxProfile) · traffic → gateway filter · lifecycle → new CRD + separate controller · practice → template/skill. Fits none → core RFC (must stay rare).
 
-**Packs**: one signed OCI artifact bundling filters/skills/templates/drivers/CRs with a manifest declaring socket contracts. `plume pack install context-compaction` → filter live on all agents, template + skill indexed, no redeploys, rollback = uninstall.
+**Packs**: one signed OCI artifact bundling filters/skills/templates/drivers/CRs with a manifest declaring socket contracts. `assayd pack install context-compaction` → filter live on all agents, template + skill indexed, no redeploys, rollback = uninstall.
 
 **Enforcement**: every feature proposal names its pattern + socket; engine changes presumed wrong until an RFC proves the five primitives can't express it.
 
@@ -393,7 +393,7 @@ Two loops, separated: the **inner loop** (user-owned scaffold) and the **governa
 
 ## 16 · Competitive positioning
 
-| | kagent (CNCF/Solo.io) | Rossoctl (ex-Kagenti, IBM) | Dapr Agents | plume |
+| | kagent (CNCF/Solo.io) | Rossoctl (ex-Kagenti, IBM) | Dapr Agents | assayd |
 |---|---|---|---|---|
 | Agent model | prompt+tools config run by own ADK engine | framework-neutral intercept | Python framework on actors | any container speaking A2A |
 | Domain | none (ops tools) | knowledge-base service | none | **versioned KG contract, ontology-first** |
@@ -402,7 +402,7 @@ Two loops, separated: the **inner loop** (user-owned scaffold) and the **governa
 | Footprint | moderate | heavy (16GB/4c dev) | Dapr runtime | **≤8 pods, Postgres+NATS only** |
 | UI stance | UI early | UI-led | n/a | CLI + security first |
 
-kagent answers "how do I run an agent on k8s"; plume answers "how do I run an agent I can trust with my business" — and kagent agents can register on plume (they speak A2A). **Checked against the tag, 2026-09-05**: kagent v0.10.0 (released 2026-09-04) carries a `BYO` arm on its `AgentSpec` — "a user-provided container image … expects it to serve the agent over the A2A protocol on port 8080" — so framework neutrality and BYO A2A containers are **shared capability, not a moat**. kagent is a prospective integration target, not a straw man. Whatever plume is for has to survive that sentence. Palantir AIP validates ontology-first at $-scale; plume is its open, lightweight, k8s-native expression. Eval-gated rollout is 2026 best-practice *as SaaS + scripts*; nobody ships it as a k8s primitive — 12–18-month window.
+kagent answers "how do I run an agent on k8s"; assayd answers "how do I run an agent I can trust with my business" — and kagent agents can register on assayd (they speak A2A). **Checked against the tag, 2026-09-05**: kagent v0.10.0 (released 2026-09-04) carries a `BYO` arm on its `AgentSpec` — "a user-provided container image … expects it to serve the agent over the A2A protocol on port 8080" — so framework neutrality and BYO A2A containers are **shared capability, not a moat**. kagent is a prospective integration target, not a straw man. Whatever assayd is for has to survive that sentence. Palantir AIP validates ontology-first at $-scale; assayd is its open, lightweight, k8s-native expression. Eval-gated rollout is 2026 best-practice *as SaaS + scripts*; nobody ships it as a k8s primitive — 12–18-month window.
 
 ### Open source and enterprise — the split
 
@@ -414,7 +414,7 @@ kagent answers "how do I run an agent on k8s"; plume answers "how do I run an ag
 
 ## 17 · Weight budget — core tier
 
-agent-operator 1 (the only plume-code pod) · agentgateway 1–2 · SPIRE 2 · Zitadel 1 (on our Postgres) · NATS 1 · Postgres 1 · OpenObserve 1 ≈ **8 pods**.
+agent-operator 1 (the only assayd-code pod) · agentgateway 1–2 · SPIRE 2 · Zitadel 1 (on our Postgres) · NATS 1 · Postgres 1 · OpenObserve 1 ≈ **8 pods**.
 
 **Beyond core, as designed**: `plus` adds workflow-operator (a standing controller) + workflow-runtime (which scales 0→N with trigger registrations) — +2, OpenFGA with its co-located ext-authz adapter (+1), model-operator (+1), and optionally Argo and Phoenix. Enterprise adds tenant-operator (+1). Per managed knowledge graph: adapter + backend (2 workload pods). Generative serving adds KServe's `llmisvc` controller at plus tier and **+1 endpoint-picker (EPP) per inference pool** alongside the vLLM serving pods — the same workload category (design 25 A1). A hard-isolated tenant costs ~4–5 pods core-only (NATS, Postgres, Zitadel, OpenObserve and the gateway stay shared), +2–3 at plus.
 

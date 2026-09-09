@@ -15,7 +15,7 @@
 
 ### 2. MINOR — the projection routes have no design-03 rows
 
-`23-app-layer.md:13,19-24` vs design 03 §3.4. "Projection rows in the 03 compiler" is claimed as one of plume's three thin pieces — correctly — but 03's concern table gained no App-projection row (workflow POST + run-status routes, chat SSE route, KG read routes, each with OIDC + exchange + CORS-pinned-to-route-host + `consumerBudgets`, and the App's own KG scope header). The series' standing rule: compiled concerns are rows, not prose. **Fix**: one "App projection" row in 03 §3.4 (or its amendment log) enumerating the three shapes and their attached policies.
+`23-app-layer.md:13,19-24` vs design 03 §3.4. "Projection rows in the 03 compiler" is claimed as one of assayd's three thin pieces — correctly — but 03's concern table gained no App-projection row (workflow POST + run-status routes, chat SSE route, KG read routes, each with OIDC + exchange + CORS-pinned-to-route-host + `consumerBudgets`, and the App's own KG scope header). The series' standing rule: compiled concerns are rows, not prose. **Fix**: one "App projection" row in 03 §3.4 (or its amendment log) enumerating the three shapes and their attached policies.
 
 ### 3. MINOR — `POST /api/<name>` retry semantics are unstated (shared with 21-review finding 2)
 
@@ -27,7 +27,7 @@
 
 ## Lens summary
 
-1. **kro-composes claim** (requested scrutiny): **holds**. The watcher's three jobs — identity provisioning (which *is* 06's "App login clients provisioned by the operator at reconcile", now located), pin/coherence validation, status aggregation — create no resources; the RGD ships in the chart and instances are kro's; the compiler and client-gen carry the rest. The architecture's "App | kro" row stays true, and the design polices its own honesty ("plume adds logic *around* composition, never a composition engine"). No finding.
+1. **kro-composes claim** (requested scrutiny): **holds**. The watcher's three jobs — identity provisioning (which *is* 06's "App login clients provisioned by the operator at reconcile", now located), pin/coherence validation, status aggregation — create no resources; the RGD ships in the chart and instances are kro's; the compiler and client-gen carry the rest. The architecture's "App | kro" row stays true, and the design polices its own honesty ("assayd adds logic *around* composition, never a composition engine"). No finding.
 2. **Doctrine/charter**: clean — 0 platform pods, no state, primitives honest.
 3. **SSE vs A2A's stream** (requested scrutiny): the *mapping* is right — D2's "documented projection of A2A's own stream, not a new protocol" is exactly ADR-0016's spirit, and the event vocabulary (status/message/artifact/done) is a thin rename of A2A's task lifecycle. Finding 1 is the reconnect path betraying the same principle the happy path honors.
 4. **Contract consistency**: findings 2/3; elsewhere strong — pinning + `MemberSkew` (warn-never-block, D4 — the right call for mid-migration reality), release-triggers-member-gates composition with 02/16, the design-20 retention linkage acknowledged, member-Held returning a typed 503 the UI can render honestly.

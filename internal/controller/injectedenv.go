@@ -3,22 +3,22 @@ package controller
 import (
 	corev1 "k8s.io/api/core/v1"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // InjectedEnvPrefix is reserved to the operator. Design 02 §11 has always said
 // this design owns the injected env contract and design 09 says templates
 // "consume, never define" it — but nothing reserved the namespace, so a user
-// could set PLUME_GATEWAY_URL in spec.runtime.env and Kubernetes would keep the
+// could set ASSAYD_GATEWAY_URL in spec.runtime.env and Kubernetes would keep the
 // LAST duplicate in the container. That is a redirect of the agent's egress
 // away from the chokepoint every guarantee in this platform is enforced at,
 // written by the person the chokepoint constrains. Admission now rejects the
 // prefix (A65); injection appends after user env as defence in depth, so the
 // operator's value wins even if a path ever reached here without admission.
-const InjectedEnvPrefix = "PLUME_"
+const InjectedEnvPrefix = "ASSAYD_"
 
 // EnvGatewayURL is the base URL of the agentgateway an agent's egress traverses.
-const EnvGatewayURL = "PLUME_GATEWAY_URL"
+const EnvGatewayURL = "ASSAYD_GATEWAY_URL"
 
 // injectedEnv returns the operator-owned variables for one workload.
 //
@@ -26,11 +26,11 @@ const EnvGatewayURL = "PLUME_GATEWAY_URL"
 // and design 09's reference loop consumes them, but two have nothing to produce
 // a value from today and this function does not invent one:
 //
-//   - PLUME_KG_ENDPOINTS would carry the resolved endpoint per knowledge
+//   - ASSAYD_KG_ENDPOINTS would carry the resolved endpoint per knowledge
 //     binding. There is no KnowledgeGraph CR in any design to resolve one from
 //     — design 01 is the KnowledgeGraphProvider protocol and design 13 the
 //     Graphiti adapter; neither declares the kind. Owed there.
-//   - PLUME_NATS_URL is the JetStream task store that makes replicas>1 safe.
+//   - ASSAYD_NATS_URL is the JetStream task store that makes replicas>1 safe.
 //     No NATS ships in the chart at all, so there is no address and no
 //     credential. Owed to design 07.
 //
@@ -82,7 +82,7 @@ func withInjectedEnv(user []corev1.EnvVar, cfg InjectedEnvConfig) []corev1.EnvVa
 // UsesReservedEnvPrefix reports the first reserved name an Agent sets itself.
 // Admission rejects these, so this is the operator-side belt to that braces —
 // and the path that reports it on an object admitted before the rule existed.
-func UsesReservedEnvPrefix(spec plumev1alpha1.AgentSpec) string {
+func UsesReservedEnvPrefix(spec assaydv1alpha1.AgentSpec) string {
 	if spec.Runtime == nil {
 		return ""
 	}

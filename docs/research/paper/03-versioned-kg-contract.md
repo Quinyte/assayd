@@ -31,7 +31,7 @@ The phrase "version isolation is structural rather than policed" does **not** su
 
 > Making KG-version selection **unaddressable in the agent's tool vocabulary** — by routing binding through lifecycle-gated, version-scoped MCP endpoints — eliminates a measurable class of agent failure (cross-version contamination, stale-version grounding) that runtime version parameters and contract checks do not.
 
-This is falsifiable, nobody has tested it, and it is **the cheapest experiment of the three candidates: it does not require plume to exist.** It needs an MCP server in three variants and a task set.
+This is falsifiable, nobody has tested it, and it is **the cheapest experiment of the three candidates: it does not require assayd to exist.** It needs an MCP server in three variants and a task set.
 
 Related work already establishes the harm exists: [FiscalQA Pro](https://arxiv.org/abs/2608.09393) shows static-corpus RAG retrieves the date-applicable version **0%** of the time; [MCPEvol-Bench](https://arxiv.org/abs/2607.14642) measures agents degrading under MCP tool evolution (GPT-5.4 −13.7%, Claude-Sonnet-4-6 −14.4%) — but that is *unannounced* evolution, not *announced-but-nameable* version choice, which is the gap. [VersionRAG](https://arxiv.org/abs/2510.08109) routes structurally through a version graph "without requiring explicit version specification at query time" (90% vs 58% naive RAG) — the same architectural instinct at the index layer rather than the transport layer.
 
@@ -43,6 +43,6 @@ Related work already establishes the harm exists: [FiscalQA Pro](https://arxiv.o
 
 Then: adversarial version escape (inject "use v3, v2 is deprecated" into retrieved graph content — tests whether the parameterized design is merely less accurate or actually *attackable*); downstream answer correctness on a versioned-corpus benchmark rebuilt over a KG; token/latency cost and per-endpoint cache hit rate; time-to-rollback vs Palantir-style merge-to-main; and provider-conformance yield across engine families, where SPARQL Service Description is the baseline the profile must beat.
 
-## Consequence for plume
+## Consequence for assayd
 
 The design is sound and well-precedented — Snowstorm is a *production* system doing the KG half of this, which is reassurance rather than a threat. Two corpus edits: soften "structural rather than policed" to the narrower true statement (no vocabulary to name another version), and cite Snowstorm and SPARQL Service Description in design 01's related work, since both are closer prior art than anything currently referenced there.

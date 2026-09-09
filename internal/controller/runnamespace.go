@@ -20,11 +20,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // Design 02 A42/A60: an Agent's workload and its revision material live in an
-// operator-owned namespace, `plume-run-<agent-namespace>`, so that a principal
+// operator-owned namespace, `assayd-run-<agent-namespace>`, so that a principal
 // with create/delete on ConfigMaps in the Agent's namespace cannot delete a
 // published revision's copy and recreate it under the same name. A ConfigMap
 // can only be used by Pods in its own namespace, so the material is out of the
@@ -40,52 +40,52 @@ import (
 // BLOCKER 7 — so no label is consulted as evidence here.
 const (
 	// RunNamespacePrefix is the fixed prefix of every run namespace name.
-	RunNamespacePrefix = "plume-run-"
+	RunNamespacePrefix = "assayd-run-"
 
 	// LabelRunNamespace is what the Gateway listener admits routes from (design
 	// 03 A44, design 07 A5.3). It is NOT the SPIFFE selector's label: design 26
 	// A1 also stamps it on a vCluster's host sync namespace, where a tenant
 	// creates the Pods.
-	LabelRunNamespace = "plume.dev/run-namespace"
+	LabelRunNamespace = "assayd.dev/run-namespace"
 	// LabelPodsBy certifies one property — nothing but the agent-operator
 	// creates Pods here — and is the ClusterSPIFFEID's namespace selector
 	// (design 07 A5.2). It never goes on a sync namespace.
-	LabelPodsBy         = "plume.dev/pods-by"
+	LabelPodsBy         = "assayd.dev/pods-by"
 	PodsByAgentOperator = "agent-operator"
 	// LabelAgentNamespace carries the Agent's OWN namespace, on the run
 	// namespace and on every workload Pod: the SVID path segment reads it (A59),
 	// so the move is invisible to authorization.
-	LabelAgentNamespace = "plume.dev/agent-namespace"
+	LabelAgentNamespace = "assayd.dev/agent-namespace"
 	// LabelOwnedBy is observability — the install this namespace belongs to.
 	// It is never consulted as evidence.
-	LabelOwnedBy = "plume.dev/owned-by"
+	LabelOwnedBy = "assayd.dev/owned-by"
 	// LabelAgentUID is the provenance label on every workload and copy in a run
 	// namespace (A44/A60). Corroboration, not authority: the name is.
-	LabelAgentUID = "plume.dev/agent-uid"
+	LabelAgentUID = "assayd.dev/agent-uid"
 	// AnnotationBindingNonce is stamped on the run namespace at creation. An
 	// annotation, not a label: nothing selects on it.
-	AnnotationBindingNonce = "plume.dev/binding-nonce"
+	AnnotationBindingNonce = "assayd.dev/binding-nonce"
 
 	// LabelBinding marks the operator's own binding records as such; a human
-	// reading plume-system sees what they are.
-	LabelBinding = "plume.dev/run-namespace-binding"
+	// reading assayd-system sees what they are.
+	LabelBinding = "assayd.dev/run-namespace-binding"
 	// bindingSchemaVersion is the only version this operator decodes. A record
 	// carrying another is BindingRecordInvalid, never guessed at.
 	bindingSchemaVersion = "1"
 
 	// MirrorPrefix names the ResourceQuota and LimitRange copies in a run
 	// namespace (A60).
-	MirrorPrefix = "plume-mirror-"
+	MirrorPrefix = "assayd-mirror-"
 	// AnnotationMirrorSource carries the mirrored object's source name, so the
 	// reverse mapping does not depend on a truncated name.
-	AnnotationMirrorSource = "plume.dev/mirror-source"
+	AnnotationMirrorSource = "assayd.dev/mirror-source"
 
-	// The admission policies that reserve the plume.dev namespace labels to the
+	// The admission policies that reserve the assayd.dev namespace labels to the
 	// operator identities (design 07 A5.9). Without them the labels SPIRE and the
 	// Gateway act on are a convention, and the operator refuses to create run
 	// namespaces.
-	NamespaceLabelPolicyName = "plume-namespace-labels"
-	GatewayRoutePolicyName   = "plume-gateway-routes"
+	NamespaceLabelPolicyName = "assayd-namespace-labels"
+	GatewayRoutePolicyName   = "assayd-gateway-routes"
 )
 
 // Reasons on CondRunNamespaceUnavailable (design 02 §5).
@@ -108,21 +108,29 @@ var pssLabels = []string{
 
 // RunNamespaceName maps a source namespace to its run namespace.
 //
-// `plume-run-` is ten characters and a namespace name is a DNS label of at
-// most 63, so the naive form is unconstructable for any source over 53. Naive
-// truncation is forbidden — it is non-injective and would pool two tenants'
-// material — so the name is truncated and suffixed with a 16-hex (64-bit) hash
-// of the untruncated source (design 03 §3.2's rule, widened by A44 from 8 hex
-// because 32 bits is not enough for a name that is also a security boundary).
-// A collision is still detected, by the binding record, never silently reused.
+// A namespace name is a DNS label of at most 63 characters, so the naive
+// prefix+source form is unconstructable for a long source. Naive truncation is
+// forbidden — it is non-injective and would pool two tenants' material — so the
+// name is truncated and suffixed with a 16-hex (64-bit) hash of the
+// UNTRUNCATED source (design 03 §3.2's rule, widened by A44 from 8 hex because
+// 32 bits is not enough for a name that is also a security boundary). A
+// collision is still detected, by the binding record, never silently reused.
+//
+// The kept length is DERIVED from the prefix, not written down. It used to be a
+// literal 36 under a comment reading "10 + 36 + 1 + 16 = 63", and the 2026-09-09
+// rename made the prefix eleven characters and every long name 64 — one over the
+// limit, caught by TestRunNamespaceNameIsADNSLabelAndInjectiveAtTheLimit. A
+// magic number that encodes the length of a name is a bug waiting for that name
+// to change.
 func RunNamespaceName(source string) string {
 	if len(RunNamespacePrefix)+len(source) <= 63 {
 		return RunNamespacePrefix + source
 	}
+	const hashHex = 16
+	keep := 63 - len(RunNamespacePrefix) - 1 - hashHex // 1 for the separator
 	sum := sha256.Sum256([]byte(source))
-	suffix := hex.EncodeToString(sum[:])[:16]
-	// 10 + 36 + 1 + 16 = 63.
-	return RunNamespacePrefix + strings.TrimRight(source[:36], "-") + "-" + suffix
+	suffix := hex.EncodeToString(sum[:])[:hashHex]
+	return RunNamespacePrefix + strings.TrimRight(source[:keep], "-") + "-" + suffix
 }
 
 // MirrorName names a ResourceQuota or LimitRange copy. Those names are DNS
@@ -137,7 +145,7 @@ func MirrorName(source string) string {
 }
 
 // BindingName names the binding record for a run namespace.
-func BindingName(runNamespace string) string { return "plume-run-binding-" + runNamespace }
+func BindingName(runNamespace string) string { return "assayd-run-binding-" + runNamespace }
 
 type bindingState string
 
@@ -293,7 +301,7 @@ func LabelAuthorityPresent(c client.Reader) func(context.Context) (bool, error) 
 // ensureRunNamespace returns the run namespace an Agent's material and workload
 // go into, or a runNamespaceError. It is design 02 A60's ordered check list; the
 // numbers in comments are its rows, and the first that applies decides.
-func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *plumev1alpha1.Agent) (string, error) {
+func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *assaydv1alpha1.Agent) (string, error) {
 	if r.LabelAuthorityPresent == nil || r.OperatorNamespace == "" {
 		return "", fmt.Errorf("run namespace: the reconciler was built without an operator namespace " +
 			"or a label-authority check; NewAgentReconciler refuses this, so this is a test wiring error")
@@ -305,7 +313,7 @@ func (r *AgentReconciler) ensureRunNamespace(ctx context.Context, agent *plumev1
 	if !ok {
 		return "", &runNamespaceError{reason: ReasonLabelAuthorityAbsent, terminal: true,
 			message: fmt.Sprintf("the admission policies %s and %s (design 07 A5.9) are not installed, "+
-				"so the plume.dev namespace labels SPIRE and the Gateway act on would be forgeable. "+
+				"so the assayd.dev namespace labels SPIRE and the Gateway act on would be forgeable. "+
 				"No run namespace is created until the chart's policies are present",
 				NamespaceLabelPolicyName, GatewayRoutePolicyName)}
 	}
@@ -650,7 +658,7 @@ func (r *AgentReconciler) reconcileRunNamespaceLabels(ctx context.Context, ns, s
 
 // deleteRunNamespace deletes a run namespace after the two checks that bound
 // the operator's cluster-wide namespaces/delete grant: the name has the
-// plume-run- shape, and the nonce (before binding) or UID (after) is the
+// assayd-run- shape, and the nonce (before binding) or UID (after) is the
 // binding's. The caller has verified whichever applies; the shape is checked
 // here so no path can forget it.
 func (r *AgentReconciler) deleteRunNamespace(ctx context.Context, ns *corev1.Namespace) error {
@@ -672,7 +680,7 @@ func (r *AgentReconciler) deleteRunNamespace(ctx context.Context, ns *corev1.Nam
 // in it re-enters the same code. `self` is the Agent being DELETED when the
 // finalizer calls this, so it does not count itself; every other caller passes
 // nil, because a live Agent that reached the handler must count.
-func (r *AgentReconciler) runNamespaceHandler(ctx context.Context, b *binding, self *plumev1alpha1.Agent) error {
+func (r *AgentReconciler) runNamespaceHandler(ctx context.Context, b *binding, self *assaydv1alpha1.Agent) error {
 	// Step 0.
 	if b.state != bindingTerminating && b.state != bindingDeleting {
 		return nil
@@ -716,7 +724,7 @@ func (r *AgentReconciler) runNamespaceHandler(ctx context.Context, b *binding, s
 // namespace. Both lists are LIVE (uncached) and both are scoped by the source
 // UID, so a recreated tenant's leftovers are orphans that go with the
 // namespace rather than evidence to keep it.
-func (r *AgentReconciler) runNamespaceStillNeeded(ctx context.Context, b *binding, self *plumev1alpha1.Agent) (bool, error) {
+func (r *AgentReconciler) runNamespaceStillNeeded(ctx context.Context, b *binding, self *assaydv1alpha1.Agent) (bool, error) {
 	var source corev1.Namespace
 	if err := r.reader().Get(ctx, types.NamespacedName{Name: b.sourceNamespace}, &source); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -727,7 +735,7 @@ func (r *AgentReconciler) runNamespaceStillNeeded(ctx context.Context, b *bindin
 	if string(source.UID) != b.sourceNamespaceUID {
 		return false, nil
 	}
-	var agents plumev1alpha1.AgentList
+	var agents assaydv1alpha1.AgentList
 	if err := r.reader().List(ctx, &agents, client.InNamespace(b.sourceNamespace)); err != nil {
 		return false, fmt.Errorf("live-list agents in %s: %w", b.sourceNamespace, err)
 	}
@@ -789,7 +797,7 @@ func (r *AgentReconciler) runNamespaceStillNeeded(ctx context.Context, b *bindin
 // A60): after this Agent's own workloads and copies are gone, ask whether it
 // was the last, swap the binding before the confirming list, and run the
 // handler.
-func (r *AgentReconciler) releaseRunNamespaceIfLast(ctx context.Context, agent *plumev1alpha1.Agent) error {
+func (r *AgentReconciler) releaseRunNamespaceIfLast(ctx context.Context, agent *assaydv1alpha1.Agent) error {
 	runName := RunNamespaceName(agent.Namespace)
 	defer r.lockRunNamespace(runName)()
 	b, err := r.readBinding(ctx, runName)

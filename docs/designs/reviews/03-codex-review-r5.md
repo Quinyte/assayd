@@ -132,7 +132,7 @@ provable loosening under any admitted-set ordering.
 
 **Concrete failure:** model drift sets `fallbackActive=true`. The operator
 recompiles the Backend attached to the serving route. If agentgateway NACKs the
-new provider block, the drifted primary stays live while plume records an
+new provider block, the drifted primary stays live while assayd records an
 automated remediation. If it applies, a different answering model reaches
 production without the candidate isolation A19 now claims every tightening
 uses. Similarly, a tool server removing an advertised tool narrows a mandatory
@@ -190,7 +190,7 @@ selector are explicitly still owed. See the
 
 **Concrete failure:** policy-controller is installed and healthy, so the chart
 passes a HIPAA profile and Agents do not receive
-`ImageSignatureUnverified`. The plume workload namespace lacks the opt-in label
+`ImageSignatureUnverified`. The assayd workload namespace lacks the opt-in label
 or has no matching enforcing image policy. An unsigned digest-pinned image is
 admitted. The platform reports provenance verified when nothing checked it.
 
@@ -360,19 +360,19 @@ profile/pack and mutate each profile-added entry with its catalog untouched.
 The text says Sigstore is not installed, then says the chart declares the
 dependency; a Helm dependency is installation/bundling, while an external
 prerequisite needs a versioned capability check. It also calls the cost zero
-only by moving required compliance pods outside plume's ledger. That may be a
+only by moving required compliance pods outside assayd's ledger. That may be a
 reasonable doctrine choice, but it is not a zero-cost compliance profile, and
 an organisation running Kyverno is in fact forced to install a second engine.
 Choose one precise contract: bundled pinned subchart, or external prerequisite
 with compatible versions and preflight. Account the required pods in the
-profile's total operational weight even if plume does not own them.
+profile's total operational weight even if assayd does not own them.
 
 ### MAJOR 10 — A21 is contradicted inside the authoritative pricing section
 
 **File:** `docs/designs/03-policy-compiler.md:333-375,534-536`.
 
 The amendment says two tuple-keyed ConfigMaps. The body opens with one
-`plume-model-pricing`, line 365 says tuple-keying is still owed, and line 373
+`assayd-model-pricing`, line 365 says tuple-keying is still owed, and line 373
 says the model operator writes internal rows into that same map. Those are the
 two r4 defects A21 claims to close. Fold the two concrete schemas, ownership,
 merge/tie behavior, and staleness source into §3.5; delete the owed sentence and

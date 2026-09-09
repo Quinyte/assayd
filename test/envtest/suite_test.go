@@ -28,8 +28,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
 )
 
 var (
@@ -49,7 +49,7 @@ func TestMain(m *testing.M) {
 
 	must(clientgoscheme.AddToScheme(scheme), "register core scheme")
 	must(apiextensionsv1.AddToScheme(scheme), "register apiextensions scheme")
-	must(plumev1alpha1.AddToScheme(scheme), "register plume scheme")
+	must(assaydv1alpha1.AddToScheme(scheme), "register assayd scheme")
 
 	env := &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd")},
@@ -84,8 +84,8 @@ func must(err error, what string) {
 	}
 }
 
-// operatorNamespace is the envtest stand-in for plume-system.
-const operatorNamespace = "plume-system"
+// operatorNamespace is the envtest stand-in for assayd-system.
+const operatorNamespace = "assayd-system"
 
 // runNS is the run namespace an Agent in ns gets its workload and material in
 // (design 02 A42). Tests that look for either look there.

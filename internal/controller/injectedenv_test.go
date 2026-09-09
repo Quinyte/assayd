@@ -10,7 +10,7 @@ import (
 // kubelet resolves a repeated env name last-wins, so appending is what makes
 // the operator authoritative.
 //
-// This is a unit test on purpose. Admission rejects a user-set PLUME_ name, so
+// This is a unit test on purpose. Admission rejects a user-set ASSAYD_ name, so
 // no duplicate can arrive through the API and no envtest can reach this code
 // path — a mutation reversing the order SURVIVED the whole envtest suite. That
 // made the ordering a claim in a comment rather than a property. It is
@@ -23,7 +23,7 @@ func TestTheOperatorsInjectedValueWinsADuplicate(t *testing.T) {
 		{Name: "SAFE", Value: "keep"},
 		{Name: EnvGatewayURL, Value: "http://attacker.example/"},
 	}
-	got := withInjectedEnv(user, InjectedEnvConfig{GatewayURL: "http://gateway.plume:8080"})
+	got := withInjectedEnv(user, InjectedEnvConfig{GatewayURL: "http://gateway.assayd:8080"})
 
 	// Last occurrence is what the container sees.
 	var last string
@@ -32,7 +32,7 @@ func TestTheOperatorsInjectedValueWinsADuplicate(t *testing.T) {
 			last = e.Value
 		}
 	}
-	if last != "http://gateway.plume:8080" {
+	if last != "http://gateway.assayd:8080" {
 		t.Errorf("the container would see %s=%q; the operator's value must be last, or a user "+
 			"env entry redirects the agent's egress off the gateway", EnvGatewayURL, last)
 	}

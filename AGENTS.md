@@ -1,8 +1,8 @@
-# AGENTS.md — plume
+# AGENTS.md — assayd
 
-**This file is the model-neutral source of truth for how to work on plume.** Codex, Cursor, Copilot, Gemini and anything else that reads `AGENTS.md` starts here. `CLAUDE.md` carries the Claude-specific skill mechanics and defers to this file for everything else — so a rule lives in exactly one place and no model gets a different version of it.
+**This file is the model-neutral source of truth for how to work on assayd.** Codex, Cursor, Copilot, Gemini and anything else that reads `AGENTS.md` starts here. `CLAUDE.md` carries the Claude-specific skill mechanics and defers to this file for everything else — so a rule lives in exactly one place and no model gets a different version of it.
 
-plume ("graphene" in early drafts) is a lightweight, Kubernetes-native agent platform.
+assayd ("graphene" in early drafts) is a lightweight, Kubernetes-native agent platform.
 
 **Phase: implementing P1, under the scope reset of ADR-0030.** The agent-operator, its CRD, the chart and CI exist and pass on k3d and kind.
 
@@ -57,5 +57,5 @@ DISTRO=kind make e2e
 ## Conventions
 
 - Commits explain *why*, and state what is not done. Conventional prefixes for docs (`docs(designs):`).
-- "plume" is a codename (ADR-0001). Flag it before it reaches anything expensive to change — API groups, module paths.
+- "assayd" is a codename (ADR-0001). Flag it before it reaches anything expensive to change — API groups, module paths.
 - **The user decides, with reasoning shown.** Present options with trade-offs and a recommendation; never a silent choice, never a blank menu.

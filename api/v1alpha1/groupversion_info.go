@@ -1,9 +1,9 @@
-// Package v1alpha1 contains the plume platform API.
+// Package v1alpha1 contains the assayd platform API.
 //
-// Group is plume.dev — a codename per ADR-0001; renaming before public release
+// Group is assayd.dev — a codename per ADR-0001; renaming before public release
 // is a tracked task and is a mechanical regenerate, not a redesign.
 // +kubebuilder:object:generate=true
-// +groupName=plume.dev
+// +groupName=assayd.dev
 package v1alpha1
 
 import (
@@ -13,7 +13,7 @@ import (
 
 var (
 	// GroupVersion is the group and version for this API.
-	GroupVersion = schema.GroupVersion{Group: "plume.dev", Version: "v1alpha1"}
+	GroupVersion = schema.GroupVersion{Group: "assayd.dev", Version: "v1alpha1"}
 
 	// SchemeBuilder registers the Go types with a scheme.
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}

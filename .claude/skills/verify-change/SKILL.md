@@ -1,6 +1,6 @@
 ---
 name: verify-change
-description: The loop that closes a plume change — amend, gate, critique independently, critique cross-family, spike the unmeasured claim, correct, re-review. Use after any design amendment, ADR, or code change that asserts a property, and whenever a review returns findings. A change is not done when it reads right; it is done when the claim it makes has been measured or a test can fail on it.
+description: The loop that closes a assayd change — amend, gate, critique independently, critique cross-family, spike the unmeasured claim, correct, re-review. Use after any design amendment, ADR, or code change that asserts a property, and whenever a review returns findings. A change is not done when it reads right; it is done when the claim it makes has been measured or a test can fail on it.
 when_to_use: after an amendment or fix, when a review returns findings, before calling a design ready, "verify this change", "close the loop", "is this actually done"
 ---
 

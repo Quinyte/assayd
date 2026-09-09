@@ -5,7 +5,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // Codex r7 BLOCKER 1. The revision NAME is ten hex characters — forty bits —
@@ -25,9 +25,9 @@ import (
 // and costs nothing. If the projection encoding changes the pair stops
 // colliding, which fails loudly here and is correct: a new encoding needs its
 // own pinned pair, not a deleted test.
-func collidingPair() (safe, evil plumev1alpha1.AgentSpec) {
-	mk := func(image, pad string) plumev1alpha1.AgentSpec {
-		return plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{
+func collidingPair() (safe, evil assaydv1alpha1.AgentSpec) {
+	mk := func(image, pad string) assaydv1alpha1.AgentSpec {
+		return assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{
 			Image: image,
 			// Port is explicit and matches the CRD default. It entered the
 			// projection at ADR-0031, and a spec built as a literal skips

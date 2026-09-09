@@ -16,7 +16,7 @@ Makes ADR-0014's claim literally true — **"compliance is a profile you enable,
 
 ## 3. Safeguard → mechanism map (what's already true)
 
-| 2026 HIPAA technical safeguard | plume mechanism | Design |
+| 2026 HIPAA technical safeguard | assayd mechanism | Design |
 |---|---|---|
 | Unique user identification; per-action attribution | on-behalf-of `act` chains in every receipt | 06/04 |
 | Audit controls — every PHI **access** logged with attribution | the receipt stream (enforced-hop completeness). Note: with mandatory redaction applied before persistence, the trail proves *access*, not post-redaction content — stated in §6 (r1 f2) | 04 |
@@ -31,7 +31,7 @@ The profile's job for all of the above is to **turn optional into mandatory and 
 
 ## 4. The two genuinely new capabilities
 
-1. **Tamper-evident receipts (hash-chaining)** — ADR-0021 reserved `chain: {prev_hash, hash}`; the profile turns it on. **Single-writer construction (r1 f1 — parallel tap replicas cannot share one chain)**: chaining happens **downstream of the stream, not in the tap** — a dedicated **chainer consumer** (one durable JetStream consumer per tenant stream; JetStream serializes it) reads receipts **in stream order**, computes the chain **over the stream's own sequence numbers**, and writes chain records + signed **checkpoint anchors** (head + count, to object storage and optionally to a customer-controlled immutable store). Tap replicas stay stateless and parallel (04's split-mode scaling survives intact), and "chained over the stream sequence" is a stronger auditor statement than "chained at ingest" — the ordering basis is explicit. Verification: `plume compliance verify --since` walks the chain and reports the first break with its sequence. **Honest limits, stated**: chaining proves *append-order integrity* of the stream sequence as recorded; it does not prove *completeness* against a compromised gateway (receipts derive from gateway export — ADR-0021 D1's boundary, restated here rather than glossed) — the compensating controls are the split-mode tap, gateway attestation (SVID), and the gap counters that make `ReceiptsDegraded` visible.
+1. **Tamper-evident receipts (hash-chaining)** — ADR-0021 reserved `chain: {prev_hash, hash}`; the profile turns it on. **Single-writer construction (r1 f1 — parallel tap replicas cannot share one chain)**: chaining happens **downstream of the stream, not in the tap** — a dedicated **chainer consumer** (one durable JetStream consumer per tenant stream; JetStream serializes it) reads receipts **in stream order**, computes the chain **over the stream's own sequence numbers**, and writes chain records + signed **checkpoint anchors** (head + count, to object storage and optionally to a customer-controlled immutable store). Tap replicas stay stateless and parallel (04's split-mode scaling survives intact), and "chained over the stream sequence" is a stronger auditor statement than "chained at ingest" — the ordering basis is explicit. Verification: `assayd compliance verify --since` walks the chain and reports the first break with its sequence. **Honest limits, stated**: chaining proves *append-order integrity* of the stream sequence as recorded; it does not prove *completeness* against a compromised gateway (receipts derive from gateway export — ADR-0021 D1's boundary, restated here rather than glossed) — the compensating controls are the split-mode tap, gateway attestation (SVID), and the gap counters that make `ReceiptsDegraded` visible.
 2. **Retention & reporting** — 6-year tiering of receipts + bodies to object storage (lifecycle policy shipped, not hand-rolled); **access-review reports** (who could reach what, from CR-derived tuples + Grant CRs + contextual role definitions — 24), **activity reports** (per-user/per-agent PHI-touching actions from the audit index), and **breach-support export** (a scoped, signed evidence bundle for an incident window). All as Jobs writing signed artifacts.
 
 ## 5. Pack contents
@@ -46,7 +46,7 @@ provides:
   dashboards: [compliance-posture.json]
 ```
 
-**Application path — declare → review → apply → verify (r1 f3)**: the `profile` facet **never mutates chart values** (design 07 owns them under signed charts, pre-hooks, golden snapshots and rollback). Instead `plume compliance enable`'s **preflight** emits the exact **values delta for a GitOps commit**; the human applies it through the normal chart path; the **posture document** then *verifies* those values are in effect (drift ⇒ `ComplianceViolation`). The facet's other outputs are CR-shaped and reconcile normally. The `profile` facet compiles to: the required-values declaration, admission policies (the §3 mandatory rules), and the **posture document** the operator reconciles — every setting it mandates is checkable, and `plume compliance status` renders pass/fail per safeguard row with the CR/setting that proves it.
+**Application path — declare → review → apply → verify (r1 f3)**: the `profile` facet **never mutates chart values** (design 07 owns them under signed charts, pre-hooks, golden snapshots and rollback). Instead `assayd compliance enable`'s **preflight** emits the exact **values delta for a GitOps commit**; the human applies it through the normal chart path; the **posture document** then *verifies* those values are in effect (drift ⇒ `ComplianceViolation`). The facet's other outputs are CR-shaped and reconcile normally. The `profile` facet compiles to: the required-values declaration, admission policies (the §3 mandatory rules), and the **posture document** the operator reconciles — every setting it mandates is checkable, and `assayd compliance status` renders pass/fail per safeguard row with the CR/setting that proves it.
 
 ## 6. What a profile cannot do (the section that keeps the claim honest)
 
@@ -68,7 +68,7 @@ This list is a deliverable, not a disclaimer: an auditor reading it learns exact
 | Mandatory setting drifts (CR or values) | Admission rejects the change; if applied out-of-band, `ComplianceViolation` + the posture doc's failing row names it |
 | Chain break detected | `ChainIntegrityFailed` (page); verify report names the sequence; no auto-repair, ever (a self-healing audit chain is not an audit chain) |
 | Retention tiering fails | `RetentionDegraded`; receipts stay in the hot store (never dropped on a tiering error — retention failures must not become deletion) |
-| Enabling the profile on a non-conforming install | `plume compliance enable` runs a **preflight** listing every violation first; no partial enablement |
+| Enabling the profile on a non-conforming install | `assayd compliance enable` runs a **preflight** listing every violation first; no partial enablement |
 | Report Job fails | Retried; reports are artifacts with digests — a missing report is visible, not assumed |
 
 ## 8. Security
@@ -82,7 +82,7 @@ Preflight fixture (non-conforming install ⇒ complete violation list); mandator
 ## 10. Decisions for async review
 
 - **D1 — The profile is a pack**, requesting one new closed-catalog facet kind (`profile`) — the exception is named, not smuggled.
-- **D2 — Hash-chaining and retention land in core (flag-gated); the enterprise product is packaging, reporting, and support** — ADR-0015's rule, honored precisely and **checkably (r1 f5)**: an OSS user can enable chaining and run `plume compliance verify` standalone — tamper-evident receipts require no license. Enterprise adds the profile bundle, mandatory-settings enforcement, the reports, and support.
+- **D2 — Hash-chaining and retention land in core (flag-gated); the enterprise product is packaging, reporting, and support** — ADR-0015's rule, honored precisely and **checkably (r1 f5)**: an OSS user can enable chaining and run `assayd compliance verify` standalone — tamper-evident receipts require no license. Enterprise adds the profile bundle, mandatory-settings enforcement, the reports, and support.
 - **D3 — Chain integrity is never auto-repaired**, and its limits (order-integrity, not completeness) are stated to auditors.
 - **D4 — §6 "what it cannot do" ships in the product**, not just the docs.
 

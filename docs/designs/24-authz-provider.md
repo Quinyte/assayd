@@ -39,7 +39,7 @@ Deliberately **coarse**: objects are CRs (agents, tools, graphs), not rows — e
 
 Two producers, no third:
 
-1. **Operator-reconciled tuples** (owned, rebuildable — CR-resident facts only): `Agent.tools` → `can_call`; `expose` consumers → `can_invoke`; Workflow triggers → `can_trigger`; App role *definitions*. **User↔role/member relations are NOT tuples** (r1 f1 — group claims live in tokens, not CRs, and core has no directory sync): they resolve as **contextual tuples at check time** — the ext-authz adapter passes the verified JWT's group/role claims into the FGA check request (OpenFGA-native contextual tuples; research note updated) — no sync, no staleness, revocation rides token lifetime (already the stated number). Named-user exceptions outside IdP groups remain Grant CRs. `plume authz rebuild` reconstructs exactly the CR-derived set.
+1. **Operator-reconciled tuples** (owned, rebuildable — CR-resident facts only): `Agent.tools` → `can_call`; `expose` consumers → `can_invoke`; Workflow triggers → `can_trigger`; App role *definitions*. **User↔role/member relations are NOT tuples** (r1 f1 — group claims live in tokens, not CRs, and core has no directory sync): they resolve as **contextual tuples at check time** — the ext-authz adapter passes the verified JWT's group/role claims into the FGA check request (OpenFGA-native contextual tuples; research note updated) — no sync, no staleness, revocation rides token lifetime (already the stated number). Named-user exceptions outside IdP groups remain Grant CRs. `assayd authz rebuild` reconstructs exactly the CR-derived set.
 2. **Grant CRs** (ad-hoc, auditable): `kind: Grant {subject, relation, object, expiry?}` — GitOps-reviewed, receipted, expirable. **No hand-written tuples, ever** — the FGA API's write surface is operator-only (network-policied), so the audit story stays whole.
 
 ## 5. The ext-authz adapter
@@ -50,7 +50,7 @@ Envoy-compatible `Check` gRPC (agentgateway OSS capability, cited): maps (SVID /
 
 - **Plus tier** (with OpenFGA). **Core tier**: layer 2 absent — compiled policy (layers 1+3) is the whole story, surfaced as `ReBACAvailable=False` at install (the `GatesSkipped` honesty pattern; no silent difference between tiers).
 - **FGA/adapter down**: routes carrying the ext-authz policy **fail closed** (403 + `AuthzUnavailable` condition); operators may pre-declare `authz: {failOpen: never}` — there is no fail-open knob, and that's a decision, not an omission.
-- Enabling ReBAC on a running install: `plume authz enable` → rebuild tuples from CRs → shadow mode (checks evaluated + logged, not enforced — `wouldDeny` metric) → enforce. Shadow-first is mandatory (the design-20 "learn before you act" pattern applied to authz).
+- Enabling ReBAC on a running install: `assayd authz enable` → rebuild tuples from CRs → shadow mode (checks evaluated + logged, not enforced — `wouldDeny` metric) → enforce. Shadow-first is mandatory (the design-20 "learn before you act" pattern applied to authz).
 
 ## 7. Failure modes
 

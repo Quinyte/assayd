@@ -11,9 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // The end-to-end shape of Codex r7 BLOCKER 1, against a real API server.
@@ -32,12 +32,12 @@ import (
 // matters.
 // pinnedCollidingSpecs is the pair from internal/revision/collision_test.go:
 // two specs naming different images that project to one revision NAME.
-func pinnedCollidingSpecs() (safe, evil plumev1alpha1.AgentSpec) {
-	safe = plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{
+func pinnedCollidingSpecs() (safe, evil assaydv1alpha1.AgentSpec) {
+	safe = assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{
 		Image: "ghcr.io/acme/agent@sha256:a100000000000000000000000000000000000000000000000000000000000001",
 		Port:  8080,
 		Env:   []corev1.EnvVar{{Name: "PAD", Value: "1917962"}}}}
-	evil = plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{
+	evil = assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{
 		Image: "ghcr.io/attacker/backdoor@sha256:b200000000000000000000000000000000000000000000000000000000000002",
 		Port:  8080,
 		Env:   []corev1.EnvVar{{Name: "PAD", Value: "x216079"}}}}
@@ -52,7 +52,7 @@ func TestACollidingSpecCannotRewriteAGatedWorkload(t *testing.T) {
 	name := controller.WorkloadName("collide", revision.MustHash(safe))
 
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "collide", func(a *plumev1alpha1.Agent) { a.Spec = safe })
+	a := mustCreateAgent(t, ns, "collide", func(a *assaydv1alpha1.Agent) { a.Spec = safe })
 	r := newReconciler(false)
 	settle(t, r, a)
 	markAvailable(t, ns, name, 1)
@@ -66,7 +66,7 @@ func TestACollidingSpecCannotRewriteAGatedWorkload(t *testing.T) {
 	}
 
 	// The attack: same revision NAME, different image.
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -86,22 +86,22 @@ func TestACollidingSpecCannotRewriteAGatedWorkload(t *testing.T) {
 			"ADR-0006 is bypassed entirely and status still names the revision that passed.", img)
 	}
 
-	var after plumev1alpha1.Agent
+	var after assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
-	c := condition(&after, plumev1alpha1.CondRevisionHashCollision)
+	c := condition(&after, assaydv1alpha1.CondRevisionHashCollision)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Errorf("no RevisionHashCollision condition: the operator refused the write and said nothing, " +
 			"which NFR-8 forbids — a degraded path names its consequence")
 	}
-	if ready := condition(&after, plumev1alpha1.CondReady); ready == nil || ready.Status != metav1.ConditionFalse {
+	if ready := condition(&after, assaydv1alpha1.CondReady); ready == nil || ready.Status != metav1.ConditionFalse {
 		t.Error("Ready stayed True while the operator was refusing to converge the agent's own spec")
 	}
 }
 
 // Status, not the Deployment, is the authority. A code review found the first
-// version of this guard read only a plume.dev/revision-digest annotation off the
+// version of this guard read only a assayd.dev/revision-digest annotation off the
 // Deployment — closing the collision against an agents/update principal and
 // leaving it open to a WEAKER deployments/patch one, who could set the
 // annotation to the digest of the spec they were about to write, or delete it
@@ -139,7 +139,7 @@ func TestACollidingSpecIsRefusedWithNoWorkloadAndWithAStrippedAnnotation(t *test
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ns := newNamespace(t)
-			a := mustCreateAgent(t, ns, "guard", func(a *plumev1alpha1.Agent) { a.Spec = safe })
+			a := mustCreateAgent(t, ns, "guard", func(a *assaydv1alpha1.Agent) { a.Spec = safe })
 			r := newReconciler(false)
 			settle(t, r, a)
 			workload := controller.WorkloadName("guard", revision.MustHash(safe))
@@ -151,7 +151,7 @@ func TestACollidingSpecIsRefusedWithNoWorkloadAndWithAStrippedAnnotation(t *test
 
 			tc.sabotage(t, ns, workload)
 
-			var live plumev1alpha1.Agent
+			var live assaydv1alpha1.Agent
 			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 				t.Fatalf("get agent: %v", err)
 			}
@@ -161,11 +161,11 @@ func TestACollidingSpecIsRefusedWithNoWorkloadAndWithAStrippedAnnotation(t *test
 			}
 			reconcileOnce(t, r, &live)
 
-			var after plumev1alpha1.Agent
+			var after assaydv1alpha1.Agent
 			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 				t.Fatalf("get agent: %v", err)
 			}
-			if c := condition(&after, plumev1alpha1.CondRevisionHashCollision); c == nil ||
+			if c := condition(&after, assaydv1alpha1.CondRevisionHashCollision); c == nil ||
 				c.Status != metav1.ConditionTrue {
 				t.Errorf("no collision reported with the %s: the guard depended on the "+
 					"Deployment, which the attacking principal controls", tc.name)
@@ -177,7 +177,7 @@ func TestACollidingSpecIsRefusedWithNoWorkloadAndWithAStrippedAnnotation(t *test
 			// CondDegraded is owned and non-sticky, so a branch that sets the phase
 			// and says nothing actively clears it — and a suspected chosen collision
 			// is the worst state this machine has.
-			if d := condition(&after, plumev1alpha1.CondDegraded); d == nil ||
+			if d := condition(&after, assaydv1alpha1.CondDegraded); d == nil ||
 				d.Status != metav1.ConditionTrue {
 				t.Error("phase went Degraded and CondDegraded did not: every alert keyed on the " +
 					"condition goes quiet at exactly the wrong moment")
@@ -192,15 +192,15 @@ func TestACollidingSpecIsRefusedWithNoWorkloadAndWithAStrippedAnnotation(t *test
 func TestACollisionClearsWhenTheSpecIsRepaired(t *testing.T) {
 	safe, evil := pinnedCollidingSpecs()
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "repair", func(a *plumev1alpha1.Agent) { a.Spec = safe })
+	a := mustCreateAgent(t, ns, "repair", func(a *assaydv1alpha1.Agent) { a.Spec = safe })
 	r := newReconciler(false)
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("repair", revision.MustHash(safe)), 1)
 	settle(t, r, a)
 
-	set := func(t *testing.T, spec plumev1alpha1.AgentSpec) plumev1alpha1.Agent {
+	set := func(t *testing.T, spec assaydv1alpha1.AgentSpec) assaydv1alpha1.Agent {
 		t.Helper()
-		var live plumev1alpha1.Agent
+		var live assaydv1alpha1.Agent
 		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 			t.Fatalf("get agent: %v", err)
 		}
@@ -209,14 +209,14 @@ func TestACollisionClearsWhenTheSpecIsRepaired(t *testing.T) {
 			t.Fatalf("update: %v", err)
 		}
 		reconcileOnce(t, r, &live)
-		var got plumev1alpha1.Agent
+		var got assaydv1alpha1.Agent
 		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
 			t.Fatalf("get agent: %v", err)
 		}
 		return got
 	}
 
-	if c := condition(ptr(set(t, evil)), plumev1alpha1.CondRevisionHashCollision); c == nil ||
+	if c := condition(ptr(set(t, evil)), assaydv1alpha1.CondRevisionHashCollision); c == nil ||
 		c.Status != metav1.ConditionTrue {
 		t.Fatal("setup: the colliding spec did not raise the condition")
 	}
@@ -226,7 +226,7 @@ func TestACollisionClearsWhenTheSpecIsRepaired(t *testing.T) {
 	repaired.Runtime.Image = "ghcr.io/acme/agent@sha256:5669fbc273a09c85000000000000000000000000000000000000000000000000"
 	after := set(t, repaired)
 
-	if c := condition(&after, plumev1alpha1.CondRevisionHashCollision); c != nil &&
+	if c := condition(&after, assaydv1alpha1.CondRevisionHashCollision); c != nil &&
 		c.Status == metav1.ConditionTrue {
 		t.Errorf("the collision condition survived the repair, with message: %s\n"+
 			"A stale True on a healthy agent is the loud-and-wrong of rule 8, and it is what "+
@@ -234,7 +234,7 @@ func TestACollisionClearsWhenTheSpecIsRepaired(t *testing.T) {
 	}
 }
 
-func ptr(a plumev1alpha1.Agent) *plumev1alpha1.Agent { return &a }
+func ptr(a assaydv1alpha1.Agent) *assaydv1alpha1.Agent { return &a }
 
 // The annotation is corroboration, and this is the one case where it is the ONLY
 // evidence: the workload is stamped and status carries no digest for that name,
@@ -248,14 +248,14 @@ func ptr(a plumev1alpha1.Agent) *plumev1alpha1.Agent { return &a }
 func TestAStampedWorkloadIsNotAdoptedWhenStatusHasNoRecord(t *testing.T) {
 	safe, evil := pinnedCollidingSpecs()
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "norecord", func(a *plumev1alpha1.Agent) { a.Spec = safe })
+	a := mustCreateAgent(t, ns, "norecord", func(a *assaydv1alpha1.Agent) { a.Spec = safe })
 	r := newReconciler(false)
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("norecord", revision.MustHash(safe)), 1)
 	settle(t, r, a)
 
 	// Status forgets; the cluster does not.
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -273,11 +273,11 @@ func TestAStampedWorkloadIsNotAdoptedWhenStatusHasNoRecord(t *testing.T) {
 	}
 	reconcileOnce(t, r, &live)
 
-	var after plumev1alpha1.Agent
+	var after assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
-	if c := condition(&after, plumev1alpha1.CondRevisionHashCollision); c == nil ||
+	if c := condition(&after, assaydv1alpha1.CondRevisionHashCollision); c == nil ||
 		c.Status != metav1.ConditionTrue {
 		t.Error("a workload stamped with a DIFFERENT revision digest was adopted by name because " +
 			"status had forgotten it; the new spec's image would install under the old identity")
@@ -308,7 +308,7 @@ func TestARolloutIsNotReportedReadyWhenTheActiveRevisionHasNoWorkload(t *testing
 	if err := k8s.Delete(context.Background(), &d); err != nil {
 		t.Fatalf("delete workload: %v", err)
 	}
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -318,11 +318,11 @@ func TestARolloutIsNotReportedReadyWhenTheActiveRevisionHasNoWorkload(t *testing
 	}
 	reconcileOnce(t, r, &live)
 
-	var after plumev1alpha1.Agent
+	var after assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
-	if c := condition(&after, plumev1alpha1.CondReady); c != nil && c.Status == metav1.ConditionTrue {
+	if c := condition(&after, assaydv1alpha1.CondReady); c != nil && c.Status == metav1.ConditionTrue {
 		t.Errorf("Ready=True with reason %q while the active revision has no workload at all. "+
 			"Nothing is serving, and the message says something is.", c.Reason)
 	}
@@ -405,11 +405,11 @@ func TestAStrippedStampOnAVouchedWorkloadSelfHeals(t *testing.T) {
 	if d.Annotations[controller.RevisionDigestAnnotation] != revision.MustDigest(a.Spec) {
 		t.Error("the workload was not re-stamped, so the next pass refuses it again")
 	}
-	var after plumev1alpha1.Agent
+	var after assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
-	if c := condition(&after, plumev1alpha1.CondRevisionHashCollision); c != nil &&
+	if c := condition(&after, assaydv1alpha1.CondRevisionHashCollision); c != nil &&
 		c.Status == metav1.ConditionTrue {
 		t.Error("a workload status vouches for was reported as a collision")
 	}
@@ -436,7 +436,7 @@ func TestAnUnvouchedUnstampedWorkloadIsRefused(t *testing.T) {
 		t.Fatalf("strip: %v", err)
 	}
 	// Status forgets, so nothing non-forgeable vouches for the pair.
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -447,11 +447,11 @@ func TestAnUnvouchedUnstampedWorkloadIsRefused(t *testing.T) {
 	}
 	reconcileOnce(t, r, a)
 
-	var after plumev1alpha1.Agent
+	var after assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
-	if c := condition(&after, plumev1alpha1.CondRevisionHashCollision); c == nil ||
+	if c := condition(&after, assaydv1alpha1.CondRevisionHashCollision); c == nil ||
 		c.Status != metav1.ConditionTrue {
 		t.Error("a workload nothing vouches for was adopted")
 	}
@@ -488,7 +488,7 @@ func TestAnUnstampedAvailableWorkloadDoesNotPromote(t *testing.T) {
 	}
 	markAvailable(t, ns, name, 1)
 
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestAnUnstampedAvailableWorkloadDoesNotPromote(t *testing.T) {
 	}
 	reconcileOnce(t, r, a)
 
-	var after plumev1alpha1.Agent
+	var after assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -522,7 +522,7 @@ func TestARevisionThatBecomesActiveAgainLeavesTheAbandonedList(t *testing.T) {
 
 	set := func(t *testing.T, image string) {
 		t.Helper()
-		var live plumev1alpha1.Agent
+		var live assaydv1alpha1.Agent
 		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 			t.Fatalf("get agent: %v", err)
 		}
@@ -539,7 +539,7 @@ func TestARevisionThatBecomesActiveAgainLeavesTheAbandonedList(t *testing.T) {
 		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") // A -> B
 	set(t, firstSpec.Image) // B -> A
 
-	var after plumev1alpha1.Agent
+	var after assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}

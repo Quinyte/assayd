@@ -105,11 +105,11 @@ func TestTheCardIsByteStableAcrossFetches(t *testing.T) {
 // agent and get an answer.
 func TestItAnswersATask(t *testing.T) {
 	t.Setenv("AGENT_NAME", "answerer")
-	t.Setenv("PLUME_GATEWAY_URL", "http://gw.plume:8080")
+	t.Setenv("ASSAYD_GATEWAY_URL", "http://gw.assayd:8080")
 	srv := httptest.NewServer(handler())
 	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/plume-test/echo", "application/json",
+	resp, err := http.Post(srv.URL+"/assayd-test/echo", "application/json",
 		strings.NewReader(`{"message":{"parts":[{"text":"hello"}]}}`))
 	if err != nil {
 		t.Fatalf("post task: %v", err)
@@ -137,8 +137,8 @@ func TestItAnswersATask(t *testing.T) {
 	}
 	// Reported, never dialled: an e2e can prove the operator's injected contract
 	// reached the container without a gateway existing.
-	if out.Gateway != "http://gw.plume:8080" {
-		t.Errorf("PLUME_GATEWAY_URL was not reported back: %q", out.Gateway)
+	if out.Gateway != "http://gw.assayd:8080" {
+		t.Errorf("ASSAYD_GATEWAY_URL was not reported back: %q", out.Gateway)
 	}
 	if len(out.Artifacts) == 0 || out.Artifacts[0].Parts[0].Text != "echo: hello" {
 		t.Errorf("unexpected artifacts: %+v", out.Artifacts)

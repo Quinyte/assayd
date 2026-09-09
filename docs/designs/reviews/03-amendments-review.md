@@ -66,7 +66,7 @@ poll can apply old routes after reconcile N+1 installed new isolation policies.
 pricing); `<provider>/<model>` split undefined and `revision.go:66` already
 documents the slash hazard; `capacity = rate × 3600` overshoots the daily budget
 by 4.17%, breaking the "cuts early, never late" invariant the same section
-invokes; `plume doctor reports the tier gap` has no mechanism in design 08 §7;
+invokes; `assayd doctor reports the tier gap` has no mechanism in design 08 §7;
 the registry cannot express a Backend restriction, so ADR-0014's BAA control is
 outside its stated extension point; classifying `egressAllowlist` as behaviour
 makes a BAA change a fleet-wide eval cycle with no exemption for the urgent

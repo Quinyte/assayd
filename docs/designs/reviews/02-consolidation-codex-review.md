@@ -10,7 +10,7 @@ The rewrite removed the amendment-reading burden. It did not produce a closed de
 
 ### BLOCKER 1 — `runtime.resources` is a direct behavioural input through `resourceFieldRef`, not merely capacity
 
-**Files:** `docs/designs/02-agent-crd-operator.md:287`, `:304`; `config/crd/plume.dev_agents.yaml:632`; `internal/revision/leaves.go:258-261`
+**Files:** `docs/designs/02-agent-crd-operator.md:287`, `:304`; `config/crd/assayd.dev_agents.yaml:632`; `internal/revision/leaves.go:258-261`
 
 The design classifies `runtime.resources` as policy surface and justifies the live edit as capacity whose regressions design 20 will detect. The admitted `runtime.env` schema contains Kubernetes `resourceFieldRef`, however. An approved image can branch on an environment variable sourced from `limits.cpu`, `limits.memory`, or the corresponding request. The selector is hashed, but the resource value it resolves is not.
 
@@ -104,7 +104,7 @@ Design 02 consumes a “per-agent” daily spend aggregate as the hard budget ba
 
 **Files:** `docs/designs/02-agent-crd-operator.md:527-529`; `docs/designs/09-sdk-templates.md:21-28`; `internal/controller/agent_controller.go:941-971`
 
-Section 11 says design 02 owns injection of `PLUME_GATEWAY_URL`, `PLUME_KG_ENDPOINTS`, `PLUME_NATS_URL`, and tenant credentials. The consolidated body contains no contract for their sources, requiredness, Secret shape, per-revision behavior, or disabled-tier values. The workload renderer only copies user `env`/`envFrom`; it injects none of them. Design 09's reference SDK consumes these variables and uses `PLUME_NATS_URL` for the shared task-state store that makes `replicas>1` safe.
+Section 11 says design 02 owns injection of `ASSAYD_GATEWAY_URL`, `ASSAYD_KG_ENDPOINTS`, `ASSAYD_NATS_URL`, and tenant credentials. The consolidated body contains no contract for their sources, requiredness, Secret shape, per-revision behavior, or disabled-tier values. The workload renderer only copies user `env`/`envFrom`; it injects none of them. Design 09's reference SDK consumes these variables and uses `ASSAYD_NATS_URL` for the shared task-state store that makes `replicas>1` safe.
 
 **Concrete failure:** a template-built Agent starts, advertises shared task state, and the operator may clear `TaskStateUnverified` after card support lands, but every replica lacks the NATS address/credential and falls back to local state. A2A collaboration, KG access, and task continuity fail despite the contract being presented as operator-owned.
 
@@ -168,7 +168,7 @@ The design says wrong bytes produce `RevisionMaterialCollision`. The reconciler 
 
 The body says name is deletion authority and labels are corroboration, and it explicitly permits/restamps metadata drift. Both workload and material enumeration prefilter by mutable labels before applying the name check. An object whose label is removed is invisible to finalization; normal reconcile would repair it, but deletion can race before that repair.
 
-**Concrete failure:** strip `plume.dev/agent-uid` from an immutable Secret copy, then delete the Agent while another Agent keeps the shared run namespace alive. The finalizer releases and the Secret survives indefinitely with credential bytes. The same shape on a Deployment leaves a workload running after its authorizing Agent is gone.
+**Concrete failure:** strip `assayd.dev/agent-uid` from an immutable Secret copy, then delete the Agent while another Agent keeps the shared run namespace alive. The finalizer releases and the Secret survives indefinitely with credential bytes. The same shape on a Deployment leaves a workload running after its authorizing Agent is gone.
 
 **Fix:** enumerate from a non-forgeable/recorded set rather than a mutable-label selector. Persist exact created object names per retained revision, or list the bounded run namespace and apply the deterministic name shape plus status digest/UID checks before deletion. Add tests that strip each metadata key immediately before Agent deletion while a sibling retains the namespace.
 
@@ -176,7 +176,7 @@ The body says name is deletion authority and labels are corroboration, and it ex
 
 **Files:** `docs/designs/02-agent-crd-operator.md:87-95`; `docs/designs/03-policy-compiler.md:74-95` at `af1f1c9`
 
-Design 02 says inline below 4 KiB and by-reference above it. At the same snapshot, design 03's A51 text says the producer input is bounded plume CR data and concludes one inline form, while older paragraphs in design 03 still contradict it. Design 03 marks itself RE-OPENED and instructs consolidation against A51, not the stale storage table.
+Design 02 says inline below 4 KiB and by-reference above it. At the same snapshot, design 03's A51 text says the producer input is bounded assayd CR data and concludes one inline form, while older paragraphs in design 03 still contradict it. Design 03 marks itself RE-OPENED and instructs consolidation against A51, not the stale storage table.
 
 **Concrete failure:** an implementer creates `<agent>-<revision>-inputs` ConfigMaps because design 02 is called authoritative, while the compiler writes inline only. The objects have no agreed writer/reader/GC contract and can leak resolved policy data.
 
@@ -186,7 +186,7 @@ Design 02 says inline below 4 KiB and by-reference above it. At the same snapsho
 
 **Files:** `docs/architecture.md:81-103`, `:177-191`, `:434-453`; `api/v1alpha1/agent_types.go:44-57`; `internal/controller/agent_controller.go:953-960`; `docs/designs/02-agent-crd-operator.md:38`, `:259`, `:475`
 
-Canonical architecture's Agent example uses a mutable image tag, `2M` for an int64, and numeric `usdPerDay`; the admitted CRD requires a digest, integer, and decimal string. Architecture says every hop crosses the gateway while P1 deliberately ships `gateway.enabled: false`, and says signed images are enforced by a built-in VAP while this body correctly says no verifier ships. The generated API comment still says at least one gate is required in prod although the reconciler explicitly promotes with none, and calls the receipt tier exact although ADR-0028 retracts exact USD. The controller comment says plume permits tags next to code that can only receive a digest-pinned image.
+Canonical architecture's Agent example uses a mutable image tag, `2M` for an int64, and numeric `usdPerDay`; the admitted CRD requires a digest, integer, and decimal string. Architecture says every hop crosses the gateway while P1 deliberately ships `gateway.enabled: false`, and says signed images are enforced by a built-in VAP while this body correctly says no verifier ships. The generated API comment still says at least one gate is required in prod although the reconciler explicitly promotes with none, and calls the receipt tier exact although ADR-0028 retracts exact USD. The controller comment says assayd permits tags next to code that can only receive a digest-pinned image.
 
 **Concrete failure:** users copy the canonical manifest and admission rejects it; users trust `kubectl explain` and believe a missing gate is prevented or a USD ceiling exact when neither is true.
 
@@ -202,7 +202,7 @@ Canonical architecture's Agent example uses a mutable image tag, `2M` for an int
 
 **Concrete failure:** a controller consumer waits on a documented condition that cannot occur, or a future implementer reuses the name with incompatible semantics.
 
-**Fix:** remove it before release, or document the same compatibility-only clearing rationale and prove a stale `True` is cleared. Because plume is unreleased, removal is cleaner.
+**Fix:** remove it before release, or document the same compatibility-only clearing rationale and prove a stale `True` is cleared. Because assayd is unreleased, removal is cleaner.
 
 ### MINOR 2 — ADR-0019 still presents `revisionHistoryLimit` as a field
 
@@ -227,9 +227,9 @@ All temporary edits were restored from `/tmp` backup copies; no `git checkout` w
 | M3 | Change only the four `runtime.resources` leaves from `inPlace` to `mints` | **KILLED** by all four corresponding leaf cases | The projection omission is pinned once the inventory accounts for the behaviour reachable through `resourceFieldRef` |
 | M4 | Emit `RevisionMaterialCollision` instead of `RevisionMaterialUnavailable` for typed material collisions | **KILLED** by `TestMaterialWithTheRightProvenanceAndWrongContentIsRefused` | The test is coupled to the implementation's wrong condition type; matching the design fails it |
 | M5 | Delete the default-deny NetworkPolicy row from §5 | **SURVIVED** `go test ./test/docs/... -count=1` | The “complete unenforced list” has no independent fixture catalog; deleting a load-bearing disclosure is invisible |
-| R1 | Temporary envtest: create a revision Secret, strip only `plume.dev/agent-uid`, delete its Agent while a sibling retains the run namespace | **REPRODUCED** | Finalization releases while the Secret copy remains; label prefiltering defeats the stated name-authority cleanup |
+| R1 | Temporary envtest: create a revision Secret, strip only `assayd.dev/agent-uid`, delete its Agent while a sibling retains the run namespace | **REPRODUCED** | Finalization releases while the Secret copy remains; label prefiltering defeats the stated name-authority cleanup |
 | R2 | Repository-wide search for Service constructors/reconcile paths, followed by the full green gate | **REPRODUCED** | No Agent Service exists and no test requires one; e2e explicitly stops at a running `pause` Pod |
-| R3 | Repository-wide search for rollback API/CLI and injected `PLUME_*` variables | **REPRODUCED** | Neither claimed interface has an implementation or a complete declarative socket |
+| R3 | Repository-wide search for rollback API/CLI and injected `ASSAYD_*` variables | **REPRODUCED** | Neither claimed interface has an implementation or a complete declarative socket |
 
 ## Disagreement with the same-family consolidation critique
 

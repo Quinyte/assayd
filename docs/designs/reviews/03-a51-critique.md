@@ -1,7 +1,7 @@
 # Design 03 A51 — independent adversarial critique
 
 - **Scope**: design 03 amendment **A51** (`docs/designs/03-policy-compiler.md:737`, plus the body edits at `:3`, `:81`, `:106`, `:353`, `:355`, `:364`, `:444`), the note it plants in `docs/designs/11-connector-crd.md:99`, `ADR-0014` Amendment 1, and the four cross-design contradiction fixes in commit `af1f1c9` (designs 20, 03, 23, `architecture.md`). Includes the one uncommitted follow-up edit to `:81` and `:737`.
-- **Read cold** against designs 01, 02, 04, 11, 13, 20, 23, 26, `docs/architecture.md`, `docs/research/agentgateway-v1.4.1-2026-08.md`, `docs/research/agentgateway-otlp-attributes-2026-09.md`, `charts/plume/templates/admission.yaml`, `internal/controller/`.
+- **Read cold** against designs 01, 02, 04, 11, 13, 20, 23, 26, `docs/architecture.md`, `docs/research/agentgateway-v1.4.1-2026-08.md`, `docs/research/agentgateway-otlp-attributes-2026-09.md`, `charts/assayd/templates/admission.yaml`, `internal/controller/`.
 - **Verdict: REVISE — 3 BLOCKER, 7 MAJOR, 3 MINOR.**
 
 **A51's central diagnosis is correct, verified, and worth having.** `git show HEAD~1:docs/designs/03-policy-compiler.md` line 106 read *"the resolved tool server's advertised tool set (design 11 §4) — **not** an `AgentSpec` field"*. Checked against the producing document: the field is declared at `11:30` as `toolAllowlist: [read_claim, search_claims]     # narrows what the server offers`, inside §3 "CRD schema"; the cited anchor `11:49` says *"design 03 emits `AgentgatewayBackend` and tool-filter policy from `toolAllowlist`"*. `grep -io 'advertis[a-z]*' docs/designs/11-connector-crd.md` returns exactly one hit — line 99, text this same commit wrote. `tools/list` appears nowhere in design 11. The premise was false in both halves and five amendments rested on it. That finding stands.
@@ -68,11 +68,11 @@ The commit then states the rule three incompatible ways across two documents:
 
 The size-bound row, rewritten by A51 (including the uncommitted follow-up):
 
-> **A51 narrows this.** The premise that `resolvedInputs` has no bound plume can impose was checked against design 11 and does not survive … **So the sealed value is stored inline, in one form.** (`03:81`)
+> **A51 narrows this.** The premise that `resolvedInputs` has no bound assayd can impose was checked against design 11 and does not survive … **So the sealed value is stored inline, in one form.** (`03:81`)
 
 Six lines later, untouched, opening on the exact premise A51 falsified:
 
-> **Where the sealed value lives, and why it is not always the same place (A47).** **The sealed value has no bound plume may impose — a tool catalogue is design 11's to size** — so status is the wrong home for the large case. But the object that would replace it is not always reachable … the deciding property is **mode, not size** (`03:87`)
+> **Where the sealed value lives, and why it is not always the same place (A47).** **The sealed value has no bound assayd may impose — a tool catalogue is design 11's to size** — so status is the wrong home for the large case. But the object that would replace it is not always reachable … the deciding property is **mode, not size** (`03:87`)
 
 followed by a three-row table specifying `by reference` above 4 KiB (`03:91`), and a paragraph specifying the replacement `ConfigMap`, its name, its labels, its immutability, its 1 MiB residual bound, and an "**Owed to design 02**: extend that name-shape authority to cover `-inputs`" (`03:95`). None of it was deleted. `03:87` contains verbatim the sentence A51 says "does not survive".
 
@@ -120,11 +120,11 @@ This is status on the Agent's **own** CR, written by a controller during an inci
 
 ### MAJOR 3 — "the producer can be edited under review" is a bound nothing enforces
 
-**Files:** `docs/designs/03-policy-compiler.md:353` · `:355` · `:737` · `charts/plume/templates/admission.yaml` · `docs/designs/11-connector-crd.md:58`
+**Files:** `docs/designs/03-policy-compiler.md:353` · `:355` · `:737` · `charts/assayd/templates/admission.yaml` · `docs/designs/11-connector-crd.md:58`
 
 A51 softens A25 on the strength of a review that does not exist: *"the producer **can be edited under review**"* (`03:353`). I looked for it.
 
-- The repository contains exactly two admission policies (`charts/plume/templates/admission.yaml`): `plume-namespace-labels`, which reserves the `plume.dev/*` namespace labels to the operator SAs, and `plume-gateway-routes`, which restricts HTTPRoute authorship on the plume Gateway. Neither matches `Connector`.
+- The repository contains exactly two admission policies (`charts/assayd/templates/admission.yaml`): `assayd-namespace-labels`, which reserves the `assayd.dev/*` namespace labels to the operator SAs, and `assayd-gateway-routes`, which restricts HTTPRoute authorship on the assayd Gateway. Neither matches `Connector`.
 - `grep -rniI "ValidatingAdmission|MutatingWebhook|admissionregistration" charts/ config/ internal/ api/ cmd/` returns only those two policies and their RBAC. There is no webhook anywhere.
 - Design 11's only admission clause is signed-image: *"Catalog image unsigned | Admission rejects (same bar as agents)"* (`11:58`). It says nothing about who may edit `spec.tool.toolAllowlist`, and design 11 §11 (`11:92`) records that even the *name-uniqueness* rule three designs assume "is enforced at admission" has no enforcement in this repository.
 - Design 11 defines no revision, gate or approval on a Connector spec edit. Design 02's revision gate keys on `AgentSpec`.
@@ -133,7 +133,7 @@ So a Connector spec edit is an ordinary `kubectl apply` by anyone with RBAC edit
 
 The operational hole is still closed, by A37's freeze, not by any review. Say that.
 
-**Fix:** replace *"the producer can be edited under review"* at `03:353` with what is true: *"the producer is an ordinary namespaced CR edit with no gate, no revision and no admission check — verified against design 11 and `charts/plume/templates/admission.yaml`, which carries two policies, neither touching `Connector`. Nothing catches the edit; what protects R1 is A37's freeze alone."* Record on design 11 as owed: whether a `toolAllowlist` widening should require anything at all.
+**Fix:** replace *"the producer can be edited under review"* at `03:353` with what is true: *"the producer is an ordinary namespaced CR edit with no gate, no revision and no admission check — verified against design 11 and `charts/assayd/templates/admission.yaml`, which carries two policies, neither touching `Connector`. Nothing catches the edit; what protects R1 is A37's freeze alone."* Record on design 11 as owed: whether a `toolAllowlist` widening should require anything at all.
 
 ### MAJOR 4 — collapsing to inline deletes the only stated bound, and the seal is a one-shot transition
 
@@ -145,7 +145,7 @@ So after A51 the only defence against an oversized `resolvedInputs` is a schema 
 
 **Concrete failure:** a connector to a large system-of-record declares 3,000 tool names. Four retained revisions × ~60 KB of names ≈ 240 KB of `resolvedInputs` in one Agent's status, on top of four `behaviourProjection`s. Push it further — a generated allowlist, several bound connectors — and the status update exceeds etcd's object limit and is rejected. `03:79` makes that unrecoverable: *"The seal is a **transition, evaluated once** … Nothing seals before that instant and **nothing seals after it**."* The revision goes active, the seal write fails, and there is no second attempt. The Agent serves with no sealed operand, and `03:380` says an unsealed active binding withholds the capability — permanently, with no condition naming a size. NFR-8 says a degraded path is never silent; this one is silent about the actual cause.
 
-**Fix:** state a plume-side bound on the inline form that does not depend on design 11 shipping — the 4 KiB threshold A51 is deleting is already the right number — with the compile error `03:92` already specifies, and add the §5 row. Then keep design 11's `maxItems` as the *producer-side* bound so the number is the producer's rather than plume's, which is A51's stated intent. A bound owed to an unimplemented design is not a bound.
+**Fix:** state a assayd-side bound on the inline form that does not depend on design 11 shipping — the 4 KiB threshold A51 is deleting is already the right number — with the compile error `03:92` already specifies, and add the §5 row. Then keep design 11's `maxItems` as the *producer-side* bound so the number is the producer's rather than assayd's, which is A51's stated intent. A bound owed to an unimplemented design is not a bound.
 
 ### MAJOR 5 — A51 consolidates onto a status write without opening design 26, which forbids that write in hard mode
 
@@ -177,7 +177,7 @@ This commit's stated purpose includes fixing *"Four self-contradictions from the
 
 Design 20 A7 was corrected (`20:81`). Design 03 §5's withdrawal row was corrected (`03:444`). Design 03 §11's A50 entry was **not**, and still reads:
 
-> design 04 A4 adds the field and names **no** agentgateway OTLP attribute, no plume-owned stamping mechanism and no grammar for it … so the check had no input … A40's canary attributes by the full endpoint identity in the receipt, which is `hop.endpoint` — **the other field with no producer** — so **`llmFallbackActive` cannot legitimately go true on any cluster today**, one replica or many (`03:738`)
+> design 04 A4 adds the field and names **no** agentgateway OTLP attribute, no assayd-owned stamping mechanism and no grammar for it … so the check had no input … A40's canary attributes by the full endpoint identity in the receipt, which is `hop.endpoint` — **the other field with no producer** — so **`llmFallbackActive` cannot legitimately go true on any cluster today**, one replica or many (`03:738`)
 
 Measured: `04:119` gives `hop.gatewayInstance` *"four, all default"* producers; `04:115-117` give three of `hop.endpoint`'s four parts as default. A50 as written is false in the producing document's own words, in the design under review, in a commit whose thesis is that this exact failure mode keeps recurring.
 
@@ -208,7 +208,7 @@ A drift fallback between an `azureopenai` arm and an `azure` arm on the same hos
 
 **Files:** `docs/designs/03-policy-compiler.md:737` · `docs/designs/11-connector-crd.md:10`, `:16`, `:28`, `:58`
 
-A51: *"Design 11 contains no advertised-set concept, no `tools/list` discovery and **no catalogue**"*. Design 11 uses "catalog" seven times — *"MCP catalog content (packs)"* (`11:10`), *"Artifact (catalog images)"* as a charter primitive (`11:16`), `ghcr.io/plume-catalog/fhir-mcp:1.2.0` (`11:28`), *"Catalog image unsigned | Admission rejects"* (`11:58`). It is an **image** catalog, not a tool catalogue, so A51's conclusion is unaffected — but the sentence as written is checkable and false, in an amendment whose authority is that it checked.
+A51: *"Design 11 contains no advertised-set concept, no `tools/list` discovery and **no catalogue**"*. Design 11 uses "catalog" seven times — *"MCP catalog content (packs)"* (`11:10`), *"Artifact (catalog images)"* as a charter primitive (`11:16`), `ghcr.io/assayd-catalog/fhir-mcp:1.2.0` (`11:28`), *"Catalog image unsigned | Admission rejects"* (`11:58`). It is an **image** catalog, not a tool catalogue, so A51's conclusion is unaffected — but the sentence as written is checkable and false, in an amendment whose authority is that it checked.
 
 **Fix:** *"no catalogue **of tools**"*, or *"no tool-set discovery of any kind; design 11's 'catalog' is the signed pack-image catalog (`11:28`), a different thing."*
 

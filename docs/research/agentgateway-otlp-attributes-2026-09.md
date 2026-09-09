@@ -30,7 +30,7 @@ Two corrections to standing design text fall out of this and are listed in §6.
 
 ## 1. How a span gets its attributes at all
 
-Three producers, and only three. Knowing which is which is the whole of "can plume stamp this".
+Three producers, and only three. Knowing which is which is the whole of "can assayd stamp this".
 
 1. **A fixed, hard-coded `kv` vector** built per request, then handed to `Tracer::send`.
    `crates/agentgateway/src/telemetry/log.rs#L1354-L1600`. This is the same vector that feeds the access
@@ -49,7 +49,7 @@ Three producers, and only three. Knowing which is which is the whole of "can plu
    `cel/types.rs#L601-L603`) — **no request context at all**. A resource expression can only be a
    constant. `request.*`, `backend.*`, `llm.*` all evaluate to nothing and the pair is silently dropped.
 
-**Consequence for plume, stated once**: the only per-request stamping surface is producer 2, and it lives
+**Consequence for assayd, stated once**: the only per-request stamping surface is producer 2, and it lives
 on a **Gateway-scoped** policy. A per-Agent constant cannot be stamped; only a CEL expression over
 something already in the request can.
 
@@ -59,7 +59,7 @@ something already in the request can.
 
 ### 2.1 Emitted by default
 
-| plume needs | attribute key | value at v1.4.1 | source |
+| assayd needs | attribute key | value at v1.4.1 | source |
 |---|---|---|---|
 | arm (provider) | **`gen_ai.provider.name`** | `AIProvider::provider()` | `log.rs#L1477-L1480`, `llm/mod.rs#L750-L765` |
 | model (requested) | **`gen_ai.request.model`** | the **client's** `model` field, verbatim from the request body | `log.rs#L1481-L1484`; `crates/llm/src/types/completions.rs#L328-L361` |
@@ -92,7 +92,7 @@ Sources: `crates/llm/src/azure.rs#L38,L97-L106`, `crates/llm/src/vertex.rs#L29,L
 - **`server.address` / `server.port` are never set.** Grep the kv vector: the key is `endpoint`, a
   single `host:port` string, and it is **not** an OTel semantic convention. semconv v1.41.0 lists
   `server.address` as `recommended` on the GenAI client span and `server.port` as conditionally required
-  beside it (`model/gen-ai/spans.yaml#L32-L38`). A plume transform that maps `endpoint` → `server.address`
+  beside it (`model/gen-ai/spans.yaml#L32-L38`). A assayd transform that maps `endpoint` → `server.address`
   must split it itself and record that it is doing so.
 - **Azure `deploymentName` is not emitted, under any key.** In the CRD it is
   `AzureOpenAIConfig.deploymentName` (`controller/api/v1alpha1/agentgateway/agentgateway_backend_types.go#L397-L417`),
@@ -126,7 +126,7 @@ written today and will pass**, provided the transform keys on `endpoint` and not
 **But the neighbouring case fails.** Two deployments on the **same** Azure resource differing only in
 `deploymentName` (upstream's own `apiVersion != v1` shape, where `deploymentName` is CEL-required —
 `agentgateway_backend_types.go#L398`) are **indistinguishable**: same `gen_ai.provider.name`, same
-`endpoint`, and `gen_ai.request.model` carries the client's string, not the deployment. Plume's
+`endpoint`, and `gen_ai.request.model` carries the client's string, not the deployment. Assayd's
 `LLMEndpoint{arm: azureopenai, endpoint, deploymentName}` is therefore **not** fully recoverable from the
 export. Design 02 A53's CEL rule that `azureopenai` carries no `model` because *"the deployment is the
 identity"* is right about the CRD and wrong about the telemetry: the identity the CRD insists on is the
@@ -166,10 +166,10 @@ exporter; the HTTP exporter carries the provider's resource in the usual way).
 embedded Helm chart (`controller/pkg/helm/embed.go`) whose container template sets `NODE_NAME`,
 `POD_NAMESPACE`, `POD_NAME`, `NAMESPACE`, `GATEWAY` and `INSTANCE_IP` from the downward API by default —
 `controller/pkg/helm/agentgateway/templates/_helpers.tpl#L170-L235`. Each is skipped only if the user
-supplies an env var of the same name. So **plume's chart has to do nothing** for §2's four Pod-identity
+supplies an env var of the same name. So **assayd's chart has to do nothing** for §2's four Pod-identity
 attributes to appear.
 
-**`k8s.pod.uid` is NOT emitted and there is no code path that would emit it.** If plume wants it, the
+**`k8s.pod.uid` is NOT emitted and there is no code path that would emit it.** If assayd wants it, the
 route is env config, and it **is** reachable from the CRD surface, not only from the Deployment:
 `AgentgatewayParameters.spec.env` is a `[]corev1.EnvVar`
 (`controller/api/v1alpha1/agentgateway/agentgateway_parameters_types.go#L161-L175`), merged into the
@@ -220,14 +220,14 @@ note, and stands.
 | span | `route` | the **HTTPRoute's**, as `<ns>/<name>` (`types/agent.rs#L770-L773`) |
 | CEL only | `proxy.route.namespace`, `proxy.gateway.namespace`, `backend.name` | route / Gateway / Backend namespace (`cel/types.rs#L141-L173`, `#L412-L421`) |
 
-Under design 02 A42 the route, the Backend and the workload Service all live in `plume-run-<ns>`, so
+Under design 02 A42 the route, the Backend and the workload Service all live in `assayd-run-<ns>`, so
 **every** namespace above is either the gateway's or the run namespace. Design 04 A5's statement of the
 problem is exactly right, and this note adds that there is no attribute it overlooked.
 
 **The available mechanism is a naming convention, not an attribute.** Design 03 §3.2 already emits routes
-and Backends into `plume-run-<agent-namespace>` under a deterministic name
+and Backends into `assayd-run-<agent-namespace>` under a deterministic name
 (`<name>-<concern>[-<rev>]`, truncation to a 16-hex suffix past 63 chars). If the **run namespace name**
-is a total, injective function of the Agent namespace — which design 02 A42's `plume-run-<ns>` scheme is,
+is a total, injective function of the Agent namespace — which design 02 A42's `assayd-run-<ns>` scheme is,
 modulo the same truncation rule — then `route`'s namespace segment is a decodable encoding of the Agent's
 namespace, and the transform can invert it without a Kubernetes lookup. **That inversion must be
 specified, not assumed**: the truncation-and-hash rule is not invertible by string manipulation, so the
@@ -239,7 +239,7 @@ That is the honest shape of the choice design 04 A5 owes:
   truncated namespace and needs a stated fallback.
 - **Option B — read the Agent.** §2 already puts the tap inside the agent-operator binary, where a client
   and an informer cache are in hand; key the cache by the `route` attribute, or by the
-  `plume.dev/agent-uid` label design 03 §3.2 stamps on every emitted resource. This is a real change to
+  `assayd.dev/agent-uid` label design 03 §3.2 stamps on every emitted resource. This is a real change to
   §4's "stateless" claim and should be written as one.
 - **Option C — stamp it.** §5 below. Costs a per-route policy and leaks the value upstream unless paired
   with a removal.
@@ -265,22 +265,22 @@ budget row today regardless of which option lands.
 All four are `DefaultedUnknown`, so an unmatched request omits them rather than emitting a placeholder.
 
 `route_rule` is the Gateway API `rules[].name` field; v1.4.0 moved the build target to Gateway API v1.6,
-so it is available for plume to set.
+so it is available for assayd to set.
 
-**This contradicts design 03 A49 and design 04 A5 in plume's favour.** A49 says *"the envelope carries no
+**This contradicts design 03 A49 and design 04 A5 in assayd's favour.** A49 says *"the envelope carries no
 route, revision or generation… nothing can attribute one"* and defers its withdrawal-escalation test on
 that basis; design 04 A5's third paragraph says the tap has no route identity. The **envelope** indeed has
 no route field — that part is true and the field is still owed — but the **export** carries a fully
 qualified route identity with no stamping and no configuration. And because design 03 §3.2's names are
 deterministic and carry `-<rev>` on revision routes, `route` names the *revision*, not merely the Agent.
-So A49's sound positive witness — *a receipt attributing traffic to a route plume withdrew* — is
+So A49's sound positive witness — *a receipt attributing traffic to a route assayd withdrew* — is
 **buildable now**: add `hop.route` to `receipt/v1` from the `route` attribute (plus `hop.routeRule` from
 `route_rule` if rule-level attribution is wanted), and the deferred conformance case is unblocked once
 the drain allowance A49 also names is specified. No new agentgateway capability is required.
 
 ---
 
-## 6. What a plume-owned stamping mechanism would have to look like
+## 6. What a assayd-owned stamping mechanism would have to look like
 
 Only for the things §2–§4 say are genuinely absent: `deploymentName`, `projectId`, the selected
 priority-group provider, and the Agent's own namespace.
@@ -293,10 +293,10 @@ resources."* No stamping exists or is needed: agentgateway emits **`protocol`** 
 cover `kg_query`: design 03 emits an `AgentgatewayBackend` for KG the same as for tools, so both report
 the same `protocol`, and `kg_query` must be recovered from the Backend or route **name**, not from a
 backend class. §3.1's sentence should be corrected in both halves — the stamping does not exist, and the
-attribute that does exist is not sufficient for plume's own hop taxonomy.
+attribute that does exist is not sufficient for assayd's own hop taxonomy.
 
 **The one real per-request stamping surface** is `spec.frontend.tracing.attributes.add[]`, CEL, on the
-single Gateway-scoped tracing policy. Since a frontend policy may target only a Gateway, plume cannot
+single Gateway-scoped tracing policy. Since a frontend policy may target only a Gateway, assayd cannot
 attach a different constant per Agent; the expression must read something already in the request. Two
 shapes work:
 
@@ -309,7 +309,7 @@ shapes work:
      tracing:
        attributes:
          add:
-           - { name: plume.backend, expression: "backend.name" }
+           - { name: assayd.backend, expression: "backend.name" }
    ```
    This costs one policy for the whole cluster and no per-route resource. It recovers the **Backend**,
    which is the closest available proxy for "which endpoint" when a Backend enumerates exactly one
@@ -318,17 +318,17 @@ shapes work:
 2. **Inject and lift.** A route-scoped `traffic.transformation.request.set[]`
    (`agentgateway_policy_types.go#L877`, `Transform` at `#L2441-L2470`) adds a header carrying the Agent's
    namespace/endpoint id; the Gateway tracing policy lifts it with
-   `request.headers['x-plume-agent']`. ⚠️ **A request transformation forwards the header upstream** — to
+   `request.headers['x-assayd-agent']`. ⚠️ **A request transformation forwards the header upstream** — to
    the LLM provider — so this needs a paired removal at the backend transformation, and it is a new
    header on a serving path, i.e. a behaviour-surface change under design 02 A25's rule. Prefer shape 1.
 
 **Neither shape can produce `deploymentName` or `projectId`**, because neither is in the CEL context: the
 LLM context (`cel/types.rs#L1394-L1460`) exposes `streaming`, `requestModel`, `responseModel`, `provider`
 and the token/cost counts, and nothing about the provider's instance configuration. Recovering those
-requires plume to **resolve them from its own compiled spec** — the `LLMEndpoint` it emitted into the
+requires assayd to **resolve them from its own compiled spec** — the `LLMEndpoint` it emitted into the
 Backend — keyed by `(backend.name or route, gen_ai.provider.name, endpoint)`. That is a lookup the
 operator can do without upstream change, and it is the honest answer for design 04 A5's `hop.endpoint`:
-*the export names the arm, the host and the model; the deployment/project comes from plume's own record of
+*the export names the arm, the host and the model; the deployment/project comes from assayd's own record of
 what it compiled, joined on the Backend identity the export does carry.*
 
 ---
@@ -338,7 +338,7 @@ what it compiled, joined on the Backend identity the export does carry.*
 1. **design 03 §3.1 (via design 04 §3.1)** — "the backend class stamped into span attributes by
    design-03-emitted resources". No such stamping exists. `protocol` is emitted by default and is a
    5-value enum that cannot express `kg_query`. Both halves of the sentence need correction.
-2. **design 03 A49 / design 04 A5** — "nothing can attribute a receipt to a route plume withdrew".
+2. **design 03 A49 / design 04 A5** — "nothing can attribute a receipt to a route assayd withdrew".
    `route` = `<ns>/<name>` is emitted by default, and design 03's deterministic names carry the revision.
    The envelope field is owed; the *producer* exists. A49's deferral reason should be narrowed to the
    drain allowance alone.
@@ -360,9 +360,9 @@ what it compiled, joined on the Backend identity the export does carry.*
 
 ## 8. Stated gaps — NOT verified
 
-- **Whether the deployer's rendered Deployment is what a plume install actually gets.** Verified that the
+- **Whether the deployer's rendered Deployment is what a assayd install actually gets.** Verified that the
   controller's embedded chart sets the downward-API env vars by default. Not verified against a running
-  cluster, and design 07 A1 records that plume's chart does not yet carry the agentgateway subchart. A
+  cluster, and design 07 A1 records that assayd's chart does not yet carry the agentgateway subchart. A
   spike should assert the four resource attributes on a real export before design 04 depends on them.
 - **MCP sub-spans.** `log.trace_spans` buffers spans created during MCP processing and flushes them after
   the request span (`log.rs#L1617-L1628`). Their attribute sets were **not** read. Design 04 §3.1 claims
@@ -398,7 +398,7 @@ what it compiled, joined on the Backend identity the export does carry.*
 | Any attribute names the Agent's own namespace | **REFUTED** | every namespace is the gateway's or the route's (run) namespace |
 | Route identity is emitted by default | **CONFIRMED** | `route` = `<ns>/<name>`, `log.rs#L1375`; `types/agent.rs#L770-L773` |
 | Rule-level route identity is emitted | **CONFIRMED** | `route_rule`, `log.rs#L1371-L1374` |
-| `hop.type` needs plume stamping today | **CONFIRMED** | `protocol` is emitted but its enum has no `kg_query`; `cel/types.rs#L464-L471` |
+| `hop.type` needs assayd stamping today | **CONFIRMED** | `protocol` is emitted but its enum has no `kg_query`; `cel/types.rs#L464-L471` |
 | Per-request CEL stamping exists on the tracing policy | **CONFIRMED** | `attributes.add[]`, `agentgateway_policy_types.go#L3229-L3234`; evaluated at `trc.rs#L314-L327` |
 | `resources[]` CEL can read the request | **REFUTED** | `Executor::new_empty()`, `trc.rs#L189`; constants only |
 | Default attributes can be suppressed | **CONFIRMED** | `attributes.remove[]` via `LoggingFields::has`, `log.rs#L347-L351`, `trc.rs#L285-L287` |

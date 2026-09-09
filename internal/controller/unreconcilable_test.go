@@ -11,7 +11,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // An Agent with neither runtime nor external cannot be created today — CEL
@@ -27,13 +27,13 @@ func TestUnreconcilableAgentDegradesRatherThanPanicking(t *testing.T) {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme: %v", err)
 	}
-	if err := plumev1alpha1.AddToScheme(scheme); err != nil {
+	if err := assaydv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme: %v", err)
 	}
 
 	// A fake client bypasses admission, which is the point: this is the shape of
 	// an object that predates the current CRD.
-	stored := &plumev1alpha1.Agent{
+	stored := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "legacy", Namespace: "default",
 			Finalizers: []string{Finalizer},
@@ -62,16 +62,16 @@ func TestUnreconcilableAgentDegradesRatherThanPanicking(t *testing.T) {
 		t.Fatalf("reconcile returned an error rather than reporting the condition: %v", err)
 	}
 
-	var got plumev1alpha1.Agent
+	var got assaydv1alpha1.Agent
 	if err := c.Get(context.Background(), ctrlKey("default", "legacy"), &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.Status.Phase != plumev1alpha1.PhaseDegraded {
+	if got.Status.Phase != assaydv1alpha1.PhaseDegraded {
 		t.Errorf("phase is %q, want Degraded", got.Status.Phase)
 	}
 	var found bool
 	for _, cond := range got.Status.Conditions {
-		if cond.Type == string(plumev1alpha1.CondDegraded) && cond.Reason == "NoWorkloadSpecified" {
+		if cond.Type == string(assaydv1alpha1.CondDegraded) && cond.Reason == "NoWorkloadSpecified" {
 			found = true
 			if cond.Message == "" {
 				t.Error("the condition must say what to do about it")

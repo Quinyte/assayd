@@ -10,7 +10,7 @@ Makes ADR-0016 mechanical: the App CR's composition, the HTTP/SSE projection sha
 
 ## 2. Doctrine & charter gates
 
-- **Plane**: slow only at the seams — **kro composes; plume's own code is three thin pieces**: (1) an App *watcher* in the agent-operator (identity provisioning per 06, pin validation, status aggregation — no resource creation of its own), (2) projection rows in the 03 compiler, (3) CLI client-gen. The App **ResourceGraphDefinition ships in the chart**; instances are kro's job. Honesty note: the architecture's "App | kro" row stays true — plume adds *logic around* composition, never a composition engine.
+- **Plane**: slow only at the seams — **kro composes; assayd's own code is three thin pieces**: (1) an App *watcher* in the agent-operator (identity provisioning per 06, pin validation, status aggregation — no resource creation of its own), (2) projection rows in the 03 compiler, (3) CLI client-gen. The App **ResourceGraphDefinition ships in the chart**; instances are kro's job. Honesty note: the architecture's "App | kro" row stays true — assayd adds *logic around* composition, never a composition engine.
 - **Pods**: 0 platform (frontend is a user workload). **Stateful deps**: none. **Primitives**: Resource, Agent, Artifact (frontend image, generated client package). ✓
 
 ## 3. Projection shapes (compiled by 03, consumed by frontends)
@@ -28,13 +28,13 @@ All routes: OIDC-authenticated (the App's client, 06), user token exchanged at t
 Per architecture §03, plus what P4 machinery makes enforceable:
 
 - **Pinning**: `members` pin exact versions (agent revision-producing image tags, graph versions, frontend digest). Admission (prod profile): unpinned members rejected; **cross-member coherence** validated by the watcher — an App naming `pa-reviewer@1.4.2` + `payer-policies@v12` warns if that agent revision's `knowledge[]` binding pins a *different* graph version (`MemberSkew` condition — the coherent-set promise made checkable).
-- **Release = the App CR change** (GitOps); member rollouts still run their own gates (an App bump to `agent@1.5.0` triggers that agent's eval-gated rollout — the App reaches `Ready` only when all members do; `plume deploy` streams the aggregate).
+- **Release = the App CR change** (GitOps); member rollouts still run their own gates (an App bump to `agent@1.5.0` triggers that agent's eval-gated rollout — the App reaches `Ready` only when all members do; `assayd deploy` streams the aggregate).
 - **Rollback** = previous App spec; members individually re-point (instant for graphs/frontends; agents re-point to retained revisions per `revisionHistoryLimit` — the design 20 linkage note applies).
 - Status aggregates member conditions (`MembersReady n/m`, `MemberSkew`, worst-member condition surfaced).
 
-## 5. Typed client generation (`plume init app` / `plume app gen`)
+## 5. Typed client generation (`assayd init app` / `assayd app gen`)
 
-**SSE transport (r1 f4)**: the generated client implements SSE over `fetch()` streams — native `EventSource` cannot send `Authorization` headers; no cookies, no tokens-in-query-strings, `Last-Event-ID` managed manually. Generated TS package from: Agent Cards (A2A skills → chat/task methods), Workflow `input.schema` (→ typed `POST /api/<name>` calls + run polling), optional kgp scope (→ typed KG read hooks). Properties: **generated code pins the source digests** (card digest, schema digest) — `plume app gen --check` in CI fails when the deployed members drift from the client the frontend was built against (the client-server skew gate, mechanical); no runtime dependency on plume (the client is plain fetch/SSE); regeneration is idempotent (golden-tested).
+**SSE transport (r1 f4)**: the generated client implements SSE over `fetch()` streams — native `EventSource` cannot send `Authorization` headers; no cookies, no tokens-in-query-strings, `Last-Event-ID` managed manually. Generated TS package from: Agent Cards (A2A skills → chat/task methods), Workflow `input.schema` (→ typed `POST /api/<name>` calls + run polling), optional kgp scope (→ typed KG read hooks). Properties: **generated code pins the source digests** (card digest, schema digest) — `assayd app gen --check` in CI fails when the deployed members drift from the client the frontend was built against (the client-server skew gate, mechanical); no runtime dependency on assayd (the client is plain fetch/SSE); regeneration is idempotent (golden-tested).
 
 ## 6. Failure modes
 
@@ -57,7 +57,7 @@ RGD golden instantiation; projection e2e (login → chat SSE full lifecycle → 
 
 ## 9. Decisions for async review
 
-- **D1 — kro composes; plume's App code is watcher + compiler rows + client-gen only** (the architecture's claim, held).
+- **D1 — kro composes; assayd's App code is watcher + compiler rows + client-gen only** (the architecture's claim, held).
 - **D2 — SSE chat is a documented projection of A2A's own stream** — no new protocol.
 - **D3 — Client packages pin source digests; `app gen --check` is the CI skew gate.**
 - **D4 — `MemberSkew` warns, never blocks** (mid-migration is legitimate; silence isn't).

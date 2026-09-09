@@ -178,9 +178,9 @@ func TestLocalRateLimitShape(t *testing.T) {
 			t.Errorf("%s is %v, design 03 §3.5 clamps to int32 because it is int32", f, got)
 		}
 	}
-	// burst carrying no minimum is why plume must validate burst >= 0 itself (A10).
+	// burst carrying no minimum is why assayd must validate burst >= 0 itself (A10).
 	if _, has := dig(props, "burst").(map[string]any)["minimum"]; has {
-		t.Error("burst now has a minimum at " + pinnedTag + "; A10 says plume validates burst >= 0 because the CRD does not")
+		t.Error("burst now has a minimum at " + pinnedTag + "; A10 says assayd validates burst >= 0 because the CRD does not")
 	}
 	// EXACT minimums, not presence: §3.5's "rate < 1 is a compile error" assumes
 	// the API rejects 0, which minimum: 1 states and minimum: 0 would not.

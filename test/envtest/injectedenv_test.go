@@ -10,9 +10,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // A65. Design 02 §11 has always said this design owns the injected env
@@ -21,7 +21,7 @@ import (
 func TestTheOperatorInjectsTheGatewayURL(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "inj", nil)
-	r := newReconcilerWithEnv(false, controller.InjectedEnvConfig{GatewayURL: "http://plume-gateway.plume:8080"})
+	r := newReconcilerWithEnv(false, controller.InjectedEnvConfig{GatewayURL: "http://assayd-gateway.assayd:8080"})
 	rev := revision.MustHash(a.Spec)
 	settle(t, r, a)
 
@@ -30,7 +30,7 @@ func TestTheOperatorInjectsTheGatewayURL(t *testing.T) {
 	if !ok {
 		t.Fatalf("%s was not injected; container env: %v", controller.EnvGatewayURL, env)
 	}
-	if got != "http://plume-gateway.plume:8080" {
+	if got != "http://assayd-gateway.assayd:8080" {
 		t.Errorf("%s is %q", controller.EnvGatewayURL, got)
 	}
 }
@@ -48,7 +48,7 @@ func TestNothingIsInjectedForAProducerThatDoesNotExist(t *testing.T) {
 	settle(t, r, a)
 
 	env := containerEnv(t, ns, controller.WorkloadName("noprod", rev))
-	for _, name := range []string{"PLUME_KG_ENDPOINTS", "PLUME_NATS_URL", controller.EnvGatewayURL} {
+	for _, name := range []string{"ASSAYD_KG_ENDPOINTS", "ASSAYD_NATS_URL", controller.EnvGatewayURL} {
 		if v, ok := env[name]; ok {
 			t.Errorf("%s was injected as %q with no producer for it; an agent that dials a "+
 				"placeholder reports an outage instead of taking its fallback", name, v)
@@ -57,15 +57,15 @@ func TestNothingIsInjectedForAProducerThatDoesNotExist(t *testing.T) {
 }
 
 // The bypass the reservation closes. A container keeps the LAST duplicate, so
-// before this rule a user could set PLUME_GATEWAY_URL in their own env and
+// before this rule a user could set ASSAYD_GATEWAY_URL in their own env and
 // redirect their agent's egress away from the chokepoint that enforces every
 // budget, tool grant and egress rule — written by exactly the person those
 // rules constrain.
 func TestAUserCannotSetAReservedEnvName(t *testing.T) {
 	ns := newNamespace(t)
-	a := &plumev1alpha1.Agent{
+	a := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "reserved"},
-		Spec: plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{
+		Spec: assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{
 			Image: "ghcr.io/acme/agent@sha256:" + strings.Repeat("a", 64),
 			Env: []corev1.EnvVar{{
 				Name:  controller.EnvGatewayURL,
@@ -75,34 +75,34 @@ func TestAUserCannotSetAReservedEnvName(t *testing.T) {
 	}
 	err := k8s.Create(context.Background(), a)
 	if err == nil {
-		t.Fatal("the API accepted an Agent setting PLUME_GATEWAY_URL itself: a container keeps " +
+		t.Fatal("the API accepted an Agent setting ASSAYD_GATEWAY_URL itself: a container keeps " +
 			"the last duplicate, so this redirects the agent's egress off the gateway")
 	}
-	if !strings.Contains(err.Error(), "PLUME_") {
+	if !strings.Contains(err.Error(), "ASSAYD_") {
 		t.Errorf("refused, but not by the reserved-prefix rule — the message does not mention "+
 			"the prefix, so this test proves nothing about which rule fired: %v", err)
 	}
 }
 
 // The same door, one field over: envFrom maps a whole ConfigMap or Secret under
-// a prefix, so a PLUME_ prefix there shadows the injected name just as well.
+// a prefix, so a ASSAYD_ prefix there shadows the injected name just as well.
 func TestAUserCannotUseAReservedEnvFromPrefix(t *testing.T) {
 	ns := newNamespace(t)
-	a := &plumev1alpha1.Agent{
+	a := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "reservedfrom"},
-		Spec: plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{
+		Spec: assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{
 			Image: "ghcr.io/acme/agent@sha256:" + strings.Repeat("b", 64),
 			EnvFrom: []corev1.EnvFromSource{{
-				Prefix:       "PLUME_",
+				Prefix:       "ASSAYD_",
 				ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "cfg"}},
 			}},
 		}},
 	}
 	err := k8s.Create(context.Background(), a)
 	if err == nil {
-		t.Fatal("the API accepted an envFrom prefix of PLUME_")
+		t.Fatal("the API accepted an envFrom prefix of ASSAYD_")
 	}
-	if !strings.Contains(err.Error(), "PLUME_") {
+	if !strings.Contains(err.Error(), "ASSAYD_") {
 		t.Errorf("refused by something other than the prefix rule: %v", err)
 	}
 }
@@ -116,9 +116,9 @@ func TestChangingTheInjectedGatewayURLDoesNotMintARevision(t *testing.T) {
 	a := mustCreateAgent(t, ns, "nomint", nil)
 	before := revision.MustHash(a.Spec)
 
-	r := newReconcilerWithEnv(false, controller.InjectedEnvConfig{GatewayURL: "http://one.plume:8080"})
+	r := newReconcilerWithEnv(false, controller.InjectedEnvConfig{GatewayURL: "http://one.assayd:8080"})
 	settle(t, r, a)
-	r2 := newReconcilerWithEnv(false, controller.InjectedEnvConfig{GatewayURL: "http://two.plume:8080"})
+	r2 := newReconcilerWithEnv(false, controller.InjectedEnvConfig{GatewayURL: "http://two.assayd:8080"})
 	settle(t, r2, a)
 
 	if after := revision.MustHash(a.Spec); after != before {
@@ -128,7 +128,7 @@ func TestChangingTheInjectedGatewayURLDoesNotMintARevision(t *testing.T) {
 	// And the running workload does follow the new address — it is converged in
 	// place, which is what "not revision material" has to mean to be useful.
 	env := containerEnv(t, ns, controller.WorkloadName("nomint", before))
-	if got := env[controller.EnvGatewayURL]; got != "http://two.plume:8080" {
+	if got := env[controller.EnvGatewayURL]; got != "http://two.assayd:8080" {
 		t.Errorf("the workload still carries %q after the operator was repointed", got)
 	}
 }

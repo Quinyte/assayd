@@ -34,7 +34,7 @@ Templates are Go `text/template`, parsed with `template.New(name).Parse(value)` 
 ### Reading a Pod label — correct syntax
 
 ```
-spiffe://{{ .TrustDomain }}/agent/{{ index .PodMeta.Labels "plume.dev/agent-namespace" }}/{{ index .PodMeta.Labels "plume.dev/agent" }}
+spiffe://{{ .TrustDomain }}/agent/{{ index .PodMeta.Labels "assayd.dev/agent-namespace" }}/{{ index .PodMeta.Labels "assayd.dev/agent" }}
 ```
 
 `index` is required: a label key containing `/` or `.` cannot be written as a field access, and `{{ .PodMeta.Labels "key" }}` (a map followed by an argument) is **not** a call form text/template accepts. The upstream docs show only `.PodMeta.Namespace` / `.PodSpec.ServiceAccountName` / `.PodMeta.Name`; there is no upstream example with `index`, so the form above rests on the Go `text/template` contract: *"index — Returns the result of indexing its first argument by the following arguments. Thus "index x 1 2 3" is, in Go syntax, x[1][2][3]. Each indexed item must be a map, slice, or array."* — https://pkg.go.dev/text/template
@@ -45,7 +45,7 @@ spiffe://{{ .TrustDomain }}/agent/{{ index .PodMeta.Labels "plume.dev/agent-name
 2. The rendered string is parsed by `spiffeid.FromString` (go-spiffe v2.8.1 `spiffeid/id.go` → `ValidatePath`). With the label as a **whole segment**, `spiffe://td/agent//reviewer` fails with `path cannot contain empty segments`; as the **last** segment, `spiffe://td/agent/team-a/` fails with `path cannot have a trailing slash` (`spiffeid/errors.go`). The SPIFFE ID spec forbids both (SPIFFE-ID.md §2.2: "MUST NOT include segments that are empty or are relative path modifiers", "MUST NOT include a trailing /").
 3. `renderSPIFFEID` wraps that as `invalid SPIFFE ID: …`, `renderPodEntry` as `failed to render SPIFFE ID: …`, and the reconciler (`pkg/spireentry/reconciler.go` ~L517) does `log.Error(err, "Failed to render entry")`, increments `status.stats.podEntryRenderFailures`, and continues with the next pod. **No entry is created for that pod; it gets no SVID.** Nothing is written to the Pod, and no Kubernetes Event is emitted — the only signals are the controller log line and the counter.
 
-**Caveat that matters for the amendment:** the fail-closed outcome is a property of the *template shape*, not of the controller. `spiffe://td/agent-{{ index .PodMeta.Labels "k" }}/x` renders `agent-` — a valid segment — and silently mints an identity. Keep every label-derived value as a whole path segment. Better still, add `podSelector.matchExpressions: [{key: plume.dev/agent-namespace, operator: Exists}, {key: plume.dev/agent, operator: Exists}]` so an unlabeled pod is not selected at all (no render-failure noise, same outcome: no SVID), and alert on `podEntryRenderFailures > 0` as the genuine-bug signal.
+**Caveat that matters for the amendment:** the fail-closed outcome is a property of the *template shape*, not of the controller. `spiffe://td/agent-{{ index .PodMeta.Labels "k" }}/x` renders `agent-` — a valid segment — and silently mints an identity. Keep every label-derived value as a whole path segment. Better still, add `podSelector.matchExpressions: [{key: assayd.dev/agent-namespace, operator: Exists}, {key: assayd.dev/agent, operator: Exists}]` so an unlabeled pod is not selected at all (no render-failure noise, same outcome: no SVID), and alert on `podEntryRenderFailures > 0` as the genuine-bug signal.
 
 ## 2. Gateway API v1 — listener `allowedRoutes.namespaces` and cross-namespace `parentRefs`
 
@@ -66,7 +66,7 @@ spec:
         from: Selector            # enum on RouteNamespaces.from: All | Selector | Same ; default Same
         selector:                 # metav1.LabelSelector; REQUIRED when from: Selector, ignored otherwise
           matchLabels:
-            plume.dev/run-namespace: "true"
+            assayd.dev/run-namespace: "true"
       # kinds: [...]              # optional, max 8
 ```
 
@@ -120,7 +120,7 @@ Consequence for design 26's delete path and design 02 A42's run namespaces: once
 
 ## Contradictions with current designs (say so, per the research discipline)
 
-1. **Design 02 §3.5 line ~320 (A59) has the wrong template syntax**: it writes `{{ .PodMeta.Labels "plume.dev/agent-namespace" }}`. That does not parse as a map lookup in `text/template` and would be rejected by the ClusterSPIFFEID webhook (or, at best, fail at render). It must be `{{ index .PodMeta.Labels "plume.dev/agent-namespace" }}`. Design 07 (which ships the ClusterSPIFFEID per A59's "Owed") and design 26 (per-tenant SPIRE) must carry the `index` form — and design 02 §3.5 should be corrected in the same pass so the three never disagree.
+1. **Design 02 §3.5 line ~320 (A59) has the wrong template syntax**: it writes `{{ .PodMeta.Labels "assayd.dev/agent-namespace" }}`. That does not parse as a map lookup in `text/template` and would be rejected by the ClusterSPIFFEID webhook (or, at best, fail at render). It must be `{{ index .PodMeta.Labels "assayd.dev/agent-namespace" }}`. Design 07 (which ships the ClusterSPIFFEID per A59's "Owed") and design 26 (per-tenant SPIRE) must carry the `index` form — and design 02 §3.5 should be corrected in the same pass so the three never disagree.
 2. **A59's "label absent ⇒ fail closed" is template-shape dependent** (see §1 caveat). The amendment should state the invariant ("every label-derived value is a whole path segment") and add the `Exists` `podSelector`, rather than rely on the empty-segment rejection implicitly.
 3. No contradiction found for items 2–4: design 03 A44 / design 02 A45 already state the ReferenceGrant/allowedRoutes split correctly; PSA and NamespaceTerminating are not yet described in designs 07/26, so the facts above are additive.
 

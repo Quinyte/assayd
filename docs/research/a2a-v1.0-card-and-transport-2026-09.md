@@ -2,7 +2,7 @@
 
 Supersedes the coarse claims in `a2a-2026-08.md` for anything at field level. That
 file said "card at `/.well-known/agent-card.json`; JSON-RPC 2.0 + SSE" — both true,
-and both too coarse to have caught the two things plume got wrong.
+and both too coarse to have caught the two things assayd got wrong.
 
 **Re-verify by: 2027-03.** A2A is on a ~2-3 month patch cadence within 1.0.x.
 
@@ -40,7 +40,7 @@ Optional: `provider`, `documentationUrl`, `securitySchemes`, `securityRequiremen
 
 ### `protocolVersion` is NOT a top-level field
 
-This is the finding plume needed. In v1.0 the card has **no top-level `url` and no
+This is the finding assayd needed. In v1.0 the card has **no top-level `url` and no
 top-level `protocolVersion`**. Both moved into `supportedInterfaces[]`, an ordered list
 (first entry preferred) of `AgentInterface`:
 
@@ -69,19 +69,19 @@ optional (an opaque routing string a client must echo in requests when set).
 **`protocolVersion` carries `"1.0"`.** Confirmed literally, not inferred:
 `a2a-go` `a2a/core.go` has `const Version ProtocolVersion = "1.0"`. It is MAJOR.MINOR,
 not the release triple — the proto comment says *"Use the latest supported minor version
-per major version. Examples: `"0.3"`, `"1.0"`"*. So **plume's supported-set string is
+per major version. Examples: `"0.3"`, `"1.0"`"*. So **assayd's supported-set string is
 correct and its location is wrong.** The e2e fixture and the operator agreed on a value
 that a real v1.0 card does not carry at that key at all.
 
 `protocolBinding` is an open string; the three official values are `JSONRPC`, `GRPC`,
 `HTTP+JSON` (`a2a-go` `TransportProtocol*` constants).
 
-### Why plume drifted: this is the v0.x shape
+### Why assayd drifted: this is the v0.x shape
 
-`a2acompat/a2av0/agentcard.go` preserves the pre-1.0 card, and it is exactly what plume
+`a2acompat/a2av0/agentcard.go` preserves the pre-1.0 card, and it is exactly what assayd
 implements — top-level `url` and `protocolVersion`, plus `preferredTransport` and
 `additionalInterfaces`. The compat layer's job is to fold those into
-`supportedInterfaces[]`. plume is reading a v0.x card and calling it v1.0.
+`supportedInterfaces[]`. assayd is reading a v0.x card and calling it v1.0.
 
 ### `capabilities` is real — but has only four fields, and `sharedTaskState` is not one
 
@@ -97,14 +97,14 @@ implements — top-level `url` and `protocolVersion`, plus `preferredTransport` 
 **`sharedTaskState` does not exist.** `grep -i shared` over `a2a.proto` returns nothing;
 over `specification.md` it returns only prose ("shared `contextId`", "shared tasks").
 Design 02 §3.2 keys `TaskStateUnverified` off `capabilities.sharedTaskState`, which is a
-field plume invented. Nothing in A2A v1.0 asserts anything resembling shared task state.
+field assayd invented. Nothing in A2A v1.0 asserts anything resembling shared task state.
 
-Also gone: **`stateTransitionHistory`**, which plume's responder declares. It existed in
+Also gone: **`stateTransitionHistory`**, which assayd's responder declares. It existed in
 v0.x; it is absent from v1.0's proto and prose entirely.
 
 If design 02 wants that assertion, the spec-sanctioned vehicle is
 `capabilities.extensions[]` — an `AgentExtension` is `{uri, description, required, params}`,
-where `uri` identifies a plume-defined extension. That keeps the card valid instead of
+where `uri` identifies a assayd-defined extension. That keeps the card valid instead of
 adding an unrecognized key.
 
 ## 2. The transport
@@ -135,7 +135,7 @@ The full `A2AService` surface, with the method name and the HTTP+JSON path each 
 | `DeleteTaskPushNotificationConfig` | `DELETE /tasks/{id}/pushNotificationConfigs/{id}` | no |
 | `GetExtendedAgentCard` | `GET /extendedAgentCard` | no |
 
-**There is no `POST /v1/tasks` in any binding.** plume's responder endpoint matches
+**There is no `POST /v1/tasks` in any binding.** assayd's responder endpoint matches
 nothing in v1.0. Note also that under JSON-RPC the HTTP path is irrelevant — every method
 POSTs to the single interface `url`; the paths above are the HTTP+JSON binding only.
 
@@ -178,10 +178,10 @@ protojson serializes enum values by proto name. `TaskState` is therefore
 `TASK_STATE_AUTH_REQUIRED`, `TASK_STATE_UNSPECIFIED`. Confirmed in `a2a-go` `a2a/core.go`
 (`TaskStateCompleted TaskState = "TASK_STATE_COMPLETED"`).
 
-**Not** the lowercase `"completed"` plume's responder emits, and not the lowercase
+**Not** the lowercase `"completed"` assayd's responder emits, and not the lowercase
 lifecycle `a2a-2026-08.md` recorded.
 
-## 3. What this contradicts in plume
+## 3. What this contradicts in assayd
 
 Nothing here contradicts an ADR — ADR-0019 (card served by the container) and ADR-0030
 (narrow slice) are untouched. It contradicts implementation and two design claims:
@@ -193,7 +193,7 @@ Nothing here contradicts an ADR — ADR-0019 (card served by the container) and 
 2. **`internal/controller/card.go`** — `Capabilities.SharedTaskState` parses a field that
    does not exist, so design 02 §3.2's `TaskStateUnverified` condition is presently keyed
    off a value that is always `false` for any conformant agent. Either drop the condition
-   or re-key it onto a plume `AgentExtension` URI.
+   or re-key it onto a assayd `AgentExtension` URI.
 3. **`test/responder/main.go`** — serves a v0.x card (top-level `url`/`protocolVersion`,
    `stateTransitionHistory`, no `supportedInterfaces`/`defaultInputModes`/
    `defaultOutputModes`), answers a bespoke `POST /v1/tasks`, and reports

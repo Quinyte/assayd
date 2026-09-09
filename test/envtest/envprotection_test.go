@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // EnvSourceProtectionUnavailable announced the env-source bypass while A20, A35
@@ -25,7 +25,7 @@ func TestAnAgentWithAnEnvSourceNoLongerReportsItsSourcesUngated(t *testing.T) {
 	ns := newNamespace(t)
 	mustCreateSource(t, ns, "ConfigMap", "prompt", map[string]string{"P": "v"})
 	mustCreateSource(t, ns, "Secret", "creds", map[string]string{"k": "v"})
-	a := mustCreateAgent(t, ns, "envsrc", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "envsrc", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "prompt"}}}}
 		a.Spec.Runtime.Env = []corev1.EnvVar{{Name: "KEY", ValueFrom: &corev1.EnvVarSource{
@@ -34,7 +34,7 @@ func TestAnAgentWithAnEnvSourceNoLongerReportsItsSourcesUngated(t *testing.T) {
 	})
 	got := settle(t, newReconciler(false), a)
 
-	if c := condition(&got, plumev1alpha1.CondEnvSourceProtectionUnavailable); c != nil &&
+	if c := condition(&got, assaydv1alpha1.CondEnvSourceProtectionUnavailable); c != nil &&
 		c.Status == metav1.ConditionTrue {
 		t.Fatalf("an Agent whose copies live in the run namespace still says its sources are "+
 			"unprotected; the condition names a gap A42 closed:\n%s", c.Message)
@@ -57,7 +57,7 @@ func TestAnAgentWithNoEnvSourceStaysQuiet(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "noenvsrc", nil)
 	got := settle(t, newReconciler(false), a)
-	if c := condition(&got, plumev1alpha1.CondEnvSourceProtectionUnavailable); c != nil &&
+	if c := condition(&got, assaydv1alpha1.CondEnvSourceProtectionUnavailable); c != nil &&
 		c.Status == metav1.ConditionTrue {
 		t.Error("an Agent with no env source was told its env sources are ungated")
 	}
@@ -69,23 +69,23 @@ func TestAnAgentWithNoEnvSourceStaysQuiet(t *testing.T) {
 func TestAStaleEnvSourceConditionFromBeforeA42IsCleared(t *testing.T) {
 	ns := newNamespace(t)
 	mustCreateSource(t, ns, "ConfigMap", "prompt", map[string]string{"P": "v"})
-	a := mustCreateAgent(t, ns, "stale", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "stale", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "prompt"}}}}
 	})
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	live.Status.Conditions = []metav1.Condition{{
-		Type: string(plumev1alpha1.CondEnvSourceProtectionUnavailable), Status: metav1.ConditionTrue,
+		Type: string(assaydv1alpha1.CondEnvSourceProtectionUnavailable), Status: metav1.ConditionTrue,
 		Reason: "SourcesNotIsolated", Message: "written by an operator from before A42",
 		LastTransitionTime: metav1.Now()}}
 	if err := k8s.Status().Update(context.Background(), &live); err != nil {
 		t.Fatalf("plant the stale condition: %v", err)
 	}
 	got := settle(t, newReconciler(false), &live)
-	if c := condition(&got, plumev1alpha1.CondEnvSourceProtectionUnavailable); c != nil &&
+	if c := condition(&got, assaydv1alpha1.CondEnvSourceProtectionUnavailable); c != nil &&
 		c.Status == metav1.ConditionTrue {
 		t.Error("a stale abnormal-true condition from before A42 survived the upgrade; an operator " +
 			"reading it would go looking for a gap that is closed")
@@ -107,7 +107,7 @@ func TestTheEnvSourceMessageCannotBrickTheStatus(t *testing.T) {
 	for i := 0; i < 150; i++ {
 		mustCreateSource(t, ns, "ConfigMap", fmt.Sprintf("%s-%d", long, i), map[string]string{"k": "v"})
 	}
-	a := mustCreateAgent(t, ns, "bigmsg", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "bigmsg", func(a *assaydv1alpha1.Agent) {
 		for i := 0; i < 150; i++ {
 			a.Spec.Runtime.EnvFrom = append(a.Spec.Runtime.EnvFrom, corev1.EnvFromSource{
 				ConfigMapRef: &corev1.ConfigMapEnvSource{
@@ -148,13 +148,13 @@ func TestTheEnvSourceMessageCannotBrickTheStatus(t *testing.T) {
 // against that is what r7 BLOCKER 3 was.
 func TestAnEnvSourceArmTheOperatorCannotReadBlocksTheRevision(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "filekey", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "filekey", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.Env = []corev1.EnvVar{{Name: "K", ValueFrom: &corev1.EnvVarSource{
 			FileKeyRef: &corev1.FileKeySelector{VolumeName: "v", Path: "p.env", Key: "K"}}}}
 	})
 	got := settle(t, newReconciler(false), a)
 
-	c := condition(&got, plumev1alpha1.CondEnvSourceUnresolved)
+	c := condition(&got, assaydv1alpha1.CondEnvSourceUnresolved)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatal("an env source the operator cannot read did not block the revision; hashing only " +
 			"the arms it happens to recognise is a guarantee with a hole nothing reports")
@@ -192,13 +192,13 @@ func mustCreateSource(t *testing.T, ns, kind, name string, data map[string]strin
 // could not be read. A missing referent is UNRESOLVED, never a zero digest.
 func TestAnAgentWithAnUnresolvedSourceGetsNoRevision(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "unresolved", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "unresolved", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "absent"}}}}
 	})
 	got := settle(t, newReconciler(false), a)
 
-	c := condition(&got, plumev1alpha1.CondEnvSourceUnresolved)
+	c := condition(&got, assaydv1alpha1.CondEnvSourceUnresolved)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatal("an Agent referencing a ConfigMap that does not exist reported nothing")
 	}
@@ -222,7 +222,7 @@ func TestAnAgentWithAnUnresolvedSourceGetsNoRevision(t *testing.T) {
 func TestEditingAReferencedConfigMapMintsACandidate(t *testing.T) {
 	ns := newNamespace(t)
 	mustCreateSource(t, ns, "ConfigMap", "prompt", map[string]string{"SYSTEM_PROMPT": "you are helpful"})
-	a := mustCreateAgent(t, ns, "contenthash", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "contenthash", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "prompt"}}}}
 	})

@@ -4,7 +4,7 @@
 §12 (lines 495–841) is provenance and is out of scope.
 
 This is an **inventory pass, not a verdict pass**. No file was edited. Every claim below was checked
-against `internal/controller`, `internal/revision`, `api/v1alpha1`, `charts/plume`, `test/envtest`,
+against `internal/controller`, `internal/revision`, `api/v1alpha1`, `charts/assayd`, `test/envtest`,
 `test/chart` and `test/e2e` at the working tree of 2026-09-04.
 
 ## Counts
@@ -28,7 +28,7 @@ The substantive defects — the ones the rewrite must **decide**, not tidy — a
 **A-10** (the charter-gate line denies operator state that §3.2 creates),
 **E-1 / E-2 / E-3** (three admission guarantees that no CEL rule, webhook or policy provides),
 **E-4 / G-6** (the tool-name uniqueness rule that justifies a discriminator-free binding is owned by no design),
-**G-8** (`plume logs` is the only supported run-namespace read path and design 08 does not describe it),
+**G-8** (`assayd logs` is the only supported run-namespace read path and design 08 does not describe it),
 and **E-12** (the cold-candidate eval premise is attributed to a design that does not state it).
 
 ---
@@ -38,7 +38,7 @@ and **E-12** (the cold-candidate eval premise is attributed to a design that doe
 **A-1. The `--operator-namespace` flag both does and does not exist.**
 - L151: "The operator is to learn that namespace from a `--operator-namespace` flag, defaulting to the ServiceAccount namespace file every Pod mounts, and refuse to start with neither; **the flag does not exist yet**."
 - L210: "The chart renders … and **passes `--operator-namespace` from the downward API**."
-- Repo: `cmd/operator/main.go:62` defines it, `:80` refuses to start without it, `charts/plume/templates/operator.yaml:70` passes `--operator-namespace=$(POD_NAMESPACE)`, and `test/chart/chart_test.go:608 TestOperatorIsToldItsNamespace` pins it.
+- Repo: `cmd/operator/main.go:62` defines it, `:80` refuses to start without it, `charts/assayd/templates/operator.yaml:70` passes `--operator-namespace=$(POD_NAMESPACE)`, and `test/chart/chart_test.go:608 TestOperatorIsToldItsNamespace` pins it.
 - **Fix**: keep L151's rule (learn from the flag, default to the SA namespace file, refuse with neither); delete the "does not exist yet" clause and L210's restatement.
 
 **A-2. A42 is both "blocked on unwritten amendments" and "implemented".**
@@ -50,7 +50,7 @@ and **E-12** (the cold-candidate eval premise is attributed to a design that doe
 - L138: "An earlier version of this row had the operator derive 'every subject that can read Agents in the source namespace' … **That is not implementable** … Direct `kubectl logs` in a run namespace is **not supported**, and **nothing grants it**."
 - L396: "no Role or RoleBinding granting Pod `create` in a run namespace is rendered by the chart, and **the read-only RoleBinding this section's table owes must stay read-only**."
 - L474 (§8): "and **a chart test that fails if the read-only RoleBinding's Role ever carries a verb outside `get`/`list`/`watch`**."
-- Repo: `charts/plume/templates/rbac.yaml` renders one ClusterRole + ClusterRoleBinding for the operator and no per-namespace read-only RoleBinding; no such chart test exists in `test/chart/chart_test.go`.
+- Repo: `charts/assayd/templates/rbac.yaml` renders one ClusterRole + ClusterRoleBinding for the operator and no per-namespace read-only RoleBinding; no such chart test exists in `test/chart/chart_test.go`.
 - **Fix**: L138 is the surviving rule. Delete the clause in L396 and the §8 line in L474. L396's hardening note ("the hardening to take if the read-access RoleBinding ever grows a write verb") must be rewritten to say the RoleBinding does not exist.
 
 **A-4. §6 asserts a NetworkPolicy that §3.2 says is not applied anywhere.**
@@ -59,16 +59,16 @@ and **E-12** (the cold-candidate eval premise is attributed to a design that doe
 - Repo: `grep -r NetworkPolicy charts/` returns nothing.
 - **Fix**: §6 must state the control *and* that nothing applies it at P1, or point at the §3.2 row. A security section that lists an absent control as shipped is the exact shape NFR-8 exists to stop.
 
-**A-5. The admission policy is both "not a params object" and rendered "with the `plume-operators` params".**
+**A-5. The admission policy is both "not a params object" and rendered "with the `assayd-operators` params".**
 - L144: "**Not a params object**: a params ConfigMap that went missing would have turned the policy into a cluster-wide denial of every namespace write."
-- L210: "The chart renders design 07 A5.9's two admission policies **and the `plume-operators` params**."
-- Repo: `charts/plume/templates/admission.yaml` renders the operator identities *into* the CEL (`$operators`, from `.Values.admission.extraOperators`); there is no `plume-operators` object and no `paramKind` in either policy.
-- **Fix**: delete "and the `plume-operators` params" from L210.
+- L210: "The chart renders design 07 A5.9's two admission policies **and the `assayd-operators` params**."
+- Repo: `charts/assayd/templates/admission.yaml` renders the operator identities *into* the CEL (`$operators`, from `.Values.admission.extraOperators`); there is no `assayd-operators` object and no `paramKind` in either policy.
+- **Fix**: delete "and the `assayd-operators` params" from L210.
 
 **A-6. Revision-material provenance: label authority vs. A57's name-and-content authority.**
-- L278 (Ownership / GC row): "**A label, not an `ownerReference` (A44)** — `plume.dev/agent-uid` and `plume.dev/revision-digest`, stamped at creation and covered by the `RevisionRecord` digest."
-- L281 (Missing or wrong copy row): "if a copy is absent, or its `plume.dev/agent-uid` **label** or content digest disagrees with the record (A44), the revision's route goes to **weight 0** with `RevisionMaterialUnavailable`."
-- L295: "A copy named for this revision that this operator did not just create must satisfy the whole invariant — same kind, **matching `plume.dev/agent-uid` and `plume.dev/revision-digest` labels (A44)**, immutable, byte-identical — or it is `RevisionMaterialCollision` and the revision is not published."
+- L278 (Ownership / GC row): "**A label, not an `ownerReference` (A44)** — `assayd.dev/agent-uid` and `assayd.dev/revision-digest`, stamped at creation and covered by the `RevisionRecord` digest."
+- L281 (Missing or wrong copy row): "if a copy is absent, or its `assayd.dev/agent-uid` **label** or content digest disagrees with the record (A44), the revision's route goes to **weight 0** with `RevisionMaterialUnavailable`."
+- L295: "A copy named for this revision that this operator did not just create must satisfy the whole invariant — same kind, **matching `assayd.dev/agent-uid` and `assayd.dev/revision-digest` labels (A44)**, immutable, byte-identical — or it is `RevisionMaterialCollision` and the revision is not published."
 - L134: "**every rule that tested a copy's owner UID is rewritten against a label** … the record is the *only* provenance."
 - L137 states the opposite for workloads: "The name is the **deletion-safety** authority — immutable after creation, so a victim object cannot be renamed into the shape (A57)."
 - Repo (A57, which the user confirms is implemented): `internal/controller/material.go:126–135` — "**CONTENT FIRST (A57).** `immutable: true` freezes data, not labels or annotations … The bytes are the only thing the Pod reads. If they match, this IS the material the revision was minted from, whatever the metadata says, so the operator **restamps** rather than refusing." And `:241` — "The **NAME** is what an attacker cannot forge … Everything else is corroboration."
@@ -94,7 +94,7 @@ and **E-12** (the cold-candidate eval premise is attributed to a design that doe
 
 **A-10. "Stateful deps: none. Operator state = CR status + JetStream KV" vs. the binding record.**
 - L18: "**Stateful deps**: none. **Operator state = CR status + JetStream KV (directory)**. **One additional read-only reconcile input**: design 04's per-agent daily spend aggregate."
-- L151: "For every source namespace `S` the operator keeps a **binding**: a `ConfigMap` named `plume-run-binding-<run-namespace>` in the **operator's own namespace**." This is durable, authoritative, non-CR, non-KV operator state whose loss is unrecoverable without a human (L204). §3.2 also reads ResourceQuotas, LimitRanges, Namespaces and two ValidatingAdmissionPolicies, so "one additional read-only input" is false.
+- L151: "For every source namespace `S` the operator keeps a **binding**: a `ConfigMap` named `assayd-run-binding-<run-namespace>` in the **operator's own namespace**." This is durable, authoritative, non-CR, non-KV operator state whose loss is unrecoverable without a human (L204). §3.2 also reads ResourceQuotas, LimitRanges, Namespaces and two ValidatingAdmissionPolicies, so "one additional read-only input" is false.
 - L424 repeats the false form: "**no state outside CR status + directory KV**."
 - **Fix**: §2 must name the binding record as operator-owned state, and L424 must be corrected. This is a doctrine claim ("Postgres+NATS only"/stateful deps) and it is currently wrong in the charter-gate section.
 
@@ -195,7 +195,7 @@ over the transitive leaf graph") and the leaf-vs-aggregate override precedence a
 **B-16. L282 — the operator-privilege row understates the shipped privilege, and names the wrong namespace.**
 > "the operator needs `create` on `Secrets` **in agent namespaces**, on top of the `get` A20 already required"
 
-`charts/plume/files/operator-rules.yaml` grants `create, delete, get, list, update, watch` on
+`charts/assayd/files/operator-rules.yaml` grants `create, delete, get, list, update, watch` on
 `configmaps, limitranges, namespaces, resourcequotas, secrets` cluster-wide. `delete` is required by A56's
 sweep and §3.7; `configmaps` by A35's copies and the binding record; and under A42 the copies are in the
 run namespace, not agent namespaces. A row whose stated purpose is to expose the escalation surface
@@ -234,7 +234,7 @@ argument.
 | C-2 | 127 | "`immutable: true` forbids an update and permits exactly that, **the same distinction that refuted A20**" | **[keep the counter-example]** — the delete-and-recreate fact is why A42 exists; drop "refuted A20" |
 | C-3 | 134 | "This matters more than it reads — A35's ownership row, A41's missing-copy check, A39's `AlreadyExists` invariant and A38's rollback test all read 'owner UID', and under A42 that predicate is unsatisfiable." | the rule: no run-namespace object carries an ownerReference; provenance is name + label + record |
 | C-4 | 136 | "**The label is not the proof** — Codex r8 BLOCKER 7: Kubernetes records no 'created by'…" | **[keep the counter-example]** — the "a label needs only `update` to forge" fact; drop the citation |
-| C-5 | 138 | "An earlier version of this row had the operator derive 'every subject that can read Agents…' **That is not implementable**" | **[keep the counter-example]** — "Kubernetes answers 'may this subject do this?' and never 'who may do this?'" is the reason `plume logs` is the path |
+| C-5 | 138 | "An earlier version of this row had the operator derive 'every subject that can read Agents…' **That is not implementable**" | **[keep the counter-example]** — "Kubernetes answers 'may this subject do this?' and never 'who may do this?'" is the reason `assayd logs` is the path |
 | C-6 | 149 | "Codex r8 BLOCKER 7 and MAJOR 3 are the same gap seen twice: A44 said 'created, never adopted' and gave the operator nothing durable to check that with" | "the binding record exists because a label is forgeable and a namespace has no creator field" |
 | C-7 | 163 | "…and the cross-family review showed the RoleBinding simply arrives after the check." | **[keep the counter-example]** — why an "empty now" check is not a proof |
 | C-8 | 177 | "Refusing here wedged the operator's own recovery terminally, because the pass after the delete met its own Terminating namespace with a rotated nonce." | the rule: a deletion timestamp means wait, whatever the nonce |
@@ -242,7 +242,7 @@ argument.
 | C-10 | 202 | "The window r8 described — B writes material while A deletes — needs B to have read `Bound` before A swapped…" | the ordering rule + why it is safe; drop "r8 described" |
 | C-11 | 222 | "…and an earlier justification defended that with the number of revisions that coexist — which answers an accidental-collision question nobody asked." | **[keep the counter-example]** — chosen vs accidental collision is the whole point of A37 |
 | C-12 | 226 | "An earlier version of this rule made the annotation authoritative and said nothing about who may write it." | **[keep the counter-example]** — the `deployments/patch` attack is why status is the authority |
-| C-13 | 228 | "The adoption branch existed for a workload predating the field, and there is no such workload — plume is unreleased…" | the rule: an absent annotation is refused, never adopted |
+| C-13 | 228 | "The adoption branch existed for a workload predating the field, and there is no such workload — assayd is unreleased…" | the rule: an absent annotation is refused, never adopted |
 | C-14 | 232 | "It was in neither the owned nor the sticky set, which meant a repaired Agent reported `Ready=True` while still carrying a `True` collision condition…" | the rule: `RevisionHashCollision` is owned, so it clears |
 | C-15 | 241 | "An earlier wording defined the policy surface as 'whatever §3.6 compiles', which would have classified those three as policy…" | **[keep the counter-example]** — "the discriminator is capability, not the compile path" needs its foil |
 | C-16 | 256 | "`internal/revision` classified `budget` and `expose` as policy-surface — the pre-A25 split — … The table above said the opposite for over a round" | "changing this table is a hash migration"; see B-14 |
@@ -266,7 +266,7 @@ argument.
 | C-34 | 346 | "An earlier version of A12 said new fields *default* to policy-surface and called that the safe direction — it is not; the critic demonstrated it by adding a `SystemPrompt` field…" | **[keep the counter-example]** — this is the argument for compulsory classification |
 | C-35 | 361 | "**Three documents had been counting it differently**: this rule says history is *additional*… while design 03 A28 capped… and A35 bounded…" | the retained-set definition and its size; drop the three-way autopsy |
 | C-36 | 388 | "**The template uses `index` (A60, correcting A59).** A59 wrote `{{ .PodMeta.Labels "…" }}`, which Go's `text/template` does not accept as a map lookup…" | the corrected template + the fact that spire-controller-manager's webhook rejects a non-parsing template |
-| C-37 | 392 | "**The path segment is a LABEL, not `.PodMeta.Namespace` (A59), and this is an authorization change disguised as a move.**" | **[keep the counter-example]** — the `…/agent/plume-run-team-a/reviewer` walk is why the label exists |
+| C-37 | 392 | "**The path segment is a LABEL, not `.PodMeta.Namespace` (A59), and this is an authorization change disguised as a move.**" | **[keep the counter-example]** — the `…/agent/assayd-run-team-a/reviewer` walk is why the label exists |
 | C-38 | 396 | "One label carrying two trust boundaries was the critique's first blocker." | the rule: `pods-by` and `run-namespace` are distinct labels because they carry distinct trust boundaries |
 | C-39 | 398 | "An earlier note listed a design 06 amendment as owed for this; checking the text rather than the note, the SPIFFE template was never design 06's." | delete |
 | C-40 | 432 | "**Irrelevant (A38).** … The pre-A35 rule refused the rollback here, which would extend an incident by declining a recovery that is perfectly available" | the rule: a rollback target's *source* drifting is irrelevant; only its copies matter |
@@ -344,7 +344,7 @@ is absent from the repo and the body carries no "nothing enforces this yet".
 - L414: "Admission has already enforced … **prod-gate presence**"
 - L440: "Prod gates missing | **Rejected at admission** when the EvalSuite CRD is installed; never reconciled"
 - L466: "**prod-gate presence (CEL)**"
-- Repo: no `ValidatingAdmissionPolicy` on Agents (`charts/plume/templates/admission.yaml` covers Namespaces
+- Repo: no `ValidatingAdmissionPolicy` on Agents (`charts/assayd/templates/admission.yaml` covers Namespaces
   and HTTPRoutes only) and no `XValidation` for `gates` in `api/v1alpha1/agent_types.go`. CRD-level CEL
   cannot observe whether another CRD is installed, so this is not merely unbuilt — it is not expressible
   in the mechanism named. What is implemented is *reconcile-time*: `internal/controller/discovery.go`
@@ -356,7 +356,7 @@ is absent from the repo and the body carries no "nothing enforces this yet".
 - L59: "usdPerDay is a decimal STRING: `^[0-9]{1,6}(\.[0-9]{1,6})?$` (A15, six digits per A18)"
 - L414: "Admission has already enforced … **the `usdPerDay` grammar**"
 - Repo: `api/v1alpha1/agent_types.go:312` is a bare `*string` with no `+kubebuilder:validation:Pattern`
-  and no `XValidation`; the generated CRD (`charts/plume/crds/plume.dev_agents.yaml:81–85`) has `type: string`
+  and no `XValidation`; the generated CRD (`charts/assayd/crds/assayd.dev_agents.yaml:81–85`) has `type: string`
   and nothing else. Any string is accepted today, and it flows into the revision projection
   (`internal/revision/revision.go` `budget.USDPerDay`) and design 03's pricing compile.
 
@@ -405,7 +405,7 @@ property `coordination.k8s.io` does not provide. **Fix**: state what leader elec
   design says — but the rule as stated is not the rule as implemented.
 
 **E-10. "the operator's RBAC therefore needs `pods/log` `get` for itself" (L138).**
-Not granted in `charts/plume/files/operator-rules.yaml`. L210 admits the read-access path is not
+Not granted in `charts/assayd/files/operator-rules.yaml`. L210 admits the read-access path is not
 implemented; this sentence should say so where it stands.
 
 **E-11. The condition vocabulary's closure rule is asserted nowhere in the body.**
@@ -433,7 +433,7 @@ Same rule, two or more places, different wording. Left column is the site the re
 |---|---|---|---|
 | F-1 | 105 | 431 | env source missing/unreadable ⇒ `EnvSourceUnresolved`, no revision, no workload — including the "a zero would let deleting an object mint the same hash as never having referenced it" clause, repeated almost verbatim |
 | F-2 | 271–283 | 109 | A35: copies made at mint, before publication, from the same buffer; the workload references the copy |
-| F-3 | 125 | 113, 127 | revision workloads and material live in `plume-run-<agent-namespace>` |
+| F-3 | 125 | 113, 127 | revision workloads and material live in `assayd-run-<agent-namespace>` |
 | F-4 | 267 | 127, 277 | `immutable: true` permits delete-and-recreate, so immutability binds contents to an object, never a name to contents — argued three times |
 | F-5 | 133 | 206 | design 03 §3.2's truncate-and-hash rule, once for the namespace name and once for mirror names |
 | F-6 | 280–281 | 147, 438 | copies are rewritten non-optional; a missing/mismatched copy ⇒ weight 0 / `RevisionMaterialUnavailable`; rollback refused |
@@ -443,7 +443,7 @@ Same rule, two or more places, different wording. Left column is the site the re
 | F-10 | 213 | 31, 480 | `sandbox` ⇒ singleton; `replicas>1` + `sandbox` is an admission error |
 | F-11 | 214 | 444 | sandbox runtime class absent ⇒ hardened Deployment + `SandboxDowngraded` |
 | F-12 | 359 | 482 | `revisionHistoryLimit` counts **in addition to** active and candidate |
-| F-13 | 373 | 443 | card signature: required for plume-built, `CardUnsigned=True` for BYO/external |
+| F-13 | 373 | 443 | card signature: required for assayd-built, `CardUnsigned=True` for BYO/external |
 | F-14 | 376 | 441 | `registrationDeadline` expiry ⇒ candidate failed and deleted, slot freed |
 | F-15 | 375 | 442 | card advertising an ungranted capability ⇒ `Registered=False` naming the mismatch |
 | F-16 | 95 | 45–46 (YAML comment) | tool names resolve in the agent's own namespace; one name space across Connector facets and `MCPServer`; no kind discriminator |
@@ -451,7 +451,7 @@ Same rule, two or more places, different wording. Left column is the site the re
 | F-18 | 230 | 137, 295 | `AlreadyExists` is a race/never provenance/not an adoption — three formulations, three places, one rule |
 | F-19 | 161–163 | 136 | the nonce defeats pre-creation, the UID defeats delete-and-recreate; the table row states the whole argument the prose block then states again |
 | F-20 | 139 | 176, 206 | ResourceQuota / LimitRange / Pod Security mirroring — the decision, the ordering ("mirrors before `Bound`") and the naming, split across three sites |
-| F-21 | 392–394 | 140 | the SPIFFE path segment is the `plume.dev/agent-namespace` label, not `.PodMeta.Namespace` |
+| F-21 | 392–394 | 140 | the SPIFFE path segment is the `assayd.dev/agent-namespace` label, not `.PodMeta.Namespace` |
 | F-22 | 142 | 466 | default-deny NetworkPolicy, egress to the gateway only (and see A-4) |
 | F-23 | 143 | 404 | Service and route move with the workload; the compiler owns them by label and name, not `ownerReference` |
 | F-24 | 457 | 142 | `GovernanceSkipped=GatewayDisabled` is what a `gateway.enabled: false` install reports |
@@ -483,7 +483,7 @@ schema and from `api/v1alpha1` entirely. §12's A14 entry already records it as 
 
 **G-3. L305 — "`revisionHash(spec)` is computed from spec alone (`internal/revision/revision.go:12`)".**
 Line 12 of that file is prose inside the package doc comment. The claim is also false since A20: the
-signatures are `Digest(spec plumev1alpha1.AgentSpec, resolved Resolved)` and `Hash(spec, resolved)`, and
+signatures are `Digest(spec assaydv1alpha1.AgentSpec, resolved Resolved)` and `Hash(spec, resolved)`, and
 both **refuse** without the resolved sources. The A18 argument this citation supports (the subset
 predicate needs `(old, new)` and is not expressible in a content-addressed digest) is still correct —
 but its evidence line now points at the wrong thing and states a superseded signature. See §H.
@@ -504,8 +504,8 @@ binding is permitted to carry neither a kind discriminator nor a namespace. See 
 ("`Agent.tools` → `can_call`"). The claim is true; the anchor is not. Design 24's own A1 propagates the
 same bad number, so fixing it is a two-document change.
 
-**G-8. L138 — "**The supported path is `plume logs`** (design 08)".**
-`08-cli.md` contains no `plume logs` and no `SubjectAccessReview`; its CLI surface at :26 is
+**G-8. L138 — "**The supported path is `assayd logs`** (design 08)".**
+`08-cli.md` contains no `assayd logs` and no `SubjectAccessReview`; its CLI surface at :26 is
 `agent list|status|logs|register`. The same non-existent command is cited by design 07 A5.7 and by
 ADR-0029, so three documents now depend on a design-08 feature design 08 does not describe. This is the
 *only* supported read path for run-namespace Pod logs, so the gap is user-visible.
@@ -533,7 +533,7 @@ once; the consolidated header should either name it precisely or drop the review
 
 **G-13. L17 — "§17 budget".**
 Not dead: `docs/architecture.md:415` is "## 17 · Weight budget — core tier" and it does say
-"agent-operator 1 (the only plume-code pod) … ≈ **8 pods**". But the document is never named at the
+"agent-operator 1 (the only assayd-code pod) … ≈ **8 pods**". But the document is never named at the
 citation, and design 02 has eleven sections of its own, so a reader hits `§17` in §2 and has nowhere to
 go. (Designs 06, 07 and 10 cite it the same unqualified way; fixing it here is a corpus-wide habit, not a
 design-02 bug.)
@@ -609,7 +609,7 @@ in the current body, what enforces it, and the sentence that must not be lost.
 
 ### 4. The binding record (§3.2, L149–204)
 - **Rule**: for every source namespace `S`, a strictly-decoded `ConfigMap`
-  `plume-run-binding-<run-namespace>` in the operator's own namespace, carrying `sourceNamespace`,
+  `assayd-run-binding-<run-namespace>` in the operator's own namespace, carrying `sourceNamespace`,
   `sourceNamespaceUID`, `runNamespace`, `runNamespaceUID`, a 128-bit `nonce`, `state`
   (`Creating`·`Bound`·`Terminating`·`Deleting`) and `schemaVersion: 1`. **Nothing defaults**; a missing
   field, unknown state or undecodable version is terminal `RunNamespaceUnavailable=BindingRecordInvalid`.
@@ -635,12 +635,12 @@ in the current body, what enforces it, and the sentence that must not be lost.
 
 ### 5. Label authority (§3.2, L144)
 - **Rule**: three consumers act on run-namespace labels and none reads the binding — the
-  `ClusterSPIFFEID` selects on `plume.dev/pods-by`, the Gateway listener admits on
-  `plume.dev/run-namespace`, and the Namespace reconciler keys on both. So the chart ships a
+  `ClusterSPIFFEID` selects on `assayd.dev/pods-by`, the Gateway listener admits on
+  `assayd.dev/run-namespace`, and the Namespace reconciler keys on both. So the chart ships a
   `ValidatingAdmissionPolicy` and binding on Namespaces **and their `status` and `finalize`
-  subresources** denying any create/update that sets or changes `plume.dev/pods-by`,
-  `plume.dev/run-namespace`, `plume.dev/tenant-sync`, `plume.dev/agent-namespace`, `plume.dev/owned-by`
-  or the `plume.dev/binding-nonce` annotation from anyone but the identities rendered **into** the policy.
+  subresources** denying any create/update that sets or changes `assayd.dev/pods-by`,
+  `assayd.dev/run-namespace`, `assayd.dev/tenant-sync`, `assayd.dev/agent-namespace`, `assayd.dev/owned-by`
+  or the `assayd.dev/binding-nonce` annotation from anyone but the identities rendered **into** the policy.
   A second policy admits Gateway-parented `HTTPRoute`s from the operator only.
 - **Must not be lost**: "**Not a params object**: a params ConfigMap that went missing would have turned
   the policy into a cluster-wide denial of every namespace write."
@@ -652,7 +652,7 @@ in the current body, what enforces it, and the sentence that must not be lost.
 - **Must not be lost**: the two-labels-two-boundaries rule at L396 — `pods-by: agent-operator` means only
   the operator creates Pods there; `run-namespace` is the Gateway's, and a vCluster host sync namespace
   carries it while a *tenant* creates the Pods there.
-- **Enforced**: `charts/plume/templates/admission.yaml`, `test/chart/chart_test.go:517`,
+- **Enforced**: `charts/assayd/templates/admission.yaml`, `test/chart/chart_test.go:517`,
   `test/e2e/e2e_test.go:598 TestNamespaceLabelsAreReservedToTheOperator`,
   `test/envtest/runnamespace_test.go:517 TestRunNamespaceRefusesWithoutLabelAuthority`.
 
@@ -708,7 +708,7 @@ in the current body, what enforces it, and the sentence that must not be lost.
   writing `agent-{{ index … }}` would render a valid ID from an absent label" — *and* the `podSelector`
   additionally requires both labels to exist. Both halves, or the property is gone.
 - **The identity does not move when the Pod does** (L392–394): the path segment is the
-  `plume.dev/agent-namespace` label carrying the **Agent's own** namespace.
+  `assayd.dev/agent-namespace` label carrying the **Agent's own** namespace.
 - **Finalization ordering** (L408): drain (respecting `taskTimeout`) → revoke routes/policies in reverse
   apply order → **deactivate, never delete**, the `agent-actor` client → GC directory + SPIRE labels →
   delete workloads, copies, and the run namespace if last, by the binding protocol → release. "Nothing is

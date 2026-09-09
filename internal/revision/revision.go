@@ -45,7 +45,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // HashLength is how many hex characters of the digest name a revision. Ten hex
@@ -214,20 +214,20 @@ type exposeProtocol struct {
 // so the ORDER of instance fields is fixed by this file rather than by the
 // declaration order of a CRD type someone may reorder later — a reorder there
 // would silently re-gate every Agent.
-func endpointIdentity(e plumev1alpha1.LLMEndpoint) string {
+func endpointIdentity(e assaydv1alpha1.LLMEndpoint) string {
 	return string(e.Arm) + "|" + instanceIdentity(e.AzureOpenAI, e.VertexAI, e.Bedrock, e.Custom) +
 		"|model=" + e.Model
 }
 
-func allowIdentity(e plumev1alpha1.LLMAllowEntry) string {
+func allowIdentity(e assaydv1alpha1.LLMAllowEntry) string {
 	models := append([]string(nil), e.Models...)
 	sort.Strings(models)
 	return string(e.Arm) + "|" + instanceIdentity(e.AzureOpenAI, e.VertexAI, e.Bedrock, e.Custom) +
 		"|models=" + strings.Join(models, ",")
 }
 
-func instanceIdentity(az *plumev1alpha1.AzureOpenAIInstance, vx *plumev1alpha1.VertexAIInstance,
-	br *plumev1alpha1.BedrockInstance, cu *plumev1alpha1.CustomInstance) string {
+func instanceIdentity(az *assaydv1alpha1.AzureOpenAIInstance, vx *assaydv1alpha1.VertexAIInstance,
+	br *assaydv1alpha1.BedrockInstance, cu *assaydv1alpha1.CustomInstance) string {
 	switch {
 	case az != nil:
 		return fmt.Sprintf("azure(endpoint=%s,deployment=%s,apiVersion=%s)",
@@ -265,7 +265,7 @@ type external struct {
 // Deployment named H to the malicious image while status still names the
 // revision that passed. The old justification counted how many revisions
 // coexist, which answers an accidental-collision question nobody was asking.
-func Digest(spec plumev1alpha1.AgentSpec, resolved Resolved) (string, error) {
+func Digest(spec assaydv1alpha1.AgentSpec, resolved Resolved) (string, error) {
 	if unknown := UnknownEnvArms(spec); len(unknown) > 0 {
 		return "", fmt.Errorf("cannot mint a revision: %v. An env source this operator does not "+
 			"recognise is one whose content it cannot hash, and hashing only the arms it happens "+
@@ -287,7 +287,7 @@ func Digest(spec plumev1alpha1.AgentSpec, resolved Resolved) (string, error) {
 // are not the same revision unless their Digests agree, and the controller
 // treats a same-name/different-digest pair as a terminal RevisionHashCollision
 // rather than as one revision.
-func Hash(spec plumev1alpha1.AgentSpec, resolved Resolved) (string, error) {
+func Hash(spec assaydv1alpha1.AgentSpec, resolved Resolved) (string, error) {
 	// json.Marshal emits struct fields in declaration order and map keys
 	// lexically; the projection contains no maps, so this is canonical without a
 	// separate canonicalizer. Lists that carry no order semantics are sorted in
@@ -301,7 +301,7 @@ func Hash(spec plumev1alpha1.AgentSpec, resolved Resolved) (string, error) {
 
 // encode canonicalizes the projection. Both Digest and Hash go through it, so
 // they can never disagree about what was hashed.
-func encode(spec plumev1alpha1.AgentSpec, resolved Resolved) []byte {
+func encode(spec assaydv1alpha1.AgentSpec, resolved Resolved) []byte {
 	p := project(spec)
 	// A20: the CONTENT of every referenced source is part of the identity. The
 	// digests are folded in EnvSources' sorted order, so the projection does not
@@ -319,7 +319,7 @@ func encode(spec plumev1alpha1.AgentSpec, resolved Resolved) []byte {
 // project maps a spec onto A12's behaviour surface. Every included field is
 // named here and in behaviourFields; every excluded one is named in
 // policyFields. TestEveryFieldIsClassified proves the two lists are exhaustive.
-func project(spec plumev1alpha1.AgentSpec) behaviour {
+func project(spec assaydv1alpha1.AgentSpec) behaviour {
 	var b behaviour
 
 	if r := spec.Runtime; r != nil {

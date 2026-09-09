@@ -12,9 +12,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // THE property. Design 02 promised instant rollback, retention delivered the
@@ -32,7 +32,7 @@ func TestARollbackUnderSourceDriftSelectsTheRetainedRevision(t *testing.T) {
 	if err := k8s.Create(context.Background(), cm); err != nil {
 		t.Fatalf("create configmap: %v", err)
 	}
-	a := mustCreateAgent(t, ns, "roll", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "roll", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.Env = []corev1.EnvVar{{
 			Name: "MODE",
 			ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
@@ -99,7 +99,7 @@ func TestARollbackUnderSourceDriftSelectsTheRetainedRevision(t *testing.T) {
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	a.Spec.Release = &plumev1alpha1.ReleaseSpec{TargetRevisionDigest: r1Digest}
+	a.Spec.Release = &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: r1Digest}
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestPinningARevisionDoesNotMintOne(t *testing.T) {
 	a := mustCreateAgent(t, ns, "pinmint", nil)
 	before := revision.MustHash(a.Spec)
 
-	a.Spec.Release = &plumev1alpha1.ReleaseSpec{TargetRevisionDigest: strings.Repeat("b", 64)}
+	a.Spec.Release = &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: strings.Repeat("b", 64)}
 	if after := revision.MustHash(a.Spec); after != before {
 		t.Errorf("setting the pin moved the revision %s -> %s: asking for a rollback would "+
 			"mint a new revision to roll back from", before, after)
@@ -145,17 +145,17 @@ func TestAnUnresolvablePinRefusesRatherThanServingCurrentSpec(t *testing.T) {
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	a.Spec.Release = &plumev1alpha1.ReleaseSpec{TargetRevisionDigest: strings.Repeat("c", 64)}
+	a.Spec.Release = &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: strings.Repeat("c", 64)}
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
 	got := settle(t, r, a)
 
-	if !meta.IsStatusConditionTrue(got.Status.Conditions, string(plumev1alpha1.CondDegraded)) {
+	if !meta.IsStatusConditionTrue(got.Status.Conditions, string(assaydv1alpha1.CondDegraded)) {
 		t.Errorf("a pin naming a digest no retained revision carries did not degrade the "+
 			"Agent; conditions: %v", got.Status.Conditions)
 	}
-	c := meta.FindStatusCondition(got.Status.Conditions, string(plumev1alpha1.CondDegraded))
+	c := meta.FindStatusCondition(got.Status.Conditions, string(assaydv1alpha1.CondDegraded))
 	if c == nil || c.Reason != "ReleasePinUnresolvable" {
 		t.Errorf("degraded for the wrong reason: %+v — 'it was refused' is not evidence about "+
 			"which rule refused", c)
@@ -168,12 +168,12 @@ func TestAnUnresolvablePinRefusesRatherThanServingCurrentSpec(t *testing.T) {
 // that is not the one the user meant.
 func TestTheShortRevisionNameIsNotAcceptedAsAPin(t *testing.T) {
 	ns := newNamespace(t)
-	a := &plumev1alpha1.Agent{
+	a := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "shortpin"},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{
 				Image: "ghcr.io/acme/agent@sha256:" + strings.Repeat("a", 64)},
-			Release: &plumev1alpha1.ReleaseSpec{TargetRevisionDigest: "1f119ef39b"},
+			Release: &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: "1f119ef39b"},
 		},
 	}
 	err := k8s.Create(context.Background(), a)
@@ -234,7 +234,7 @@ func TestARollbackServesThePinnedRevisionsImage(t *testing.T) {
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	a.Spec.Release = &plumev1alpha1.ReleaseSpec{TargetRevisionDigest: r1Digest}
+	a.Spec.Release = &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: r1Digest}
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestARollbackServesThePinnedRevisionsImage(t *testing.T) {
 // Measured behaviour was correct; the point is that no test would have noticed
 // if it stopped being.
 func TestAPinIsRefusedWhenItsMaterialCannotVouchForIt(t *testing.T) {
-	mk := func(t *testing.T, name, cmName string) (string, string, *plumev1alpha1.Agent, string) {
+	mk := func(t *testing.T, name, cmName string) (string, string, *assaydv1alpha1.Agent, string) {
 		t.Helper()
 		ns := newNamespace(t)
 		cm := &corev1.ConfigMap{
@@ -271,7 +271,7 @@ func TestAPinIsRefusedWhenItsMaterialCannotVouchForIt(t *testing.T) {
 		if err := k8s.Create(context.Background(), cm); err != nil {
 			t.Fatalf("create cm: %v", err)
 		}
-		a := mustCreateAgent(t, ns, name, func(a *plumev1alpha1.Agent) {
+		a := mustCreateAgent(t, ns, name, func(a *assaydv1alpha1.Agent) {
 			a.Spec.Runtime.Env = []corev1.EnvVar{{Name: "MODE", ValueFrom: &corev1.EnvVarSource{
 				ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{Name: cmName}, Key: "MODE"}}}}
@@ -307,12 +307,12 @@ func TestAPinIsRefusedWhenItsMaterialCannotVouchForIt(t *testing.T) {
 		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 			t.Fatalf("get: %v", err)
 		}
-		a.Spec.Release = &plumev1alpha1.ReleaseSpec{TargetRevisionDigest: dig}
+		a.Spec.Release = &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: dig}
 		if err := k8s.Update(context.Background(), a); err != nil {
 			t.Fatalf("pin: %v", err)
 		}
 		got := settle(t, r, a)
-		c := meta.FindStatusCondition(got.Status.Conditions, string(plumev1alpha1.CondDegraded))
+		c := meta.FindStatusCondition(got.Status.Conditions, string(assaydv1alpha1.CondDegraded))
 		if c == nil || c.Reason != "ReleasePinUnresolvable" {
 			t.Errorf("a revision whose evaluated bytes no longer exist was not refused: %+v.\n"+
 				"Reading the user's object instead would serve content that revision never saw.", c)
@@ -333,12 +333,12 @@ func TestAPinIsRefusedWhenItsMaterialCannotVouchForIt(t *testing.T) {
 			t.Fatalf("get: %v", err)
 		}
 		a.Spec.Runtime.Env[0].ValueFrom.ConfigMapKeyRef.Name = "cfg2"
-		a.Spec.Release = &plumev1alpha1.ReleaseSpec{TargetRevisionDigest: dig}
+		a.Spec.Release = &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: dig}
 		if err := k8s.Update(context.Background(), a); err != nil {
 			t.Fatalf("update: %v", err)
 		}
 		got := settle(t, r, a)
-		c := meta.FindStatusCondition(got.Status.Conditions, string(plumev1alpha1.CondDegraded))
+		c := meta.FindStatusCondition(got.Status.Conditions, string(assaydv1alpha1.CondDegraded))
 		if c == nil || c.Reason != "ReleasePinUnresolvable" {
 			t.Errorf("a pin whose spec declares different sources was not refused: %+v.\n"+
 				"Copies are named by POSITION, so mapping them across a changed list would "+

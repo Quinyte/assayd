@@ -1,6 +1,6 @@
 ---
 name: write-spec
-description: Rules for anything a human reads to understand plume — designs, ADRs, CRD schemas, error messages, condition names. Use when writing or revising a design doc, an ADR, a CRD type, or any user-facing string. A spec that needs a person to already know the answer has failed.
+description: Rules for anything a human reads to understand assayd — designs, ADRs, CRD schemas, error messages, condition names. Use when writing or revising a design doc, an ADR, a CRD type, or any user-facing string. A spec that needs a person to already know the answer has failed.
 paths: docs/**, api/**, config/**, charts/**
 ---
 

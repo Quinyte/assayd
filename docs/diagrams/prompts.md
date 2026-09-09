@@ -15,7 +15,7 @@ used for this set, because the visualizer's Gemini key returned `API_KEY_SERVICE
 
 ## 01 — Architecture (16:9)
 Three horizontal bands. Band 1 CONTROL PLANE (faint `#F3ECD9` wash): Git repo → Argo CD →
-plume operators. Band 2 DATA PLANE: Agent A / Agent B → **gold-outlined agentgateway
+assayd operators. Band 2 DATA PLANE: Agent A / Agent B → **gold-outlined agentgateway
 (A2A / MCP / LLM)** → MCP tools / Knowledge Graph / LLM providers. Band 3 SUBSTRATE:
 NATS JetStream, Postgres, with an arrow down from the gateway into NATS.
 Gold beat: the agentgateway box.
@@ -57,7 +57,7 @@ Workflow→Agent `steps` · Model→EvalSuite `gates`. Gold beat: Agent.
 
 ## 07 — What actually runs (16:9)
 Three chip-tray bands. CORE (gold-tint wash, "8 pods"): **gold `agent-operator` chip** captioned
-"the only plume code", then agentgateway · SPIRE · Zitadel · NATS · Postgres · OpenObserve.
+"the only assayd code", then agentgateway · SPIRE · Zitadel · NATS · Postgres · OpenObserve.
 PLUS: workflow-operator · workflow-runtime · OpenFGA · model-operator · Argo.
 ENTERPRISE: tenant-operator · compliance packs. Footer: "two stateful dependencies: Postgres and NATS".
 Gold beat: agent-operator.

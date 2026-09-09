@@ -44,7 +44,7 @@ defining how the gateway produces trustworthy values for them.
 ### BLOCKER 1 — mutable image tags still change executable code under an unchanged gated revision
 
 **Files:** `api/v1alpha1/agent_types.go:69-73`,
-`config/crd/plume.dev_agents.yaml:436-440`,
+`config/crd/assayd.dev_agents.yaml:436-440`,
 `internal/controller/agent_controller.go:527-534`,
 `docs/designs/02-agent-crd-operator.md:30,362,480-486`
 
@@ -89,7 +89,7 @@ with a deterministic wrapper test.
 **Files:** `internal/controller/agent_controller.go:377-390`,
 `test/envtest/collision_test.go:357-391`
 
-The controller treats a missing `plume.dev/revision-digest` annotation as a
+The controller treats a missing `assayd.dev/revision-digest` annotation as a
 legacy object to adopt and stamp from the **current** Agent spec. The test pins
 that behavior. The migration has no trusted record of which old projection
 actually created the Deployment.
@@ -100,7 +100,7 @@ operator derives M's public full digest, rewrites the Pod template to M, and
 stamps it. I reproduced this exact sequence; the resulting Deployment ran
 `ghcr.io/attacker/backdoor:1.0.0` under S's revision name and gate history.
 
-**Specific fix:** plume is unreleased, so remove the adoption branch and fail
+**Specific fix:** assayd is unreleased, so remove the adoption branch and fail
 closed on a missing digest. If a future upgrade migration is required, persist
 the old full identity before accepting spec changes and remint/regate an
 unverifiable object. Never reconstruct legacy identity from current spec.
@@ -151,7 +151,7 @@ verdict for S's digest cannot authorize colliding M even when no workload exists
 ### BLOCKER 6 — the shipped LLM API cannot represent A24's endpoint identity
 
 **Files:** `api/v1alpha1/agent_types.go:169-183`,
-`config/crd/plume.dev_agents.yaml:186-212`,
+`config/crd/assayd.dev_agents.yaml:186-212`,
 `docs/designs/02-agent-crd-operator.md:50-56,494-500`
 
 The API still exposes flat `[]string` providers/egress allowlist and a fallback
@@ -175,7 +175,7 @@ across provider, fallback, allowlist, price, and receipt schemas.
 `docs/designs/03-policy-compiler.md:139`
 
 The namespace's only stated provenance is the forgeable label
-`plume.dev/owned-by: <install-uid>`. Kubernetes does not record “created by this
+`assayd.dev/owned-by: <install-uid>`. Kubernetes does not record “created by this
 controller,” and after restart the controller cannot distinguish its namespace
 from one pre-created with the same public label. The 8-hex truncation suffix is
 also only 32 bits. A44 imports design 03's “collision-checked” rule without
@@ -183,7 +183,7 @@ persisting the source namespace name/UID needed to perform that check.
 
 **Failure scenario:** a namespace-create principal pre-creates the predictable
 run namespace with the install label and a RoleBinding granting itself access.
-After restart, plume accepts it and writes copied Secrets. Independently, two
+After restart, assayd accepts it and writes copied Secrets. Independently, two
 chosen long source names collide in the 32-bit suffix; the second maps into the
 first tenant's run namespace and the labels cannot distinguish them.
 
@@ -224,12 +224,12 @@ same-namespace Service through the actual Gateway.
 
 The receipt envelope has `ns`, subjects are `receipts.<ns>.<agent>...`, and the
 budget backstop aggregates per Agent. A45 changes the route/workload namespace
-from `claims` to `plume-run-claims`, but neither design defines a trusted source
+from `claims` to `assayd-run-claims`, but neither design defines a trusted source
 Agent namespace/UID attribute or how the transform obtains it. A4 adds endpoint
 and gateway instance only.
 
 **Failure scenario:** the transform derives `ns` from the HTTPRoute/backend or
-Pod namespace. Spend lands under `plume-run-claims`, while the Agent and
+Pod namespace. Spend lands under `assayd-run-claims`, while the Agent and
 backstop lookup remain under `claims`; the exact-tier budget sees no spend and
 fails open. If it rewrites prefixes heuristically, truncation/hashing and source
 namespace recreation make attribution ambiguous.
@@ -298,7 +298,7 @@ generation, and absence of an Event is not success. This is the deleted witness
 problem in another form.
 
 **Failure scenario:** a budget drops from 1000 to 1. The weight-zero update
-NACKs; the old route continues serving 1000. Plume observes current-generation
+NACKs; the old route continues serving 1000. Assayd observes current-generation
 status, applies the tightened policy to what it calls a non-serving route, and
 records/retries from a state that never existed.
 
@@ -315,7 +315,7 @@ NACKs and old traffic persists; the transaction must not advance.
 `docs/designs/04-receipt-tap.md:20-36,104-109`
 
 Design 04 adds `hop.endpoint` and `hop.gatewayInstance` to JSON, but does not
-name the exact agentgateway OTLP attributes, their stability, or a plume-owned
+name the exact agentgateway OTLP attributes, their stability, or a assayd-owned
 stamping mechanism that produces them. No current code or vendored conformance
 asserts either. Even if `gatewayInstance` is a Pod identity, “distinct count ==
 declared replicas” can be satisfied by dead, old Pod IDs during rollout while a
@@ -435,7 +435,7 @@ producer contracts has a compatible cardinality/size bound.
 
 **Failure scenario:** a legitimate MCP server advertises a large tool catalog or
 a tenant has many consumer budgets. The Agent becomes `PolicyCompileFailed`
-solely because plume invented a status-storage cap that the producer was never
+solely because assayd invented a status-storage cap that the producer was never
 required to meet.
 
 **Specific fix:** propagate explicit per-field bounds to producer schemas and

@@ -1,4 +1,4 @@
-# Publishing, held to the bar plume sets for the agents it runs.
+# Publishing, held to the bar assayd sets for the agents it runs.
 #
 # ADR-0019 requires agent images to be cosign-signed and admission rejects
 # unsigned ones; design 07 §4 says the chart ships "as a cosign-signed OCI
@@ -33,8 +33,8 @@ env:
   # interpolating it directly produces an invalid tag — which is exactly how
   # v0.1.1 first failed. The certificate identity below is a GitHub URL and
   # deliberately keeps the original case.
-  IMAGE_NAME: quinyte/plume-operator
-  CHART_NAME: quinyte/charts/plume
+  IMAGE_NAME: quinyte/assayd-operator
+  CHART_NAME: quinyte/charts/assayd
   CHART_REPO: quinyte/charts
 
 jobs:
@@ -66,7 +66,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # linux/arm64 is not an afterthought: plume targets laptop clusters, and
+      # linux/arm64 is not an afterthought: assayd targets laptop clusters, and
       # a chunk of those are Apple Silicon.
       - id: push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -174,8 +174,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # The chart ships pinned to the DIGEST of the image this run built, not to
-      # a tag that could later point elsewhere. This is the same rule plume
-      # enforces on agent images, applied to plume.
+      # a tag that could later point elsewhere. This is the same rule assayd
+      # enforces on agent images, applied to assayd.
       - name: pin the chart to the published digest
         run: |
           set -euo pipefail
@@ -184,9 +184,9 @@ jobs:
           # an unrunnable binary anywhere else.
           v="${{ needs.image.outputs.version }}"
           d="${{ needs.image.outputs.digest }}"
-          yq -i ".version = \"${v}\" | .appVersion = \"${v}\"" charts/plume/Chart.yaml
-          yq -i ".operator.image.tag = \"${v}\" | .operator.image.digest = \"${d}\"" charts/plume/values.yaml
-          grep -E "digest|tag" charts/plume/values.yaml | head -4
+          yq -i ".version = \"${v}\" | .appVersion = \"${v}\"" charts/assayd/Chart.yaml
+          yq -i ".operator.image.tag = \"${v}\" | .operator.image.digest = \"${d}\"" charts/assayd/values.yaml
+          grep -E "digest|tag" charts/assayd/values.yaml | head -4
 
       - name: package and push
         run: |
@@ -196,11 +196,11 @@ jobs:
           # architecture had it ever fired.
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login "${REGISTRY}" \
             --username "${{ github.actor }}" --password-stdin
-          helm package charts/plume --destination /tmp
+          helm package charts/assayd --destination /tmp
           # 2>&1 matters: helm writes "Pushed:" and "Digest:" to STDERR, so a
           # plain pipe to tee captures an empty file and the digest extraction
           # below finds nothing — after the chart has already been pushed.
-          helm push "/tmp/plume-${{ needs.image.outputs.version }}.tgz" \
+          helm push "/tmp/assayd-${{ needs.image.outputs.version }}.tgz" \
             "oci://${REGISTRY}/${CHART_REPO}" 2>&1 | tee /tmp/push.log
           # grep -m1, not `grep | head -1`: head closes the pipe, grep takes
           # SIGPIPE, and pipefail turns a successful push into a failed step.

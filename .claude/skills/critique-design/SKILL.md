@@ -1,6 +1,6 @@
 ---
 name: critique-design
-description: Adversarial review of a plume design doc or ADR before it can be approved. Use after a draft is complete, when the user asks to review/validate/critique a design, or before amending an approved design. A design may not move to approved without a passing critique.
+description: Adversarial review of a assayd design doc or ADR before it can be approved. Use after a draft is complete, when the user asks to review/validate/critique a design, or before amending an approved design. A design may not move to approved without a passing critique.
 when_to_use: design review, critique, validate a design, approve a design, "is this design right", before amending an approved design
 context: fork
 background: false

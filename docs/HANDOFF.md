@@ -1,4 +1,4 @@
-# Handoff — plume, 2026-09-03 (end of the A42 session)
+# Handoff — assayd, 2026-09-03 (end of the A42 session)
 
 Written at the end of the session that implemented design 02 A42. Everything
 here was verified by running it, not recalled. Read this, then `AGENTS.md`,
@@ -21,7 +21,7 @@ still not started and is still `RE-OPENED, do not implement`.**
 | A21 | `runtime.image` must be a digest-pinned OCI reference (CEL) |
 | A35 | a revision reads its own **immutable copy** |
 | A37 | the full digest is the revision identity; the 10-char name is a name |
-| **A42 / A60 / A61** | workloads and copies live in `plume-run-<ns>`; the operator proves it created that namespace by a binding record (nonce before binding, namespace UID after); a Terminating/Deleting handler tears it down when its last Agent goes; Pod Security labels, ResourceQuota and LimitRange are mirrored; the chart ships two admission policies reserving the `plume.dev` namespace labels to the operator, and the operator fail-closes without them |
+| **A42 / A60 / A61** | workloads and copies live in `assayd-run-<ns>`; the operator proves it created that namespace by a binding record (nonce before binding, namespace UID after); a Terminating/Deleting handler tears it down when its last Agent goes; Pod Security labels, ResourceQuota and LimitRange are mirrored; the chart ships two admission policies reserving the `assayd.dev` namespace labels to the operator, and the operator fail-closes without them |
 | A50 | the digest reaches `evalStatus` and `cards[]` |
 | A53 | typed LLM endpoint identities |
 | A56 | revision material is collected with its revision and with the Agent |
@@ -160,7 +160,7 @@ versions of one graph, and the seal firing after the canary begins.
 
 - **Design 02 §5's first table is the list of what is stated and unenforced** —
   sixteen rows, including the three admission guarantees that are not
-  CEL-expressible, the NetworkPolicy, `plume logs`, SPIRE, the `Sandbox` API,
+  CEL-expressible, the NetworkPolicy, `assayd logs`, SPIRE, the `Sandbox` API,
   the scratchpad, events/metrics/alerts, and "≥1 gate required in prod", which
   nothing requires: an Agent declaring no gate promotes with `GatesSkipped`.
   Read that table before believing any guarantee this design states.
@@ -187,7 +187,7 @@ versions of one graph, and the seal firing after the canary begins.
   paused delete racing a new Agent, a chosen name collision. envtest has no
   namespace controller, so deletions never complete there; these need the e2e.
 - **NetworkPolicy** (design 07 A5.4) lands with the gateway; the Sigstore
-  opt-in stamp (A5.6) with the verifier; `plume logs` with design 08.
+  opt-in stamp (A5.6) with the verifier; `assayd logs` with design 08.
 - **r8 blockers 10–13, majors 3, 6** are design 03's and are the next thing.
 - **Cross-family review availability**: Codex accepted this session's request
   framed as a defensive review of our own unreleased repository. Keep that
@@ -199,8 +199,8 @@ versions of one graph, and the seal firing after the canary begins.
 make test      # 7 layers — the pre-commit gate; ran before every commit
 make race      # internal/... api/...
 make verify    # generation reproducible AND committed (fails on ANY uncommitted file)
-make e2e                  # REAL k3d cluster — creates plume-local
-make conformance-cluster  # REAL k3d cluster — creates plume-conformance
+make e2e                  # REAL k3d cluster — creates assayd-local
+make conformance-cluster  # REAL k3d cluster — creates assayd-conformance
 ```
 
 `make e2e` ran green on the final tree (three times this session, the last

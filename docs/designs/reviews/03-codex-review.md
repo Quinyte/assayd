@@ -11,7 +11,7 @@ review target.
 Scope read independently before reading `03-amendments-review.md`: design 03
 §§3.1, 3.3, 3.3.1, 3.5, 5, 8.1 and A1–A9; design 02 §§3.1, 3.3, 5 and A15–A19;
 ADR-0020, ADR-0027; architecture §00/§01; and the amended rows in designs 01,
-07, 08, 10 and the designs index. No plume implementation exists to mutate for
+07, 08, 10 and the designs index. No assayd implementation exists to mutate for
 this design. I therefore checked the load-bearing third-party behavior against
 agentgateway's published 2.2 API and pinned upstream source, and executed the
 boundary arithmetic rather than treating the prose as proof.
@@ -49,8 +49,8 @@ condition shapes and meanings; the slash conceals the missing contract.
 
 **Concrete failure:** create a public A2A route whose OAuth policy targets the
 not-yet-created route. Agentgateway returns `Accepted=True, Attached=False`.
-Plume creates the route as step 3. If attachment remains pending or fails, the
-public route exists without the OAuth guarantee while plume records the
+Assayd creates the route as step 3. If attachment remains pending or fails, the
+public route exists without the OAuth guarantee while assayd records the
 mandatory concern as accepted.
 
 **Specific fix:** make route publication a two-phase operation. Create an inert
@@ -411,7 +411,7 @@ misreported as a killed classification mutation.
 | Mandatory-entry mutation is independently pinned | **SURVIVED BY SPECIFIED TEST SHAPE** | Registry-derived behavioral cases disappear when the production entry is deleted; no implementation exists yet to run a code mutation |
 | Recursive-type mutation is killed | **INVALID BY SPECIFIED TEST SHAPE** | A walker without a recursion stack hangs/crashes; that is not an assertion failure |
 
-No plume source mutation was performed: the compiler, registry, five condition
+No assayd source mutation was performed: the compiler, registry, five condition
 constants, gateway switch, chart dependency, NOTES, and leaf test do not exist
 in the reviewed snapshot. Treating a non-compiling hypothetical implementation
 as mutation evidence would violate AGENTS.md rule 3.

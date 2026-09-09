@@ -41,7 +41,7 @@
 
 ### 7. MINOR — condition-list and visibility nits
 
-`11-connector-crd.md:41,60,61`. §5 uses `EventsDegraded` but §3's conditions list doesn't declare it (ToolReady/IngestionReady/EventsReady/CredentialsValid) — add it. And "visible in `plume dir`/status" — the directory lists tools, not event backlogs; the truthful surface is the Connector CR status + a receiver metric (design 10's catalog could carry an `events_pending` signal once design 21 consumes them). **Fix**: two wording corrections.
+`11-connector-crd.md:41,60,61`. §5 uses `EventsDegraded` but §3's conditions list doesn't declare it (ToolReady/IngestionReady/EventsReady/CredentialsValid) — add it. And "visible in `assayd dir`/status" — the directory lists tools, not event backlogs; the truthful surface is the Connector CR status + a receiver metric (design 10's catalog could carry an `events_pending` signal once design 21 consumes them). **Fix**: two wording corrections.
 
 ## Lens summary
 

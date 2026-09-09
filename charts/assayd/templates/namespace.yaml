@@ -4,9 +4,9 @@ kind: Namespace
 metadata:
   name: {{ .Values.namespace }}
   labels:
-    {{- include "plume.labels" . | nindent 4 }}
+    {{- include "assayd.labels" . | nindent 4 }}
     # The operator's own namespace runs under the restricted Pod Security
-    # Standard. Everything plume renders here already satisfies it, so enforcing
+    # Standard. Everything assayd renders here already satisfies it, so enforcing
     # it means a future addition that does not is rejected at admission rather
     # than discovered later.
     pod-security.kubernetes.io/enforce: restricted

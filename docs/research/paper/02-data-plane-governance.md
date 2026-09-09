@@ -37,7 +37,7 @@ Frame as systems engineering with a stated limitation, never as a new primitive,
 
 Required demonstrations: (1) a topology where framework depth caps and a global hop counter both pass and per-identity occurrence budgeting is the only thing that halts it — if it cannot be constructed, (b) has no reason to exist; (2) the fan-out amplification table — fix depth, sweep branching factor, plot invocations against what the lineage check observed, then show budgets closing the gap; (3) header-integrity under a prompt-injected agent that forges, truncates, or replays lineage, including the confused-deputy case where A launders a call through B to shed its lineage entry; (4) header growth bound and fail-open-vs-closed behaviour at the size limit (fail-open here is total bypass); (5) p99 latency vs the stateful call-graph baseline, since "no shared state" is the only claimed advantage.
 
-## Consequence for plume
+## Consequence for assayd
 
 Architecturally the bindings are *validated* — this is "bind, don't build" working. Two actions:
 

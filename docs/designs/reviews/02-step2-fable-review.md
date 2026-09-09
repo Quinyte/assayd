@@ -14,8 +14,8 @@ The three commit messages are candid and their INVALID/SURVIVED/KILLED distincti
 | `go build ./... && go vet ./...` at HEAD | clean |
 | unit (`./internal/... ./api/... ./test/responder/...`) at HEAD | green |
 | envtest, full suite, at HEAD (`setup-envtest use 1.36.x`) | green, 81.0s |
-| `CLUSTER=plume-e2e-resp make e2e` on a clean tree | green, `EXIT=0`; all 12 tests incl. the three new responder tests (74.1s of test time, ~3 min wall) |
-| `CLUSTER=plume-e2e-resp make e2e` with mutation X3 applied | `TestTheOperatorRegistersTheCardItFetched` FAILS at `responder_test.go:324` — see ledger |
+| `CLUSTER=assayd-e2e-resp make e2e` on a clean tree | green, `EXIT=0`; all 12 tests incl. the three new responder tests (74.1s of test time, ~3 min wall) |
+| `CLUSTER=assayd-e2e-resp make e2e` with mutation X3 applied | `TestTheOperatorRegistersTheCardItFetched` FAILS at `responder_test.go:324` — see ledger |
 | Seven measurement probes (envtest, written for this review and deleted afterwards) | each reproduced the behaviour cited in the finding that names it (T1–T7 below) |
 | Mutation ledger (this review's) | 4 mutations, each `go build`-checked before the result was believed; each restored from a `cp` backup and the restore checked with `git diff --quiet` |
 
@@ -50,7 +50,7 @@ X1 and X2 are the two halves of what A66 says the rollback guarantees: that the 
 
 **File**: `internal/controller/agent_controller.go:334` (`desired, desiredDigest = pin.Revision, pin.Digest`), `:430` (`ensureWorkload(ctx, &agent, …)`), `:848` (`desired := r.deploymentFor(agent, runNS, rev, material)` — renders from `agent.Spec`, the spec as it is *now*), `:955-965` (the whole-template rewrite when `!templateEquivalent`).
 
-**Evidence** (T7, envtest): image A gated and promoted as R1; image B deployed and promoted as R2; `spec.release.targetRevisionDigest` set to R1's digest. Result: `active=R1`, `activeRevisionDigest=R1`, `phase=Ready`, and R1's Deployment `spec.template.spec.containers[0].image == B`, annotation `plume.dev/revision-digest == R1`.
+**Evidence** (T7, envtest): image A gated and promoted as R1; image B deployed and promoted as R2; `spec.release.targetRevisionDigest` set to R1's digest. Result: `active=R1`, `activeRevisionDigest=R1`, `phase=Ready`, and R1's Deployment `spec.template.spec.containers[0].image == B`, annotation `assayd.dev/revision-digest == R1`.
 
 The pin selects R1's **name, digest and material names** and nothing else. `deploymentFor` then renders the pod template from the current spec — image, port, resources, env *names*, injected env — and the drift-correction block rewrites R1's template to match, stamping the result with R1's digest. The one case the committed test exercises (`TestARollbackUnderSourceDriftSelectsTheRetainedRevision`, ConfigMap content drift) is exactly the case where the current spec renders an identical template, so the defect is invisible there.
 
@@ -112,9 +112,9 @@ ADR-0031 decision 2, in full, settles: the field rather than a request CR, "unse
 
 ## MAJOR 7 — `DISTRO=kind make e2e` — a documented command and a CI matrix lane — is broken by `b7744b9`
 
-**File**: `hack/e2e.sh:36-40` (registry created in the `k3d` branch only), `:102-118` (build, `docker push localhost:5111/…` and `PLUME_E2E_RESPONDER_IMAGE=k3d-plume-e2e-registry:5111/…`, unconditional); `.github/workflows/ci.yml:88` (`distro: [k3d, kind]`); AGENTS.md "Commands" (`DISTRO=kind make e2e`); CLAUDE.md line 5 ("pass on k3d and kind").
+**File**: `hack/e2e.sh:36-40` (registry created in the `k3d` branch only), `:102-118` (build, `docker push localhost:5111/…` and `ASSAYD_E2E_RESPONDER_IMAGE=k3d-assayd-e2e-registry:5111/…`, unconditional); `.github/workflows/ci.yml:88` (`distro: [k3d, kind]`); AGENTS.md "Commands" (`DISTRO=kind make e2e`); CLAUDE.md line 5 ("pass on k3d and kind").
 
-Read, not run — there is no kind cluster here and I did not create one. Under `set -euo pipefail`, the kind lane reaches `docker push localhost:5111/plume-responder:…` with no registry at that address and exits; if a registry happened to be present, the kind node could not resolve `k3d-plume-e2e-registry:5111` and `responderImage()` would fail the three responder tests. The commit message claims green on k3d only and does not mention kind; the commits are unpushed, so CI has not yet said this. It will.
+Read, not run — there is no kind cluster here and I did not create one. Under `set -euo pipefail`, the kind lane reaches `docker push localhost:5111/assayd-responder:…` with no registry at that address and exits; if a registry happened to be present, the kind node could not resolve `k3d-assayd-e2e-registry:5111` and `responderImage()` would fail the three responder tests. The commit message claims green on k3d only and does not mention kind; the commits are unpushed, so CI has not yet said this. It will.
 
 **Fix**: a kind-compatible registry path (kind's documented local-registry pattern with `containerdConfigPatches`), or a `kind)` arm that fails loudly naming the gap — either way, stop the header line from saying "k3d and kind" until both are true.
 
@@ -180,14 +180,14 @@ The fixture answers a bespoke `POST /v1/tasks` with a bespoke body (`agent`, `ga
 | ADR-0031 decision 2: full digest, field not CR, unset = follow spec | A66, `agent_types.go` | ADR-0031 | **true** |
 | ADR-0031 decision 2 also requires gate-evidence eligibility and a security recheck | `release.go:61-64`, §5, A66 | ADR-0031 | **false** — MAJOR 6; source is `reviews/00-astra-direction-review.md:190-191` |
 | ADR-0019: container is the card's source of truth | `card.go:21-23`, responder | ADR-0019 (2) | **true** |
-| ADR-0029: workloads and material in `plume-run-<ns>` | `release.go` reads there | ADR-0029 | **true** |
+| ADR-0029: workloads and material in `assayd-run-<ns>` | `release.go` reads there | ADR-0029 | **true** |
 | Design 09: unsigned BYO card registers with loud `CardUnsigned` | `card.go:31-36`, `agent_controller.go:501-503` | design 09 §3 item 2 | **true**, verbatim ("BYO/external agents with unsigned cards register with a loud `CardUnsigned` condition") |
 | Design 11 owns tool resolution, which does not exist | `card.go:37-41`, §5 | design 11 line 49, §11 | **true** |
 | Design 03's route names the revision Service by `backendRef` | `card.go:104-108`, A64 | design 03 line 157 | **true** |
 | §3.4 "does not specify where the sleep happens" for "3 retries, backoff" | A68 | §3.4 | **defensible** — §3.4 says "fetches it in-cluster (3 retries, backoff)"; in-line is the plain reading, but nothing forbids between-reconcile retries |
 | §3.4 makes an unfetchable card a registration failure, not a serving one | A68, `card.go:48-51` | §5 failure table, §4, design 09 §5 | **false** — MAJOR 3 |
-| A67: CRD refuses a tagged image; workload sets `imagePullPolicy: Always` | commit, A67 | `plume.dev_agents.yaml:777`; `agent_controller.go:1096` | **true** |
-| A66: the 40-bit name is refused by the CRD pattern | A66 | `plume.dev_agents.yaml:538` `^[0-9a-f]{64}$`; `TestTheShortRevisionNameIsNotAcceptedAsAPin` (envtest, real API server) | **true**, measured |
+| A67: CRD refuses a tagged image; workload sets `imagePullPolicy: Always` | commit, A67 | `assayd.dev_agents.yaml:777`; `agent_controller.go:1096` | **true** |
+| A66: the 40-bit name is refused by the CRD pattern | A66 | `assayd.dev_agents.yaml:538` `^[0-9a-f]{64}$`; `TestTheShortRevisionNameIsNotAcceptedAsAPin` (envtest, real API server) | **true**, measured |
 
 ## §5 honesty
 

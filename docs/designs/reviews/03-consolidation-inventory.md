@@ -4,7 +4,7 @@
 §11 (lines 735–837) is provenance and is out of scope.
 
 This is an **inventory pass, not a verdict pass**. No file was edited. Every claim below was checked
-against `api/v1alpha1`, `internal/revision`, `internal/controller`, `cmd/operator`, `charts/plume`,
+against `api/v1alpha1`, `internal/revision`, `internal/controller`, `cmd/operator`, `charts/assayd`,
 `config/crd`, `test/conformance`, `test/docs` and the three agentgateway research notes at the working
 tree of 2026-09-04, HEAD `71b5f5b` — i.e. **after** the round-3 critique and after the corrections that
 commit made to designs 03, 04 and 20, so several round-3 findings are narrowed or closed below rather
@@ -68,7 +68,7 @@ thing this pass found:
 - **E-4 / G-9** — `gatewayReplicas` is the divisor on **every** rate limit; its stated producers
   (`gateway.replicas`, `--gateway-replicas`) do not exist, and its provenance row says "Available at
   P1? **yes**".
-- **G-6** — plume's `LLMArm` enum has **six** arms; §3.4.1/§3.4.1.1 write the catalogue and the subset
+- **G-6** — assayd's `LLMArm` enum has **six** arms; §3.4.1/§3.4.1.1 write the catalogue and the subset
   predicate over **eight**, and the instance-field table omits the `azure` arm's five fields.
 - **G-7** — §3.4.1.1's `egressAllowlist` YAML example uses `instance:` and `endpoint: {scheme: …}`.
   Neither key exists; `scheme` is not a field anywhere in `api/v1alpha1`.
@@ -136,7 +136,7 @@ thing this pass found:
 
 **A-5. The receipt witness has no producer and has four producers, in one table cell.**
 - L444: "First, `hop.gatewayInstance` has **no producer**: design 04 introduces the field and names no
-  agentgateway attribute and no plume-owned stamping mechanism for it (design 04 A5 records the gap), so
+  agentgateway attribute and no assayd-owned stamping mechanism for it (design 04 A5 records the gap), so
   today the check has no input at all."
 - L444, four sentences later: "**The reason is no proof, not no input.** An earlier draft of this
   amendment said both fields had no producer; measured against tag `v1.4.1`, `hop.gatewayInstance` has
@@ -153,7 +153,7 @@ thing this pass found:
   only the drain allowance**".
 - L720: "A49's withdrawal-escalation case … **cannot be written until design 04 carries a route or
   revision identity on the envelope and a drain allowance** (design 04 A5), **because nothing today can
-  attribute a receipt to a route plume withdrew**."
+  attribute a receipt to a route assayd withdrew**."
 - **Fix**: §8's deferral reason is the drain allowance alone.
 
 **A-7. One-concern-per-policy stands on a source finding, and on diffability, in three places.**
@@ -335,7 +335,7 @@ thing this pass found:
 > `Chart.yaml` — **neither exists yet**: `Chart.yaml` has no `dependencies:` block and **`values.yaml` no
 > `gateway` key**"
 
-`charts/plume/values.yaml:87–89` ships `gateway: {enabled: false, name: plume}`. The `Chart.yaml` half is
+`charts/assayd/values.yaml:87–89` ships `gateway: {enabled: false, name: assayd}`. The `Chart.yaml` half is
 true. **Fix**: state the rule (the switch is the subchart's condition, so switch and install cannot
 diverge) and the one thing still owed (the `dependencies:` block, design 07).
 
@@ -357,9 +357,9 @@ drop the sentence — it is design 02's rule and design 02 now states it.
 the compiler cannot avoid changing."** Same defect, in the sentence that justifies design 03's emit
 registry. The analogy is still sound; the test named is not the one that carries it.
 
-**B-5. L612 — "Neither is implemented yet — `config/crd/plume.dev_agents.yaml` currently has a bare
-`type: string`."** Verified true (`config/crd/plume.dev_agents.yaml:85`, and the chart copy at
-`charts/plume/crds/plume.dev_agents.yaml:85`). Keep the fact; move the status latch. Note the generated
+**B-5. L612 — "Neither is implemented yet — `config/crd/assayd.dev_agents.yaml` currently has a bare
+`type: string`."** Verified true (`config/crd/assayd.dev_agents.yaml:85`, and the chart copy at
+`charts/assayd/crds/assayd.dev_agents.yaml:85`). Keep the fact; move the status latch. Note the generated
 description at both sites still cites **ADR-0020**, which ADR-0028 supersedes.
 
 **B-6. L582 — "Owed to `make conformance-cluster`, where the harness already exists."** Correct
@@ -389,7 +389,7 @@ Correct and current. Keep.
 **B-10. L295 — "this repo runs `go vet` with no `.golangci.yml`."** Verified (`Makefile:44`, no
 `.golangci.yml`). Correct today; it is a repo-state assertion inside a design and will rot.
 
-**B-11. L143 — "`charts/plume/templates/` has no `NOTES.txt` today."** Verified true. Keep the owed item,
+**B-11. L143 — "`charts/assayd/templates/` has no `NOTES.txt` today."** Verified true. Keep the owed item,
 drop the "today".
 
 **B-12. L50 — "this lives in `status.revisions[]` on the Agent, written by the operator."**
@@ -398,10 +398,10 @@ Present tense, no disclaimer. Design 02 §5 carries the honest row — `02:443`:
 reads it until the compiler exists**." Design 03, which owns the contents, says nothing.
 
 **B-13. L586/L622 — the pricing ConfigMaps are described as chart-shipped, in the present tense.**
-> "**Two ConfigMaps** … `plume-model-pricing`, **chart-owned and versioned** … The table is
+> "**Two ConfigMaps** … `assayd-model-pricing`, **chart-owned and versioned** … The table is
 > **chart-shipped** with `updated` baked in"
 
-`grep -r plume-model-pricing charts/ config/ internal/` returns nothing. Neither map exists, nothing is
+`grep -r assayd-model-pricing charts/ config/ internal/` returns nothing. Neither map exists, nothing is
 owed to design 07 for them, and §5 has no row for "the table is not installed".
 
 **B-14. L3 (header) — the status line is now accurate and the Research line is not.**
@@ -577,7 +577,7 @@ the two-writer argument and the load-error rules all rest on two objects nothing
 **E-4. `gatewayReplicas` — the divisor on every rate limit — has no producer.**
 - L114: "`gatewayReplicas` | chart value **`gateway.replicas`** → operator flag
   **`--gateway-replicas`**, default `1` | **yes**".
-- `charts/plume/values.yaml`'s `gateway:` block has `enabled` and `name` only.
+- `charts/assayd/values.yaml`'s `gateway:` block has `enabled` and `name` only.
   `cmd/operator/main.go:62–69` defines `operator-namespace`, `metrics-bind-address`,
   `health-probe-bind-address`, `leader-elect` and `eval-suite-check-interval`. No replicas flag.
 - L648 compounds it: "**`gatewayReplicas < 1` is likewise rejected at the flag**, not discovered by
@@ -587,9 +587,9 @@ the two-writer argument and the load-error rules all rest on two objects nothing
 
 **E-5. §6 claims an admission control the chart does not render.**
 - L700: "Emitted policies are the only capability-change path (**admission denies non-operator writes on
-  plume-labeled gateway resources**)."
-- `charts/plume/templates/admission.yaml:88` matches `resources: ["httproutes"]` only, and keys on
-  `parentRefs` naming the plume Gateway, not on a plume label. `agentgatewaypolicies` and
+  assayd-labeled gateway resources**)."
+- `charts/assayd/templates/admission.yaml:88` matches `resources: ["httproutes"]` only, and keys on
+  `parentRefs` naming the assayd Gateway, not on a assayd label. `agentgatewaypolicies` and
   `agentgatewaybackends` are covered by nothing. So the two kinds that carry the *capability* — the
   auth policy and the tool filter — are exactly the two the claim does not reach.
 
@@ -731,7 +731,7 @@ Line 66 is `Sandbox   string \`json:"sandbox,omitempty"\`` — a struct field. T
 - L532: "the closed set **`openai azureopenai azure anthropic gemini vertexai bedrock custom`**, verified
   in the shipped CRD".
 - Both are correct about *agentgateway* (verified in the vendored CRD: eight provider arms). They are
-  wrong about *plume*: `api/v1alpha1/agent_types.go:193` is
+  wrong about *assayd*: `api/v1alpha1/agent_types.go:193` is
   `+kubebuilder:validation:Enum=anthropic;openai;azureopenai;vertexai;bedrock;custom` — **six**. `azure`
   and `gemini` are unrepresentable in `llm.providers`, in `llm.fallback` and in `egressAllowlist`, so the
   catalogue the design specifies carries two rows nothing can name, and an operator whose org uses Azure
@@ -760,13 +760,13 @@ Line 66 is `Sandbox   string \`json:"sandbox,omitempty"\`` — a struct field. T
 
 **G-9. `gateway.replicas` and `--gateway-replicas`.** See E-4.
 
-**G-10. `plume-model-pricing` / `plume-model-pricing-internal`.** See B-13/E-3.
+**G-10. `assayd-model-pricing` / `assayd-model-pricing-internal`.** See B-13/E-3.
 
 **G-11. "Design 02 §3.3's deletion authority is a name shape, and its shape today is
 `<agent>-<revisionHash>-env-<n>`" (L95) is true and insufficient.**
 The shipped authority (`internal/controller/material.go`'s `isRevisionMaterial`, mutation-confirmed by
-round 3) gates on **three** things: the `env-<n>` name shape, a non-empty `plume.dev/revision-digest`
-annotation, and a non-empty `plume.dev/source` annotation set to `ref.Kind + "." + ref.Name`. L95
+round 3) gates on **three** things: the `env-<n>` name shape, a non-empty `assayd.dev/revision-digest`
+annotation, and a non-empty `assayd.dev/source` annotation set to `ref.Kind + "." + ref.Name`. L95
 specifies the `-inputs` object as carrying **two labels and no annotations**, so extending only the name
 shape leaves it failing two of three gates. The owed item as written does not close the leak it names.
 
@@ -825,9 +825,9 @@ the whole non-spec-producer machinery rests on the opposite premise.**
   either design 11 gains a discovered-set concept or design 03's provenance row is corrected to name the
   Connector CR.
 
-**G-18. `plume doctor` is design 08 **§7**, not §8 — cited as §8 three times.**
-- L143, L682, L687: "`plume doctor` reports it (**design 08 §8**)".
-- `08-cli.md:64` is "`## 7. plume doctor`"; §8 is the failure-mode section. The rule design 03 depends on
+**G-18. `assayd doctor` is design 08 **§7**, not §8 — cited as §8 three times.**
+- L143, L682, L687: "`assayd doctor` reports it (**design 08 §8**)".
+- `08-cli.md:64` is "`## 7. assayd doctor`"; §8 is the failure-mode section. The rule design 03 depends on
   is at `08:70`, inside §7, and it is **correct and reciprocal**: "`doctor` also reports the **tier
   gap** … Design 03 relies on this verb as the sole report for a whole class of un-emitted governance, so
   it is named here rather than assumed."
@@ -843,7 +843,7 @@ the whole non-spec-producer machinery rests on the opposite premise.**
 
 **G-20. Design 11 was never told the catalogue bound, and §11 is about a different debt.**
 - L81/L95 owe design 11 "a stated catalogue bound" so the one-MiB number "is the producer's rather than
-  plume's".
+  assayd's".
 - `11-connector-crd.md:88` §11 is "Owed to this design (2026-09-04, **from design 02 §3.1 and
   ADR-0027**)" and its subject is the absent `MCPServer` kind and the tool-name uniqueness rule — a
   different gap, which design 03 itself depends on at L105 ("resolved against a Connector facet or
@@ -878,7 +878,7 @@ the whole non-spec-producer machinery rests on the opposite premise.**
 - Design 03's own §3.4 row (L469) and the removed-field row (L113) are correct; the propagation is not.
 
 **Verified correct, so the rewrite does not "fix" them**: design 07 A5.3's listener shape
-(`07:154–158`, `matchLabels: {plume.dev/run-namespace: "true"}`) matches L175; design 27 §3's closing
+(`07:154–158`, `matchLabels: {assayd.dev/run-namespace: "true"}`) matches L175; design 27 §3's closing
 rule ("**rejected, not warned**", `27:30`) matches L297; design 05's card row (`05:50`, SoT preserved per
 ADR-0019) matches L473; design 17's mock route (`17:40`, "recorded as a design 03 §3.4 row now, alongside
 the eval temporary-grant row") matches L477; design 01 A8 (`01:209`, "**No header signature exists or is
@@ -975,7 +975,7 @@ must not be lost, and what enforces it — **nothing, in most cases, and that is
 - **Must not be lost**: "`Accepted=True` also covers `PartiallyValid`" is the reason `reason: Valid` is
   required — currently carried only in the research note, not in the design's own table.
 - **Three things the research note has and the design does not**, and the rewrite should add them:
-  (a) the ancestor list is **capped at 16** and plume's entry can be **evicted**, replaced by a
+  (a) the ancestor list is **capped at 16** and assayd's entry can be **evicted**, replaced by a
   truncation ancestor carrying condition type `StatusSummarized`
   (`agentgateway-v1.4.1-2026-08.md:155–157`) — under the design's own rule, eviction reads as failure,
   which is fail-closed but leaves an Agent permanently un-`Ready` on a busy Gateway, for a reason no
@@ -1078,7 +1078,7 @@ must not be lost, and what enforces it — **nothing, in most cases, and that is
      tampered table skews both tiers identically" — and §6's consequence: "**no backstop**".
 - **Must not be lost**: "a per-day budget is **not directly expressible** — hourly is the coarsest
   available window"; "`ExactlyOneOf=requests;tokens` means one policy cannot carry both"; "at tag v1.4.1
-  `burst` carries **no `Minimum`**, so a negative burst is schema-valid and plume validates `burst >= 0`
+  `burst` carries **no `Minimum`**, so a negative burst is schema-valid and assayd validates `burst >= 0`
   itself".
 - **Must be deleted**: the capacity paragraph at L656 (A-4).
 - **Enforced**: `test/conformance/crd_contract_test.go:163 TestLocalRateLimitShape` pins the exact `unit`
@@ -1087,7 +1087,7 @@ must not be lost, and what enforces it — **nothing, in most cases, and that is
   versions that survived a valid mutation. `cluster_test.go:233 TestNegativeBurstIsAcceptedEverywhere`
   and `:251 TestDailyUnitIsRejected` measure the rest. `test/docs`'s `cuts-early-guarantee`,
   `overshoot-bound`, `exact-usd-tier` and `pricing-damage-bounded` rules keep all three retractions from
-  returning to the corpus. **This is the second-best-enforced part of the design.** The plume-side half —
+  returning to the corpus. **This is the second-best-enforced part of the design.** The assayd-side half —
   the divisor, the emitted arithmetic, `BudgetExhausted` — is enforced by nothing (E-4).
 
 ### 6. The pricing arithmetic and its edge rules (§3.5, L584–670)
@@ -1142,7 +1142,7 @@ must not be lost, and what enforces it — **nothing, in most cases, and that is
   dropped, because a dropped entry silently widens nothing but a dropped *deny* silently widens
   everything.**"
 - **Must not be lost**: "**What this guarantee does not cover, stated rather than implied.** The
-  predicate is over **names**, not addresses: plume does not resolve DNS, so a permitted hostname that
+  predicate is over **names**, not addresses: assayd does not resolve DNS, so a permitted hostname that
   later repoints is outside the control."
 - **Must not be lost**: "**`models` is enforceable on some arms and not others** … `azureopenai` does not
   [carry `model`] — it carries `apiVersion`, `deploymentName` and `endpoint`, and at `apiVersion: v1` the
@@ -1150,7 +1150,7 @@ must not be lost, and what enforces it — **nothing, in most cases, and that is
 - **Must be fixed**: the arm set, the instance-field table and the YAML example (G-6, G-7, A-22).
 - **Enforced**: `test/conformance/crd_contract_test.go:244 TestNoEgressFieldExists` (exactly one
   `allowlist` hit, the MCP methods list) and `:262 TestAzureOpenAIHasNoModelField` — which also pins that
-  `anthropic`, `vertexai` and `bedrock` **do** carry `model`. The plume-side CEL is real:
+  `anthropic`, `vertexai` and `bedrock` **do** carry `model`. The assayd-side CEL is real:
   `agent_types.go:247–251,270–274` enforce arm↔instance matching, `azureopenai` carrying no `model`, and
   a `models`-narrowed `azureopenai` entry requiring a `deploymentName`. **This is the one design-03 rule
   with enforcement on both sides of the interface.** The subset predicate itself has none.
@@ -1197,12 +1197,12 @@ must carry them:
   fall back to comparing the current value against itself — that classifies every drift as `Equal`,
   never freezes, and **lets a resolved sibling's catalogue widen a live route with no gate**."
 - **A47**: "an Agent failing `PolicyCompileFailed` because a legitimate MCP server advertises many tools
-  would be **plume enforcing a storage cap the producer was never told about**." And the mode-keyed —
+  would be **assayd enforcing a storage cap the producer was never told about**." And the mode-keyed —
   not size-keyed — storage table, which round 3 called "the right structure".
 - **A48**: "**One shared tenant limit cannot have N independently authoritative applied operands**".
 - **A49**: the reduction — "the withdrawal is **applied and converged at the control plane** … and is
   **best-effort at the dataplane**, and every consumer of `PolicyInputDrifted=RouteFailedClosed` must
-  read it as *'plume refused, and cannot prove the refusal reached traffic.'*" And: "**presence proves
+  read it as *'assayd refused, and cannot prove the refusal reached traffic.'*" And: "**presence proves
   failure even where absence proves nothing**."
 - **A50**: "**A declined option with a named cost, not an impossibility**" — per-Pod canary addressing
   costs N direct dials plus a membership watch and bypasses the production route the canary exists to
@@ -1286,7 +1286,7 @@ rather than amend"). Verified against the current body — every one of these is
 | **O-3** | **`sealedBindings`'s grammar is not injective, and has no value for `identity`.** L80's `<kind>/<name>` where `name` is "the binding's `requested` string … no join and no split is performed on it". `spec.knowledge[]` carries `{name, version}`; two versions of one graph resolve to different endpoints and collapse onto one key — representing the request needs the join the grammar forbids. And nothing in `AgentSpec` names an identity, so the third kind has no `name` segment. This would be the **fourth** non-injective key in this design's lineage, sitting on the operand the freeze keys on. | L80, L26, L108 |
 | **O-4** | **The seal is a two-object write with no crash rule.** L79 puts a ConfigMap create and a status update in one sentence. A crash between them leaves the record permanently unsealed on an active revision — "nothing seals after it" (L79) — so per L380 the capability is withheld and "only a new revision can acquire it": **an Agent whose tools resolved cleanly loses every tool for the life of that revision because the operator restarted at the wrong moment**, silently, since `PolicyInputDrifted` names a producer that never moved. And the name-taken case (`<agent>-<revisionHash>-inputs`, a 40-bit truncation that is chosen-collidable in about a second) has no rule, because design 02's `RevisionMaterialCollision` answer is "the revision is not published" and the seal fires **after** publication. | L79, L95, L684 |
 | **O-5** | **`identity`'s binding-ness did not propagate.** Design 06 is absent from L121's `ProducerAbsent` enumeration; `ProducerAbsent`/`Unresolvable` are undefined for an SVID; A33's per-Agent rule read literally fires on every Agent in every cluster; and design 06 was never amended — it contains no `Binding`, no resolution state, and its status line is unmarked. See A-9. | L26, L104, L121, L260 |
-| **O-6** | **The `-inputs` object's owed item to design 02 is insufficient and was never delivered.** The shipped delete authority gates on three things (name shape + `plume.dev/revision-digest` + `plume.dev/source`); L95 specifies two labels and no annotations and asks only for the name shape. Design 02 was edited in the same change and carries no owed note. See G-11. | L95 |
+| **O-6** | **The `-inputs` object's owed item to design 02 is insufficient and was never delivered.** The shipped delete authority gates on three things (name shape + `assayd.dev/revision-digest` + `assayd.dev/source`); L95 specifies two labels and no annotations and asks only for the name shape. Design 02 was edited in the same change and carries no owed note. See G-11. | L95 |
 | **O-7** | **The external-Agent row rests on a premise the same design refutes.** L92: "Its resolved inputs are an endpoint and an OAuth client identity, which do not approach the bound." `spec.tools[]` is a sibling of `external`, nothing excludes an external Agent from declaring tools, and L26/L62 put `toolAllowlist` in the sealed value unconditionally — so an external Agent fronting a large MCP catalogue is a **permanent `PolicyCompileFailed`**, a capability removed by a storage rule. | L92, L81 |
 | **O-8** | **Design 20's remediation row still specifies the check A50 withdrew.** Round 3 BLOCKER 3: `20:21`'s detection clause was edited and its remediation clause — "activation requires a distinct instance per replica" over `hop.gatewayInstance` — was not. An implementer reads the row that specifies the whole path. | cross-design |
 | **O-9** | **Narrowed since round 3, and still open.** `20:21` no longer says drift detection "cannot run" — it now says `hop.endpoint` is emitted for arm, model and host:port but **not** Azure's `deploymentName`, "so two deployments on one endpoint differing only in deployment are one identity to this read and **drift between them is invisible**". So the detector works except for that pair. But §6's failure table (`20:40–48`) still scopes `DriftDetectionDegraded` to "Canary CronJob fails (infra)" and has **no row for the Azure blind spot** — a permanently undetectable drift class with no condition naming it, which is the same NFR-8 shape one case smaller. | cross-design |
@@ -1354,7 +1354,7 @@ Class G was reported as 23 dead anchors. Every cross-document anchor in design 0
 |---|---|
 | design 02 has no A12 / A24 | both exist; design 02's §12 does not use the `**A<n>` bold form the checker required |
 | design 26 has no A1 / A2 | both exist, same reason |
-| design 07 has no A1 | A1 exists as an **inline** amendment tag at `07:41`, not a `## A1` heading, and design 07's status line correctly says "amendments A1–A5". Design 03's citation of it at `03:171` is sound, and the substance is independently true: measured, `charts/plume/` has no subcharts directory and `Chart.yaml` has no `dependencies:` block |
+| design 07 has no A1 | A1 exists as an **inline** amendment tag at `07:41`, not a `## A1` heading, and design 07's status line correctly says "amendments A1–A5". Design 03's citation of it at `03:171` is sound, and the substance is independently true: measured, `charts/assayd/` has no subcharts directory and `Chart.yaml` has no `dependencies:` block |
 
 **The one real anchor defect is smaller and different from what G described.** Design 03's body cites `§2.1`, `§2.6`, `§2.7` and `§2.8` eight times. Those are sections of `research/agentgateway-v1.4.1-spike.md`, all of which exist. Three citations name the spike; **five are bare** and rely on a "spike measured" antecedent one clause earlier. Design 03 has its own §2 — Doctrine & charter gates — so a bare `(§2.1)` reads as a self-reference to a section that says nothing of the kind. The consolidation should qualify all eight.
 

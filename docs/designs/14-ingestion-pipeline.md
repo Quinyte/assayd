@@ -17,7 +17,7 @@ How a snapshot gets built: acquire → normalize → extract → resolve → gat
 
 ## 3. Execution model
 
-Triggers (r1 f5): `plume kg push` · the Connector's `ingestion.schedule` (11) · connector source-change events (11, once design 21 wires them) · design 20 staleness remediation. Any of these ⇒ the operator creates a **build Job** for `<graph> vN+1`:
+Triggers (r1 f5): `assayd kg push` · the Connector's `ingestion.schedule` (11) · connector source-change events (11, once design 21 wires them) · design 20 staleness remediation. Any of these ⇒ the operator creates a **build Job** for `<graph> vN+1`:
 
 ```
 Job (DBOS workflow "build-<graph>-vN+1", per-run DB schema role: restricted)
@@ -47,7 +47,7 @@ Each stage emits a `kg.build.<stage>` CloudEvent; the whole run is one DBOS work
 
 ## 5. Ambiguity & the review queue
 
-`resolve` never guesses on ambiguous merges: candidates land in a **review queue** (JetStream KV + `plume kg review`). **Park/resume lifecycle (r1 f2)**: on pause the DBOS workflow enters a durable waiting state and **the Job exits cleanly** — 0 pods is true even mid-review; the **operator watches the queue** and relaunches the build Job on resolution (deterministic workflow id `build-<graph>-vN+1` ⇒ DBOS resumes at the paused stage). The same park/relaunch mechanic serves the budget-exhaustion halt (operator relaunches after the 00:00 UTC window). Queue older than `reviewTimeout` (72h) ⇒ `ReviewTimedOut`, build failed visibly — never auto-merge. Resolutions replay on future builds (same pair ⇒ same answer), invalidated on ontology major (§4).
+`resolve` never guesses on ambiguous merges: candidates land in a **review queue** (JetStream KV + `assayd kg review`). **Park/resume lifecycle (r1 f2)**: on pause the DBOS workflow enters a durable waiting state and **the Job exits cleanly** — 0 pods is true even mid-review; the **operator watches the queue** and relaunches the build Job on resolution (deterministic workflow id `build-<graph>-vN+1` ⇒ DBOS resumes at the paused stage). The same park/relaunch mechanic serves the budget-exhaustion halt (operator relaunches after the 00:00 UTC window). Queue older than `reviewTimeout` (72h) ⇒ `ReviewTimedOut`, build failed visibly — never auto-merge. Resolutions replay on future builds (same pair ⇒ same answer), invalidated on ontology major (§4).
 
 ## 6. Failure modes
 

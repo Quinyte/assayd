@@ -281,7 +281,7 @@ the Agent has one `Ready`, one phase and one condition per type; the CLI treats
 any `PolicyCompileFailed`/`PolicyApplyIncomplete` as terminal.
 
 **Concrete failure:** one optional tool fails and the A2A route serves. One
-controller reports Ready, while `plume deploy` aborts as terminal; two failed
+controller reports Ready, while `assayd deploy` aborts as terminal; two failed
 routes race to overwrite one condition message and clearing one hides the other.
 
 **Specific fix:** define required-versus-optional route aggregation, stable
@@ -445,7 +445,7 @@ execution-validated” as a current open item hides the strongest evidence in th
 review.
 
 **Specific fix:** replace it with the measured list and the one remaining order
-question; distinguish dependency-spike evidence from plume implementation e2e,
+question; distinguish dependency-spike evidence from assayd implementation e2e,
 which is still absent.
 
 ## R2 closure ledger

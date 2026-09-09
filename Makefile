@@ -1,10 +1,10 @@
-# plume — the loop: nothing merges without green tests and a critic PASS.
+# assayd — the loop: nothing merges without green tests and a critic PASS.
 SHELL := /bin/bash
 GOBIN := $(shell go env GOPATH)/bin
 CONTROLLER_GEN := $(GOBIN)/controller-gen
 SETUP_ENVTEST  := $(GOBIN)/setup-envtest
 ENVTEST_K8S    ?= 1.36.x
-CLUSTER        ?= plume-local
+CLUSTER        ?= assayd-local
 
 # Tool versions are pinned here, not floated with @latest. A build whose output
 # depends on when it ran is not reproducible, and `make verify` would fail for
@@ -36,7 +36,7 @@ $(SETUP_ENVTEST):
 generate: $(CONTROLLER_GEN) ## deepcopy funcs
 	$(CONTROLLER_GEN) object paths=./api/...
 manifests: $(CONTROLLER_GEN) ## CRDs + RBAC
-	$(CONTROLLER_GEN) crd rbac:roleName=plume-operator paths=./... output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
+	$(CONTROLLER_GEN) crd rbac:roleName=assayd-operator paths=./... output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
 
 ## ---------- the loop ----------
 .PHONY: fmt vet unit envtest docs conformance conformance-cluster chart chart-conform test race cover e2e verify
@@ -60,13 +60,13 @@ conformance-cluster: ## the same contract, measured against a real gateway (prov
 	./hack/conformance-cluster.sh
 
 chart: ## render the chart and hold it to the doctrine (pods, stateful deps, RBAC)
-	helm lint charts/plume
+	helm lint charts/assayd
 	go test ./test/chart/... -count=1
 
 chart-conform: ## validate rendered manifests against the k8s schemas we support
 	@for v in 1.34.0 1.35.0 1.36.0; do \
 		echo "==> kubeconform $$v"; \
-		helm template plume charts/plume | kubeconform -strict -summary \
+		helm template assayd charts/assayd | kubeconform -strict -summary \
 			-kubernetes-version $$v -ignore-missing-schemas || exit 1; \
 	done
 
@@ -77,8 +77,8 @@ verify: ## what CI runs — generation must be reproducible
 # `git diff` cannot see an untracked file, so a newly generated CRD that nobody
 # committed would pass this gate silently. --porcelain reports both.
 	@$(MAKE) generate manifests
-	@cp config/crd/plume.dev_agents.yaml charts/plume/crds/plume.dev_agents.yaml
-	@sed -n '/^rules:/,$$p' config/rbac/role.yaml > charts/plume/files/operator-rules.yaml
+	@cp config/crd/assayd.dev_agents.yaml charts/assayd/crds/assayd.dev_agents.yaml
+	@sed -n '/^rules:/,$$p' config/rbac/role.yaml > charts/assayd/files/operator-rules.yaml
 	@out="$$(git status --porcelain -- api config charts)"; \
 	if [ -n "$$out" ]; then \
 		echo "generated files are stale or uncommitted — run 'make generate manifests' and commit:"; \

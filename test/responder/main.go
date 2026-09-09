@@ -97,14 +97,14 @@ func handler() http.Handler {
 	name := env("AGENT_NAME", "responder")
 	cardPath := env("CARD_PATH", "/.well-known/agent-card.json")
 
-	// PLUME_GATEWAY_URL is the operator's injected contract (design 02 §11,
+	// ASSAYD_GATEWAY_URL is the operator's injected contract (design 02 §11,
 	// A65). It is REPORTED, never dialled, so an e2e can prove injection reached
 	// the container without this fixture needing a gateway to exist.
-	gateway := os.Getenv("PLUME_GATEWAY_URL")
+	gateway := os.Getenv("ASSAYD_GATEWAY_URL")
 
 	self := card{
 		Name:        name,
-		Description: "minimal HTTP responder — plume e2e fixture",
+		Description: "minimal HTTP responder — assayd e2e fixture",
 		Version:     "0.1.0",
 		SupportedInterfaces: []agentInterface{{
 			URL:             fmt.Sprintf("http://%s:%s/", name, port),
@@ -143,7 +143,7 @@ func handler() http.Handler {
 	// Implementing the real method set belongs with the client that will call it
 	// — design 03's route — not with a fixture that would then be the only thing
 	// in the repository claiming to speak A2A.
-	mux.HandleFunc("/plume-test/echo", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/assayd-test/echo", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return

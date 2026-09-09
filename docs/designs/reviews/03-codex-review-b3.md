@@ -83,19 +83,19 @@ seen until the container restarts
 ([Secret environment variables](https://kubernetes.io/docs/tasks/inject-data-application/distribute-credentials-secure/#define-container-environment-variables-using-secret-data)).
 
 Mounted Secret/ConfigMap volumes can update after a kubelet sync, provided the
-application reloads the file. That is a different delivery contract and plume's
+application reloads the file. That is a different delivery contract and assayd's
 Agent API does not expose it today. The local Kubernetes types confirm the
 reference has only name/key/optional; there is no UID or resourceVersion pin for
 kubelet to resolve.
 
 **Conclusion:** snapshots do not remove an existing live, no-restart rotation
-feature from `envFrom`; there is none. They do add an eval delay before plume
+feature from `envFrom`; there is none. They do add an eval delay before assayd
 deliberately replaces Pods. That delay is still unacceptable for emergency
 credential recovery, but it needs a separate credential path, not a false claim
 about current env behavior.
 
 Revocation and replacement must also be separated. When a credential is
-compromised, the issuer should revoke the old credential immediately; no plume
+compromised, the issuer should revoke the old credential immediately; no assayd
 eval may delay revocation. Supplying replacement bytes to an env-based process
 then requires a same-revision rolling restart. Supplying them without restart
 requires file/CSI delivery plus application reload.
@@ -113,7 +113,7 @@ does not distinguish that from an API key. R1 passes eval. The Secret changes to
 and serves it under R1's old result. Exempting Secret content for rotation makes
 this bypass intentional.
 
-If plume cannot distinguish behavioral data from credentials safely, the strict
+If assayd cannot distinguish behavioral data from credentials safely, the strict
 fallback is to freeze both. Slow rotation is worse operations; ungated behavior
 is broken correctness. The final API should not force that fallback on genuine
 credentials.
@@ -131,7 +131,7 @@ For those behavioral references, prefer **sealing the source in place** over
 copying it:
 
 1. Before hashing or creating a revision, the operator applies a
-   `plume.dev/env-source-protection` finalizer plus protected metadata to the
+   `assayd.dev/env-source-protection` finalizer plus protected metadata to the
    exact source UID.
 2. A chart-shipped, fail-closed `ValidatingAdmissionPolicy` denies data changes,
    deletion, protected-label changes and finalizer removal by every principal
@@ -169,7 +169,7 @@ lock; if the source was protected only by admission rather than permanently set
 `immutable: true`, it may become mutable again.
 
 **Required caveat:** this is a proposed Kubernetes transaction, not yet measured
-in plume. It must be spiked before becoming the design. In particular, test
+in assayd. It must be spiked before becoming the design. In particular, test
 update, delete, finalizer removal, label removal, controller restart, two Agents
 sharing one source, and a node drain. If the lock/refcount transaction cannot be
 made race-free, behavioral snapshots are the simpler safe fallback.
@@ -207,7 +207,7 @@ are rejected; they never silently gain the live exemption.
 For `delivery: env`, a rotation watch triggers a rolling restart of the **same
 revision**, not a new eval, because the binding's logical identity is unchanged.
 For `delivery: file`, kubelet/CSI may update mounted content and the application
-must implement reload; plume must not promise no-restart rotation without that
+must implement reload; assayd must not promise no-restart rotation without that
 application contract. Changes to provider, principal, audience, scope,
 destination, source path or delivery mode mint and gate a new revision.
 
@@ -320,7 +320,7 @@ not. The better shape is:
 > **Seal generic behavioral sources; bind and rotate credentials through a
 > separate typed, provenance-constrained field.**
 
-If plume is unwilling to add the typed credential contract now, freezing all
+If assayd is unwilling to add the typed credential contract now, freezing all
 generic env sources is the only safe interim behavior. It should be described as
 a correctness-first limitation, not as a production-grade credential rotation
 story.

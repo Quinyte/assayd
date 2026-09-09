@@ -4,7 +4,7 @@
 
 **Reviewer:** Codex (`codex-critic`), deliberately a different model family from the implementer and previous reviewers
 
-**Scope:** `api/v1alpha1/agent_types.go`, generated Agent CRDs, `internal/revision/`, `internal/controller/`, `cmd/operator/`, `charts/plume/`, and the envtest/chart/e2e tests
+**Scope:** `api/v1alpha1/agent_types.go`, generated Agent CRDs, `internal/revision/`, `internal/controller/`, `cmd/operator/`, `charts/assayd/`, and the envtest/chart/e2e tests
 
 **Verdict:** **REVISE — 7 BLOCKER, 4 MAJOR, 0 MINOR**
 
@@ -43,7 +43,7 @@ A12 hashes env sources “by referent, not contents,” but `EnvFrom` permits ar
 
 ### BLOCKER 3 — Mutable image tags make the revision hash non-content-addressed
 
-**Files:** `api/v1alpha1/agent_types.go:71-73`, `config/crd/plume.dev_agents.yaml:436-440`, `charts/plume/crds/plume.dev_agents.yaml:436-440`, `internal/controller/agent_controller.go:443-462`
+**Files:** `api/v1alpha1/agent_types.go:71-73`, `config/crd/assayd.dev_agents.yaml:436-440`, `charts/assayd/crds/assayd.dev_agents.yaml:436-440`, `internal/controller/agent_controller.go:443-462`
 
 The API accepts any non-empty image string. The generated CRD has no digest restriction, and the chart contains no signature admission policy. `ImagePullPolicyAlways` makes a mutable tag explicitly re-resolve on every pull.
 
@@ -150,7 +150,7 @@ Removing the explicit `ServiceAccountName: "default"` compiled, was built into t
 
 ### MAJOR 4 — Invalid container ports are admitted and become silent reconcile failures
 
-**Files:** `api/v1alpha1/agent_types.go:83-86`, `config/crd/plume.dev_agents.yaml:441-445`, `charts/plume/crds/plume.dev_agents.yaml:441-445`
+**Files:** `api/v1alpha1/agent_types.go:83-86`, `config/crd/assayd.dev_agents.yaml:441-445`, `charts/assayd/crds/assayd.dev_agents.yaml:441-445`
 
 The Agent CRD accepts any `int32` port, including negative values and values above 65535. Deployment admission then rejects the rendered workload, and reconciliation returns an error without an Agent condition explaining that the CR itself is invalid.
 

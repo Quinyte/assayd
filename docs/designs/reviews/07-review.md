@@ -83,11 +83,11 @@ VERDICT: REVISE — 9 findings
 | 6 | MINOR | **Resolved.** CRDs never rolled back; schema changes additive within N/N−1; the version guard checks both directions. |
 | 7 | MINOR | **Resolved.** Cosign-signed OCI chart, digest-pinned images, SBOM — "the same admission story agents get". |
 | 8 | MINOR | **Resolved.** Charter line added (plane/primitives; ships sockets, defines none). |
-| 9 | MINOR | **Mostly resolved** — `plume-contracts` ConfigMap named, `ontology/v1` added. Residual **R2-a**: the OASF 1.1.0 pin (design 05) is still absent from the ledger, and `pack/v1` is forward-declared before design 18 exists (fine, but mark it reserved). Cosmetic: D1 still says "stateful-dep grep" — update the word to match §2's allowlist. |
+| 9 | MINOR | **Mostly resolved** — `assayd-contracts` ConfigMap named, `ontology/v1` added. Residual **R2-a**: the OASF 1.1.0 pin (design 05) is still absent from the ledger, and `pack/v1` is forward-declared before design 18 exists (fine, but mark it reserved). Cosmetic: D1 still says "stateful-dep grep" — update the word to match §2's allowlist. |
 
 ### Residual (MINOR, non-blocking)
 
-- **R2-a** — add the OASF pin to the `plume-contracts` ledger; mark `pack/v1` as reserved-until-design-18; fix D1's stale "grep" wording.
+- **R2-a** — add the OASF pin to the `assayd-contracts` ledger; mark `pack/v1` as reserved-until-design-18; fix D1's stale "grep" wording.
 
 ### Verdict
 

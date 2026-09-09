@@ -14,9 +14,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // The WIRING, pinned where it is cheap to check. §3.4 fetches the card once the
@@ -35,7 +35,7 @@ func TestTheOperatorAttemptsACardFetchOnceTheRevisionIsAvailable(t *testing.T) {
 	// Before availability there is nothing to fetch FROM, so nothing should be
 	// claimed about registration.
 	got := settle(t, r, a)
-	if c := meta.FindStatusCondition(got.Status.Conditions, string(plumev1alpha1.CondRegistered)); c != nil {
+	if c := meta.FindStatusCondition(got.Status.Conditions, string(assaydv1alpha1.CondRegistered)); c != nil {
 		t.Errorf("Registered was set before the revision was available: %+v — there is no "+
 			"container serving a card yet, so any verdict here is invented", c)
 	}
@@ -43,7 +43,7 @@ func TestTheOperatorAttemptsACardFetchOnceTheRevisionIsAvailable(t *testing.T) {
 	markAvailable(t, ns, controller.WorkloadName("cardwire", rev), 1)
 	got = settle(t, r, a)
 
-	c := meta.FindStatusCondition(got.Status.Conditions, string(plumev1alpha1.CondRegistered))
+	c := meta.FindStatusCondition(got.Status.Conditions, string(assaydv1alpha1.CondRegistered))
 	if c == nil {
 		t.Fatalf("no Registered condition after the revision became available: the card fetch "+
 			"was never attempted; conditions %+v", got.Status.Conditions)
@@ -86,7 +86,7 @@ func TestAFailedCardFetchDoesNotWithholdTraffic(t *testing.T) {
 		t.Errorf("the revision did not become active despite being available; a card fetch "+
 			"failure blocked promotion. active=%q phase=%q", got.Status.ActiveRevision, got.Status.Phase)
 	}
-	if !meta.IsStatusConditionTrue(got.Status.Conditions, string(plumev1alpha1.CondReady)) {
+	if !meta.IsStatusConditionTrue(got.Status.Conditions, string(assaydv1alpha1.CondReady)) {
 		t.Errorf("Ready is not True after an unreachable card; conditions %+v", got.Status.Conditions)
 	}
 }
@@ -154,7 +154,7 @@ func TestARegisteredCardIsRereadAndDriftIsSignalled(t *testing.T) {
 	markAvailable(t, ns, controller.WorkloadName("drifty", rev), 1)
 	got := settle(t, r, a)
 
-	c := meta.FindStatusCondition(got.Status.Conditions, string(plumev1alpha1.CondRegistered))
+	c := meta.FindStatusCondition(got.Status.Conditions, string(assaydv1alpha1.CondRegistered))
 	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != "CardValidated" {
 		t.Fatalf("the card was not registered: %+v", c)
 	}
@@ -196,7 +196,7 @@ func TestARegisteredCardIsRereadAndDriftIsSignalled(t *testing.T) {
 	}
 	got = settle(t, r, a)
 
-	c = meta.FindStatusCondition(got.Status.Conditions, string(plumev1alpha1.CondRegistered))
+	c = meta.FindStatusCondition(got.Status.Conditions, string(assaydv1alpha1.CondRegistered))
 	if c == nil || c.Reason != "CardDrifted" {
 		t.Errorf("the agent replaced its card — a new skill and a new version — and the only "+
 			"trace was the digest changing in place. Registered reason is %q, want CardDrifted",

@@ -11,19 +11,19 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // goldenSpec exercises every projected field and every policy field at once —
 // a claim TestTheGoldenSpecPopulatesEveryLeaf now checks, because it was false:
 // usdPerDay, taskTimeout, maxHops, expose.a2a.auth and egressAllowlist were all
 // absent while the comment said otherwise (Codex r7 MAJOR 3).
-func goldenSpec() plumev1alpha1.AgentSpec {
+func goldenSpec() assaydv1alpha1.AgentSpec {
 	tokens, usd, hops, yes := int64(2000000), "12.50", int32(4), true
-	return plumev1alpha1.AgentSpec{
-		Runtime: &plumev1alpha1.AgentRuntime{
+	return assaydv1alpha1.AgentSpec{
+		Runtime: &assaydv1alpha1.AgentRuntime{
 			Image: "ghcr.io/acme/pa-agent@sha256:1400000000000000000000000000000000000000000000000000000000000000", Replicas: 2, Port: 8080,
-			Sandbox: &plumev1alpha1.SandboxSpec{Profile: "gvisor"},
+			Sandbox: &assaydv1alpha1.SandboxSpec{Profile: "gvisor"},
 			// One entry per union ARM: the arms are mutually exclusive, so a single
 			// EnvVar cannot populate them all and a fixture with one entry silently
 			// covers a quarter of the surface.
@@ -50,51 +50,51 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 				Claims:   []corev1.ResourceClaim{{Name: "gpu", Request: "one"}},
 			},
 		},
-		Card: plumev1alpha1.CardSpec{Path: "/.well-known/agent-card.json"},
-		Knowledge: []plumev1alpha1.KnowledgeBinding{{Name: "payer-policies", Version: "v12",
-			Scope: &plumev1alpha1.KGScope{EntityTypes: []string{"Procedure", "Policy"}}}},
-		Tools: []plumev1alpha1.ToolBinding{{Name: "claims-system", RequiresApproval: true}},
+		Card: assaydv1alpha1.CardSpec{Path: "/.well-known/agent-card.json"},
+		Knowledge: []assaydv1alpha1.KnowledgeBinding{{Name: "payer-policies", Version: "v12",
+			Scope: &assaydv1alpha1.KGScope{EntityTypes: []string{"Procedure", "Policy"}}}},
+		Tools: []assaydv1alpha1.ToolBinding{{Name: "claims-system", RequiresApproval: true}},
 		// One entry per ARM, for the same reason the Env list carries one per union
 		// arm: the arms are mutually exclusive within an entry, so a fixture with
 		// two entries silently leaves four arms' instance leaves unpinned.
-		LLM: &plumev1alpha1.LLMSpec{
-			Providers: []plumev1alpha1.LLMEndpoint{
-				{Arm: plumev1alpha1.ArmOpenAI, Model: "gpt-x"},
-				{Arm: plumev1alpha1.ArmAnthropic, Model: "claude"},
-				{Arm: plumev1alpha1.ArmAzureOpenAI, AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{
+		LLM: &assaydv1alpha1.LLMSpec{
+			Providers: []assaydv1alpha1.LLMEndpoint{
+				{Arm: assaydv1alpha1.ArmOpenAI, Model: "gpt-x"},
+				{Arm: assaydv1alpha1.ArmAnthropic, Model: "claude"},
+				{Arm: assaydv1alpha1.ArmAzureOpenAI, AzureOpenAI: &assaydv1alpha1.AzureOpenAIInstance{
 					Endpoint: "acme.openai.azure.com", DeploymentName: "gpt4o-prod", APIVersion: "2024-10-21"}},
-				{Arm: plumev1alpha1.ArmVertexAI, Model: "gemini-pro", VertexAI: &plumev1alpha1.VertexAIInstance{
+				{Arm: assaydv1alpha1.ArmVertexAI, Model: "gemini-pro", VertexAI: &assaydv1alpha1.VertexAIInstance{
 					ProjectID: "acme-prod", Region: "us-central1"}},
-				{Arm: plumev1alpha1.ArmBedrock, Model: "claude-3", Bedrock: &plumev1alpha1.BedrockInstance{
+				{Arm: assaydv1alpha1.ArmBedrock, Model: "claude-3", Bedrock: &assaydv1alpha1.BedrockInstance{
 					Region: "us-east-1", Guardrail: "gr-1"}},
-				{Arm: plumev1alpha1.ArmCustom, Model: "pa", Custom: &plumev1alpha1.CustomInstance{
+				{Arm: assaydv1alpha1.ArmCustom, Model: "pa", Custom: &assaydv1alpha1.CustomInstance{
 					Host: "llm.internal.example.com", Port: 8443, PathPrefix: "/v1"}},
 			},
-			EgressAllowlist: []plumev1alpha1.LLMAllowEntry{
-				{Arm: plumev1alpha1.ArmOpenAI, Models: []string{"gpt-4o"}},
-				{Arm: plumev1alpha1.ArmAnthropic},
-				{Arm: plumev1alpha1.ArmAzureOpenAI, AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{
+			EgressAllowlist: []assaydv1alpha1.LLMAllowEntry{
+				{Arm: assaydv1alpha1.ArmOpenAI, Models: []string{"gpt-4o"}},
+				{Arm: assaydv1alpha1.ArmAnthropic},
+				{Arm: assaydv1alpha1.ArmAzureOpenAI, AzureOpenAI: &assaydv1alpha1.AzureOpenAIInstance{
 					Endpoint: "acme.openai.azure.com", DeploymentName: "gpt4o-prod", APIVersion: "2024-10-21"}},
-				{Arm: plumev1alpha1.ArmVertexAI, VertexAI: &plumev1alpha1.VertexAIInstance{
+				{Arm: assaydv1alpha1.ArmVertexAI, VertexAI: &assaydv1alpha1.VertexAIInstance{
 					ProjectID: "acme-prod", Region: "us-central1"}},
-				{Arm: plumev1alpha1.ArmBedrock, Bedrock: &plumev1alpha1.BedrockInstance{
+				{Arm: assaydv1alpha1.ArmBedrock, Bedrock: &assaydv1alpha1.BedrockInstance{
 					Region: "us-east-1", Guardrail: "gr-1"}},
-				{Arm: plumev1alpha1.ArmCustom, Custom: &plumev1alpha1.CustomInstance{
+				{Arm: assaydv1alpha1.ArmCustom, Custom: &assaydv1alpha1.CustomInstance{
 					Host: "llm.internal.example.com", Port: 8443, PathPrefix: "/v1"}},
 			},
-			Fallback: &plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmAnthropic, Model: "pa-classifier"},
+			Fallback: &assaydv1alpha1.LLMEndpoint{Arm: assaydv1alpha1.ArmAnthropic, Model: "pa-classifier"},
 		},
-		Budget: &plumev1alpha1.BudgetSpec{
+		Budget: &assaydv1alpha1.BudgetSpec{
 			TokensPerDay: &tokens, USDPerDay: &usd,
 			TaskTimeout: &metav1.Duration{Duration: 90 * time.Second}, MaxHops: &hops,
 		},
-		Gates:  []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}},
-		Loop:   &plumev1alpha1.LoopSpec{AllowReentry: true, MaxVisits: 2},
-		Expose: &plumev1alpha1.ExposeSpec{A2A: &plumev1alpha1.ExposeProtocol{Visibility: "org", Auth: "oauth"}},
+		Gates:  []assaydv1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}},
+		Loop:   &assaydv1alpha1.LoopSpec{AllowReentry: true, MaxVisits: 2},
+		Expose: &assaydv1alpha1.ExposeSpec{A2A: &assaydv1alpha1.ExposeProtocol{Visibility: "org", Auth: "oauth"}},
 		// Set so a change to how this leaf encodes would move a golden digest —
 		// and, because it is policy surface, the digest must NOT move for it. The
 		// two golden constants below are what prove that.
-		Release: &plumev1alpha1.ReleaseSpec{TargetRevisionDigest: strings.Repeat("a", 64)},
+		Release: &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: strings.Repeat("a", 64)},
 	}
 }
 
@@ -158,7 +158,7 @@ func goldenSpec() plumev1alpha1.AgentSpec {
 // comment above describes — every existing Agent's hash changes, so every Agent
 // mints a candidate and every active workload is orphaned by name.
 //
-// It is being taken deliberately and now because plume has no production
+// It is being taken deliberately and now because assayd has no production
 // clusters: P1 is unshipped, so the set of affected revisions is empty and the
 // migration costs nothing today. Taken after the first install it would need a
 // carry-forward that maps old hashes to new ones. Design 02 §3.3 records the
@@ -185,8 +185,8 @@ func TestTheGoldenSpecPopulatesEveryLeaf(t *testing.T) {
 	// exclusive at admission — one spec cannot legally carry both, so demanding
 	// one fixture cover every leaf would be unsatisfiable and the check would end
 	// up deleted instead of believed.
-	fixtures := append([]plumev1alpha1.AgentSpec{goldenSpec(), goldenExternalSpec()}, coverageSpecs()...)
-	for _, l := range Leaves(t, reflect.TypeOf(plumev1alpha1.AgentSpec{}), "spec", nil) {
+	fixtures := append([]assaydv1alpha1.AgentSpec{goldenSpec(), goldenExternalSpec()}, coverageSpecs()...)
+	for _, l := range Leaves(t, reflect.TypeOf(assaydv1alpha1.AgentSpec{}), "spec", nil) {
 		covered := false
 		for _, spec := range fixtures {
 			if v, ok := readLeaf(reflect.ValueOf(spec), l); ok && !v.IsZero() {
@@ -212,11 +212,11 @@ func TestTheGoldenSpecPopulatesEveryLeaf(t *testing.T) {
 // `llm.providers[]`, whose arms ARE in goldenSpec and therefore digest-pinned —
 // so an encoding change reaches goldenDigest through the providers side. If
 // fallback ever gets its own encoding, it needs its own pinned fixture.
-func coverageSpecs() []plumev1alpha1.AgentSpec {
-	fb := func(e plumev1alpha1.LLMEndpoint) plumev1alpha1.AgentSpec {
-		return plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: goldenSpec().Runtime.Image},
-			LLM:     &plumev1alpha1.LLMSpec{Fallback: &e},
+func coverageSpecs() []assaydv1alpha1.AgentSpec {
+	fb := func(e assaydv1alpha1.LLMEndpoint) assaydv1alpha1.AgentSpec {
+		return assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{Image: goldenSpec().Runtime.Image},
+			LLM:     &assaydv1alpha1.LLMSpec{Fallback: &e},
 		}
 	}
 	// fileKeyRef reads from a VOLUME, and this API renders none — so the operator
@@ -224,39 +224,39 @@ func coverageSpecs() []plumev1alpha1.AgentSpec {
 	// digest-pinned fixture for that reason, and it stays here so its four leaves
 	// keep classification coverage. The refusal is asserted separately by
 	// TestAFileKeyRefSpecCannotMintARevision.
-	fileKey := plumev1alpha1.AgentSpec{
-		Runtime: &plumev1alpha1.AgentRuntime{
+	fileKey := assaydv1alpha1.AgentSpec{
+		Runtime: &assaydv1alpha1.AgentRuntime{
 			Image: goldenSpec().Runtime.Image,
 			Env: []corev1.EnvVar{{Name: "FIL", ValueFrom: &corev1.EnvVarSource{
 				FileKeyRef: &corev1.FileKeySelector{
 					VolumeName: "vol", Path: "p.env", Key: "K", Optional: boolPtr(true)}}}},
 		},
 	}
-	return []plumev1alpha1.AgentSpec{
+	return []assaydv1alpha1.AgentSpec{
 		fileKey,
-		fb(plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmAzureOpenAI,
-			AzureOpenAI: &plumev1alpha1.AzureOpenAIInstance{
+		fb(assaydv1alpha1.LLMEndpoint{Arm: assaydv1alpha1.ArmAzureOpenAI,
+			AzureOpenAI: &assaydv1alpha1.AzureOpenAIInstance{
 				Endpoint: "acme.openai.azure.com", DeploymentName: "gpt4o-prod", APIVersion: "2024-10-21"}}),
-		fb(plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmVertexAI, Model: "gemini-pro",
-			VertexAI: &plumev1alpha1.VertexAIInstance{ProjectID: "acme-prod", Region: "us-central1"}}),
-		fb(plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmBedrock, Model: "claude-3",
-			Bedrock: &plumev1alpha1.BedrockInstance{Region: "us-east-1", Guardrail: "gr-1"}}),
-		fb(plumev1alpha1.LLMEndpoint{Arm: plumev1alpha1.ArmCustom, Model: "pa",
-			Custom: &plumev1alpha1.CustomInstance{Host: "llm.internal.example.com", Port: 8443, PathPrefix: "/v1"}}),
+		fb(assaydv1alpha1.LLMEndpoint{Arm: assaydv1alpha1.ArmVertexAI, Model: "gemini-pro",
+			VertexAI: &assaydv1alpha1.VertexAIInstance{ProjectID: "acme-prod", Region: "us-central1"}}),
+		fb(assaydv1alpha1.LLMEndpoint{Arm: assaydv1alpha1.ArmBedrock, Model: "claude-3",
+			Bedrock: &assaydv1alpha1.BedrockInstance{Region: "us-east-1", Guardrail: "gr-1"}}),
+		fb(assaydv1alpha1.LLMEndpoint{Arm: assaydv1alpha1.ArmCustom, Model: "pa",
+			Custom: &assaydv1alpha1.CustomInstance{Host: "llm.internal.example.com", Port: 8443, PathPrefix: "/v1"}}),
 	}
 }
 
 // goldenExternalSpec is the other legal Agent shape: an external agent, which
 // admission requires to carry no runtime at all. It exists so External's three
 // leaves are pinned by a digest like every other leaf.
-func goldenExternalSpec() plumev1alpha1.AgentSpec {
-	return plumev1alpha1.AgentSpec{
-		External: &plumev1alpha1.ExternalAgent{
+func goldenExternalSpec() assaydv1alpha1.AgentSpec {
+	return assaydv1alpha1.AgentSpec{
+		External: &assaydv1alpha1.ExternalAgent{
 			Endpoint:       "https://partner.example.com/a2a",
 			OAuthClientRef: "partner-client",
 			InlineCard:     `{"name":"partner"}`,
 		},
-		Card: plumev1alpha1.CardSpec{Path: "/.well-known/agent-card.json"},
+		Card: assaydv1alpha1.CardSpec{Path: "/.well-known/agent-card.json"},
 	}
 }
 

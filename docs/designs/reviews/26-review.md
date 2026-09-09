@@ -36,7 +36,7 @@ Seven of ten hold cleanly, which is a real vindication of ADR-0013's "mostly inh
 
 ### 2. MAJOR — hard mode's shared/per-tenant boundary is underspecified, and at three points self-contradictory; workload identity is the sharpest
 
-`26-tenant-cr.md:37,44,49`. §4 says the tenant gets "its own API server, **its own plume operator set**, its own runtime", while §3's matrix keeps NATS, Postgres, and Zitadel **shared** (account / roles / org). Those two statements can't both be complete, and three concrete consequences go unaddressed:
+`26-tenant-cr.md:37,44,49`. §4 says the tenant gets "its own API server, **its own assayd operator set**, its own runtime", while §3's matrix keeps NATS, Postgres, and Zitadel **shared** (account / roles / org). Those two statements can't both be complete, and three concrete consequences go unaddressed:
 
 - **SPIRE / trust domains (the new mechanism the thesis denies).** Design 02 §3.5 issues SVIDs from one platform ClusterSPIFFEID templated on `.PodMeta.Namespace` + the agent label. vCluster runs tenant workloads as **host pods in a synced host namespace**, so a shared host SPIRE attests them with the *host* namespace — collapsing every tenant agent into one namespace segment and breaking the identity scheme's granularity. The alternative — a SPIRE server per vCluster — means N trust domains that the (shared) gateway must federate: SPIFFE federation is unquestionably a new mechanism, and nothing in designs 02/06 provides it.
 - **Write direction across the vCluster boundary.** If the gateway is shared (as §3's "gateway partition" implies) but the operators run *inside* the vCluster, those operators must write gateway CRs on the **host** cluster — requiring host-cluster credentials that defeat the isolation hard mode exists for. So either the gateway is per-tenant too (a cost §4 doesn't count), or the compiler stays host-side (and the operator set is *not* per-tenant).
@@ -58,7 +58,7 @@ Relatedly, D3's honest gap is narrower than the reality: the shared runtime hold
 
 ### 5. MINOR — `TenantVersionSkew` has no comparison mechanism
 
-`26-tenant-cr.md:51`. A lagging tenant vCluster means **two** `plume-contracts` ledgers (07 §4) — host and tenant — and the N/N−1 rule now applies *between installs*, not just across an upgrade. Who compares them, what blocks on skew, and does a tenant one version behind still receive host-side compiled config? **Fix**: name the comparator (the tenant-operator reads both ledgers at reconcile), state what a >1 gap blocks (tenant upgrades, not tenant traffic), and surface it on the condition already defined.
+`26-tenant-cr.md:51`. A lagging tenant vCluster means **two** `assayd-contracts` ledgers (07 §4) — host and tenant — and the N/N−1 rule now applies *between installs*, not just across an upgrade. Who compares them, what blocks on skew, and does a tenant one version behind still receive host-side compiled config? **Fix**: name the comparator (the tenant-operator reads both ledgers at reconcile), state what a >1 gap blocks (tenant upgrades, not tenant traffic), and surface it on the condition already defined.
 
 ## Lens summary
 
@@ -96,12 +96,12 @@ VERDICT: REVISE — 5 findings
 
 ### New findings (introduced by the r2 revision)
 
-#### R2-1. MAJOR — hard mode now says three different things about where the plume operators run and who holds cross-tenant privilege
+#### R2-1. MAJOR — hard mode now says three different things about where the assayd operators run and who holds cross-tenant privilege
 
 `26-tenant-cr.md:37,54,81`. The fix to r1 f2 moved operators host-side, but the surrounding text didn't move with it, and the new placement doesn't survive contact with what operators actually do:
 
 - **§3 (Control plane row)**: "the platform operators run **inside** it — see §4".
-- **§4 (the new table)**: "plume operators + policy compiler | **host-side** … They watch the tenant's API server **read-only** via the vCluster's kubeconfig".
+- **§4 (the new table)**: "assayd operators + policy compiler | **host-side** … They watch the tenant's API server **read-only** via the vCluster's kubeconfig".
 - **§7**: "the tenant-operator holds the **only** cross-tenant privilege in the system".
 
 The three cannot all hold. Worse, §4's own resolution is inadequate as stated: design 02's operator does not merely *watch* — it **creates** Deployments/Sandboxes, applies pod labels for SVID attestation, and writes directory entries. In hard mode those objects must be created in the **tenant's** API server, so the operator needs write access, not read-only. And if a shared host-side operator holds write kubeconfigs for every tenant vCluster, then it is cross-tenant privileged too — falsifying §7 and weakening hard mode's blast-radius story exactly where it is sold (a compromised shared agent-operator would reach every tenant's API server).

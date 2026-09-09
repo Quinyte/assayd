@@ -1,12 +1,12 @@
 {{- if and .Values.operator.podDisruptionBudget.enabled (ne .Values.profile "local") }}
-{{- include "plume.validate" . -}}
+{{- include "assayd.validate" . -}}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "plume.operator.name" . }}
+  name: {{ include "assayd.operator.name" . }}
   namespace: {{ .Values.namespace }}
   labels:
-    {{- include "plume.labels" . | nindent 4 }}
+    {{- include "assayd.labels" . | nindent 4 }}
 spec:
   # maxUnavailable, never minAvailable: with N replicas a minAvailable of N
   # permits no eviction at all, so a node drain hangs indefinitely and routine
@@ -14,5 +14,5 @@ spec:
   maxUnavailable: {{ .Values.operator.podDisruptionBudget.maxUnavailable }}
   selector:
     matchLabels:
-      {{- include "plume.operator.selectorLabels" . | nindent 6 }}
+      {{- include "assayd.operator.selectorLabels" . | nindent 6 }}
 {{- end }}

@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // A Service is per REVISION, not per Agent, and that is the whole point.
@@ -31,7 +31,7 @@ import (
 // Design 03 §3.6 places it in the run namespace with the route, because a
 // backendRef across namespaces needs a ReferenceGrant in the target namespace
 // and the user's namespace is not somewhere this operator may require one.
-func (r *AgentReconciler) serviceFor(agent *plumev1alpha1.Agent, runNS, rev string) *corev1.Service {
+func (r *AgentReconciler) serviceFor(agent *assaydv1alpha1.Agent, runNS, rev string) *corev1.Service {
 	// Identical to deploymentFor's, and deliberately so: this selects that
 	// Deployment's Pods and nothing else. A revision's Pods carry the revision
 	// label, so a Service for R1 cannot reach R2 even while both run.
@@ -73,7 +73,7 @@ func (r *AgentReconciler) serviceFor(agent *plumev1alpha1.Agent, runNS, rev stri
 // as its workload: a Service that exists under this name but was rendered from a
 // DIFFERENT projection is a 40-bit name collision, and converging it would point
 // the safe revision's route at the attacker's Pods. Stop instead.
-func (r *AgentReconciler) ensureService(ctx context.Context, agent *plumev1alpha1.Agent, runNS, rev, digest string) error {
+func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alpha1.Agent, runNS, rev, digest string) error {
 	desired := r.serviceFor(agent, runNS, rev)
 	desired.Annotations = map[string]string{RevisionDigestAnnotation: digest}
 
@@ -150,7 +150,7 @@ func equalService(a, b *corev1.Service) bool {
 // name authority as ownedWorkloads: the name shape `<agent>-<revision>`, which
 // is immutable so a victim object cannot be renamed into it, corroborated by
 // the Agent's UID. Nothing is deleted for wearing a label.
-func (r *AgentReconciler) ownedServices(ctx context.Context, agent *plumev1alpha1.Agent, runNS string) ([]corev1.Service, error) {
+func (r *AgentReconciler) ownedServices(ctx context.Context, agent *assaydv1alpha1.Agent, runNS string) ([]corev1.Service, error) {
 	var list corev1.ServiceList
 	if err := r.List(ctx, &list,
 		client.InNamespace(runNS),
@@ -168,7 +168,7 @@ func (r *AgentReconciler) ownedServices(ctx context.Context, agent *plumev1alpha
 	return owned, nil
 }
 
-func isRevisionService(agent *plumev1alpha1.Agent, s *corev1.Service) bool {
+func isRevisionService(agent *assaydv1alpha1.Agent, s *corev1.Service) bool {
 	rev := s.Labels[LabelRevision]
 	if rev == "" || s.Labels[LabelAgentUID] != string(agent.UID) {
 		return false
@@ -181,7 +181,7 @@ func isRevisionService(agent *plumev1alpha1.Agent, s *corev1.Service) bool {
 // workload does not — the Agent is in another namespace — so Kubernetes will
 // not collect it, and a leaked one keeps a name that a later revision of the
 // same Agent would legitimately want.
-func (r *AgentReconciler) collectRevisionServices(ctx context.Context, agent *plumev1alpha1.Agent, runNS string, keep map[string]bool) error {
+func (r *AgentReconciler) collectRevisionServices(ctx context.Context, agent *assaydv1alpha1.Agent, runNS string, keep map[string]bool) error {
 	owned, err := r.ownedServices(ctx, agent, runNS)
 	if err != nil {
 		return err

@@ -2,7 +2,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: plume-operator
+  name: assayd-operator
 rules:
 - apiGroups:
   - ""
@@ -66,6 +66,30 @@ rules:
   - update
   - watch
 - apiGroups:
+  - assayd.dev
+  resources:
+  - agents
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - assayd.dev
+  resources:
+  - agents/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - assayd.dev
+  resources:
+  - agents/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - coordination.k8s.io
   resources:
   - leases
@@ -76,27 +100,3 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - plume.dev
-  resources:
-  - agents
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - plume.dev
-  resources:
-  - agents/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - plume.dev
-  resources:
-  - agents/status
-  verbs:
-  - get
-  - patch
-  - update

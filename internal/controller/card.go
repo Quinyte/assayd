@@ -15,7 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // Card fetch, design 02 §3.4. The card is served by the CONTAINER and the
@@ -157,8 +157,8 @@ func (e *cardError) Error() string { return e.msg }
 // changes under the operator and the Service is the address design 03's route
 // will name, so fetching from anywhere else would validate a card served by
 // something other than what serves traffic.
-func (r *AgentReconciler) fetchAndValidateCard(ctx context.Context, agent *plumev1alpha1.Agent,
-	runNS, rev string) (*plumev1alpha1.CardStatus, error) {
+func (r *AgentReconciler) fetchAndValidateCard(ctx context.Context, agent *assaydv1alpha1.Agent,
+	runNS, rev string) (*assaydv1alpha1.CardStatus, error) {
 	path := agent.Spec.Card.Path
 	if path == "" {
 		path = "/.well-known/agent-card.json"
@@ -236,7 +236,7 @@ func (r *AgentReconciler) fetchAndValidateCard(ctx context.Context, agent *plume
 	// actually made.
 	sum := sha256.Sum256(body)
 	now := metav1.NewTime(time.Now())
-	return &plumev1alpha1.CardStatus{
+	return &assaydv1alpha1.CardStatus{
 		Revision:  rev,
 		Name:      c.Name,
 		Version:   c.Version,
@@ -288,8 +288,8 @@ func (r *AgentReconciler) fetchOnce(ctx context.Context, url string) ([]byte, er
 // name and the full digest are written: design 16 requires {name, digest} at
 // every gate step, and a card accepted under a chosen 40-bit collision would
 // otherwise attach a verdict to the wrong projection.
-func upsertCard(cards []plumev1alpha1.CardStatus, c plumev1alpha1.CardStatus,
-	revDigest string) []plumev1alpha1.CardStatus {
+func upsertCard(cards []assaydv1alpha1.CardStatus, c assaydv1alpha1.CardStatus,
+	revDigest string) []assaydv1alpha1.CardStatus {
 	c.RevisionDigest = revDigest
 	for i := range cards {
 		if cards[i].RevisionDigest == revDigest {
@@ -321,7 +321,7 @@ const CardDriftInterval = 5 * time.Minute
 // over: TestReconcileIsIdempotent caught five reconciles of a converged agent
 // issuing four status writes, and the envtest suite went from about a minute to
 // seven. A card is not a per-reconcile input.
-func cardFetchDue(status *plumev1alpha1.AgentStatus, revDigest string, now time.Time) bool {
+func cardFetchDue(status *assaydv1alpha1.AgentStatus, revDigest string, now time.Time) bool {
 	c := cardEntry(status, revDigest)
 	if c == nil {
 		return true // never attempted
@@ -344,7 +344,7 @@ func cardFetchDue(status *plumev1alpha1.AgentStatus, revDigest string, now time.
 // Reconcile returned RequeueAfter 0, no SyncPeriod is set, so the manager's
 // ~10h default applied and a converged agent was never re-read. The constant's
 // comment described a schedule that did not exist — a bound nothing enforced.
-func cardRequeueAfter(status *plumev1alpha1.AgentStatus, revDigest string) time.Duration {
+func cardRequeueAfter(status *assaydv1alpha1.AgentStatus, revDigest string) time.Duration {
 	c := cardEntry(status, revDigest)
 	if c == nil || c.Digest == "" {
 		return CardRetryInterval
@@ -352,7 +352,7 @@ func cardRequeueAfter(status *plumev1alpha1.AgentStatus, revDigest string) time.
 	return CardDriftInterval
 }
 
-func cardEntry(status *plumev1alpha1.AgentStatus, revDigest string) *plumev1alpha1.CardStatus {
+func cardEntry(status *assaydv1alpha1.AgentStatus, revDigest string) *assaydv1alpha1.CardStatus {
 	for i := range status.Cards {
 		if status.Cards[i].RevisionDigest == revDigest {
 			return &status.Cards[i]
@@ -372,14 +372,14 @@ func findCondition(conds []metav1.Condition, t string) *metav1.Condition {
 
 // hasCardFor reports whether this revision is REGISTERED — an entry with an
 // empty digest is a failed attempt, not a card.
-func hasCardFor(status *plumev1alpha1.AgentStatus, revDigest string) bool {
+func hasCardFor(status *assaydv1alpha1.AgentStatus, revDigest string) bool {
 	c := cardEntry(status, revDigest)
 	return c != nil && c.Digest != ""
 }
 
 // recordCardAttempt stamps a failed attempt so the retry gate has something to
 // measure from that does not freeze the way a condition timestamp does.
-func recordCardAttempt(status *plumev1alpha1.AgentStatus, rev, revDigest string, at time.Time) {
+func recordCardAttempt(status *assaydv1alpha1.AgentStatus, rev, revDigest string, at time.Time) {
 	t := metav1.NewTime(at)
 	if c := cardEntry(status, revDigest); c != nil {
 		c.FetchedAt = &t
@@ -390,7 +390,7 @@ func recordCardAttempt(status *plumev1alpha1.AgentStatus, rev, revDigest string,
 	// Revision is set even though this is not a card: pruneCards collects by
 	// revision name, so an attempt record without one would be the one thing in
 	// status that never gets collected.
-	status.Cards = append(status.Cards, plumev1alpha1.CardStatus{
+	status.Cards = append(status.Cards, assaydv1alpha1.CardStatus{
 		Revision: rev, RevisionDigest: revDigest, FetchedAt: &t,
 	})
 }
@@ -398,7 +398,7 @@ func recordCardAttempt(status *plumev1alpha1.AgentStatus, rev, revDigest string,
 // pruneCards drops entries for revisions that have left the retained set.
 // §3.4 says a card is "collected with revisions"; nothing collected them, so an
 // Agent accumulated one entry per revision it had ever registered, forever.
-func pruneCards(status *plumev1alpha1.AgentStatus, keep map[string]bool) bool {
+func pruneCards(status *assaydv1alpha1.AgentStatus, keep map[string]bool) bool {
 	if len(status.Cards) == 0 {
 		return false
 	}

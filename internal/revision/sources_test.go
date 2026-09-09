@@ -5,7 +5,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -15,7 +15,7 @@ func boolPtr(b bool) *bool { return &b }
 // unchanged and the new content served under the old revision's gate result,
 // with no permission to touch the Agent at all.
 func TestChangingASourcesCONTENTMintsARevision(t *testing.T) {
-	spec := plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{
+	spec := assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{
 		Image: "ghcr.io/acme/agent@sha256:" +
 			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
@@ -46,7 +46,7 @@ func TestChangingASourcesCONTENTMintsARevision(t *testing.T) {
 // A missing referent is UNRESOLVED, never a zero digest. A zero would let
 // deleting an object mint the same hash as never having referenced it.
 func TestAnUnresolvedSourceRefusesToMint(t *testing.T) {
-	spec := plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{
+	spec := assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{
 		Image: "ghcr.io/acme/agent@sha256:" +
 			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{
@@ -56,7 +56,7 @@ func TestAnUnresolvedSourceRefusesToMint(t *testing.T) {
 		t.Error("a spec referencing an unresolved Secret minted a revision")
 	}
 	// And it must not equal the identity of a spec with no reference at all.
-	bare := plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{Image: spec.Runtime.Image}}
+	bare := assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{Image: spec.Runtime.Image}}
 	withEmpty, err := Hash(spec, Resolved{{Kind: "Secret", Name: "creds"}: ""})
 	if err != nil {
 		t.Fatalf("hash: %v", err)
@@ -70,7 +70,7 @@ func TestAnUnresolvedSourceRefusesToMint(t *testing.T) {
 // An arm this operator does not recognise is one whose content it cannot hash.
 // fileKeyRef reads from a volume, and this API renders none.
 func TestAFileKeyRefSpecCannotMintARevision(t *testing.T) {
-	spec := plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{
+	spec := assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{
 		Image: "ghcr.io/acme/agent@sha256:" +
 			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		Env: []corev1.EnvVar{{Name: "K", ValueFrom: &corev1.EnvVarSource{

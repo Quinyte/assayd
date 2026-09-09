@@ -1,11 +1,11 @@
 ---
 name: adr
-description: Record an architecture decision for plume. Use when a design session settles a contested choice, reverses a prior decision, or the user says "record this decision".
+description: Record an architecture decision for assayd. Use when a design session settles a contested choice, reverses a prior decision, or the user says "record this decision".
 when_to_use: record this decision, we settled on X, reverse a prior decision
 paths: docs/decisions/**
 ---
 
-# Writing a plume ADR
+# Writing a assayd ADR
 
 1. Next sequential number in `docs/decisions/` (`NNNN-kebab-title.md`).
 2. Format (keep it under ~15 lines — ADRs are records, not essays):

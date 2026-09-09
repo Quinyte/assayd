@@ -7,7 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // Design 02 §3.3 (A12) classifies every AgentSpec field as behaviour-surface
@@ -86,7 +86,7 @@ func TestEveryFieldIsClassified(t *testing.T) {
 			}
 		}
 	}
-	walk(reflect.TypeOf(plumev1alpha1.AgentSpec{}), "")
+	walk(reflect.TypeOf(assaydv1alpha1.AgentSpec{}), "")
 }
 
 // Every behaviour-surface field must actually reach the projection. A field
@@ -114,11 +114,11 @@ func TestBehaviourFieldsAreProjected(t *testing.T) {
 
 // baseFor gives a field's test the surrounding structure it needs, so that
 // mutateField changes exactly one thing.
-func baseFor(path string) plumev1alpha1.AgentSpec {
+func baseFor(path string) assaydv1alpha1.AgentSpec {
 	s := baseSpec()
 	if strings.HasPrefix(path, "External.") {
 		s.Runtime = nil
-		s.External = &plumev1alpha1.ExternalAgent{
+		s.External = &assaydv1alpha1.ExternalAgent{
 			Endpoint:       "https://base.example.com",
 			OAuthClientRef: "client-a",
 		}
@@ -127,7 +127,7 @@ func baseFor(path string) plumev1alpha1.AgentSpec {
 }
 
 // mutateField returns the field's base with exactly the named field changed.
-func mutateField(t *testing.T, path string) plumev1alpha1.AgentSpec {
+func mutateField(t *testing.T, path string) assaydv1alpha1.AgentSpec {
 	t.Helper()
 	s := baseSpec()
 	switch path {
@@ -139,18 +139,18 @@ func mutateField(t *testing.T, path string) plumev1alpha1.AgentSpec {
 		s.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "cfg"}}}}
 	case "Runtime.Sandbox":
-		s.Runtime.Sandbox = &plumev1alpha1.SandboxSpec{Profile: "gvisor"}
+		s.Runtime.Sandbox = &assaydv1alpha1.SandboxSpec{Profile: "gvisor"}
 	case "Knowledge":
-		s.Knowledge = []plumev1alpha1.KnowledgeBinding{{Name: "g", Version: "v1"}}
+		s.Knowledge = []assaydv1alpha1.KnowledgeBinding{{Name: "g", Version: "v1"}}
 	case "Tools":
-		s.Tools = []plumev1alpha1.ToolBinding{{Name: "db"}}
+		s.Tools = []assaydv1alpha1.ToolBinding{{Name: "db"}}
 	case "LLM":
-		s.LLM = &plumev1alpha1.LLMSpec{Providers: []plumev1alpha1.LLMEndpoint{{Arm: plumev1alpha1.ArmOpenAI, Model: "gpt-x"}}}
+		s.LLM = &assaydv1alpha1.LLMSpec{Providers: []assaydv1alpha1.LLMEndpoint{{Arm: assaydv1alpha1.ArmOpenAI, Model: "gpt-x"}}}
 	case "Budget":
 		tokens := int64(2000000)
-		s.Budget = &plumev1alpha1.BudgetSpec{TokensPerDay: &tokens}
+		s.Budget = &assaydv1alpha1.BudgetSpec{TokensPerDay: &tokens}
 	case "Expose":
-		s.Expose = &plumev1alpha1.ExposeSpec{A2A: &plumev1alpha1.ExposeProtocol{Visibility: "org"}}
+		s.Expose = &assaydv1alpha1.ExposeSpec{A2A: &assaydv1alpha1.ExposeProtocol{Visibility: "org"}}
 	case "External.Endpoint":
 		s = baseFor(path)
 		s.External.Endpoint = "https://other.example.com"
@@ -162,7 +162,7 @@ func mutateField(t *testing.T, path string) plumev1alpha1.AgentSpec {
 		s.Runtime.Port = 9090
 	case "Loop":
 		s = baseFor(path)
-		s.Loop = &plumev1alpha1.LoopSpec{AllowReentry: true, MaxVisits: 2}
+		s.Loop = &assaydv1alpha1.LoopSpec{AllowReentry: true, MaxVisits: 2}
 	default:
 		t.Fatalf("no mutation defined for %q — add one when classifying a new field", path)
 	}

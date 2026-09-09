@@ -2,7 +2,7 @@
 
 - **Status**: **approved** — critique PASS at r2 (reviews/17-review.md) · ADR-0024
 - **Phase**: P3 · **Size**: M · **Date**: 2026-08-20
-- **ADRs**: 0021 (receipts, fidelity consumers, capture levels) · interfaces: 04 (the stream + object store), 16 (dataset sampler), 08 (`plume session` verbs), 02 (dev-revision targets)
+- **ADRs**: 0021 (receipts, fidelity consumers, capture levels) · interfaces: 04 (the stream + object store), 16 (dataset sampler), 08 (`assayd session` verbs), 02 (dev-revision targets)
 
 ## 1. Purpose & scope
 
@@ -10,7 +10,7 @@ Turns the receipt stream into three capabilities: **session reconstruction** (wh
 
 ## 2. Doctrine & charter gates
 
-- **Plane**: slow (a library + Job logic in the operator/CLI; no service). **Pods**: 0 — reconstruction is a read path; sampling/extraction run inside the eval Job (16 §5); `plume session` verbs read directly.
+- **Plane**: slow (a library + Job logic in the operator/CLI; no service). **Pods**: 0 — reconstruction is a read path; sampling/extraction run inside the eval Job (16 §5); `assayd session` verbs read directly.
 - **Stateful deps**: none new — sessions are **views over the RECEIPTS stream + object store**, never a copy. ✓ **Primitives**: Event (consuming), Artifact (exported fixtures/datasets), Agent (replay drives A2A). ✓
 
 ## 3. The session model
@@ -45,7 +45,7 @@ Stratified sampling over a window: strata by `(outcome.status, termination_reaso
 
 ## 6. Export & scrubbing
 
-`plume session export <id>` → a self-contained fixture (inputs + recorded hops + outcome) for bug reports and golden-case promotion. Export **always** runs the credential-scrub denylist again (defense in depth) and honors an additional `--redact <pattern>` pass; exports are marked with their origin digests. `plume eval promote <session>` = export + append to the suite's curated set.
+`assayd session export <id>` → a self-contained fixture (inputs + recorded hops + outcome) for bug reports and golden-case promotion. Export **always** runs the credential-scrub denylist again (defense in depth) and honors an additional `--redact <pattern>` pass; exports are marked with their origin digests. `assayd eval promote <session>` = export + append to the suite's curated set.
 
 ## 7. Failure modes
 

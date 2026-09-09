@@ -1,6 +1,6 @@
 ---
 name: review-code
-description: Adversarial review of a plume code diff before merge. Use after implementing a feature and before merging, or when the user asks to review code. Complements critique-design, which reviews specs; this reviews the code and its tests.
+description: Adversarial review of a assayd code diff before merge. Use after implementing a feature and before merging, or when the user asks to review code. Complements critique-design, which reviews specs; this reviews the code and its tests.
 when_to_use: code review, review this diff, before merging, "is this code right"
 context: fork
 background: false

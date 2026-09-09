@@ -1,6 +1,6 @@
 ---
 name: implement-feature
-description: Implement one plume feature test-first. Use when writing or changing operator, compiler, CLI, or API-type code. Enforces the loop — read the design → failing test → implement → mutation-check → independent critic → merge — and refuses to finalize untested work.
+description: Implement one assayd feature test-first. Use when writing or changing operator, compiler, CLI, or API-type code. Enforces the loop — read the design → failing test → implement → mutation-check → independent critic → merge — and refuses to finalize untested work.
 when_to_use: implement, build, write the reconciler, add a feature, start coding
 paths: api/**, internal/**, cmd/**, test/**, config/**, charts/**
 allowed-tools: Bash(make *) Bash(go *) Bash(git status *) Bash(git diff *) Bash(git show *)

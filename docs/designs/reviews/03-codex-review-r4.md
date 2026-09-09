@@ -69,7 +69,7 @@ positive.
 
 **Concrete failure:** a tool-filter tightening is NACKed and the old permissive
 filter remains. During the probe the MCP server is unhealthy and rejects the
-removed tool itself. Both `tools/list` and `tools/call` match the table, so plume
+removed tool itself. Both `tools/list` and `tools/call` match the table, so assayd
 publishes; when the server recovers the old filter still exposes the tool.
 
 **Specific fix:** define gateway-origin, policy-specific evidence rather than
@@ -187,7 +187,7 @@ OpenAI v1 endpoint. The emitted provider has no field in which to pin that
 model; a request selects another deployment/model on the same endpoint. The
 endpoint tuple passes while the model restriction is unenforced.
 
-**Specific fix:** define a discriminated plume type per upstream arm, including
+**Specific fix:** define a discriminated assayd type per upstream arm, including
 normalization/defaults. For `azureopenai`, either require and treat a
 non-v1 `deploymentName` as the constrained model identity, emit a separately
 verified request rewrite/guard that pins v1 model selection, or reject

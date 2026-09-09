@@ -31,14 +31,14 @@ The new tuple proves control-plane translation, which is better and correctly
 named. It cannot prove the tightening transaction in line 115 reached the
 proxy. At v1.4.1, a NACK is emitted only as a Kubernetes Event whose involved
 object is the **Gateway**. The publisher carries a gateway name, type URL, error
-text and timestamp; it carries no Policy/Route UID, no plume resource-set
+text and timestamp; it carries no Policy/Route UID, no assayd resource-set
 digest, and no generation. Watching that uncorrelated negative stream cannot turn
 absence of an Event into positive acknowledgement of one update. An old NACK
-can be attributed to the new apply, and a new NACK can arrive after plume has
+can be attributed to the new apply, and a new NACK can arrive after assayd has
 republished the route. The research note also explicitly leaves open whether a
 NACK retains the old permissive config or fails closed.
 
-**Concrete failure:** a tool filter is narrowed. Plume makes the route inert,
+**Concrete failure:** a tool filter is narrowed. Assayd makes the route inert,
 applies the policy, observes every current-generation Kubernetes condition, sees
 no NACK yet, and republishes. The proxy then NACKs the policy and continues its
 previous configuration. The newly denied tool remains callable while the Agent
@@ -397,7 +397,7 @@ Design 07 says it will ship “a Sigstore policy-controller or a Kyverno
 a controller and lifecycle/availability contract, and shipping one adds core
 pods to a budget already stated as approximately eight. If the controller is
 assumed external, a binding alone does not verify anything. Choose one mechanism,
-state whether plume installs or requires it, price its pods and failure mode, and
+state whether assayd installs or requires it, price its pods and failure mode, and
 make install fail or loudly degrade when the verifier is absent. “Or” is not a
 supply-chain enforcement design.
 
@@ -439,7 +439,7 @@ reading the full provenance log.
 |---|---|---|
 | Stable dependency baseline | **REPRODUCED** | `refs/tags/v1.4.1` resolves to `163ea214…`; `v1.5.0-beta.1` exists but is not the pinned stable contract |
 | One crossing request per replica | **REFUTED / REPRODUCED BY SOURCE** | v1.4.1 `check_llm_request` performs only `available_refill() > 0` before dispatch and no decrement; concurrent callers all pass |
-| NACK can be correlated to one plume apply | **REFUTED / REPRODUCED BY SOURCE** | v1.4.1 `nack/publisher.go` emits a Warning Event on the Gateway with type URL/error text, no resource-set or generation identity |
+| NACK can be correlated to one assayd apply | **REFUTED / REPRODUCED BY SOURCE** | v1.4.1 `nack/publisher.go` emits a Warning Event on the Gateway with type URL/error text, no resource-set or generation identity |
 | Empty MCP Allow expression set | **REPRODUCED** | v1.4.1 `AuthorizationPolicy.MatchExpressions` is required with `MinItems=1`; the design defines no empty-set mapping |
 | Immutable referent name binds contents | **REFUTED / REPRODUCED BY CONTRACT** | Kubernetes documents that immutable ConfigMaps/Secrets cannot be edited but can be deleted and recreated |
 | OTLP field `frontendPolicies` | **REFUTED / REPRODUCED BY SOURCE** | v1.4.1 exposes `spec.frontend.tracing`; frontend policies target Gateway, not a per-Agent route |

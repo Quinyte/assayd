@@ -15,9 +15,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // Regression tests for the four blockers the independent review found. Each is
@@ -33,8 +33,8 @@ import (
 // would have decided ADR-0006's fate by whether they remembered one field.
 func TestUnwiredReconcilerHoldsRatherThanPromotingUngated(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "unwired", func(a *plumev1alpha1.Agent) {
-		a.Spec.Gates = []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
+	a := mustCreateAgent(t, ns, "unwired", func(a *assaydv1alpha1.Agent) {
+		a.Spec.Gates = []assaydv1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
 	})
 
 	// Constructed exactly as an unwired cmd/ would leave it — apart from the two
@@ -51,13 +51,13 @@ func TestUnwiredReconcilerHoldsRatherThanPromotingUngated(t *testing.T) {
 			"Holding is recoverable; ungated promotion is not, so the unset default must hold.",
 			got.Status.ActiveRevision)
 	}
-	if c := condition(&got, plumev1alpha1.CondGatesSkipped); c != nil && c.Status == metav1.ConditionTrue {
+	if c := condition(&got, assaydv1alpha1.CondGatesSkipped); c != nil && c.Status == metav1.ConditionTrue {
 		t.Errorf("GatesSkipped=True with reason %q, but no CRD check was performed — "+
 			"NFR-8 requires the degraded path be loud AND true", c.Reason)
 	}
 	// The condition must name the real cause. Asserting only the absence of
 	// GatesSkipped would accept any other wrong answer.
-	c := condition(&got, plumev1alpha1.CondGatesPassed)
+	c := condition(&got, assaydv1alpha1.CondGatesPassed)
 	if c == nil || c.Status != metav1.ConditionFalse {
 		t.Fatal("an unwired operator must report GatesPassed=False")
 	}
@@ -77,7 +77,7 @@ func TestUnwiredReconcilerHoldsRatherThanPromotingUngated(t *testing.T) {
 // on X, the pods ran Y, and the CR asserted X.
 func TestPolicySurfaceEditsReachTheWorkload(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "inplace", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "inplace", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.Resources = corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},
 		}
@@ -156,7 +156,7 @@ func TestOutOfBandDriftIsCorrected(t *testing.T) {
 func TestSpecIsRequired(t *testing.T) {
 	ns := newNamespace(t)
 	doc := `
-apiVersion: plume.dev/v1alpha1
+apiVersion: assayd.dev/v1alpha1
 kind: Agent
 metadata: {name: nospec}
 `
@@ -173,7 +173,7 @@ metadata: {name: nospec}
 
 // B4 — the collector must not delete Deployments it does not own.
 //
-// ownedWorkloads selected on a label alone. A stray plume.dev/agent label —
+// ownedWorkloads selected on a label alone. A stray assayd.dev/agent label —
 // copied from an example, applied by a Kustomize commonLabels, or set by anyone
 // with deployment-create — turned this operator into a deleter of other
 // people's workloads.
@@ -218,7 +218,7 @@ func TestGarbageCollectorIgnoresUnownedWorkloads(t *testing.T) {
 	}
 }
 
-// The ownership guard alone, isolated: bystanders that carry BOTH plume labels,
+// The ownership guard alone, isolated: bystanders that carry BOTH assayd labels,
 // including a plausible revision hash, and differ only in having no controller
 // reference. Without the UID check these are indistinguishable from real
 // revisions and fall straight into the retention window.
@@ -273,7 +273,7 @@ func TestOwnedWorkloadWithoutARevisionLabelIsNotCollected(t *testing.T) {
 	r := newReconciler(false)
 	settle(t, r, a)
 
-	var agent plumev1alpha1.Agent
+	var agent assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &agent); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -320,17 +320,17 @@ func TestOwnedWorkloadWithoutARevisionLabelIsNotCollected(t *testing.T) {
 // revision ever passed a gate.
 func TestNormalTrueConditionsAreSticky(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "sticky", func(a *plumev1alpha1.Agent) {
-		a.Spec.Gates = []plumev1alpha1.GateRef{{EvalSuiteRef: "s"}}
+	a := mustCreateAgent(t, ns, "sticky", func(a *assaydv1alpha1.Agent) {
+		a.Spec.Gates = []assaydv1alpha1.GateRef{{EvalSuiteRef: "s"}}
 	})
 
 	// With the CRD present and gates declared, GatesPassed is asserted False.
 	settle(t, newReconciler(true), a)
-	var got plumev1alpha1.Agent
+	var got assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if condition(&got, plumev1alpha1.CondGatesPassed) == nil {
+	if condition(&got, assaydv1alpha1.CondGatesPassed) == nil {
 		t.Fatal("fixture: GatesPassed was never set")
 	}
 
@@ -340,7 +340,7 @@ func TestNormalTrueConditionsAreSticky(t *testing.T) {
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if condition(&got, plumev1alpha1.CondGatesPassed) == nil {
+	if condition(&got, assaydv1alpha1.CondGatesPassed) == nil {
 		t.Error("GatesPassed was dropped when a later pass stopped asserting it. Its absence " +
 			"is indistinguishable from never-evaluated, so the record that this revision was " +
 			"gated is gone.")
@@ -368,15 +368,15 @@ func TestSpecEditOnAServingAgentStaysReady(t *testing.T) {
 	got := settle(t, r, a)
 
 	// The old revision still holds all traffic and is healthy.
-	if got.Status.Phase == plumev1alpha1.PhaseCanary {
+	if got.Status.Phase == assaydv1alpha1.PhaseCanary {
 		t.Error("phase is Canary while zero traffic is shifting: §3.3 fixes Canary as " +
 			"\"weights shift\", and there is no gateway yet")
 	}
-	if c := condition(&got, plumev1alpha1.CondReady); c == nil || c.Status != metav1.ConditionTrue {
+	if c := condition(&got, assaydv1alpha1.CondReady); c == nil || c.Status != metav1.ConditionTrue {
 		t.Error("Ready=False on an agent that is serving normally: every routine spec edit " +
 			"would trip any alert keyed on the canonical condition")
 	}
-	if c := condition(&got, plumev1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionTrue {
+	if c := condition(&got, assaydv1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionTrue {
 		t.Error("a rollout in flight must be visible as Progressing=True (A13)")
 	}
 	if got.Status.ActiveRevision != first {
@@ -393,7 +393,7 @@ var _ = ctrl.Request{}
 // narrower input of removal rather than change.
 func TestPolicySurfaceRemovalsAlsoReachTheWorkload(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "removal", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "removal", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.Resources = corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceMemory: resource.MustParse("64Mi"),
@@ -466,7 +466,7 @@ func TestHoldingOnGatesKeepsAServingAgentReady(t *testing.T) {
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	a.Spec.Gates = []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
+	a.Spec.Gates = []assaydv1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
 	a.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:5669fbc273a09c85000000000000000000000000000000000000000000000000"
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
@@ -480,7 +480,7 @@ func TestHoldingOnGatesKeepsAServingAgentReady(t *testing.T) {
 	if got.Status.ActiveRevision != first {
 		t.Fatalf("fixture: active is %q, want the original %q", got.Status.ActiveRevision, first)
 	}
-	ready := condition(&got, plumev1alpha1.CondReady)
+	ready := condition(&got, assaydv1alpha1.CondReady)
 	if ready == nil || ready.Status != metav1.ConditionTrue {
 		t.Error("Ready=False while the original revision still serves all traffic: adding " +
 			"gates to a healthy agent must not page the on-call")
@@ -493,7 +493,7 @@ func TestHoldingOnGatesKeepsAServingAgentReady(t *testing.T) {
 			"a sticky condition the branch never speaks to can go stale",
 			ready.ObservedGeneration, got.Generation)
 	}
-	c := condition(&got, plumev1alpha1.CondProgressing)
+	c := condition(&got, assaydv1alpha1.CondProgressing)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatal("a candidate held on gates is still a rollout in flight")
 	}
@@ -517,11 +517,11 @@ func TestUnwiredWithNoGatesDoesNotClaimToHold(t *testing.T) {
 	if got.Status.ActiveRevision == "" {
 		t.Fatal("fixture: an agent with no gates should promote regardless of wiring")
 	}
-	if c := condition(&got, plumev1alpha1.CondGatesPassed); c != nil && c.Reason == "GateDetectionUnwired" {
+	if c := condition(&got, assaydv1alpha1.CondGatesPassed); c != nil && c.Reason == "GateDetectionUnwired" {
 		t.Error("the agent promoted, but the condition says it is holding rather than " +
 			"promoting ungated — loud and wrong is the NFR-8 failure this was meant to fix")
 	}
-	if c := condition(&got, plumev1alpha1.CondGatesSkipped); c == nil || c.Status != metav1.ConditionTrue {
+	if c := condition(&got, assaydv1alpha1.CondGatesSkipped); c == nil || c.Status != metav1.ConditionTrue {
 		t.Error("with no gates declared the honest condition is GatesSkipped, whatever the wiring")
 	}
 }
@@ -547,7 +547,7 @@ func TestActiveRevisionLosingItsPodsIsNotReportedReady(t *testing.T) {
 	markAvailable(t, ns, name, 0)
 	got = settle(t, r, a)
 
-	if c := condition(&got, plumev1alpha1.CondReady); c == nil || c.Status != metav1.ConditionFalse {
+	if c := condition(&got, assaydv1alpha1.CondReady); c == nil || c.Status != metav1.ConditionFalse {
 		t.Errorf("Ready=%v while the only revision has no available replicas — the agent "+
 			"serves nothing and says it is fine",
 			func() any {
@@ -557,7 +557,7 @@ func TestActiveRevisionLosingItsPodsIsNotReportedReady(t *testing.T) {
 				return c.Status
 			}())
 	}
-	if c := condition(&got, plumev1alpha1.CondProgressing); c != nil && c.Status == metav1.ConditionTrue {
+	if c := condition(&got, assaydv1alpha1.CondProgressing); c != nil && c.Status == metav1.ConditionTrue {
 		t.Error("Progressing=True with no rollout in flight: the active revision is not " +
 			"rolling out over itself")
 	}
@@ -591,14 +591,14 @@ func TestProgressingIsClearedOnEveryExitFromARollout(t *testing.T) {
 	}
 	second := revision.MustHash(a.Spec)
 	got := settle(t, r, a)
-	if c := condition(&got, plumev1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionTrue {
+	if c := condition(&got, assaydv1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatal("fixture: the rollout did not register as Progressing")
 	}
 
 	// Path 1: it completes.
 	markAvailable(t, ns, controller.WorkloadName("progclear", second), 1)
 	got = settle(t, r, a)
-	if c := condition(&got, plumev1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionFalse {
+	if c := condition(&got, assaydv1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionFalse {
 		t.Error("Progressing did not go False when the rollout completed: a sticky " +
 			"condition left True reports a rollout that finished long ago")
 	}
@@ -612,7 +612,7 @@ func TestProgressingIsClearedOnEveryExitFromARollout(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 	got = settle(t, r, a)
-	if c := condition(&got, plumev1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionTrue {
+	if c := condition(&got, assaydv1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatal("fixture: second rollout did not register")
 	}
 
@@ -626,7 +626,7 @@ func TestProgressingIsClearedOnEveryExitFromARollout(t *testing.T) {
 	markAvailable(t, ns, controller.WorkloadName("progclear", second), 0)
 	got = settle(t, r, a)
 
-	if c := condition(&got, plumev1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionFalse {
+	if c := condition(&got, assaydv1alpha1.CondProgressing); c == nil || c.Status != metav1.ConditionFalse {
 		t.Errorf("Progressing is %v on a degraded agent with no rollout in flight — the "+
 			"branch that changed the situation stayed silent and the stale value survived",
 			func() any {
@@ -663,7 +663,7 @@ func TestAddingGatesToARunningAgentDoesNotHoldIt(t *testing.T) {
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), a); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	a.Spec.Gates = []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
+	a.Spec.Gates = []assaydv1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
 	if err := k8s.Update(context.Background(), a); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -673,7 +673,7 @@ func TestAddingGatesToARunningAgentDoesNotHoldIt(t *testing.T) {
 
 	got = settle(t, newReconciler(true), a)
 
-	if got.Status.Phase == plumev1alpha1.PhaseHeld {
+	if got.Status.Phase == assaydv1alpha1.PhaseHeld {
 		t.Error("phase is Held on the revision that is serving 100% of traffic: gates apply " +
 			"to a candidate that has not taken traffic, not retroactively to what is already live")
 	}
@@ -686,7 +686,7 @@ func TestAddingGatesToARunningAgentDoesNotHoldIt(t *testing.T) {
 	if got.Status.ActiveRevision != rev {
 		t.Errorf("the running revision was demoted to %q by adding a gate", got.Status.ActiveRevision)
 	}
-	if c := condition(&got, plumev1alpha1.CondProgressing); c != nil && c.Status == metav1.ConditionTrue {
+	if c := condition(&got, assaydv1alpha1.CondProgressing); c != nil && c.Status == metav1.ConditionTrue {
 		t.Error("Progressing=True claiming a rollout that cannot exist")
 	}
 }
@@ -706,7 +706,7 @@ func TestEachContainerFieldIsIndividuallyReconciled(t *testing.T) {
 	}{
 		{
 			// The sharpest case, and the one a derivative comparison cannot see:
-			// plume leaves Privileged unset, and DeepDerivative ignores fields that
+			// assayd leaves Privileged unset, and DeepDerivative ignores fields that
 			// are empty in `desired`. So privilege escalation added out-of-band is
 			// invisible to everything EXCEPT the exact container comparison.
 			field: "capsAdd",
@@ -716,7 +716,7 @@ func TestEachContainerFieldIsIndividuallyReconciled(t *testing.T) {
 			check: func(t *testing.T, c corev1.Container) {
 				if c.SecurityContext != nil && c.SecurityContext.Capabilities != nil &&
 					len(c.SecurityContext.Capabilities.Add) > 0 {
-					t.Errorf("added capabilities survived reconcile: %v. plume sets "+
+					t.Errorf("added capabilities survived reconcile: %v. assayd sets "+
 						"Capabilities{Drop: ALL} and leaves Add unset, so a derivative "+
 						"comparison ignores it — anyone with deployments/update could grant "+
 						"SYS_PTRACE and the operator would keep reporting Ready",
@@ -779,7 +779,7 @@ func TestEachContainerFieldIsIndividuallyReconciled(t *testing.T) {
 		t.Run(tc.field, func(t *testing.T) {
 			ns := newNamespace(t)
 			name := "tamper-" + strings.ToLower(tc.field)
-			a := mustCreateAgent(t, ns, name, func(a *plumev1alpha1.Agent) {
+			a := mustCreateAgent(t, ns, name, func(a *assaydv1alpha1.Agent) {
 				a.Spec.Runtime.Env = []corev1.EnvVar{{Name: "MODE", Value: "strict"}}
 				a.Spec.Runtime.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
 					LocalObjectReference: corev1.LocalObjectReference{Name: "cfg"}}}}
@@ -854,11 +854,11 @@ func TestPortEditMintsARevision(t *testing.T) {
 	}
 }
 
-// Y1 — the four fields plume left unset were unreverted drift, and one was an
+// Y1 — the four fields assayd left unset were unreverted drift, and one was an
 // escalation path. An operator that reverts the image tag but tolerates
 // imagePullPolicy: Never has corrected nothing: Never tells the kubelet to use
 // whatever local image already carries that tag, so an attacker who can also
-// place an image on a node keeps a poisoned workload while plume reports Ready.
+// place an image on a node keeps a poisoned workload while assayd reports Ready.
 // It also sidesteps ADR-0019's cosign posture — nothing pulls, so nothing is
 // verified at pull time.
 func TestPreviouslyExemptedFieldsAreReverted(t *testing.T) {
@@ -903,7 +903,7 @@ func TestPreviouslyExemptedFieldsAreReverted(t *testing.T) {
 		// kinds; numeric and boolean fields fall through to full DeepEqual, so an
 		// int32 hostPort was already caught derivatively. The gap is UNSET fields
 		// of those four kinds — and overriding the entrypoint is the sharpest
-		// instance, since plume leaves Command and Args unset entirely.
+		// instance, since assayd leaves Command and Args unset entirely.
 		{
 			field: "command",
 			tamper: func(c *corev1.Container) {
@@ -912,7 +912,7 @@ func TestPreviouslyExemptedFieldsAreReverted(t *testing.T) {
 			check: func(t *testing.T, c corev1.Container) {
 				if len(c.Command) != 0 {
 					t.Errorf("an injected entrypoint survived: %v. Command is a slice and "+
-						"plume leaves it unset, so a derivative comparison skips it — anyone "+
+						"assayd leaves it unset, so a derivative comparison skips it — anyone "+
 						"with deployments/update could replace what the container runs while "+
 						"the image tag, and therefore the revision, looks untouched", c.Command)
 				}
@@ -1118,17 +1118,17 @@ func TestDegradedPhaseAssertsTheDegradedCondition(t *testing.T) {
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("degradedcond", rev), 1)
 	got := settle(t, r, a)
-	if got.Status.Phase != plumev1alpha1.PhaseReady {
+	if got.Status.Phase != assaydv1alpha1.PhaseReady {
 		t.Fatalf("fixture: phase is %q", got.Status.Phase)
 	}
 
 	markAvailable(t, ns, controller.WorkloadName("degradedcond", rev), 0)
 	got = settle(t, r, a)
 
-	if got.Status.Phase != plumev1alpha1.PhaseDegraded {
+	if got.Status.Phase != assaydv1alpha1.PhaseDegraded {
 		t.Fatalf("phase is %q, want Degraded", got.Status.Phase)
 	}
-	c := condition(&got, plumev1alpha1.CondDegraded)
+	c := condition(&got, assaydv1alpha1.CondDegraded)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Error("phase is Degraded but the Degraded condition is not set. Anything keyed " +
 			"on the condition rather than the phase — which is the documented way to " +

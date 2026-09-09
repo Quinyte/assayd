@@ -2,7 +2,7 @@
 
 - **Status**: **approved** — critique PASS at r2 (reviews/18-review.md) · ADR-0024
 - **Phase**: P3 · **Size**: M · **Date**: 2026-08-20
-- **ADRs**: 0008 (packs are the fast plane's delivery vehicle) · interfaces: 07 (contracts ledger), 08 (`plume pack` verbs, wizard consumption), 09 (template packs — the recorded constraint: formalize around the existing artifact), 19 (knowledge patterns), 16 (runner images), 11 (reader/catalog types), 10 (dashboards/signals)
+- **ADRs**: 0008 (packs are the fast plane's delivery vehicle) · interfaces: 07 (contracts ledger), 08 (`assayd pack` verbs, wizard consumption), 09 (template packs — the recorded constraint: formalize around the existing artifact), 19 (knowledge patterns), 16 (runner images), 11 (reader/catalog types), 10 (dashboards/signals)
 - **Research**: `docs/research/oci-packs-2026-08.md` — OCI 1.1 referrers API finalized (2024; Harbor/Quay/ECR support landed 2024-25); cosign v3 defaults to referrers + the new bundle format; `oras discover` audits the attestation chain.
 
 ## 1. Purpose & scope
@@ -23,7 +23,7 @@ pack: context-compaction
 version: 0.3.0
 description: …
 requires:
-  contracts: {gateway-filter/v1: ">=1 <2", template/v1: ">=1"}   # checked vs plume-contracts (07) — the ledger carries EVERY socket contract id (gateway-filter/v1, template/v1, knowledge-pattern/v1, evalrunner/v1, …), an 07 note (r1 f4)
+  contracts: {gateway-filter/v1: ">=1 <2", template/v1: ">=1"}   # checked vs assayd-contracts (07) — the ledger carries EVERY socket contract id (gateway-filter/v1, template/v1, knowledge-pattern/v1, evalrunner/v1, …), an 07 note (r1 f4)
   tier: core                                                # or plus — refuses install below
 provides:                       # the CLOSED facet catalog (v1)
   filters:      [compact-context.yaml]        # gateway-filter configs → applied via policy compiler
@@ -37,17 +37,17 @@ provides:                       # the CLOSED facet catalog (v1)
   signals:      [context_efficiency.yaml]     # signals.yaml additions (10)
 ```
 
-**09/19 handover mechanics (r1 f3)**: the existing template/pattern artifacts are already OCI + signed — at design-18 rollout, `plume pack adopt <ref>` wraps each in a Pack CR *referencing the same artifact digest* (nothing moves, nothing re-signs); the degenerate direct-fetch path is then retired from the CLI. Facet catalog is **closed** in pack/v1 — a new facet kind is a contract revision (the same discipline as invariant types; packs must stay data). Every image referenced by a facet must itself be cosign-signed (admission enforces at use, the installer verifies at install — two layers).
+**09/19 handover mechanics (r1 f3)**: the existing template/pattern artifacts are already OCI + signed — at design-18 rollout, `assayd pack adopt <ref>` wraps each in a Pack CR *referencing the same artifact digest* (nothing moves, nothing re-signs); the degenerate direct-fetch path is then retired from the CLI. Facet catalog is **closed** in pack/v1 — a new facet kind is a contract revision (the same discipline as invariant types; packs must stay data). Every image referenced by a facet must itself be cosign-signed (admission enforces at use, the installer verifies at install — two layers).
 
 ## 4. Artifact layout & trust
 
 - OCI artifact (ORAS-pushed): manifest + content layers; **cosign v3 signature via OCI 1.1 referrers** (the registry-native chain; `oras discover` audits it). SBOM attached the same way for packs carrying image refs.
-- **Trust rules**: signature required, always; the signer identity must match the configured **pack-source allowlist** (`plume-pack-sources` ConfigMap: builtin sources shipped, org sources added explicitly; hardened profiles lock it — design 19 §6's containment made concrete). Provenance displayed at install and in every wizard surface that offers pack content (the design-05 rule generalized).
+- **Trust rules**: signature required, always; the signer identity must match the configured **pack-source allowlist** (`assayd-pack-sources` ConfigMap: builtin sources shipped, org sources added explicitly; hardened profiles lock it — design 19 §6's containment made concrete). Provenance displayed at install and in every wizard surface that offers pack content (the design-05 rule generalized).
 - Registries without referrers support: cosign's fallback storage works but `doctor` flags it (attestation-chain audit degraded).
 
 ## 5. Install/uninstall — the Pack CR
 
-`plume pack install <ref>` = CLI fetch → verify (signature, source allowlist, contract ranges vs the 07 ledger, tier) → **create a `Pack` CR**; the operator reconciles facets:
+`assayd pack install <ref>` = CLI fetch → verify (signature, source allowlist, contract ranges vs the 07 ledger, tier) → **create a `Pack` CR**; the operator reconciles facets:
 
 | Facet | Applied as |
 |---|---|
@@ -56,11 +56,11 @@ provides:                       # the CLOSED facet catalog (v1)
 | readers / catalog / runners | Type registrations (KV) consumed by designs 11/16 when a CR names them |
 | dashboards / signals | Merged into the 10-pack content (name-collision ⇒ install error, never silent override) |
 
-**Scope (r1 f2)**: the Pack CR is **cluster-scoped**; install gated by RBAC + the source allowlist; hard multi-tenancy (26) partitions allowlists per tenant. Properties: **install is atomic per facet-class with fail-closed ordering** (03's apply discipline reused — filters verify acceptance before anything advertises the pack as installed); the Pack CR's status lists每 facet's application state; `plume pack list` = `kubectl get packs`. **Uninstall** = delete the CR → reverse order teardown; **refused while in-use**: a filter attached to live routes drains first; registrations named by existing CRs (a Connector using a pack reader) block with the users listed. Instantiated knowledge patterns are *not* in-use links (docs are self-contained — 12 D2): uninstalling a pattern pack never touches existing graphs.
+**Scope (r1 f2)**: the Pack CR is **cluster-scoped**; install gated by RBAC + the source allowlist; hard multi-tenancy (26) partitions allowlists per tenant. Properties: **install is atomic per facet-class with fail-closed ordering** (03's apply discipline reused — filters verify acceptance before anything advertises the pack as installed); the Pack CR's status lists每 facet's application state; `assayd pack list` = `kubectl get packs`. **Uninstall** = delete the CR → reverse order teardown; **refused while in-use**: a filter attached to live routes drains first; registrations named by existing CRs (a Connector using a pack reader) block with the users listed. Instantiated knowledge patterns are *not* in-use links (docs are self-contained — 12 D2): uninstalling a pattern pack never touches existing graphs.
 
 ## 6. Versioning & upgrade
 
-Pack upgrades are new CR versions (`spec.ref` digest change): facets re-reconcile with the same fail-closed ordering; **patterns never auto-propagate** (12 §3.7 — upgrade-diff is human-run); filters/dashboards do propagate (that's their point — the "new technique Tuesday" path) with the previous digest retained for one-command rollback (`plume pack rollback`). Contract-range violations on upgrade refuse before touching anything.
+Pack upgrades are new CR versions (`spec.ref` digest change): facets re-reconcile with the same fail-closed ordering; **patterns never auto-propagate** (12 §3.7 — upgrade-diff is human-run); filters/dashboards do propagate (that's their point — the "new technique Tuesday" path) with the previous digest retained for one-command rollback (`assayd pack rollback`). Contract-range violations on upgrade refuse before touching anything.
 
 ## 7. Failure modes
 

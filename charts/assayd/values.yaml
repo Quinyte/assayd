@@ -16,18 +16,18 @@ profile: prod
 
 operator:
   image:
-    repository: ghcr.io/quinyte/plume-operator
+    repository: ghcr.io/quinyte/assayd-operator
     # Pinned, never floating: a rollout that cannot be reproduced is not a
     # rollout.
     tag: "0.1.0"
     # A digest WINS over the tag when set, and the release workflow sets it to
     # the digest it published and cosign-signed. A tag can be repointed at other
     # content after signing; a digest names the content itself, which is the
-    # same rule plume's admission applies to agent images (ADR-0019).
+    # same rule assayd's admission applies to agent images (ADR-0019).
     #
     # Verify what you are about to run:
-    #   cosign verify ghcr.io/quinyte/plume-operator@<digest> \
-    #     --certificate-identity-regexp '^https://github.com/Quinyte/plume/' \
+    #   cosign verify ghcr.io/quinyte/assayd-operator@<digest> \
+    #     --certificate-identity-regexp '^https://github.com/Quinyte/assayd/' \
     #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
     digest: ""
     pullPolicy: IfNotPresent
@@ -75,9 +75,9 @@ operator:
 
 # The namespace the operator runs in. CRs may live anywhere. Agent WORKLOADS
 # and revision material do not live where the Agent does: the operator creates
-# one `plume-run-<agent-namespace>` per namespace that holds an Agent (design
+# one `assayd-run-<agent-namespace>` per namespace that holds an Agent (design
 # 02 A42), and keeps its binding records here.
-namespace: plume-system
+namespace: assayd-system
 
 # The agentgateway subchart is not shipped yet (design 07 A1): P1 is the
 # declared-ungoverned tier. The Gateway's name is fixed here because the
@@ -86,12 +86,12 @@ namespace: plume-system
 # governed.
 gateway:
   enabled: false
-  name: plume
+  name: assayd
 
-# Design 07 A5.9: the identities permitted to write the reserved plume.dev
+# Design 07 A5.9: the identities permitted to write the reserved assayd.dev
 # namespace labels. The operator's own ServiceAccount is always permitted;
 # list the tenant-operator's here when the enterprise module is installed.
 # Every identity added is a principal that can mint a SPIFFE-selected
-# namespace — keep it to plume's own controllers.
+# namespace — keep it to assayd's own controllers.
 admission:
   extraOperators: []

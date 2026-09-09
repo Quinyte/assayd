@@ -22,7 +22,7 @@
 
 ### 3. MINOR — "operators/CLI logs → OpenObserve" needs scoping against 08's no-telemetry rule
 
-`10-observability-pack.md:23`. Operator logs to OpenObserve: fine. CLI logs: the CLI runs on a human's laptop, and design 08 D4 says "no telemetry in core, at all". In-cluster OpenObserve isn't vendor telemetry, but an unqualified "CLI logs ship to OpenObserve" line invites exactly the doubt D4 exists to prevent — and has no auth path anyway (see finding 2). **Fix**: scope the line to in-cluster components (operator, tap, bootstrap jobs); if `plume dev` ever ships session logs, that's an explicit opt-in flag documented in 08, not a topology default.
+`10-observability-pack.md:23`. Operator logs to OpenObserve: fine. CLI logs: the CLI runs on a human's laptop, and design 08 D4 says "no telemetry in core, at all". In-cluster OpenObserve isn't vendor telemetry, but an unqualified "CLI logs ship to OpenObserve" line invites exactly the doubt D4 exists to prevent — and has no auth path anyway (see finding 2). **Fix**: scope the line to in-cluster components (operator, tap, bootstrap jobs); if `assayd dev` ever ships session logs, that's an explicit opt-in flag documented in 08, not a topology default.
 
 ### 4. MINOR — charter line incomplete
 

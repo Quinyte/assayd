@@ -25,7 +25,7 @@ spec:
   credentials:                       # ONCE, for all facets
     secretRef: claims-creds          # or ESO-managed; oauth: {clientRef} for user-delegated (design 06)
   tool:                              # facet 1 — the ONLY agent-facing surface (ADR-0009)
-    image: ghcr.io/plume-catalog/fhir-mcp:1.2.0    # catalog (pack-delivered, signed) …
+    image: ghcr.io/assayd-catalog/fhir-mcp:1.2.0    # catalog (pack-delivered, signed) …
     # endpointRef: {url: …}                        # … or BYO running MCP server
     toolAllowlist: [read_claim, search_claims]     # narrows what the server offers
   ingestion:                         # facet 2 — bulk, never MCP

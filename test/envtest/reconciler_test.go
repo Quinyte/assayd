@@ -15,9 +15,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // The agent-operator, against a real API server.
@@ -32,7 +32,7 @@ import (
 // reconcileOnce runs one pass synchronously. Driving the reconciler directly,
 // rather than starting a manager and polling, makes each assertion about a
 // known number of passes instead of about a race.
-func reconcileOnce(t *testing.T, r *controller.AgentReconciler, a *plumev1alpha1.Agent) {
+func reconcileOnce(t *testing.T, r *controller.AgentReconciler, a *assaydv1alpha1.Agent) {
 	t.Helper()
 	_, err := r.Reconcile(context.Background(),
 		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)})
@@ -43,12 +43,12 @@ func reconcileOnce(t *testing.T, r *controller.AgentReconciler, a *plumev1alpha1
 
 // settle runs passes until the status stops changing, so a test can assert the
 // converged state without hard-coding how many passes convergence takes.
-func settle(t *testing.T, r *controller.AgentReconciler, a *plumev1alpha1.Agent) plumev1alpha1.Agent {
+func settle(t *testing.T, r *controller.AgentReconciler, a *assaydv1alpha1.Agent) assaydv1alpha1.Agent {
 	t.Helper()
-	var prev plumev1alpha1.Agent
+	var prev assaydv1alpha1.Agent
 	for i := 0; i < 10; i++ {
 		reconcileOnce(t, r, a)
-		var got plumev1alpha1.Agent
+		var got assaydv1alpha1.Agent
 		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
 			t.Fatalf("get agent: %v", err)
 		}
@@ -85,12 +85,12 @@ func newReconcilerWithEnv(gatesInstalled bool, injected controller.InjectedEnvCo
 	}
 }
 
-func mustCreateAgent(t *testing.T, ns, name string, mutate func(*plumev1alpha1.Agent)) *plumev1alpha1.Agent {
+func mustCreateAgent(t *testing.T, ns, name string, mutate func(*assaydv1alpha1.Agent)) *assaydv1alpha1.Agent {
 	t.Helper()
-	a := &plumev1alpha1.Agent{
+	a := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
 		},
 	}
 	if mutate != nil {
@@ -120,7 +120,7 @@ func markAvailable(t *testing.T, ns, name string, n int32) {
 	}
 }
 
-func condition(a *plumev1alpha1.Agent, t plumev1alpha1.ConditionType) *metav1.Condition {
+func condition(a *assaydv1alpha1.Agent, t assaydv1alpha1.ConditionType) *metav1.Condition {
 	for i := range a.Status.Conditions {
 		if a.Status.Conditions[i].Type == string(t) {
 			return &a.Status.Conditions[i]
@@ -168,7 +168,7 @@ func TestReconcileMaterializesTheRevisionWorkload(t *testing.T) {
 	// cross-namespace owner is treated as absent (A44/A60) — so provenance is
 	// the name, the Agent's UID label, and the Agent's own namespace, which the
 	// SVID template reads (A59).
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestPromotionRequiresAnAvailableWorkload(t *testing.T) {
 	r := newReconciler(false)
 
 	got := settle(t, r, a)
-	if got.Status.Phase != plumev1alpha1.PhasePending {
+	if got.Status.Phase != assaydv1alpha1.PhasePending {
 		t.Errorf("phase is %q before the workload is available; want Pending", got.Status.Phase)
 	}
 	if got.Status.ActiveRevision != "" {
@@ -203,7 +203,7 @@ func TestPromotionRequiresAnAvailableWorkload(t *testing.T) {
 	markAvailable(t, ns, controller.WorkloadName("promote", rev), 1)
 
 	got = settle(t, r, a)
-	if got.Status.Phase != plumev1alpha1.PhaseReady {
+	if got.Status.Phase != assaydv1alpha1.PhaseReady {
 		t.Errorf("phase is %q after the workload became available; want Ready", got.Status.Phase)
 	}
 	if got.Status.ActiveRevision != rev {
@@ -224,7 +224,7 @@ func TestUngatedRolloutIsLoudAboutIt(t *testing.T) {
 	markAvailable(t, ns, controller.WorkloadName("ungated", revision.MustHash(a.Spec)), 1)
 	got := settle(t, r, a)
 
-	c := condition(&got, plumev1alpha1.CondGatesSkipped)
+	c := condition(&got, assaydv1alpha1.CondGatesSkipped)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatal("an ungated rollout must set GatesSkipped=True (NFR-8: never silent)")
 	}
@@ -241,15 +241,15 @@ func TestUngatedRolloutIsLoudAboutIt(t *testing.T) {
 // them is absent, so the core tier rule applies (design 02 §3.3).
 func TestGatesDeclaredWithoutTheCRDIsLoudAboutIt(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "gatesnocrd", func(a *plumev1alpha1.Agent) {
-		a.Spec.Gates = []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
+	a := mustCreateAgent(t, ns, "gatesnocrd", func(a *assaydv1alpha1.Agent) {
+		a.Spec.Gates = []assaydv1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
 	})
 	r := newReconciler(false) // gates declared, EvalSuite CRD absent
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("gatesnocrd", revision.MustHash(a.Spec)), 1)
 	got := settle(t, r, a)
 
-	c := condition(&got, plumev1alpha1.CondGatesSkipped)
+	c := condition(&got, assaydv1alpha1.CondGatesSkipped)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatal("declared gates with no EvalSuite CRD must set GatesSkipped=True")
 	}
@@ -267,22 +267,22 @@ func TestGatesDeclaredWithoutTheCRDIsLoudAboutIt(t *testing.T) {
 // must hold at zero traffic rather than promote ungated.
 func TestDeclaredGatesHoldWhenNoGateControllerExists(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "gated", func(a *plumev1alpha1.Agent) {
-		a.Spec.Gates = []plumev1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
+	a := mustCreateAgent(t, ns, "gated", func(a *assaydv1alpha1.Agent) {
+		a.Spec.Gates = []assaydv1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
 	})
 	r := newReconciler(true) // EvalSuite CRD present
 	settle(t, r, a)
 	markAvailable(t, ns, controller.WorkloadName("gated", revision.MustHash(a.Spec)), 1)
 	got := settle(t, r, a)
 
-	if got.Status.Phase != plumev1alpha1.PhaseHeld {
+	if got.Status.Phase != assaydv1alpha1.PhaseHeld {
 		t.Errorf("phase is %q with unsatisfied gates; want Held — promoting would be an "+
 			"ungated production change", got.Status.Phase)
 	}
 	if got.Status.ActiveRevision != "" {
 		t.Errorf("revision %q was promoted through an unsatisfied gate", got.Status.ActiveRevision)
 	}
-	if c := condition(&got, plumev1alpha1.CondGatesPassed); c == nil || c.Status != metav1.ConditionFalse {
+	if c := condition(&got, assaydv1alpha1.CondGatesPassed); c == nil || c.Status != metav1.ConditionFalse {
 		t.Error("GatesPassed must be False and say why")
 	}
 }
@@ -350,7 +350,7 @@ func TestRetentionNeverCollectsTheRollbackTarget(t *testing.T) {
 	}
 
 	active := revs[len(revs)-1]
-	var got plumev1alpha1.Agent
+	var got assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -379,12 +379,12 @@ func TestRetentionNeverCollectsTheRollbackTarget(t *testing.T) {
 // Design 02 §3.2 / NFR-8: a sandbox that cannot be honoured downgrades LOUDLY.
 func TestSandboxDowngradeIsNeverSilent(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "sandboxed", func(a *plumev1alpha1.Agent) {
-		a.Spec.Runtime.Sandbox = &plumev1alpha1.SandboxSpec{Profile: "gvisor"}
+	a := mustCreateAgent(t, ns, "sandboxed", func(a *assaydv1alpha1.Agent) {
+		a.Spec.Runtime.Sandbox = &assaydv1alpha1.SandboxSpec{Profile: "gvisor"}
 	})
 	got := settle(t, newReconciler(false), a)
 
-	c := condition(&got, plumev1alpha1.CondSandboxDowngraded)
+	c := condition(&got, assaydv1alpha1.CondSandboxDowngraded)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatal("a sandbox request that could not be honoured must set SandboxDowngraded=True")
 	}
@@ -397,12 +397,12 @@ func TestSandboxDowngradeIsNeverSilent(t *testing.T) {
 // Card fetch is unimplemented, so it must be reported unverified — not assumed.
 func TestReplicasAboveOneReportsUnverifiedTaskState(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "scaled", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "scaled", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime.Replicas = 3
 	})
 	got := settle(t, newReconciler(false), a)
 
-	if c := condition(&got, plumev1alpha1.CondTaskStateUnverified); c == nil || c.Status != metav1.ConditionTrue {
+	if c := condition(&got, assaydv1alpha1.CondTaskStateUnverified); c == nil || c.Status != metav1.ConditionTrue {
 		t.Error("replicas>1 without a verified card assertion must set TaskStateUnverified=True")
 	}
 }
@@ -450,7 +450,7 @@ func TestFinalizerIsInstalledAndReleased(t *testing.T) {
 	r := newReconciler(false)
 	settle(t, r, a)
 
-	var got plumev1alpha1.Agent
+	var got assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -473,13 +473,13 @@ func TestFinalizerIsInstalledAndReleased(t *testing.T) {
 // Ready by an operator that has not actually wired anything up.
 func TestExternalAgentIsHeldNotFakedReady(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "external", func(a *plumev1alpha1.Agent) {
+	a := mustCreateAgent(t, ns, "external", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime = nil
-		a.Spec.External = &plumev1alpha1.ExternalAgent{Endpoint: "https://agent.example.com"}
+		a.Spec.External = &assaydv1alpha1.ExternalAgent{Endpoint: "https://agent.example.com"}
 	})
 	got := settle(t, newReconciler(false), a)
 
-	if got.Status.Phase == plumev1alpha1.PhaseReady {
+	if got.Status.Phase == assaydv1alpha1.PhaseReady {
 		t.Error("an external agent was reported Ready though nothing registered it")
 	}
 	var list appsv1.DeploymentList
@@ -518,7 +518,7 @@ func containsPrefix(xs []string, prefix string) bool {
 // A test cannot use revision.MustHash on a spec with env sources — that helper
 // panics, deliberately, because hashing without content asserts about an
 // identity the operator can never mint (A20).
-func revisionOf(t *testing.T, ns string, spec plumev1alpha1.AgentSpec) string {
+func revisionOf(t *testing.T, ns string, spec assaydv1alpha1.AgentSpec) string {
 	t.Helper()
 	resolved := revision.Resolved{}
 	for _, ref := range revision.EnvSources(spec) {
@@ -546,7 +546,7 @@ func revisionOf(t *testing.T, ns string, spec plumev1alpha1.AgentSpec) string {
 }
 
 // digestOf is revisionOf's full-width counterpart.
-func digestOf(t *testing.T, ns string, spec plumev1alpha1.AgentSpec) string {
+func digestOf(t *testing.T, ns string, spec assaydv1alpha1.AgentSpec) string {
 	t.Helper()
 	resolved := revision.Resolved{}
 	for _, ref := range revision.EnvSources(spec) {

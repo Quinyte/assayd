@@ -11,7 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // The Agent CRD is the platform's front door. These tests hold it to a
@@ -21,9 +21,9 @@ import (
 // that says what to do — not at reconcile time, and not by a webhook we would
 // have to run a pod for.
 
-func applyYAML(t *testing.T, ns, doc string) (*plumev1alpha1.Agent, error) {
+func applyYAML(t *testing.T, ns, doc string) (*assaydv1alpha1.Agent, error) {
 	t.Helper()
-	var a plumev1alpha1.Agent
+	var a assaydv1alpha1.Agent
 	if err := yaml.Unmarshal([]byte(doc), &a); err != nil {
 		t.Fatalf("parse fixture: %v", err)
 	}
@@ -33,7 +33,7 @@ func applyYAML(t *testing.T, ns, doc string) (*plumev1alpha1.Agent, error) {
 
 // The whole thing a developer must write to get a governed agent.
 const minimalAgent = `
-apiVersion: plume.dev/v1alpha1
+apiVersion: assayd.dev/v1alpha1
 kind: Agent
 metadata:
   name: my-agent
@@ -51,7 +51,7 @@ func TestMinimalAgentIsAccepted(t *testing.T) {
 
 	// Read it back: the API server, not the operator, must have filled in the
 	// decisions a developer should not have to make.
-	var got plumev1alpha1.Agent
+	var got assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: a.Name}, &got); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestMinimalAgentIsAccepted(t *testing.T) {
 // The realistic adoption case: an agent with domain knowledge and a tool. If
 // this is not readable at a glance, the platform is too complex to adopt.
 const realisticAgent = `
-apiVersion: plume.dev/v1alpha1
+apiVersion: assayd.dev/v1alpha1
 kind: Agent
 metadata:
   name: claims-triage
@@ -109,7 +109,7 @@ func TestMistakesAreRejectedWithActionableMessages(t *testing.T) {
 		{
 			name: "neither runtime nor external",
 			doc: `
-apiVersion: plume.dev/v1alpha1
+apiVersion: assayd.dev/v1alpha1
 kind: Agent
 metadata: {name: empty}
 spec: {}
@@ -119,7 +119,7 @@ spec: {}
 		{
 			name: "both runtime and external",
 			doc: `
-apiVersion: plume.dev/v1alpha1
+apiVersion: assayd.dev/v1alpha1
 kind: Agent
 metadata: {name: both}
 spec:
@@ -131,7 +131,7 @@ spec:
 		{
 			name: "sandbox scaled out",
 			doc: `
-apiVersion: plume.dev/v1alpha1
+apiVersion: assayd.dev/v1alpha1
 kind: Agent
 metadata: {name: scaled-sandbox}
 spec:
@@ -145,7 +145,7 @@ spec:
 		{
 			name: "name too long for a derived workload name",
 			doc: `
-apiVersion: plume.dev/v1alpha1
+apiVersion: assayd.dev/v1alpha1
 kind: Agent
 metadata: {name: this-agent-name-is-deliberately-far-too-long-to-fit-a-label}
 spec:
@@ -156,7 +156,7 @@ spec:
 		{
 			name: "plaintext external endpoint",
 			doc: `
-apiVersion: plume.dev/v1alpha1
+apiVersion: assayd.dev/v1alpha1
 kind: Agent
 metadata: {name: plaintext}
 spec:
@@ -189,17 +189,17 @@ func TestStatusIsLegibleWithoutReadingConditions(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	a.Status.Phase = plumev1alpha1.PhaseHeld
+	a.Status.Phase = assaydv1alpha1.PhaseHeld
 	a.Status.CandidateRevision = "rev-2"
 	if err := k8s.Status().Update(context.Background(), a); err != nil {
 		t.Fatalf("status update — the status subresource must be enabled: %v", err)
 	}
 
-	var got plumev1alpha1.Agent
+	var got assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
-	if got.Status.Phase != plumev1alpha1.PhaseHeld {
+	if got.Status.Phase != assaydv1alpha1.PhaseHeld {
 		t.Errorf("phase did not persist: %q", got.Status.Phase)
 	}
 	// Phase is the single field a developer reads first; it is a printer column
@@ -217,7 +217,7 @@ func TestStatusIsLegibleWithoutReadingConditions(t *testing.T) {
 func TestToolBindingCannotReachAnotherNamespace(t *testing.T) {
 	ns := newNamespace(t)
 	doc := `
-apiVersion: plume.dev/v1alpha1
+apiVersion: assayd.dev/v1alpha1
 kind: Agent
 metadata: {name: reacher}
 spec:
@@ -256,7 +256,7 @@ spec:
 	if err := k8s.Create(context.Background(), lenient); err != nil {
 		t.Fatalf("lenient create: %v", err)
 	}
-	var got plumev1alpha1.Agent
+	var got assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(lenient), &got); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
@@ -283,15 +283,15 @@ func TestPrinterColumnsResolveAgainstRealStatus(t *testing.T) {
 	}
 
 	spent := "12.40"
-	a.Status.Phase = plumev1alpha1.PhaseCanary
+	a.Status.Phase = assaydv1alpha1.PhaseCanary
 	a.Status.ActiveRevision = "rev-1"
-	a.Status.Eval = &plumev1alpha1.EvalStatus{Score: "0.94", Suite: "pa-regression", Revision: "rev-2"}
-	a.Status.Budget = &plumev1alpha1.BudgetStatus{USDSpentToday: &spent}
+	a.Status.Eval = &assaydv1alpha1.EvalStatus{Score: "0.94", Suite: "pa-regression", Revision: "rev-2"}
+	a.Status.Budget = &assaydv1alpha1.BudgetStatus{USDSpentToday: &spent}
 	if err := k8s.Status().Update(context.Background(), a); err != nil {
 		t.Fatalf("status update: %v", err)
 	}
 
-	var got plumev1alpha1.Agent
+	var got assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
 		t.Fatalf("read back: %v", err)
 	}

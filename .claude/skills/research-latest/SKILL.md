@@ -1,6 +1,6 @@
 ---
 name: research-latest
-description: Current-state research for plume — landscape, competitor, library, or standard checks. Use before binding any third-party component or when the user asks "what's the latest on X". Never answer landscape questions from memory.
+description: Current-state research for assayd — landscape, competitor, library, or standard checks. Use before binding any third-party component or when the user asks "what's the latest on X". Never answer landscape questions from memory.
 when_to_use: what is the latest on X, before binding a dependency, check current versions, landscape or competitor check
 context: fork
 background: false

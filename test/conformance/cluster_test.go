@@ -5,7 +5,7 @@
 // upstream behaviour change fails a test rather than silently invalidating a
 // design sentence.
 //
-// These are contract tests against agentgateway, not tests of plume. A failure
+// These are contract tests against agentgateway, not tests of assayd. A failure
 // means the world moved; the message names the design sentence that moved with
 // it. Run with `make conformance-cluster`, which provisions and tears down.
 package conformance
@@ -228,7 +228,7 @@ spec:
 	}
 }
 
-// TestNegativeBurstIsAcceptedEverywhere is why plume validates burst >= 0
+// TestNegativeBurstIsAcceptedEverywhere is why assayd validates burst >= 0
 // itself: neither the API server nor the controller rejects it.
 func TestNegativeBurstIsAcceptedEverywhere(t *testing.T) {
 	ensureGateway(t)
@@ -239,11 +239,11 @@ metadata: {name: conf-negburst, namespace: default}
 spec:
   targetRefs: [{kind: HTTPRoute, name: conf-route, group: gateway.networking.k8s.io}]
   traffic: {rateLimit: {local: [{tokens: 100, unit: Hours, burst: -1}]}}`); err != nil {
-		t.Fatalf("a negative burst was rejected at admission; A10 says plume must validate it because nothing else does: %v", err)
+		t.Fatalf("a negative burst was rejected at admission; A10 says assayd must validate it because nothing else does: %v", err)
 	}
 	cs, _ := conds(t, "agentgatewaypolicy", "conf-negburst")
 	if cs["Accepted"] != "True" {
-		t.Errorf("controller now rejects burst: -1 (Accepted=%q); A10's plume-side validation may be redundant", cs["Accepted"])
+		t.Errorf("controller now rejects burst: -1 (Accepted=%q); A10's assayd-side validation may be redundant", cs["Accepted"])
 	}
 }
 

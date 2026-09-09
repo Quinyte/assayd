@@ -26,7 +26,7 @@ The pattern is consistent and worth stating plainly: **this platform's architect
 
 Three narrow claims survived, ranked by cost-to-decide rather than by appeal:
 
-**1. Cross-version contamination (from the KG scan) — the cheapest decisive test, and it does not require plume to exist.**
+**1. Cross-version contamination (from the KG scan) — the cheapest decisive test, and it does not require assayd to exist.**
 > Making KG-version selection unaddressable in the agent's tool vocabulary eliminates a class of failure that a version *parameter* does not.
 
 Three MCP server variants (version-as-argument · overridable default · version-scoped endpoint), one task set, one number: what fraction of episodes contain a call resolved against a non-pinned version? The endpoint variant is 0% by construction, so **the interesting number is how large the other two are.** If the parameterized design is already ~0%, the claim is unmotivated and there is no paper — and we would have learned that design 01 solves a non-problem, which is worth knowing on its own. Weeks of work, no cluster, no operator. Adjacent results establish the harm is real ([FiscalQA Pro](https://arxiv.org/abs/2608.09393): static RAG retrieves the date-applicable version 0% of the time) while leaving this exact gap untested ([MCPEvol-Bench](https://arxiv.org/abs/2607.14642) measures *unannounced* evolution, not *announced-but-nameable* choice).

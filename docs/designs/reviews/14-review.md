@@ -13,7 +13,7 @@
 
 ### 2. MAJOR — the 72-hour review-queue pause meets the Job execution model, and nobody says what the pod does for three days
 
-`14-ingestion-pipeline.md:15,47`. §2 promises "0 standing pods for batch"; §5 pauses a run durably for up to `reviewTimeout: 72h` awaiting a human. Those compose only if the pause mechanics are specified, and they aren't: either the Job pod idles for days (a standing pod in all but name, evictable at any moment — recoverable via DBOS, but then it idles again), or the workflow parks and the pod should *exit* — in which case something must relaunch the Job when `plume kg review` resolves the entry, and nothing is named as that something. The same question applies to the budget-exhaustion halt (`:54` — "resumable after window reset": resumed *by whom*?).
+`14-ingestion-pipeline.md:15,47`. §2 promises "0 standing pods for batch"; §5 pauses a run durably for up to `reviewTimeout: 72h` awaiting a human. Those compose only if the pause mechanics are specified, and they aren't: either the Job pod idles for days (a standing pod in all but name, evictable at any moment — recoverable via DBOS, but then it idles again), or the workflow parks and the pod should *exit* — in which case something must relaunch the Job when `assayd kg review` resolves the entry, and nothing is named as that something. The same question applies to the budget-exhaustion halt (`:54` — "resumable after window reset": resumed *by whom*?).
 
 **Fix**: specify the park/resume lifecycle — on review-pause (or budget halt) the DBOS workflow enters a durable waiting state and **the Job exits cleanly** (0 pods, honestly); the operator watches the review queue / budget window and **relaunches the build Job on resolution**, where DBOS resume picks up mid-stage (deterministic workflow id `build-<graph>-vN+1` — already right for this). Add the pause/resume drill to §8's DBOS tests (pause → Job gone → resolve → relaunched → resumes at the paused stage).
 
@@ -29,7 +29,7 @@
 
 ### 5. MINOR — `dir.changed` is the wrong trigger name
 
-`14-ingestion-pipeline.md:20`. `dir.changed` is design 05's *directory* CloudEvent (agent registrations) — irrelevant to ingestion. The intended triggers are presumably: `plume kg push`, the Connector schedule (11), design 11's connector events (source-changed webhooks), and design 20's staleness remediation. **Fix**: name the actual trigger set; drop the directory event.
+`14-ingestion-pipeline.md:20`. `dir.changed` is design 05's *directory* CloudEvent (agent registrations) — irrelevant to ingestion. The intended triggers are presumably: `assayd kg push`, the Connector schedule (11), design 11's connector events (source-changed webhooks), and design 20's staleness remediation. **Fix**: name the actual trigger set; drop the directory event.
 
 ### 6. MINOR — the build's budget principal has no declared home
 

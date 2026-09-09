@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: agents.plume.dev
+  name: agents.assayd.dev
 spec:
-  group: plume.dev
+  group: assayd.dev
   names:
     kind: Agent
     listKind: AgentList
@@ -880,19 +880,20 @@ spec:
                     the downward API in a way that does not affect behaviour. See
                     ADR-0031.
                   rule: '!has(self.env) || self.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.resourceFieldRef))'
-                - message: spec.runtime.env may not set a name beginning with PLUME_.
+                - message: spec.runtime.env may not set a name beginning with ASSAYD_.
                     That prefix is the operator's injected contract (design 02 §11)
-                    — PLUME_GATEWAY_URL and its siblings — and a container keeps the
-                    LAST duplicate, so setting one here would redirect the agent away
-                    from the gateway every budget, tool grant and egress rule is enforced
-                    at. Choose another name. See ADR-0031 and design 02 A65.
-                  rule: '!has(self.env) || self.env.all(e, !e.name.startsWith(''PLUME_''))'
+                    — ASSAYD_GATEWAY_URL and its siblings — and a container keeps
+                    the LAST duplicate, so setting one here would redirect the agent
+                    away from the gateway every budget, tool grant and egress rule
+                    is enforced at. Choose another name. See ADR-0031 and design 02
+                    A65.
+                  rule: '!has(self.env) || self.env.all(e, !e.name.startsWith(''ASSAYD_''))'
                 - message: 'spec.runtime.envFrom may not use a prefix beginning with
-                    PLUME_: it is the operator''s injected contract, and a ConfigMap
-                    or Secret mapped under it could shadow PLUME_GATEWAY_URL. See
+                    ASSAYD_: it is the operator''s injected contract, and a ConfigMap
+                    or Secret mapped under it could shadow ASSAYD_GATEWAY_URL. See
                     design 02 A65.'
                   rule: '!has(self.envFrom) || self.envFrom.all(f, !has(f.prefix)
-                    || !f.prefix.startsWith(''PLUME_''))'
+                    || !f.prefix.startsWith(''ASSAYD_''))'
               tools:
                 description: |-
                   Tools grants MCP tool servers. This is the only agent-facing connector

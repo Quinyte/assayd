@@ -3,7 +3,7 @@
 - **Scope**: `docs/designs/02-agent-crd-operator.md` header + §1–§11 (lines 1–493). §12 out of scope.
 - **Method**: read the inventory (`reviews/02-consolidation-inventory.md`), then `git diff`, then the new body
   cold. Every present-tense claim checked against `api/v1alpha1`, `internal/controller`, `internal/revision`,
-  `cmd/operator`, `charts/plume`, `test/`. Two enforcement claims mutation-checked; one claimed guard
+  `cmd/operator`, `charts/assayd`, `test/`. Two enforcement claims mutation-checked; one claimed guard
   disproved by execution. Line numbers are the **new** file.
 - **Verdict**: **REVISE — 3 BLOCKER, 9 MAJOR, 15 MINOR.**
 
@@ -45,7 +45,7 @@ the missing case holds. The code does the opposite:
 
 ```go
 // internal/controller/agent_controller.go:1014
-func (r *AgentReconciler) gatesSatisfied(agent *plumev1alpha1.Agent) bool {
+func (r *AgentReconciler) gatesSatisfied(agent *assaydv1alpha1.Agent) bool {
 	if !r.evalSuiteInstalled() {
 		return true
 	}
@@ -95,7 +95,7 @@ reading: a temporary test calling `Leaves` on `type cyc struct{ Next *cyc; Name 
 
 ```
 signal: killed
-FAIL	github.com/Quinyte/plume/internal/revision	45.283s
+FAIL	github.com/Quinyte/assayd/internal/revision	45.283s
 ```
 
 — i.e. the paragraph's own stated failure mode is what happens. (The temporary file was removed; the tree
@@ -170,7 +170,7 @@ The list reads as exhaustive and is not. §3.3 has the operator create, per revi
 `ConfigMap`/`Secret` copy of every referenced env source (`:307–322`), holding **credential material**.
 Those copies meet the same test §2 applies to the binding record: check 11 at `:167` says so in this
 document's own words — *"a retained revision whose sources have drifted since it was gated **cannot be
-reproduced**"* — and `:321` says losing one sends the revision's route to weight 0. `plume-mirror-*`
+reproduced**"* — and `:321` says losing one sends the revision's route to weight 0. `assayd-mirror-*`
 ResourceQuota/LimitRange objects are operator-owned too (reconstructable, so a lesser case).
 
 Inventory **A-10** asked for exactly this and got half of it. A charter gate that names one non-reproducible
@@ -382,7 +382,7 @@ premise.
    "no leaf inside a third-party struct is overridden today" is true.
 8. `:197` — the label-authority section dropped the platform precondition the old body carried:
    "`ValidatingAdmissionPolicy` is GA from Kubernetes 1.30, the chart's floor". The chart still asserts it
-   (`charts/plume/Chart.yaml:15 kubeVersion: ">=1.30.0-0"`). The mechanism the entire run-namespace security
+   (`charts/assayd/Chart.yaml:15 kubeVersion: ">=1.30.0-0"`). The mechanism the entire run-namespace security
    argument rests on now states no version premise.
 9. `:5` — the ADR list drops **0025** (P4 governance) while §3.1 `:49` and §5 `:437` still depend on design
    22's approval interceptor and kill switch, and does not list **0014** (`:56`, `:274`) or **0026**
@@ -428,7 +428,7 @@ I tried to break each of these and could not, except where noted.
 | **One-read rule** — one GET, one buffer, hash and Create from it; the two-read race; six-step order | **INTACT** (`:324–333`). Step 5 correctly restated under content-first: "verify kind, the immutable bit, and the bytes; restamp metadata that has drifted" — the owner-UID predicate is gone, exactly as the inventory's caveat required |
 | **Retained set** — single definition, `revisionHistoryLimit + 2 + holds`, ≥4 at the default, history *additional*, a hold *extends* | **INTACT** (`:236–240`). Verified no competing count survives anywhere in the body |
 | **Binding record** — two proofs; bind-only-from-the-`Create`-response; two-state fence; live reads; teardown ordering; human-only recovery | **INTACT except MAJOR 1**. All six sub-invariants present at `:147`, `:149`, `:181`, `:151`, `:189`, `:191`. The strict-decode row has MINOR 2's gap |
-| **Label authority** — three consumers, `status`/`finalize` subresources, "not a params object", the fail-close, "presence by name is all that is checked", two labels two boundaries | **INTACT** (`:195–199`, `:362`). Verified against `charts/plume/templates/admission.yaml:38–58` and the second policy's identity set, which the new text describes more accurately than the old |
+| **Label authority** — three consumers, `status`/`finalize` subresources, "not a params object", the fail-close, "presence by name is all that is checked", two labels two boundaries | **INTACT** (`:195–199`, `:362`). Verified against `charts/assayd/templates/admission.yaml:38–58` and the second policy's identity set, which the new text describes more accurately than the old |
 | **Classification table** — capability-not-compile-path; symmetric egress gate with the `{A}→{A,B}→{B}` walk; compulsory leaf-level classification; the perturber registry failing closed; the design-20 fallback exception | **INTACT except the recursion guard (BLOCKER 2) and the map rule (MAJOR 7)**. `:249`, `:274–276`, `:279–281`, `:286`, `:293` all survive. The fail-closed perturber is real — `leaves.go:92` `t.Fatalf` on an unknown kind — and `TestEveryAgentSpecLeafBehavesAsClassified` (`leaf_test.go:206`) fails in both directions, so "adding a field must fail the build" is enforced |
 
 Fourteen smaller invariants (inventory §7): **thirteen intact** — no cross-namespace tool/graph reference
@@ -450,7 +450,7 @@ existing (MAJOR 8).
 - **`:287` the recursion guard.** Claimed present; **disproved by execution** (BLOCKER 2).
 - **`:454` §6's CEL list.** All five enforced: `agent_types.go:13` (exactly-one-of), `:69` (sandbox vs
   replicas), `:89` (digest-pinned image), `:247–274` (per-arm instance blocks), `:577` (≤52 chars).
-- **`:458` the operator's escalation.** Accurate — `charts/plume/files/operator-rules.yaml` grants
+- **`:458` the operator's escalation.** Accurate — `charts/assayd/files/operator-rules.yaml` grants
   `create/delete/get/list/update/watch` cluster-wide on `configmaps, limitranges, namespaces,
   resourcequotas, secrets`, and `agents/status` is a separate resource, so "written only … through the
   status subresource, under separate RBAC" (`:211`) holds. This is the old body's B-16 defect fixed.
@@ -545,7 +545,7 @@ claims "every finding is applied"; five were applied to most of their sites.
 | **B2** | recursion guard claimed, absent, hangs | **PARTIAL** | Guard implemented at `leaves.go:61–72`, mutation-killed (below). But `:305` still specifies the key as `(type, path)`, which cannot fire — MAJOR 1 |
 | **B3** | moved to "approved" without a passing critique | **CLOSED** | `:3` "body consolidated 2026-09-04 …; critique pending. No critique of this design has returned PASS … so it is not approved and must not be cited as such"; `README.md:8` matches |
 | **M1** | check 5 lost `Terminating`/`Deleting` | **CLOSED** | `:171` "From `Terminating` or `Deleting`: teardown is already under way, so fall through to check 6 rather than swapping again — a compare-and-swap *from* `Bound` would fail there". Read against `runnamespace.go:412–426`: the code inlines the handler call rather than literally reaching check 6, but the effect is identical (`runNamespaceHandler(ctx, b, nil)`, then `ReasonTerminating`), and the stated reason for not swapping is exactly why the code has no `bindingTerminating` arm |
-| **M2** | §2 under-counted operator state | **CLOSED** | `:21` adds "per revision, an immutable copy of every referenced `ConfigMap` and `Secret` … These hold credential bytes"; `:22` adds the `plume-mirror-*` objects as the reconstructable case. New MINOR 3 on the count sentence |
+| **M2** | §2 under-counted operator state | **CLOSED** | `:21` adds "per revision, an immutable copy of every referenced `ConfigMap` and `Secret` … These hold credential bytes"; `:22` adds the `assayd-mirror-*` objects as the reconstructable case. New MINOR 3 on the count sentence |
 | **M3** | 24 `Row N` references invalidated | **PARTIAL** | 23 of 24 renumbered and **each verified against the new table** (mapping old *n*→new: 1→2, 2→3, 3→4, 4→5, 5→6, 6→7, 7→9, 8→10, 9→11, 10→12, 11→13, 12→14). One site missed — MINOR 1 |
 | **M4** | `registrationDeadline` called an operator constant | **PARTIAL** | `:104` and `:430` corrected to "neither a field nor a constant". `:362` still says "an operator constant" — MAJOR 2 |
 | **M5** | §8 asserted a transition-matrix test | **CLOSED** | `:496` **Owed**: "an exhaustive transition matrix over the four binding states, rather than the per-check cases that exist" |
@@ -560,7 +560,7 @@ claims "every finding is applied"; five were applied to most of their sites.
 | m5 | `status.eval` / `usdSpentToday` missing from the block | **CLOSED** | `:79–80` |
 | m6 | handler step 4 lost the failed-swap clause | **CLOSED** | `:198` |
 | m7 | `requiresApproval` non-example | **CLOSED** | `:297` now uses only `external`/`external.inlineCard` |
-| m8 | VAP platform premise | **CLOSED** | `:209`; `charts/plume/Chart.yaml:15 kubeVersion: ">=1.30.0-0"` still backs it |
+| m8 | VAP platform premise | **CLOSED** | `:209`; `charts/assayd/Chart.yaml:15 kubeVersion: ">=1.30.0-0"` still backs it |
 | m9 | ADR list | **CLOSED** | `:5` — 0025 restored, 0014 / 0026+A1 / 0029 added |
 | m10 | "the headline claim" antecedent | **CLOSED** | `:311` "because the compulsory-gating claim above is otherwise false" |
 | m11 | `sandbox` fragment | **CLOSED** | `:38` "rejected with `replicas>1` (CEL)" |
@@ -672,7 +672,7 @@ decide whether the discriminator-free binding is safe.
 definition (§3.1); until it lands a collision is possible and the discriminator-free binding assumes it is
 not."
 
-### MAJOR 4 — §5's universal claim is false again: nothing emits an event, nothing exports a plume metric, and no alert ships
+### MAJOR 4 — §5's universal claim is false again: nothing emits an event, nothing exports a assayd metric, and no alert ships
 
 `docs/designs/02-agent-crd-operator.md:418` against `:238`, `:411`, `:458`, `:485`
 
@@ -700,9 +700,9 @@ the gap**:
 
 So the repository names a design-02 promise, names the consequence (`maxSupersededCandidates = 10`; the
 eleventh supersession silently drops the first), and §5 — whose whole job is to hold exactly that list —
-does not carry it. No plume metric is registered anywhere (`prometheus`, `NewCounter`, `NewGauge` return
+does not carry it. No assayd metric is registered anywhere (`prometheus`, `NewCounter`, `NewGauge` return
 nothing outside vendor); only controller-runtime's own reconcile metrics are served via
-`metricsserver.Options` in `main.go:112`. `charts/plume/templates/` contains no `PrometheusRule`, so
+`metricsserver.Options` in `main.go:112`. `charts/assayd/templates/` contains no `PrometheusRule`, so
 "Shipped alerts" ships nothing.
 
 This is not a nit about telemetry. §5's opening sentence is the load-bearing claim of the whole
@@ -811,7 +811,7 @@ and two improved:
 | One-read rule | **INTACT** (`:344–351`), step 5 unchanged |
 | Retained set | **INTACT** (`:256–258`); still exactly one definition in the body. `collectGarbage` (`agent_controller.go:1094`) protects active + candidate *outside* the limit, matching |
 | Binding record | **INTACT, and the round-1 hole is closed** — check 5's third branch is back at `:171` with the reason (a CAS from `Bound` would fail there), and MINOR 2's state-conditional decode is in the field table at `:154` |
-| Label authority | **INTACT** (`:203–209`); `charts/plume/templates/admission.yaml:40` still names `namespaces`, `namespaces/status`, `namespaces/finalize`, and `:94` still resolves an omitted `parentRef` namespace to the request's |
+| Label authority | **INTACT** (`:203–209`); `charts/assayd/templates/admission.yaml:40` still names `namespaces`, `namespaces/status`, `namespaces/finalize`, and `:94` still resolves an omitted `parentRef` namespace to the request's |
 | Classification table | **INTACT, and the guard is now real** — `:305`'s mechanism exists and is mutation-proven; only its stated key is wrong (MAJOR 1) |
 
 Fourteen smaller invariants: **all fourteen intact**, including the one round 1 recorded as damaged —
@@ -888,7 +888,7 @@ third round without being true, and this time the counter-examples are two whole
 | **M1** | guard implemented, `:305` still specified `(type, path)` | **CLOSED** | `:305` now "a **stack of the types on the current branch** … A key that included the path could never match". Matches `internal/revision/leaves.go:60–72` exactly: `stack []reflect.Type`, compared with `seen == typ` **before** `stack = append(stack, typ)`, `Fatalf` naming `prefix` (the path that closed it) and `typ`. See the sibling-branch walk below. `(type, path)` survives only at `:525`, where it is correctly framed as the key the body *had* specified |
 | **M2** | `registrationDeadline` still "an operator constant" at `:362` | **CLOSED** | `:362` now "**neither a spec field nor an operator constant** (§3.1, §5) — nothing counts down", which is what `:104` and `:432` say. `grep -rn "RegistrationDeadline\|registrationDeadline\|30 \* time.Minute" api internal cmd charts test` still returns **nothing**. One restatement survives inside §5 itself — MINOR 2 |
 | **M3** | §3.1 asserted ADR-0027 still needed the correction that had landed | **CLOSED** | `:112` now "ADR-0027 … **retracts** its 'enforced at admission' clause and points at the same owed item" — `0027-crd-ergonomics.md:22` carries exactly that retraction, verbatim. `:425` now "owed to **design 11 §11**, which records the gap" — `11-connector-crd.md:88` is `## 11. Owed to this design (2026-09-04, from design 02 §3.1 and ADR-0027)`, opening "This design must define the `MCPServer` kind and the name-uniqueness rule". Both citations now describe the current state of the cited document. An anchor nit inside design 11 — MINOR 3 |
-| **M4** | §5 silent on events, metrics, alerts | **PARTIAL** | `:429` and `:430` added and both accurate: `grep -rn 'Eventf\|EventRecorder\|Recorder' internal cmd` → **one** hit, and it is `agent_controller.go:1396`, the comment conceding the gap; `grep -rn 'prometheus\|NewCounter\|NewGauge\|metrics\.Registry' internal cmd` → **nothing**; `charts/plume/templates/` holds no `PrometheusRule`. `maxSupersededCandidates = 10` confirmed at `agent_controller.go:62`. But §7 `:487` is unchanged (MINOR 2), and the claim the two rows exist to make true is still false (MAJOR 1) |
+| **M4** | §5 silent on events, metrics, alerts | **PARTIAL** | `:429` and `:430` added and both accurate: `grep -rn 'Eventf\|EventRecorder\|Recorder' internal cmd` → **one** hit, and it is `agent_controller.go:1396`, the comment conceding the gap; `grep -rn 'prometheus\|NewCounter\|NewGauge\|metrics\.Registry' internal cmd` → **nothing**; `charts/assayd/templates/` holds no `PrometheusRule`. `maxSupersededCandidates = 10` confirmed at `agent_controller.go:62`. But §7 `:487` is unchanged (MINOR 2), and the claim the two rows exist to make true is still false (MAJOR 1) |
 | **M5** | §4 claimed server-side apply | **CLOSED** | `:414` rewritten, and true of **every** write path: `grep -rn 'FieldOwner\|ApplyPatchType\|ForceOwnership\|\.Patch(' internal cmd test` returns only `test/envtest/counting_client_test.go:53,72`, a passthrough wrapper. Status writes are `r.Status().Update` (`agent_controller.go:1265`), material is `r.Create`/`r.Update`/`r.Delete` (`material.go:160`, `:392`, `:401`), the run namespace is `r.Create`/`r.Update`/`r.Delete` with a UID precondition (`runnamespace.go:461`, `:645`, `:660`), and no code clears a `resourceVersion`. `swapBinding` (`runnamespace.go:585–598`) is a real CAS with an `IsConflict` arm. The *reasoning* is imprecise — MINOR 1 |
 | **m1** | `runnamespace.go:251` missed by the renumber | **CLOSED**, and the sweep is clean | `:251` now "a peer **mid-check-7** (namespace created, UID not yet recorded) … and **check 9** would delete its namespace. The Terminating/Deleting fence does not need this; **checks 7 and 9** do" — correct against the new table on all three numbers. I re-checked every remaining site against §3.2's fourteen rows: `runnamespace.go` `:335 :341 :357 :382 :389 :395 :396 :429 :446 :448 :455 :470 :483 :501 :506 :521 :533 :539`, `agent_controller.go:342`, and `runnamespace_test.go` `:155 :186 :197 :229 :269 :298 :327 :454 :462 :794 :817 :828 :864 :884 :1034` — **all correct**. `runnamespace_test.go:330`'s vestigial "this row" is now "this check". No stale `row`/`check` number survives in `internal/`, `test/`, `api/` or `charts/`; in `docs/` the only old numbers are in `reviews/02-a61-code-review.md`, which is a review record and correctly left as history |
 | **m2** | gates table row 1 wrong in the overlapping cell | **CLOSED** | `:248` now "naming whichever reason applies — the absent CRD, **or no gates declared, which is checked first**". `assessGates` (`agent_controller.go:1030–1049`) branches in exactly that order: `len(Spec.Gates)==0` → `NoGatesDeclared`; `EvalSuiteInstalled == nil` → `GateDetectionUnwired`; `!evalSuiteInstalled()` → `EvalSuiteCRDAbsent`; default → `GateControllerUnimplemented`. Arm 2 stays unreachable through `NewAgentReconciler`, which refuses a nil hook at `:117`, so "Three outcomes" remains honest for a shipped operator |
@@ -953,7 +953,7 @@ Neither of these is in it — agent-sandbox and a PersistentVolumeClaim wait on 
   on a warm scratchpad that is not there.
 
 - Same table, smaller: **`:122` "and the CLI warns at deploy".** `cmd/` contains `operator` and nothing else;
-  there is no CLI. §5 already knows this — `:426` carries the `plume logs` row for exactly that reason — so
+  there is no CLI. §5 already knows this — `:426` carries the `assayd logs` row for exactly that reason — so
   the omission is inconsistent rather than merely incomplete.
 
 This is round 2's MAJOR 4 with different nouns, and it is worth saying why that matters rather than treating

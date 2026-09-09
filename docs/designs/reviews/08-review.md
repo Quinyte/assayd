@@ -1,4 +1,4 @@
-# Review: Design 08 — The plume CLI
+# Review: Design 08 — The assayd CLI
 
 - **Verdict**: **REVISE**
 - **Reviewed**: `docs/designs/08-cli.md` (draft, 2026-08-20)
@@ -11,19 +11,19 @@
 
 `08-cli.md:66`. Receipt-stream liveness is checked by "publish a probe receipt, read it back". Two problems: (a) the `RECEIPTS` stream is the platform's *audit log* — designs 04/06 build a chain of custody where receipts are written by the tap from gateway-attested spans; a synthetic CLI-authored "receipt" is a forged audit record by construction, and every consumer (eval sampler, replay, spend aggregation, compliance hash-chaining) must now know to exclude it; (b) it means every `doctor`-running human needs *write* credentials to the tenant's receipt stream — a standing capability that exists only to support a health check. This inverts the design's own posture (04 §6: append-only, tap-only writer by SVID).
 
-**Fix**: check liveness without writing to the audit stream — JetStream stream-info (last sequence + last-message age) plus the tap's own health metrics answers "is the pipeline moving" read-only; if an end-to-end write probe is truly wanted, drive a real no-op task through the gateway (`plume invoke --probe` against a health endpoint) so the resulting receipt is a *genuine* receipt of a genuine hop.
+**Fix**: check liveness without writing to the audit stream — JetStream stream-info (last sequence + last-message age) plus the tap's own health metrics answers "is the pipeline moving" read-only; if an end-to-end write probe is truly wanted, drive a real no-op task through the gateway (`assayd invoke --probe` against a health endpoint) so the resulting receipt is a *genuine* receipt of a genuine hop.
 
 ### 2. MINOR — `GatesBypassed=DevProfile` is another unrecorded design-02 condition
 
 `08-cli.md:53`. The dev-loop bypass condition is well-designed (labeled, loud, admission-impossible in prod — the right shape), but it's a new Agent condition and a new rollout behavior on approved design 02, and the §11 amendment mechanism exists precisely for this (A1–A4 so far). **Fix**: one A5 line.
 
-### 3. MINOR — `plume build` omits the card-signing step design 09 assigns to it
+### 3. MINOR — `assayd build` omits the card-signing step design 09 assigns to it
 
-`08-cli.md:61` vs design 09 §3.2/D2. Design 09 has card signing "ride `plume build`"; 08's build section lists buildpacks/ko + cosign + SBOM only. The recurring cross-doc pattern (a design claiming another design does something the other doesn't say). **Fix**: add the card-signature step to §6, referencing 09 for the key/policy details (which have their own findings in 09's review).
+`08-cli.md:61` vs design 09 §3.2/D2. Design 09 has card signing "ride `assayd build`"; 08's build section lists buildpacks/ko + cosign + SBOM only. The recurring cross-doc pattern (a design claiming another design does something the other doesn't say). **Fix**: add the card-signature step to §6, referencing 09 for the key/policy details (which have their own findings in 09's review).
 
 ### 4. MINOR — `doctor` hard-codes a contract subset instead of reading the ledger
 
-`08-cli.md:66` vs design 07 §4. Doctor checks "kgp, idp, receipt, pack" — the `plume-contracts` ConfigMap (07 r2) also carries `ontology/v1` and the semconv SHA, and it exists so that exactly one artifact defines the shipped contract set. **Fix**: doctor reads the ledger ConfigMap and checks *everything in it* against the binary's supported set — future contracts join the check for free, and the two N/N−1 enforcement points (upgrade pre-hook, doctor) can never diverge.
+`08-cli.md:66` vs design 07 §4. Doctor checks "kgp, idp, receipt, pack" — the `assayd-contracts` ConfigMap (07 r2) also carries `ontology/v1` and the semconv SHA, and it exists so that exactly one artifact defines the shipped contract set. **Fix**: doctor reads the ledger ConfigMap and checks *everything in it* against the binary's supported set — future contracts join the check for free, and the two N/N−1 enforcement points (upgrade pre-hook, doctor) can never diverge.
 
 ### 5. MINOR — the charter line is incomplete
 
@@ -31,7 +31,7 @@
 
 ### 6. MINOR — the dev loop's receipt-streaming credentials have no issuance story
 
-`08-cli.md:54`. "Streams the agent's receipts live … (design 04 fidelity consumer, tenant-scoped creds)" — but nothing says how a logged-in human obtains tenant-scoped *NATS* credentials. Design 06 provisions OIDC clients; NATS is a different credential domain (accounts + user creds/JWTs). This is the first design to put a human directly on the stream, so it owns naming the bridge. **Fix**: state the mechanism — e.g. a NATS auth-callout that validates the user's IdP token and maps it to the tenant account (0 pods, NATS-native), or short-lived NATS user creds minted by the operator on `plume login` — with the read-only scoping stated either way.
+`08-cli.md:54`. "Streams the agent's receipts live … (design 04 fidelity consumer, tenant-scoped creds)" — but nothing says how a logged-in human obtains tenant-scoped *NATS* credentials. Design 06 provisions OIDC clients; NATS is a different credential domain (accounts + user creds/JWTs). This is the first design to put a human directly on the stream, so it owns naming the bridge. **Fix**: state the mechanism — e.g. a NATS auth-callout that validates the user's IdP token and maps it to the tenant account (0 pods, NATS-native), or short-lived NATS user creds minted by the operator on `assayd login` — with the read-only scoping stated either way.
 
 ## Lens summary
 
@@ -61,12 +61,12 @@ VERDICT: REVISE — 6 findings
 
 | r1 | Severity | Disposition |
 |---|---|---|
-| 1 | MAJOR | **Resolved — both halves.** `doctor` checks receipt-pipeline liveness read-only (JetStream stream-info last-sequence age + tap health metrics; "the CLI never writes to the audit stream" now stated as a rule), and the end-to-end proof became `plume invoke --probe` — a *genuine* task through the gateway whose receipt is a real receipt of a real hop. Exactly the recommended shape; audit integrity and credential posture both restored. |
+| 1 | MAJOR | **Resolved — both halves.** `doctor` checks receipt-pipeline liveness read-only (JetStream stream-info last-sequence age + tap health metrics; "the CLI never writes to the audit stream" now stated as a rule), and the end-to-end proof became `assayd invoke --probe` — a *genuine* task through the gateway whose receipt is a real receipt of a real hop. Exactly the recommended shape; audit integrity and credential posture both restored. |
 | 2 | MINOR | **Resolved.** `GatesBypassed=DevProfile` recorded as design 02 §11 A5. |
 | 3 | MINOR | **Resolved.** `build` now includes card signing per design 09 §3.2 (Sigstore keyless, same builder identity). |
-| 4 | MINOR | **Resolved.** `doctor` reads the `plume-contracts` ConfigMap ledger — "never a hard-coded subset" — so the two N/N−1 enforcement points can't diverge. |
+| 4 | MINOR | **Resolved.** `doctor` reads the `assayd-contracts` ConfigMap ledger — "never a hard-coded subset" — so the two N/N−1 enforcement points can't diverge. |
 | 5 | MINOR | **Resolved.** Primitives line added (Resource/Artifact/Agent). |
-| 6 | MINOR | **Resolved.** Read-only NATS credential scoped to `receipts.>` in the tenant account, minted by the identity bootstrap, fetched at `plume login` into the keychain; write credentials never held. Composes with design 04's per-tenant streams. |
+| 6 | MINOR | **Resolved.** Read-only NATS credential scoped to `receipts.>` in the tenant account, minted by the identity bootstrap, fetched at `assayd login` into the keychain; write credentials never held. Composes with design 04's per-tenant streams. |
 
 ### Observation (not a finding)
 

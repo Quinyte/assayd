@@ -8,7 +8,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // SourceRef names a ConfigMap or Secret an Agent's runtime reads from.
@@ -63,7 +63,7 @@ func ContentDigest(data map[string]string, binary map[string][]byte) string {
 // owns, so they are not external material. An arm this does not recognise is
 // NOT skipped — it is reported through UnknownEnvArms, because a silently
 // skipped source is a source whose content is ungated.
-func EnvSources(spec plumev1alpha1.AgentSpec) []SourceRef {
+func EnvSources(spec assaydv1alpha1.AgentSpec) []SourceRef {
 	if spec.Runtime == nil {
 		return nil
 	}
@@ -108,7 +108,7 @@ func EnvSources(spec plumev1alpha1.AgentSpec) []SourceRef {
 // A20's rule is that a source whose content is unknown blocks the revision, and
 // an unrecognised arm is the case where the operator does not even know what to
 // read.
-func UnknownEnvArms(spec plumev1alpha1.AgentSpec) []string {
+func UnknownEnvArms(spec assaydv1alpha1.AgentSpec) []string {
 	if spec.Runtime == nil {
 		return nil
 	}
@@ -133,7 +133,7 @@ func UnknownEnvArms(spec plumev1alpha1.AgentSpec) []string {
 }
 
 // MissingSources returns the references not present in resolved.
-func MissingSources(spec plumev1alpha1.AgentSpec, resolved Resolved) []SourceRef {
+func MissingSources(spec assaydv1alpha1.AgentSpec, resolved Resolved) []SourceRef {
 	var missing []SourceRef
 	for _, r := range EnvSources(spec) {
 		if _, ok := resolved[r]; !ok {
@@ -149,7 +149,7 @@ var _ = corev1.EnvVar{}
 // panics rather than returning an error, and it panics HARDER if the spec
 // actually references a source — a test that silently hashed without content
 // would be asserting about an identity production can never produce.
-func MustHash(spec plumev1alpha1.AgentSpec) string {
+func MustHash(spec assaydv1alpha1.AgentSpec) string {
 	if refs := EnvSources(spec); len(refs) > 0 {
 		panic(fmt.Sprintf("MustHash on a spec referencing %v: resolve them and call Hash, "+
 			"or this asserts about an identity the operator cannot mint", refs))
@@ -162,7 +162,7 @@ func MustHash(spec plumev1alpha1.AgentSpec) string {
 }
 
 // MustDigest is MustHash's full-width counterpart.
-func MustDigest(spec plumev1alpha1.AgentSpec) string {
+func MustDigest(spec assaydv1alpha1.AgentSpec) string {
 	if refs := EnvSources(spec); len(refs) > 0 {
 		panic(fmt.Sprintf("MustDigest on a spec referencing %v", refs))
 	}
@@ -177,7 +177,7 @@ func MustDigest(spec plumev1alpha1.AgentSpec) string {
 // with env sources to hash deterministically without an API server. The digest
 // is a constant, so it pins structure and not content — which is exactly what a
 // leaf-classification test wants and exactly what a content test must not use.
-func HashWith(spec plumev1alpha1.AgentSpec, digest string) string {
+func HashWith(spec assaydv1alpha1.AgentSpec, digest string) string {
 	h, err := HashOrRefusal(spec, digest)
 	if err != nil {
 		panic(err)
@@ -188,7 +188,7 @@ func HashWith(spec plumev1alpha1.AgentSpec, digest string) string {
 // HashOrRefusal is HashWith for callers that must distinguish "this leaf mints"
 // from "this whole spec is refused" — a leaf under an arm the operator cannot
 // read is not classified by whether its hash moves, because there is no hash.
-func HashOrRefusal(spec plumev1alpha1.AgentSpec, digest string) (string, error) {
+func HashOrRefusal(spec assaydv1alpha1.AgentSpec, digest string) (string, error) {
 	res := Resolved{}
 	for _, r := range EnvSources(spec) {
 		res[r] = digest
@@ -199,4 +199,4 @@ func HashOrRefusal(spec plumev1alpha1.AgentSpec, digest string) (string, error) 
 // HashWithFixed is HashWith with the digest this repository's tests use, so a
 // classification test can perturb env-source STRUCTURE without an API server
 // while never asserting anything about content.
-func HashWithFixed(spec plumev1alpha1.AgentSpec) string { return HashWith(spec, "fixed") }
+func HashWithFixed(spec assaydv1alpha1.AgentSpec) string { return HashWith(spec, "fixed") }

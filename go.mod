@@ -1,4 +1,4 @@
-module github.com/Quinyte/plume
+module github.com/Quinyte/assayd
 
 go 1.26.0
 

@@ -15,9 +15,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // responderImage is built and pushed by hack/e2e.sh and carries a REAL repo
@@ -31,12 +31,12 @@ func responderImage(t *testing.T) string {
 	// makes before this script runs. Design 02 §5 carries the gap. Every other
 	// absence is still a failure, because this suite's rule is that a skipped
 	// e2e is an untested feature.
-	if why := os.Getenv("PLUME_E2E_RESPONDER_SKIP"); why != "" {
+	if why := os.Getenv("ASSAYD_E2E_RESPONDER_SKIP"); why != "" {
 		t.Skipf("responder tests not run: %s", why)
 	}
-	img := os.Getenv("PLUME_E2E_RESPONDER_IMAGE")
+	img := os.Getenv("ASSAYD_E2E_RESPONDER_IMAGE")
 	if img == "" {
-		t.Fatal("PLUME_E2E_RESPONDER_IMAGE is unset. Run `make e2e`, which builds the responder " +
+		t.Fatal("ASSAYD_E2E_RESPONDER_IMAGE is unset. Run `make e2e`, which builds the responder " +
 			"and pushes it to the suite's registry so the kubelet can pull it by digest.")
 	}
 	return img
@@ -51,13 +51,13 @@ func TestAnAgentAnswersARequestThroughItsRevisionService(t *testing.T) {
 	requireOperator(t)
 	img := responderImage(t)
 	ctx := context.Background()
-	ensureNamespace(t, ctx, "plume-e2e")
+	ensureNamespace(t, ctx, "assayd-e2e")
 
 	const name = "answerer"
-	a := &plumev1alpha1.Agent{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "plume-e2e"},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{
+	a := &assaydv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "assayd-e2e"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{
 				Image: img,
 				Env:   []corev1.EnvVar{{Name: "AGENT_NAME", Value: name}},
 			},
@@ -80,7 +80,7 @@ func TestAnAgentAnswersARequestThroughItsRevisionService(t *testing.T) {
 		t.Fatalf("the revision has no Service, so nothing can reach it: %v", err)
 	}
 
-	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/plume-test/echo", wl, runNS)
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/assayd-test/echo", wl, runNS)
 	body := httpInCluster(t, ctx, "ask", url, `{"message":{"parts":[{"text":"ping"}]}}`)
 
 	var out struct {
@@ -115,13 +115,13 @@ func TestTheAgentServesItsCardFromTheContainer(t *testing.T) {
 	requireOperator(t)
 	img := responderImage(t)
 	ctx := context.Background()
-	ensureNamespace(t, ctx, "plume-e2e")
+	ensureNamespace(t, ctx, "assayd-e2e")
 
 	const name = "carded"
-	a := &plumev1alpha1.Agent{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "plume-e2e"},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{
+	a := &assaydv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "assayd-e2e"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{
 				Image: img,
 				Env:   []corev1.EnvVar{{Name: "AGENT_NAME", Value: name}},
 			},
@@ -209,7 +209,7 @@ func httpInCluster(t *testing.T, ctx context.Context, tag, url, postBody string)
 	}
 	name := "probe-" + tag
 	p := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "plume-e2e"},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "assayd-e2e"},
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{{
@@ -228,7 +228,7 @@ func httpInCluster(t *testing.T, ctx context.Context, tag, url, postBody string)
 	gone := time.Now().Add(time.Minute)
 	for time.Now().Before(gone) {
 		var scratch corev1.Pod
-		if err := k8s.Get(ctx, types.NamespacedName{Namespace: "plume-e2e", Name: name}, &scratch); err != nil {
+		if err := k8s.Get(ctx, types.NamespacedName{Namespace: "assayd-e2e", Name: name}, &scratch); err != nil {
 			break
 		}
 		time.Sleep(time.Second)
@@ -241,7 +241,7 @@ func httpInCluster(t *testing.T, ctx context.Context, tag, url, postBody string)
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		var got corev1.Pod
-		if err := k8s.Get(ctx, types.NamespacedName{Namespace: "plume-e2e", Name: name}, &got); err == nil {
+		if err := k8s.Get(ctx, types.NamespacedName{Namespace: "assayd-e2e", Name: name}, &got); err == nil {
 			for _, cs := range got.Status.ContainerStatuses {
 				if cs.State.Terminated != nil {
 					if cs.State.Terminated.ExitCode != 0 {
@@ -267,13 +267,13 @@ func TestTheOperatorRegistersTheCardItFetched(t *testing.T) {
 	requireOperator(t)
 	img := responderImage(t)
 	ctx := context.Background()
-	ensureNamespace(t, ctx, "plume-e2e")
+	ensureNamespace(t, ctx, "assayd-e2e")
 
 	const name = "registered"
-	a := &plumev1alpha1.Agent{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "plume-e2e"},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{
+	a := &assaydv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "assayd-e2e"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{
 				Image: img,
 				Env:   []corev1.EnvVar{{Name: "AGENT_NAME", Value: name}},
 			},
@@ -290,10 +290,10 @@ func TestTheOperatorRegistersTheCardItFetched(t *testing.T) {
 
 	// Registration happens after readiness, so poll for it rather than assuming
 	// the reconcile that made it available also fetched.
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
-		if err := k8s.Get(ctx, types.NamespacedName{Namespace: "plume-e2e", Name: name}, &live); err == nil {
+		if err := k8s.Get(ctx, types.NamespacedName{Namespace: "assayd-e2e", Name: name}, &live); err == nil {
 			// A REGISTERED card, not merely an entry. A failed attempt also writes
 			// one, with an empty digest, so that the retry gate has something that
 			// moves to measure from — breaking on any entry meant this test read the
@@ -327,9 +327,9 @@ func TestTheOperatorRegistersTheCardItFetched(t *testing.T) {
 	var registered, unsigned *metav1.Condition
 	for i := range live.Status.Conditions {
 		switch live.Status.Conditions[i].Type {
-		case string(plumev1alpha1.CondRegistered):
+		case string(assaydv1alpha1.CondRegistered):
 			registered = &live.Status.Conditions[i]
-		case string(plumev1alpha1.CondCardUnsigned):
+		case string(assaydv1alpha1.CondCardUnsigned):
 			unsigned = &live.Status.Conditions[i]
 		}
 	}

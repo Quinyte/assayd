@@ -27,7 +27,7 @@ The pattern layer that turns "a pile of documents of shape X" into "a graph of s
   README.md             # human doc: what shape in, what shape out, what agents get
 ```
 
-Validation: `plume pack`-side schema check + **instantiation check** — the template with default variables must produce a valid ontology/v1 doc (design 12 validation) and its fixtures must build a graph passing its own probes on the reference provider. A pack that can't pass its own fixtures doesn't publish.
+Validation: `assayd pack`-side schema check + **instantiation check** — the template with default variables must produce a valid ontology/v1 doc (design 12 validation) and its fixtures must build a graph passing its own probes on the reference provider. A pack that can't pass its own fixtures doesn't publish.
 
 ## 4. The `sop-decision-tree` pack, fully specified
 

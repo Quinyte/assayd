@@ -8,7 +8,7 @@ import (
 )
 
 // The Dockerfile is supply chain too, and the rules it has to meet are the ones
-// plume imposes on the agent images it admits (ADR-0019).
+// assayd imposes on the agent images it admits (ADR-0019).
 
 func TestBaseImagesArePinnedByDigest(t *testing.T) {
 	b, err := os.ReadFile("../../Dockerfile")
@@ -24,12 +24,12 @@ func TestBaseImagesArePinnedByDigest(t *testing.T) {
 
 	// The final stage is what ships, and it is the one that must be immutable:
 	// a tag is rebuilt upstream, so the same source would produce different
-	// bytes over time — the exact property plume refuses to accept from agents.
+	// bytes over time — the exact property assayd refuses to accept from agents.
 	final := matches[len(matches)-1][1]
 	if !strings.Contains(final, "@sha256:") {
 		t.Errorf("the runtime base image %q is pinned by tag. It is rebuilt upstream, so "+
 			"the same source can produce different bytes over time — which is precisely "+
-			"what plume's own admission rejects in an agent image.", final)
+			"what assayd's own admission rejects in an agent image.", final)
 	}
 	if strings.Contains(final, ":latest") {
 		t.Errorf("the runtime base image %q floats", final)

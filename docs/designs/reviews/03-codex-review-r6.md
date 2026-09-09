@@ -345,7 +345,7 @@ accepted while exactly-one is rejected. The vendored chart was repacked, its
 pinned digest updated, the mutation compiled, and the conformance suite passed.
 
 **Concrete failure:** an upstream or vendoring error ships that expression.
-Plume's compiler emits one field as designed, but the API rejects it; manifests
+Assayd's compiler emits one field as designed, but the API rejects it; manifests
 with both fields are admitted. The claimed dependency contract is false while
 the exact-semantic test is green.
 
@@ -388,7 +388,7 @@ the compiler drops the binding before classifying its impact.
 and an Agent declares its only critical tool. The tool route is omitted,
 `PolicyCompileFailed` is absent, and the Agent can report `Ready=True`. A user
 looking at that Agent sees no reason its advertised task cannot complete; only a
-separate `plume doctor` invocation reveals a cluster tier gap.
+separate `assayd doctor` invocation reveals a cluster tier gap.
 
 **Specific fix:** keep the single operator-level producer condition to avoid
 fleet noise, but add a per-Agent failure whenever that Agent has a requested

@@ -7,7 +7,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // Design 02 A21, decided by the user on 2026-08-26 and never implemented until
@@ -73,10 +73,10 @@ func TestOnlyADigestPinnedImageIsAdmitted(t *testing.T) {
 			"a tag alongside a digest is legal and common in CI output; the digest still pins it"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := &plumev1alpha1.Agent{
+			a := &assaydv1alpha1.Agent{
 				ObjectMeta: metav1.ObjectMeta{Name: "img-" + strings.ReplaceAll(tc.name, " ", "-"), Namespace: ns},
-				Spec: plumev1alpha1.AgentSpec{
-					Runtime: &plumev1alpha1.AgentRuntime{Image: tc.image},
+				Spec: assaydv1alpha1.AgentSpec{
+					Runtime: &assaydv1alpha1.AgentRuntime{Image: tc.image},
 				},
 			}
 			err := k8s.Create(context.Background(), a)
@@ -97,9 +97,9 @@ func TestOnlyADigestPinnedImageIsAdmitted(t *testing.T) {
 // rule that costs nothing to state is the one that says how to get one.
 func TestTheDigestRejectionNamesTheFix(t *testing.T) {
 	ns := newNamespace(t)
-	a := &plumev1alpha1.Agent{
+	a := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "msg", Namespace: ns},
-		Spec:       plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/a:1"}},
+		Spec:       assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{Image: "ghcr.io/acme/a:1"}},
 	}
 	err := k8s.Create(context.Background(), a)
 	if err == nil {

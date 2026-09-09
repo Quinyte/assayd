@@ -14,22 +14,22 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // The validation logic, tested where it can be reached. The fetch itself needs
 // a cluster (the URL names a Service), so these drive it through an injected
 // client against a real HTTP server rather than asserting about a mock.
-func cardFixture(t *testing.T, body string, status int) (*AgentReconciler, *plumev1alpha1.Agent) {
+func cardFixture(t *testing.T, body string, status int) (*AgentReconciler, *assaydv1alpha1.Agent) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	a := &plumev1alpha1.Agent{
+	a := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "pa-reviewer", Namespace: "team"},
-		Spec:       plumev1alpha1.AgentSpec{Runtime: &plumev1alpha1.AgentRuntime{Port: 8080}},
+		Spec:       assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{Port: 8080}},
 	}
 	// The fetch reads the revision's Service to get its ClusterIP, so the fake
 	// client must hold one. redirectTo then sends the request to the test server
@@ -38,7 +38,7 @@ func cardFixture(t *testing.T, body string, status int) (*AgentReconciler, *plum
 	r := &AgentReconciler{
 		CardClient: redirectTo{srv.URL},
 		Client: fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(&corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "plume-run-team", Name: "pa-reviewer-abc123"},
+			ObjectMeta: metav1.ObjectMeta{Namespace: "assayd-run-team", Name: "pa-reviewer-abc123"},
 			Spec:       corev1.ServiceSpec{ClusterIP: "10.43.0.9"},
 		}).Build(),
 	}
@@ -66,7 +66,7 @@ const goodCard = `{"name":"pa-reviewer","description":"d","version":"0.1.0",` +
 	`"capabilities":{"streaming":false},"defaultInputModes":["text/plain"],` +
 	`"defaultOutputModes":["text/plain"],"skills":[{"id":"echo"}]}`
 
-// The pre-1.0 shape, kept as a fixture on purpose. plume parsed exactly this and
+// The pre-1.0 shape, kept as a fixture on purpose. assayd parsed exactly this and
 // called it v1.0; a conformant card has no top-level protocolVersion, so the
 // operator would have refused every real agent while accepting this one.
 const v0Card = `{"name":"pa-reviewer","version":"0.1.0","protocolVersion":"1.0",` +
@@ -74,7 +74,7 @@ const v0Card = `{"name":"pa-reviewer","version":"0.1.0","protocolVersion":"1.0",
 
 func TestAValidCardIsAccepted(t *testing.T) {
 	r, a := cardFixture(t, goodCard, 200)
-	got, err := r.fetchAndValidateCard(context.Background(), a, "plume-run-team", "abc123")
+	got, err := r.fetchAndValidateCard(context.Background(), a, "assayd-run-team", "abc123")
 	if err != nil {
 		t.Fatalf("a valid card was rejected: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestEachCardDefectIsRefusedByItsOwnRule(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r, a := cardFixture(t, tc.body, tc.status)
-			_, err := r.fetchAndValidateCard(context.Background(), a, "plume-run-team", "abc123")
+			_, err := r.fetchAndValidateCard(context.Background(), a, "assayd-run-team", "abc123")
 			if err == nil {
 				t.Fatal("accepted")
 			}
@@ -136,8 +136,8 @@ func TestTheDigestIsOverTheServedBytes(t *testing.T) {
 		`"defaultOutputModes":["text/plain"],"skills":[{"id":"echo"}]}`
 	r1, a1 := cardFixture(t, goodCard, 200)
 	r2, a2 := cardFixture(t, spaced, 200)
-	c1, err1 := r1.fetchAndValidateCard(context.Background(), a1, "plume-run-team", "abc123")
-	c2, err2 := r2.fetchAndValidateCard(context.Background(), a2, "plume-run-team", "abc123")
+	c1, err1 := r1.fetchAndValidateCard(context.Background(), a1, "assayd-run-team", "abc123")
+	c2, err2 := r2.fetchAndValidateCard(context.Background(), a2, "assayd-run-team", "abc123")
 	if err1 != nil || err2 != nil {
 		t.Fatalf("setup: %v %v", err1, err2)
 	}
@@ -148,9 +148,9 @@ func TestTheDigestIsOverTheServedBytes(t *testing.T) {
 }
 
 func TestUpsertReplacesOneRevisionAndKeepsOthers(t *testing.T) {
-	cards := []plumev1alpha1.CardStatus{{Revision: "r1", RevisionDigest: "d1", Digest: "old"}}
-	cards = upsertCard(cards, plumev1alpha1.CardStatus{Revision: "r2"}, "d2")
-	cards = upsertCard(cards, plumev1alpha1.CardStatus{Revision: "r1", Digest: "new"}, "d1")
+	cards := []assaydv1alpha1.CardStatus{{Revision: "r1", RevisionDigest: "d1", Digest: "old"}}
+	cards = upsertCard(cards, assaydv1alpha1.CardStatus{Revision: "r2"}, "d2")
+	cards = upsertCard(cards, assaydv1alpha1.CardStatus{Revision: "r1", Digest: "new"}, "d1")
 	if len(cards) != 2 {
 		t.Fatalf("want 2 entries, got %d: %+v", len(cards), cards)
 	}
@@ -174,18 +174,18 @@ func TestTheCardPathFromTheSpecIsUsed(t *testing.T) {
 	r := &AgentReconciler{
 		CardClient: redirectTo{srv.URL},
 		Client: fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(&corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "plume-run-team", Name: "pa-reviewer-abc123"},
+			ObjectMeta: metav1.ObjectMeta{Namespace: "assayd-run-team", Name: "pa-reviewer-abc123"},
 			Spec:       corev1.ServiceSpec{ClusterIP: "10.43.0.9"},
 		}).Build(),
 	}
-	a := &plumev1alpha1.Agent{
+	a := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "pa-reviewer", Namespace: "team"},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Port: 8080},
-			Card:    plumev1alpha1.CardSpec{Path: "/custom.json"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{Port: 8080},
+			Card:    assaydv1alpha1.CardSpec{Path: "/custom.json"},
 		},
 	}
-	if _, err := r.fetchAndValidateCard(context.Background(), a, "plume-run-team", "abc123"); err != nil {
+	if _, err := r.fetchAndValidateCard(context.Background(), a, "assayd-run-team", "abc123"); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 	if got != "/custom.json" {
@@ -199,7 +199,7 @@ func TestTheCardPathFromTheSpecIsUsed(t *testing.T) {
 func testScheme() *runtime.Scheme {
 	sc := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(sc)
-	_ = plumev1alpha1.AddToScheme(sc)
+	_ = assaydv1alpha1.AddToScheme(sc)
 	return sc
 }
 
@@ -213,9 +213,9 @@ func testScheme() *runtime.Scheme {
 func TestCardFetchDueDecidesWhenToGoToTheNetwork(t *testing.T) {
 	now := time.Now()
 	rev := "d1"
-	withCard := func(age time.Duration) *plumev1alpha1.AgentStatus {
+	withCard := func(age time.Duration) *assaydv1alpha1.AgentStatus {
 		at := metav1.NewTime(now.Add(-age))
-		return &plumev1alpha1.AgentStatus{Cards: []plumev1alpha1.CardStatus{
+		return &assaydv1alpha1.AgentStatus{Cards: []assaydv1alpha1.CardStatus{
 			{RevisionDigest: rev, FetchedAt: &at}}}
 	}
 	// A failed ATTEMPT, which is an entry with an empty digest. It is not a
@@ -223,19 +223,19 @@ func TestCardFetchDueDecidesWhenToGoToTheNetwork(t *testing.T) {
 	// opened permanently after its first interval, because merge() freezes that
 	// timestamp while the status stays False — five reconciles, five dials, each
 	// able to block the shared work queue for the fetch timeout.
-	withFailure := func(age time.Duration) *plumev1alpha1.AgentStatus {
+	withFailure := func(age time.Duration) *assaydv1alpha1.AgentStatus {
 		at := metav1.NewTime(now.Add(-age))
-		return &plumev1alpha1.AgentStatus{Cards: []plumev1alpha1.CardStatus{
+		return &assaydv1alpha1.AgentStatus{Cards: []assaydv1alpha1.CardStatus{
 			{RevisionDigest: rev, FetchedAt: &at}}}
 	}
 
 	for _, tc := range []struct {
 		name string
-		st   *plumev1alpha1.AgentStatus
+		st   *assaydv1alpha1.AgentStatus
 		want bool
 		why  string
 	}{
-		{"never fetched", &plumev1alpha1.AgentStatus{}, true,
+		{"never fetched", &assaydv1alpha1.AgentStatus{}, true,
 			"a revision with no card must be fetched or it never registers"},
 		{"fetched just now", withCard(time.Second), false,
 			"refetching a card already held is a network call per reconcile for nothing"},
@@ -248,7 +248,7 @@ func TestCardFetchDueDecidesWhenToGoToTheNetwork(t *testing.T) {
 		{"failed long ago, then retried just now", withFailure(time.Second), false,
 			"the gate must CLOSE again after each retry. Keyed on a condition timestamp it did " +
 				"not: once open it stayed open, and every reconcile dialled"},
-		{"another revision's card", &plumev1alpha1.AgentStatus{Cards: []plumev1alpha1.CardStatus{
+		{"another revision's card", &assaydv1alpha1.AgentStatus{Cards: []assaydv1alpha1.CardStatus{
 			{RevisionDigest: "other", FetchedAt: ptrTime(now)}}}, true,
 			"this revision has no card of its own"},
 	} {
@@ -266,7 +266,7 @@ func ptrTime(t time.Time) *metav1.Time { m := metav1.NewTime(t); return &m }
 // expose several bindings, so a supported version anywhere in the list is
 // enough. Checking only the first entry survived as a mutation: no fixture had
 // more than one interface, so nothing noticed that an agent preferring a
-// binding plume does not speak would be refused outright.
+// binding assayd does not speak would be refused outright.
 func TestAnySupportedInterfaceIsEnoughNotOnlyTheFirst(t *testing.T) {
 	multi := `{"name":"pa-reviewer","description":"d","version":"0.1.0","supportedInterfaces":[` +
 		`{"url":"grpc://x/","protocolBinding":"GRPC","protocolVersion":"0.3"},` +
@@ -274,7 +274,7 @@ func TestAnySupportedInterfaceIsEnoughNotOnlyTheFirst(t *testing.T) {
 		`"capabilities":{"streaming":false},"defaultInputModes":["text/plain"],` +
 		`"defaultOutputModes":["text/plain"],"skills":[{"id":"echo"}]}`
 	r, a := cardFixture(t, multi, 200)
-	if _, err := r.fetchAndValidateCard(context.Background(), a, "plume-run-team", "abc123"); err != nil {
+	if _, err := r.fetchAndValidateCard(context.Background(), a, "assayd-run-team", "abc123"); err != nil {
 		t.Errorf("an agent offering an unsupported binding FIRST and a supported one second "+
 			"was refused: %v.\nThe array is the agent's preference order, not a single "+
 			"declaration, so refusing on the first entry rejects conformant agents.", err)
@@ -289,7 +289,7 @@ func TestACardWhoseInterfacesAreAllUnsupportedIsRefused(t *testing.T) {
 		`"capabilities":{"streaming":false},"defaultInputModes":["text/plain"],` +
 		`"defaultOutputModes":["text/plain"],"skills":[{"id":"echo"}]}`
 	r, a := cardFixture(t, old, 200)
-	_, err := r.fetchAndValidateCard(context.Background(), a, "plume-run-team", "abc123")
+	_, err := r.fetchAndValidateCard(context.Background(), a, "assayd-run-team", "abc123")
 	ce, ok := err.(*cardError)
 	if !ok || ce.reason != "CardProtocolUnsupported" {
 		t.Errorf("a card offering only 0.3 and 0.2 was not refused as unsupported: %v", err)

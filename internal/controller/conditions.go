@@ -5,7 +5,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // conditionSet accumulates the conditions one reconcile pass wants to assert.
@@ -25,7 +25,7 @@ func newConditionSet(generation int64) *conditionSet {
 	return &conditionSet{generation: generation, asserted: map[string]metav1.Condition{}}
 }
 
-func (c *conditionSet) set(condType plumev1alpha1.ConditionType, status metav1.ConditionStatus, reason, message string) {
+func (c *conditionSet) set(condType assaydv1alpha1.ConditionType, status metav1.ConditionStatus, reason, message string) {
 	c.asserted[string(condType)] = metav1.Condition{
 		Type:               string(condType),
 		Status:             status,
@@ -41,33 +41,33 @@ func (c *conditionSet) set(condType plumev1alpha1.ConditionType, status metav1.C
 // sandbox is a lie. Types NOT listed belong to other controllers (the gate
 // controller, the budget backstop, design 20's drift controllers) and are left
 // untouched — clearing another controller's condition would be a write race.
-var ownedTypes = map[plumev1alpha1.ConditionType]bool{
-	plumev1alpha1.CondReady:               true,
-	plumev1alpha1.CondProgressing:         true,
-	plumev1alpha1.CondGatesSkipped:        true,
-	plumev1alpha1.CondGatesPassed:         true,
-	plumev1alpha1.CondSandboxDowngraded:   true,
-	plumev1alpha1.CondTaskStateUnverified: true,
-	plumev1alpha1.CondDegraded:            true,
+var ownedTypes = map[assaydv1alpha1.ConditionType]bool{
+	assaydv1alpha1.CondReady:               true,
+	assaydv1alpha1.CondProgressing:         true,
+	assaydv1alpha1.CondGatesSkipped:        true,
+	assaydv1alpha1.CondGatesPassed:         true,
+	assaydv1alpha1.CondSandboxDowngraded:   true,
+	assaydv1alpha1.CondTaskStateUnverified: true,
+	assaydv1alpha1.CondDegraded:            true,
 	// Owned and no longer asserted by anything: A42 closed the gap it announced,
 	// so merge() CLEARS a stale True left by an operator from before A42.
-	plumev1alpha1.CondEnvSourceProtectionUnavailable: true,
-	plumev1alpha1.CondEnvSourceUnresolved:            true,
+	assaydv1alpha1.CondEnvSourceProtectionUnavailable: true,
+	assaydv1alpha1.CondEnvSourceUnresolved:            true,
 	// Owned so it can CLEAR. It was in neither map, which meant merge() treated
 	// it as another controller's and carried it forward verbatim — forever, with
 	// a stale message, on an agent that had gone back to Ready. No other
 	// controller writes it.
-	plumev1alpha1.CondRevisionHashCollision: true,
+	assaydv1alpha1.CondRevisionHashCollision: true,
 	// Owned so it CLEARS: Terminating clears by itself when the namespace is
 	// recreated, and LabelAuthorityAbsent when the policies appear. Left out of
 	// this set, every Agent that ever waited carried it forever beside
 	// Ready=True (found by the code review of A61).
-	plumev1alpha1.CondRunNamespaceUnavailable: true,
+	assaydv1alpha1.CondRunNamespaceUnavailable: true,
 	// Owned for the same reason: the operator is its only writer, and an Agent
 	// whose material was restored would otherwise report Ready=True beside a
 	// stale RevisionMaterialUnavailable=True forever — merge()'s default arm
 	// carries an unowned type forward as "another controller's".
-	plumev1alpha1.CondRevisionMaterialUnavailable: true,
+	assaydv1alpha1.CondRevisionMaterialUnavailable: true,
 }
 
 // stickyTypes are owned conditions that must stay in the list once set, flipped
@@ -79,10 +79,10 @@ var ownedTypes = map[plumev1alpha1.ConditionType]bool{
 // indistinguishable from "never evaluated". Dropping GatesPassed when an
 // EvalSuite CRD is uninstalled would silently erase the record that a revision
 // ever passed a gate.
-var stickyTypes = map[plumev1alpha1.ConditionType]bool{
-	plumev1alpha1.CondReady:       true,
-	plumev1alpha1.CondProgressing: true,
-	plumev1alpha1.CondGatesPassed: true,
+var stickyTypes = map[assaydv1alpha1.ConditionType]bool{
+	assaydv1alpha1.CondReady:       true,
+	assaydv1alpha1.CondProgressing: true,
+	assaydv1alpha1.CondGatesPassed: true,
 }
 
 // merge folds this pass's assertions into the existing conditions.
@@ -93,10 +93,10 @@ func (c *conditionSet) merge(existing []metav1.Condition) []metav1.Condition {
 		next, asserted := c.asserted[prev.Type]
 		if !asserted {
 			switch {
-			case stickyTypes[plumev1alpha1.ConditionType(prev.Type)]:
+			case stickyTypes[assaydv1alpha1.ConditionType(prev.Type)]:
 				// Keep the record; a later pass that has an opinion will overwrite it.
 				out = append(out, prev)
-			case ownedTypes[plumev1alpha1.ConditionType(prev.Type)]:
+			case ownedTypes[assaydv1alpha1.ConditionType(prev.Type)]:
 				// Abnormal-true and no longer observed: its absence is the signal.
 			default:
 				out = append(out, prev) // another controller's; leave it alone
@@ -150,7 +150,7 @@ func sortStrings(xs []string) {
 // compared ignoring LastTransitionTime, which is derived rather than observed —
 // comparing it would make every pass look like a change and churn the API
 // server forever.
-func equalStatus(a, b *plumev1alpha1.AgentStatus) bool {
+func equalStatus(a, b *assaydv1alpha1.AgentStatus) bool {
 	x, y := a.DeepCopy(), b.DeepCopy()
 	for i := range x.Conditions {
 		x.Conditions[i].LastTransitionTime = metav1.Time{}

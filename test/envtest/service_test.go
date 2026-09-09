@@ -12,9 +12,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // ADR-0030 step 2. Until 2026-09-05 no Service existed at all: a Pod could
@@ -119,7 +119,7 @@ func TestDeletingAnAgentCollectsItsServices(t *testing.T) {
 	// The finalizer holds the object, so it is still readable; one reconcile runs
 	// the teardown. Re-reading rather than reusing `a` keeps the resourceVersion
 	// current, which the finalizer removal needs.
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent after delete: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestAServiceCarryingAnotherRevisionDigestIsRefusedRatherThanConverged(t *te
 
 	// It refuses by REPORTING, not by erroring forever: a bare error would retry
 	// with no status and leave an operator nothing to read.
-	if !meta.IsStatusConditionTrue(got.Status.Conditions, string(plumev1alpha1.CondRevisionHashCollision)) {
+	if !meta.IsStatusConditionTrue(got.Status.Conditions, string(assaydv1alpha1.CondRevisionHashCollision)) {
 		t.Errorf("no RevisionHashCollision condition after a Service claimed the revision "+
 			"name with another digest; conditions: %v", got.Status.Conditions)
 	}

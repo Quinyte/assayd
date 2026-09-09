@@ -15,7 +15,7 @@ import (
 // a full 63-character DNS label. Naive truncation is non-injective and would
 // pool two tenants (design 02 A42); the rule is truncate-and-hash with 16 hex.
 func TestRunNamespaceNameIsADNSLabelAndInjectiveAtTheLimit(t *testing.T) {
-	if got := RunNamespaceName("team-a"); got != "plume-run-team-a" {
+	if got := RunNamespaceName("team-a"); got != "assayd-run-team-a" {
 		t.Errorf("short name: %s", got)
 	}
 	long1 := strings.Repeat("a", 60) + "xyz"
@@ -46,7 +46,7 @@ func TestMirrorNameStaysWithinADNSSubdomain(t *testing.T) {
 	if got := MirrorName(long); len(got) > 253 || !strings.HasPrefix(got, MirrorPrefix) {
 		t.Errorf("mirror name for a 250-char source is %d chars: %s", len(got), got)
 	}
-	if MirrorName("compute") != "plume-mirror-compute" {
+	if MirrorName("compute") != "assayd-mirror-compute" {
 		t.Error("short mirror name")
 	}
 }
@@ -57,7 +57,7 @@ func TestBindingRecordDecodesStrictly(t *testing.T) {
 	good := func() *corev1.ConfigMap {
 		return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "b"}, Data: map[string]string{
 			"schemaVersion": "1", "sourceNamespace": "team-a", "sourceNamespaceUID": "u1",
-			"runNamespace": "plume-run-team-a", "runNamespaceUID": "u2", "nonce": "n", "state": "Bound"}}
+			"runNamespace": "assayd-run-team-a", "runNamespaceUID": "u2", "nonce": "n", "state": "Bound"}}
 	}
 	if _, err := decodeBinding(good()); err != nil {
 		t.Fatalf("a complete record was refused: %v", err)
@@ -89,7 +89,7 @@ func TestBindingRecordDecodesStrictly(t *testing.T) {
 }
 
 // deleteRunNamespace is the one place the cluster-wide namespaces/delete grant
-// is exercised, and it refuses any name outside the plume-run- shape whatever
+// is exercised, and it refuses any name outside the assayd-run- shape whatever
 // the caller believes. Every caller today passes a run name, so this is the
 // pin that keeps the check from being decorative.
 func TestDeleteRunNamespaceRefusesAnyOtherName(t *testing.T) {
@@ -97,7 +97,7 @@ func TestDeleteRunNamespaceRefusesAnyOtherName(t *testing.T) {
 	c := fake.NewClientBuilder().WithObjects(victim).Build()
 	r := &AgentReconciler{Client: c}
 	if err := r.deleteRunNamespace(context.Background(), victim); err == nil {
-		t.Fatal("a namespace outside the plume-run- shape was deleted")
+		t.Fatal("a namespace outside the assayd-run- shape was deleted")
 	}
 	var still corev1.Namespace
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "kube-system"}, &still); err != nil {

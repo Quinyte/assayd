@@ -56,7 +56,7 @@ gateway ──calls tools/KG with exchanged token──> backends
 
 ### 3.4 CLI login (design 08 consumer)
 
-`plume login` = OIDC device-code flow against the CLI client; tokens cached in the OS keychain; `plume --as user@…` (impersonation for admins) maps to exchange with an impersonation grant — audited like everything else.
+`assayd login` = OIDC device-code flow against the CLI client; tokens cached in the OS keychain; `assayd --as user@…` (impersonation for admins) maps to exchange with an impersonation grant — audited like everything else.
 
 ## 4. Behavior
 

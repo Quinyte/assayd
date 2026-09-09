@@ -86,15 +86,15 @@ ADR-0026 even names an open review residual as its own tracking mechanism ("mini
 
 ### F10. MINOR — §05 promises two exposure projections no design specifies
 
-`architecture.md:159-160`. **`Workflow → MCP`** ("`tools/call` starts the run; progress streamed — plume workflows usable from Claude Code/IDEs") and **`Agent → MCP` single tool** have no design behind their *projection semantics*: design 21's triggers are event/cron/http and it explicitly defers MCP exposure to "03/23"; design 03 carries only a generic `expose.protocol: mcp` intent field; design 23 projects HTTP/SSE only (workflow POST, chat SSE, KG read). §20's "every claim above is backed by a critique-passed design" is falsified by these two rows. **Fix**: design the projections, or mark them as roadmap in the table.
+`architecture.md:159-160`. **`Workflow → MCP`** ("`tools/call` starts the run; progress streamed — assayd workflows usable from Claude Code/IDEs") and **`Agent → MCP` single tool** have no design behind their *projection semantics*: design 21's triggers are event/cron/http and it explicitly defers MCP exposure to "03/23"; design 03 carries only a generic `expose.protocol: mcp` intent field; design 23 projects HTTP/SSE only (workflow POST, chat SSE, KG read). §20's "every claim above is backed by a critique-passed design" is falsified by these two rows. **Fix**: design the projections, or mark them as roadmap in the table.
 
 ### F11. MINOR — §05 still bills workflows at "0 pods"
 
 `architecture.md:149`. True of DBOS-the-library (the point being made against Temporal), but design 21 adds **workflow-operator + workflow-runtime (+2, plus tier)** precisely because event triggers require standing workers. §17 states this correctly; §05 leaves the reader with "durable workflows cost nothing".
 
-### F12. MINOR — §02 says "three plume operators"
+### F12. MINOR — §02 says "three assayd operators"
 
-`architecture.md:41`. Four plume-code controllers now exist: agent, workflow, model, and the enterprise **tenant-operator** (design 26 §2, counted in §17's block). "Three core operators (plus the enterprise tenant-operator)" fixes it.
+`architecture.md:41`. Four assayd-code controllers now exist: agent, workflow, model, and the enterprise **tenant-operator** (design 26 §2, counted in §17's block). "Three core operators (plus the enterprise tenant-operator)" fixes it.
 
 ### F13. MINOR — corpus fix (outside architecture.md): design 01's Graphiti appendix is superseded
 
@@ -151,7 +151,7 @@ Verified accurate: `LLMInferenceService` promoted at **KServe v0.17** and built 
 
 #### N1. MATERIAL — §10's "Serving (classic)" row still carries the exact phrasing its own block declares stale
 
-`architecture.md:267` reads "… **Kueue** for GPUs; **llm-d for one giant model**", four lines above a block that says "plume binds llm-d *transitively* through KServe, **not 'only for one giant model' as v0.1 had it**". A reader cannot tell which sentence is current, and the stale clause is doubly wrong now: llm-d belongs to the *generative* row (which the fix added directly above), not the classic `InferenceService` path, which does not involve it at all. **Fix**: delete the clause from the classic row — the generative row and the block already carry llm-d correctly.
+`architecture.md:267` reads "… **Kueue** for GPUs; **llm-d for one giant model**", four lines above a block that says "assayd binds llm-d *transitively* through KServe, **not 'only for one giant model' as v0.1 had it**". A reader cannot tell which sentence is current, and the stale clause is doubly wrong now: llm-d belongs to the *generative* row (which the fix added directly above), not the classic `InferenceService` path, which does not involve it at all. **Fix**: delete the clause from the classic row — the generative row and the block already carry llm-d correctly.
 
 #### N2. MINOR — §17's beyond-core accounting omits the two weights design 25 A1 explicitly ledger-entered
 
@@ -163,7 +163,7 @@ Design 25 A1 states the chart installs KServe's **`llmisvc` component** at plus 
 
 #### N4. MINOR — "binds llm-d transitively" is unscoped where design 25 A1 scopes it
 
-§10's block says "plume binds llm-d transitively through KServe" without qualification; A1 says "binding KServe **for LLM serving** binds llm-d transitively". With the classic row present, the unscoped sentence implies all KServe use pulls in llm-d, which is not true of the predictive path. One prepositional phrase fixes it.
+§10's block says "assayd binds llm-d transitively through KServe" without qualification; A1 says "binding KServe **for LLM serving** binds llm-d transitively". With the classic row present, the unscoped sentence implies all KServe use pulls in llm-d, which is not true of the predictive path. One prepositional phrase fixes it.
 
 ### 3 · New inconsistencies introduced by the fixes
 
@@ -173,7 +173,7 @@ The F9 fix added "builds run as Jobs (design 14), **not Workflow CRs**" (`:139`)
 
 #### N6. MINOR — the F12 fix broke §02's sentence
 
-`architecture.md:51`: "**three core plume operators** (agent, workflow, model) — plus the enterprise tenant-operator that reconcile CRs into bindings — routes, identity, gates." The inserted clause severs subject from verb, so "that reconcile" now appears to attach to the tenant-operator alone. Substance is right; the sentence needs recasting.
+`architecture.md:51`: "**three core assayd operators** (agent, workflow, model) — plus the enterprise tenant-operator that reconcile CRs into bindings — routes, identity, gates." The inserted clause severs subject from verb, so "that reconcile" now appears to attach to the tenant-operator alone. Substance is right; the sentence needs recasting.
 
 #### N7. MINOR — §19's semconv posture still says "pin version" after §07 was corrected
 

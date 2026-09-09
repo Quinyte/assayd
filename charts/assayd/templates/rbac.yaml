@@ -1,10 +1,10 @@
-{{- include "plume.validate" . -}}
+{{- include "assayd.validate" . -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "plume.operator.name" . }}
+  name: {{ include "assayd.operator.name" . }}
   labels:
-    {{- include "plume.labels" . | nindent 4 }}
+    {{- include "assayd.labels" . | nindent 4 }}
 # The rules come verbatim from files/operator-rules.yaml, which is a copy of
 # config/rbac/role.yaml — itself generated from the kubebuilder markers in the
 # reconciler. Hand-maintaining them here is what let leader election default on
@@ -16,14 +16,14 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "plume.operator.name" . }}
+  name: {{ include "assayd.operator.name" . }}
   labels:
-    {{- include "plume.labels" . | nindent 4 }}
+    {{- include "assayd.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "plume.operator.name" . }}
+  name: {{ include "assayd.operator.name" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "plume.operator.name" . }}
+    name: {{ include "assayd.operator.name" . }}
     namespace: {{ .Values.namespace }}

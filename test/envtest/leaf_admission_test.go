@@ -11,8 +11,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // Codex r8 MAJOR 2. internal/revision's per-leaf classification test builds each
@@ -37,60 +37,60 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 	// The base seeds VALID required siblings — a knowledge entry needs both name
 	// and version, a tool needs a name — so perturbing one leaf does not fail
 	// admission on a neighbour that was left zero.
-	base := func(path string) plumev1alpha1.AgentSpec {
+	base := func(path string) assaydv1alpha1.AgentSpec {
 		if strings.HasPrefix(path, "spec.External") {
-			return plumev1alpha1.AgentSpec{
-				External: &plumev1alpha1.ExternalAgent{Endpoint: "https://a.example.com"},
+			return assaydv1alpha1.AgentSpec{
+				External: &assaydv1alpha1.ExternalAgent{Endpoint: "https://a.example.com"},
 			}
 		}
 		// The endpoint union is discriminated: an azureopenai instance block is
 		// only admissible on an azureopenai entry, so a base with no arm makes
 		// every instance leaf unreachable — 36 of 84, when the union landed. The
 		// base therefore seeds an entry whose ARM matches the leaf under test.
-		arm := plumev1alpha1.ArmAnthropic
-		for a, marker := range map[plumev1alpha1.LLMArm]string{
-			plumev1alpha1.ArmAzureOpenAI: ".AzureOpenAI.",
-			plumev1alpha1.ArmVertexAI:    ".VertexAI.",
-			plumev1alpha1.ArmBedrock:     ".Bedrock.",
-			plumev1alpha1.ArmCustom:      ".Custom.",
+		arm := assaydv1alpha1.ArmAnthropic
+		for a, marker := range map[assaydv1alpha1.LLMArm]string{
+			assaydv1alpha1.ArmAzureOpenAI: ".AzureOpenAI.",
+			assaydv1alpha1.ArmVertexAI:    ".VertexAI.",
+			assaydv1alpha1.ArmBedrock:     ".Bedrock.",
+			assaydv1alpha1.ArmCustom:      ".Custom.",
 		} {
 			if strings.Contains(path, marker) {
 				arm = a
 			}
 		}
-		ep := plumev1alpha1.LLMEndpoint{Arm: arm}
-		ae := plumev1alpha1.LLMAllowEntry{Arm: arm}
+		ep := assaydv1alpha1.LLMEndpoint{Arm: arm}
+		ae := assaydv1alpha1.LLMAllowEntry{Arm: arm}
 		switch arm {
-		case plumev1alpha1.ArmAzureOpenAI:
-			inst := &plumev1alpha1.AzureOpenAIInstance{Endpoint: "a.openai.azure.com", DeploymentName: "d"}
+		case assaydv1alpha1.ArmAzureOpenAI:
+			inst := &assaydv1alpha1.AzureOpenAIInstance{Endpoint: "a.openai.azure.com", DeploymentName: "d"}
 			ep.AzureOpenAI, ae.AzureOpenAI = inst, inst.DeepCopy()
-		case plumev1alpha1.ArmVertexAI:
-			inst := &plumev1alpha1.VertexAIInstance{ProjectID: "p", Region: "r"}
+		case assaydv1alpha1.ArmVertexAI:
+			inst := &assaydv1alpha1.VertexAIInstance{ProjectID: "p", Region: "r"}
 			ep.VertexAI, ae.VertexAI = inst, inst.DeepCopy()
-		case plumev1alpha1.ArmBedrock:
-			inst := &plumev1alpha1.BedrockInstance{Region: "r"}
+		case assaydv1alpha1.ArmBedrock:
+			inst := &assaydv1alpha1.BedrockInstance{Region: "r"}
 			ep.Bedrock, ae.Bedrock = inst, inst.DeepCopy()
-		case plumev1alpha1.ArmCustom:
-			inst := &plumev1alpha1.CustomInstance{Host: "h"}
+		case assaydv1alpha1.ArmCustom:
+			inst := &assaydv1alpha1.CustomInstance{Host: "h"}
 			ep.Custom, ae.Custom = inst, inst.DeepCopy()
 		}
-		return plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{
+		return assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{
 				// Sandbox is NOT seeded: replicas>1 with a sandbox is an admission
 				// error, so seeding it made the one policy-surface leaf that scales
 				// look unreachable. SetLeafString allocates it when the leaf under
 				// test is the profile itself.
 				Image: digest,
 			},
-			LLM: &plumev1alpha1.LLMSpec{
-				Providers:       []plumev1alpha1.LLMEndpoint{ep},
-				EgressAllowlist: []plumev1alpha1.LLMAllowEntry{*ae.DeepCopy()},
+			LLM: &assaydv1alpha1.LLMSpec{
+				Providers:       []assaydv1alpha1.LLMEndpoint{ep},
+				EgressAllowlist: []assaydv1alpha1.LLMAllowEntry{*ae.DeepCopy()},
 				Fallback:        ep.DeepCopy(),
 			},
-			Knowledge: []plumev1alpha1.KnowledgeBinding{{Name: "kg", Version: "v1"}},
-			Tools:     []plumev1alpha1.ToolBinding{{Name: "tool"}},
-			Expose: &plumev1alpha1.ExposeSpec{
-				A2A: &plumev1alpha1.ExposeProtocol{Visibility: "org", Auth: "oauth"},
+			Knowledge: []assaydv1alpha1.KnowledgeBinding{{Name: "kg", Version: "v1"}},
+			Tools:     []assaydv1alpha1.ToolBinding{{Name: "tool"}},
+			Expose: &assaydv1alpha1.ExposeSpec{
+				A2A: &assaydv1alpha1.ExposeProtocol{Visibility: "org", Auth: "oauth"},
 			},
 		}
 	}
@@ -117,9 +117,9 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 		"spec.LLM.Fallback.Arm":          {"anthropic", "openai"},
 	}
 
-	admissible := func(t *testing.T, name string, spec plumev1alpha1.AgentSpec) error {
+	admissible := func(t *testing.T, name string, spec assaydv1alpha1.AgentSpec) error {
 		t.Helper()
-		a := &plumev1alpha1.Agent{
+		a := &assaydv1alpha1.Agent{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 			Spec:       spec,
 		}
@@ -127,7 +127,7 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 	}
 
 	var unreachable []string
-	leaves := revision.Leaves(t, reflect.TypeOf(plumev1alpha1.AgentSpec{}), "spec", nil)
+	leaves := revision.Leaves(t, reflect.TypeOf(assaydv1alpha1.AgentSpec{}), "spec", nil)
 	if len(leaves) < 45 {
 		t.Fatalf("walked only %d leaves", len(leaves))
 	}
@@ -146,7 +146,7 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 
 	for i, l := range leaves {
 		t.Run(l.Path, func(t *testing.T) {
-			mk := func(n int) plumev1alpha1.AgentSpec {
+			mk := func(n int) assaydv1alpha1.AgentSpec {
 				s := base(l.Path)
 				if pair, ok := valid[l.Path]; ok {
 					revision.SetLeafString(t, reflect.ValueOf(&s).Elem(), l, pair[n])

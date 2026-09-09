@@ -20,7 +20,7 @@ proof"* (03:418). The row directly above it — A40's postcondition, untouched �
 says the canary result is *"attributed by the **full endpoint identity in the
 receipt**"* (03:416). That is `hop.endpoint`. Design 04 A5, written in the same
 change, says of **both** fields: *"no agentgateway OTLP attribute is named for
-either field, no plume-owned stamping mechanism is defined"* (04:110), and
+either field, no assayd-owned stamping mechanism is defined"* (04:110), and
 *"Until then the fields are absent"* (04:114).
 
 So A50 withdrew one of two claims that rested on the same missing producer and
@@ -78,7 +78,7 @@ the revoked audience — and every receipt it produces is byte-indistinguishable
 from a healthy one, so `WithdrawalNotEnforced` never fires and A49's only
 claimed guarantee is inert. False positive: the withdrawal *does* land, one
 in-flight 9-minute task completes, its receipt carries a `ts` after the
-converged generation, and plume pages `WithdrawalNotEnforced` on a withdrawal
+converged generation, and assayd pages `WithdrawalNotEnforced` on a withdrawal
 that worked.
 
 **Fix:** A49 owes design 04 (a) a route or revision identity on the envelope and
@@ -164,7 +164,7 @@ created and collected with that revision's env-source copies (design 02 §3.3)"*
 The shipped code makes this concrete. `MaterialName` is
 `fmt.Sprintf("%s-%s-env-%d", agent, rev, index)` (`material.go:53`), and
 `isRevisionMaterial` — *"the authority for every delete"* — requires that exact
-name shape **and** a non-empty `plume.dev/source` annotation
+name shape **and** a non-empty `assayd.dev/source` annotation
 (`material.go:244-262`). A resolvedInputs object has no source object.
 
 **Failure scenario:** R2 is minted; the object is created with tool set `{a}`.
@@ -386,7 +386,7 @@ have not moved. It can never work here: the operand's entire purpose is to
 survive a producer that *has* moved, so a re-resolution that matched the recorded
 digest would be the case where the freeze was unnecessary.
 
-**Failure scenario:** `kubectl delete ns plume-run-team-a` — or r8 MAJOR 3's
+**Failure scenario:** `kubectl delete ns assayd-run-team-a` — or r8 MAJOR 3's
 still-open last-Agent GC race — and every Agent in `team-a` goes to weight 0
 permanently, with no stated recovery. Before A47, `status.revisions[]` lived on
 the Agent CR, survived namespace loss entirely, and was captured by any CR
@@ -492,7 +492,7 @@ not.
 
 ## MINOR findings
 
-### MINOR 1 — the one-MiB bound is still plume's, and no producer was told
+### MINOR 1 — the one-MiB bound is still assayd's, and no producer was told
 
 **File:** `docs/designs/03-policy-compiler.md:75` · `docs/designs/11-connector-crd.md:30,49`
 
@@ -504,8 +504,8 @@ named, so *"the object's own"* limit has no referent (a ConfigMap's is 1 MiB
 across `data`; etcd's is 1.5 MiB; a Secret's differs in what counts).
 
 **Fix:** name the kind. Then either owe design 11 a stated catalogue bound, or
-say plainly that this is plume's storage limit, that no producer contract backs
-it, and that the compile error names plume's limit rather than the producer's
+say plainly that this is assayd's storage limit, that no producer contract backs
+it, and that the compile error names assayd's limit rather than the producer's
 breach of a contract it never signed.
 
 ### MINOR 2 — the seal's justification claims a gate that never sees the value
@@ -576,7 +576,7 @@ Said after genuinely trying to break each of these, not as a cushion.
   trigger and its interaction with §3.3.1 are wrong.
 - **A47 takes the second of MAJOR 6's two offered fixes and takes it cleanly.**
   Moving the unbounded field out of status and keeping a digest is right; keeping
-  `behaviourProjection`'s 8 KiB cap because plume owns `AgentSpec`'s size is
+  `behaviourProjection`'s 8 KiB cap because assayd owns `AgentSpec`'s size is
   exactly the right line to draw. The claim that design 02 A42's machinery
   *"already ships and tests"* is **true at HEAD** — I checked, and `836052d`
   landed it with `material_test.go` and `runnamespace_test.go` — so r8 BLOCKER
@@ -693,7 +693,7 @@ Worse, the rule that *is* written is keyed on **size**, and both problems are ke
 
 And the inline form's **shape** is defined nowhere. 03:57 declares `resolvedInputs: {name, digest}?`; 02:92 shows the same `{name: …, digest: …}` and annotates it with a threshold. Neither says what the field looks like when it carries bytes.
 
-Separately, the object's design-02 half was never written. 03:77 claims it is *"created and collected with that revision's env-source copies (design 02 §3.3)"*. Design 02 §3.3's material rules are entirely about env copies: the name is `<agent>-<revisionHash>-env-<n>` with *"`n` the source's index"* (02:340), and *"Deletion authority: the name"* (02:347) — *"the operator deletes only objects whose **name** has the derived … shape … corroborated by the `plume.dev/agent-uid` label and the source annotation"*. The shipped code is the same: `isRevisionMaterial` (`material.go:244-262`) requires the `env-<n>` name shape **and** a non-empty `plume.dev/source` annotation. A `resolvedInputs` object has no source object. It is therefore never collected — an unbounded leak in a namespace 02:135 says Kubernetes GC does not reach — and §5's row sending it to design 02's `RevisionMaterialUnavailable` (03:675) names a condition design 02 raises only for objects it knows about. Design 02 was edited in this very change and its material rules were not extended.
+Separately, the object's design-02 half was never written. 03:77 claims it is *"created and collected with that revision's env-source copies (design 02 §3.3)"*. Design 02 §3.3's material rules are entirely about env copies: the name is `<agent>-<revisionHash>-env-<n>` with *"`n` the source's index"* (02:340), and *"Deletion authority: the name"* (02:347) — *"the operator deletes only objects whose **name** has the derived … shape … corroborated by the `assayd.dev/agent-uid` label and the source annotation"*. The shipped code is the same: `isRevisionMaterial` (`material.go:244-262`) requires the `env-<n>` name shape **and** a non-empty `assayd.dev/source` annotation. A `resolvedInputs` object has no source object. It is therefore never collected — an unbounded leak in a namespace 02:135 says Kubernetes GC does not reach — and §5's row sending it to design 02's `RevisionMaterialUnavailable` (03:675) names a condition design 02 raises only for objects it knows about. Design 02 was edited in this very change and its material rules were not extended.
 
 **Fix:** put the two-form rule in §3.1 as a rule, not a comment: the schema shape of both forms, the threshold, and — separately from the threshold — *"an external Agent and a hard-mode tenant always use the inline form, and a value that exceeds the inline bound in those cases is `PolicyCompileFailed` naming the mode"*, or grant the compiler the namespaced `get` and amend design 26 A1 and ADR-0026 in the same change as A1 did for its one write. Then give design 02 §3.3 the object's kind, its derived name, its place in *"One read, one buffer, one publish"*, and a second name shape for `isRevisionMaterial` — or the row at 03:77 is a claim on a design that does not carry it.
 
@@ -961,7 +961,7 @@ Round-2 BLOCKER 3 named 02:92 explicitly. The fix was made in design 03 and not 
 
 03:95 correctly names the gap and says *"**Owed to design 02**: extend that name-shape authority to cover `-inputs`"*. Two problems.
 
-First, the owed item is not sufficient. `isRevisionMaterial` — which I confirmed by mutation is the real delete authority — gates on **three** things, not one: the `env-<n>` name shape, a non-empty `plume.dev/revision-digest` annotation, and a non-empty `plume.dev/source` annotation, which `material.go:107` sets to `ref.Kind + "." + ref.Name` of the source object. A `-inputs` object has no source object. 03:95 specifies the object as carrying two **labels** and no annotations. Extending only the name shape leaves it failing two of three gates, so it still leaks — in a namespace shared by every Agent in the source namespace (`RunNamespaceName`, `runnamespace.go:118`), which 02:135 says Kubernetes GC does not reach.
+First, the owed item is not sufficient. `isRevisionMaterial` — which I confirmed by mutation is the real delete authority — gates on **three** things, not one: the `env-<n>` name shape, a non-empty `assayd.dev/revision-digest` annotation, and a non-empty `assayd.dev/source` annotation, which `material.go:107` sets to `ref.Kind + "." + ref.Name` of the source object. A `-inputs` object has no source object. 03:95 specifies the object as carrying two **labels** and no annotations. Extending only the name shape leaves it failing two of three gates, so it still leaks — in a namespace shared by every Agent in the source namespace (`RunNamespaceName`, `runnamespace.go:118`), which 02:135 says Kubernetes GC does not reach.
 
 Second, design 02 was edited in this change and carries **no** owed note. 02:340 still declares the name as `<agent>-<revisionHash>-env-<n>` and 02:347 still declares the derived `env-<n>` shape as the sole deletion authority. The debt exists only on the side that cannot pay it.
 

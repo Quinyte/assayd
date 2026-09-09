@@ -14,8 +14,8 @@ The narrow repository gate does not:
 $ go test ./api/v1alpha1 ./test/docs
 --- FAIL: TestConditionVocabularyIsClosed
     schema_contract_test.go:232: design 02 §3.1 declares "RunNamespaceUnavailable" and no constant in this package does.
-FAIL github.com/Quinyte/plume/api/v1alpha1
-ok   github.com/Quinyte/plume/test/docs
+FAIL github.com/Quinyte/assayd/api/v1alpha1
+ok   github.com/Quinyte/assayd/test/docs
 ```
 
 There is no A60 implementation to mutate. That is not a waiver of the mutation rule: the implementation contract below requires independent fixtures that kill deletion of each authority check and state transition. The one new rule already covered by an executable closure test fails before mutation.
@@ -34,11 +34,11 @@ A60 adds `RunNamespaceUnavailable` to the design's closed Agent condition list, 
 
 **Files:** `docs/designs/07-umbrella-chart-ci.md:121-147` · `docs/designs/02-agent-crd-operator.md:136,392-394` · `docs/designs/26-tenant-cr.md:113`
 
-The binding record proves which namespace the operator created. `ClusterSPIFFEID` never reads it. It selects every namespace carrying `plume.dev/pods-by: agent-operator`, while A5.2 calls that label a certificate that only the operator creates Pods there. A60 itself already establishes the opposite principle: a label needs only `update` to forge and is not provenance. Splitting `run-namespace` and `pods-by` prevents a vCluster sync namespace from being selected accidentally; it does not make the second label authoritative.
+The binding record proves which namespace the operator created. `ClusterSPIFFEID` never reads it. It selects every namespace carrying `assayd.dev/pods-by: agent-operator`, while A5.2 calls that label a certificate that only the operator creates Pods there. A60 itself already establishes the opposite principle: a label needs only `update` to forge and is not provenance. Splitting `run-namespace` and `pods-by` prevents a vCluster sync namespace from being selected accidentally; it does not make the second label authoritative.
 
-**Failure scenario:** the principal A60 explicitly models — one able to pre-create a Namespace and plant a self-granting RoleBinding — creates any namespace with `plume.dev/pods-by: agent-operator`, then creates a Pod labelled `plume.dev/agent-namespace: team-a` and `plume.dev/agent: reviewer`. The cluster-wide `ClusterSPIFFEID` selects it and issues the soft tenant's agent identity. The real operator can refuse the namespace forever and the impersonating Pod still gets the SVID, because SPIRE never consults the binding.
+**Failure scenario:** the principal A60 explicitly models — one able to pre-create a Namespace and plant a self-granting RoleBinding — creates any namespace with `assayd.dev/pods-by: agent-operator`, then creates a Pod labelled `assayd.dev/agent-namespace: team-a` and `assayd.dev/agent: reviewer`. The cluster-wide `ClusterSPIFFEID` selects it and issues the soft tenant's agent identity. The real operator can refuse the namespace forever and the impersonating Pod still gets the SVID, because SPIRE never consults the binding.
 
-**Specific fix:** choose and specify an enforceable authority. The least invasive shape is a required cluster admission policy that reserves creation, mutation and removal of `plume.dev/pods-by` to the plume operator identities and denies tenant-created workload controllers/Pods in selected namespaces; it must account for ReplicaSet and Sandbox controllers creating child Pods. The stronger alternative is to supersede ADR-0019's templated-registration decision and register exact, binding-verified Pod UIDs. A second public label or a per-namespace selector by name is not a fix: a namespace recreator can copy both. Add a real-cluster negative test in which the scoped attacker can create Namespaces and RBAC but cannot obtain an SVID by stamping plume labels. Mutation: remove the admission binding or widen its username predicate; the test must fail.
+**Specific fix:** choose and specify an enforceable authority. The least invasive shape is a required cluster admission policy that reserves creation, mutation and removal of `assayd.dev/pods-by` to the assayd operator identities and denies tenant-created workload controllers/Pods in selected namespaces; it must account for ReplicaSet and Sandbox controllers creating child Pods. The stronger alternative is to supersede ADR-0019's templated-registration decision and register exact, binding-verified Pod UIDs. A second public label or a per-namespace selector by name is not a fix: a namespace recreator can copy both. Add a real-cluster negative test in which the scoped attacker can create Namespaces and RBAC but cannot obtain an SVID by stamping assayd labels. Mutation: remove the admission binding or widen its username predicate; the test must fail.
 
 I disagree with `02-a60-critique-r2.md`'s statement that the two-label split is “the right shape” and that the constant label is equivalent to `owned-by:<install-uid>`. Both are public, forgeable metadata. The split fixes selector conflation, not provenance.
 
@@ -46,11 +46,11 @@ I disagree with `02-a60-critique-r2.md`'s statement that the two-label split is 
 
 **Files:** `docs/designs/07-umbrella-chart-ci.md:149-163` · `docs/designs/03-policy-compiler.md:153` · `docs/designs/02-agent-crd-operator.md:136,143`
 
-The Gateway admits every namespace labelled `plume.dev/run-namespace: "true"`. Again, the binding record is not in that decision. Gateway API's selector is cross-namespace consent, not proof that plume created or governs the namespace.
+The Gateway admits every namespace labelled `assayd.dev/run-namespace: "true"`. Again, the binding record is not in that decision. Gateway API's selector is cross-namespace consent, not proof that assayd created or governs the namespace.
 
-**Failure scenario:** the same principal pre-creates a namespace carrying `plume.dev/run-namespace: "true"`, grants itself rights there, and creates an `HTTPRoute` attaching to the shared Gateway. It can publish an arbitrary backend or pre-empt a plume hostname/path without any compiler-emitted auth, rate-limit, tool-filter or receipt policy. Row 1 of A60 makes the Agent `NotCreatedByOperator`, but the Gateway accepts the attacker's route independently.
+**Failure scenario:** the same principal pre-creates a namespace carrying `assayd.dev/run-namespace: "true"`, grants itself rights there, and creates an `HTTPRoute` attaching to the shared Gateway. It can publish an arbitrary backend or pre-empt a assayd hostname/path without any compiler-emitted auth, rate-limit, tool-filter or receipt policy. Row 1 of A60 makes the Agent `NotCreatedByOperator`, but the Gateway accepts the attacker's route independently.
 
-**Specific fix:** the reserved-label admission control from BLOCKER 2 must also protect `plume.dev/run-namespace`, including the host tenant-operator as the only hard-mode writer. Additionally bind route creation targeting the plume Gateway to the compiler/operator identity; a legitimate selected namespace must not become an ungoverned route-authoring grant. Add negative tests for both pre-created soft namespaces and hard-mode host sync namespaces. Removing either label protection or the route-author restriction must be KILLED.
+**Specific fix:** the reserved-label admission control from BLOCKER 2 must also protect `assayd.dev/run-namespace`, including the host tenant-operator as the only hard-mode writer. Additionally bind route creation targeting the assayd Gateway to the compiler/operator identity; a legitimate selected namespace must not become an ungoverned route-authoring grant. Add negative tests for both pre-created soft namespaces and hard-mode host sync namespaces. Removing either label protection or the route-author restriction must be KILLED.
 
 ## BLOCKER 4 — The crash-gap “pristine” check is a TOCTOU adoption bypass
 
@@ -84,11 +84,11 @@ R2 correctly made the Agent list source-UID-aware, but the same handler separate
 
 **Specific fix:** persist a termination cause/epoch. `SourceNamespaceRecreated` is irreversible cleanup of the old binding: resources owned by the old source are targets to delete, not evidence to restore `Bound`. The “other workload still draining” predicate is valid only for last-Agent teardown under the same source UID. Alternatively stamp and verify `sourceNamespaceUID` on every resource and count only resources backed by a currently live Agent in that same source UID. Add the row-4 test with old workloads and copies deliberately left behind; it must reach namespace deletion and a fresh binding.
 
-## BLOCKER 7 — The proposed NetworkPolicy blocks two required plume paths
+## BLOCKER 7 — The proposed NetworkPolicy blocks two required assayd paths
 
 **Files:** `docs/designs/07-umbrella-chart-ci.md:165-174` · `docs/designs/02-agent-crd-operator.md:367-374,410-415` · `docs/designs/09-sdk-templates.md:23-25`
 
-A5.4 admits ingress only from gateway Pods and egress only to the gateway plus DNS. The agent-operator fetches the candidate's Agent Card in-cluster before registration; it is not a gateway Pod. The reference SDK's shared A2A task store connects directly to JetStream through `PLUME_NATS_URL`; NATS is not the gateway.
+A5.4 admits ingress only from gateway Pods and egress only to the gateway plus DNS. The agent-operator fetches the candidate's Agent Card in-cluster before registration; it is not a gateway Pod. The reference SDK's shared A2A task store connects directly to JetStream through `ASSAYD_NATS_URL`; NATS is not the gateway.
 
 **Failure scenario:** enabling the gateway causes the operator's card GET to time out under the new ingress policy, so every candidate eventually fails registration. If that were bypassed, every multi-replica template Agent loses its declared shared task store because NATS egress is denied. The gateway-on profile is less functional than the explicitly ungoverned profile and the resulting symptoms point at card/NATS failures, not NetworkPolicy.
 
@@ -164,7 +164,7 @@ Kubernetes exposes authorization checks for a subject/request, not a complete in
 
 **Failure scenario:** a group can read Agents through a ClusterRoleBinding but never gets logs, while a user whose RoleBinding was removed retains direct read access in the run namespace until the derivation controller notices and reconstructs the set. Either availability or least privilege is wrong.
 
-**Specific fix:** drop inverse authorization. Keep `plume logs` as the only supported path and perform `SubjectAccessReview` for the requesting identity, or add an explicit `logReaders`/tenant-admin subject contract that can be reconciled exactly. If direct `kubectl logs` is required, its authorization source must be enumerable and authoritative by design.
+**Specific fix:** drop inverse authorization. Keep `assayd logs` as the only supported path and perform `SubjectAccessReview` for the requesting identity, or add an explicit `logReaders`/tenant-admin subject contract that can be reconciled exactly. If direct `kubectl logs` is required, its authorization source must be enumerable and authoritative by design.
 
 ## MAJOR 5 — A DNS Service is not a NetworkPolicy peer
 

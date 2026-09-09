@@ -22,7 +22,7 @@
 - Graphiti (bitemporal, MCP server), cognee (top of 2026 memory benchmarks), LightRAG (cheap ingestion), TrustGraph (ontology-driven "Context OS"), Neo4j GraphRAG (scale). All expose MCP → provider-slot design. https://cognee.ai/blog/deep-dives/knowledge-graph-memory-benchmarks · https://trustgraph.ai/
 
 ## Evals / drift
-- Eval-gated canary is 2026 best-practice as SaaS/CI/gateway hooks — NOT as k8s primitives (plume's window, est. 12–18mo). https://futureagi.com/blog/agent-rollout-strategies-2026/
+- Eval-gated canary is 2026 best-practice as SaaS/CI/gateway hooks — NOT as k8s primitives (assayd's window, est. 12–18mo). https://futureagi.com/blog/agent-rollout-strategies-2026/
 - Market moves: OpenAI acquired Promptfoo; Braintrust $80M B. OSS: DeepEval, Inspect AI, Phoenix (OTel-native, embedding drift). https://www.braintrust.dev/articles/deepeval-alternatives-2026
 
 ## Identity / authz / tenancy / compliance

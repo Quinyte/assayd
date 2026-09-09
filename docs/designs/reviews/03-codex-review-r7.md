@@ -158,7 +158,7 @@ update but permits delete-and-recreate—and then treats a new name as an
 invariant. The name is neither secret nor capability-protected: it is present in
 the revision PodSpec, and the copy remains the same Secret/ConfigMap kind in the
 same namespace. A normal namespace Role granting create/delete on that kind
-grants it for originals and plume copies alike. `ownerReference` does not
+grants it for originals and assayd copies alike. `ownerReference` does not
 protect deletion. “The operator does not recreate it” says nothing about the
 editor.
 
@@ -268,7 +268,7 @@ condition.
 
 **Concrete failure:** `ModelDrifted` sets `status.llmFallbackActive`; both
 Backends passed the precheck. The 100/0 → 0/100 route patch is not programmed or
-the dataplane retains the old route. Plume records the fallback activation while
+the dataplane retains the old route. Assayd records the fallback activation while
 the drifted primary keeps answering—the same loud-and-wrong incident outcome
 A34 says it removed.
 

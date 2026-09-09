@@ -22,7 +22,7 @@
 
 ### 3. MINOR — `evalrunner/v1` and `evalreport/v1` are new contracts that never join the ledger
 
-`16-evalsuite.md:78` vs design 07 §4. The `plume-contracts` ConfigMap exists so every shipped contract is version-checked at upgrade (N/N−1 operational); this design mints two contracts and doesn't add them. **Fix**: add both to the ledger list (and `doctor` gets them for free, per 08 r2).
+`16-evalsuite.md:78` vs design 07 §4. The `assayd-contracts` ConfigMap exists so every shipped contract is version-checked at upgrade (N/N−1 operational); this design mints two contracts and doesn't add them. **Fix**: add both to the ledger list (and `doctor` gets them for free, per 08 r2).
 
 ### 4. MINOR — cost_regression's baseline window is unstated
 
@@ -36,7 +36,7 @@
 4. **Hidden dependencies/circularity**: D2's digest-binding (dataset, judge, revision) makes rerun-shopping structurally impossible — the design's best property; finding 4 is the one unpinned number.
 5. **Failure modes**: fail-closed everywhere (empty dataset, judge down, budget out) is exactly right; "candidate crashes under eval ⇒ that's the gate working" is the correct sentiment, stated.
 6. **Security**: finding 1; the synthetic principal naming and report-at-capture-level redaction are right.
-7. **Research freshness**: DeepEval claims verified — [Task Completion](https://deepeval.com/docs/metrics-task-completion) and [Tool Correctness](https://deepeval.com/docs/metrics-tool-correctness) are real built-in agentic metrics, and [`evals_iterator` collects traces and runs metrics as claimed](https://deepeval.com/docs/metrics-introduction); the research note is accurate. One nuance worth a line there: DeepEval's own ToolCorrectness works from its trace records — plume's is computed from *receipts*, which is why cross-runner parity on mechanical metrics is achievable (§8 already implies this; make it explicit).
+7. **Research freshness**: DeepEval claims verified — [Task Completion](https://deepeval.com/docs/metrics-task-completion) and [Tool Correctness](https://deepeval.com/docs/metrics-tool-correctness) are real built-in agentic metrics, and [`evals_iterator` collects traces and runs metrics as claimed](https://deepeval.com/docs/metrics-introduction); the research note is accurate. One nuance worth a line there: DeepEval's own ToolCorrectness works from its trace records — assayd's is computed from *receipts*, which is why cross-runner parity on mechanical metrics is achievable (§8 already implies this; make it explicit).
 8. **Testability**: the fixture-agent matrix covers every verdict path; report reproducibility asserted on digests; the flagship e2e is the P3 demo mechanized. Add: an isolation test (a non-eval principal replaying the header route during an eval run must be rejected — finding 1's regression test).
 
 ## Disposition

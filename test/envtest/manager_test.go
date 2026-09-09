@@ -16,9 +16,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // Every other envtest here drives Reconcile directly, which is right for
@@ -103,10 +103,10 @@ func TestManagerReconcilesAnAgentEndToEnd(t *testing.T) {
 	ns := newNamespace(t)
 	ctx := context.Background()
 
-	a := &plumev1alpha1.Agent{
+	a := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "managed", Namespace: ns},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
 		},
 	}
 	if err := k8s.Create(ctx, a); err != nil {
@@ -118,7 +118,7 @@ func TestManagerReconcilesAnAgentEndToEnd(t *testing.T) {
 	// Requeue rather than relying on its own write producing a watch event. If
 	// that requeue were dropped, this would hang — which is the point.
 	eventually(t, "the finalizer to be installed", func() bool {
-		var got plumev1alpha1.Agent
+		var got assaydv1alpha1.Agent
 		if err := k8s.Get(ctx, client.ObjectKeyFromObject(a), &got); err != nil {
 			return false
 		}
@@ -135,11 +135,11 @@ func TestManagerReconcilesAnAgentEndToEnd(t *testing.T) {
 	markAvailable(t, ns, controller.WorkloadName("managed", rev), 1)
 
 	eventually(t, "the revision to promote", func() bool {
-		var got plumev1alpha1.Agent
+		var got assaydv1alpha1.Agent
 		if err := k8s.Get(ctx, client.ObjectKeyFromObject(a), &got); err != nil {
 			return false
 		}
-		return got.Status.ActiveRevision == rev && got.Status.Phase == plumev1alpha1.PhaseReady
+		return got.Status.ActiveRevision == rev && got.Status.Phase == assaydv1alpha1.PhaseReady
 	})
 }
 
@@ -152,10 +152,10 @@ func TestManagerWatchesOwnedWorkloads(t *testing.T) {
 	ns := newNamespace(t)
 	ctx := context.Background()
 
-	a := &plumev1alpha1.Agent{
+	a := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "watched", Namespace: ns},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
 		},
 	}
 	if err := k8s.Create(ctx, a); err != nil {
@@ -195,17 +195,17 @@ func TestManagerReleasesTheFinalizerOnDelete(t *testing.T) {
 	ns := newNamespace(t)
 	ctx := context.Background()
 
-	a := &plumev1alpha1.Agent{
+	a := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "deleted", Namespace: ns},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
 		},
 	}
 	if err := k8s.Create(ctx, a); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	eventually(t, "the finalizer", func() bool {
-		var got plumev1alpha1.Agent
+		var got assaydv1alpha1.Agent
 		if err := k8s.Get(ctx, client.ObjectKeyFromObject(a), &got); err != nil {
 			return false
 		}
@@ -216,7 +216,7 @@ func TestManagerReleasesTheFinalizerOnDelete(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 	eventually(t, "the object to disappear", func() bool {
-		var got plumev1alpha1.Agent
+		var got assaydv1alpha1.Agent
 		return k8s.Get(ctx, client.ObjectKeyFromObject(a), &got) != nil
 	})
 }
@@ -231,7 +231,7 @@ func ptrTo[T any](v T) *T { return &v }
 // producing a watch event would strand every new Agent forever the day someone
 // added that predicate. The explicit requeue is what prevents it, and without a
 // test like this that requeue looks redundant — it is redundant only for the
-// wiring plume happens to ship today.
+// wiring assayd happens to ship today.
 func TestReconcilerIsSafeUnderGenerationChangedPredicate(t *testing.T) {
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
@@ -252,10 +252,10 @@ func TestReconcilerIsSafeUnderGenerationChangedPredicate(t *testing.T) {
 	// No cluster network here, so a card fetch can only fail; wait 100ms for that
 	// rather than the production timeout, which made these tests exceed their own.
 	r.CardFetchTimeout = 100 * time.Millisecond
-	// The wiring plume does NOT ship, deliberately: if the reconciler only works
+	// The wiring assayd does NOT ship, deliberately: if the reconciler only works
 	// without this, it is one refactor from breaking.
 	if err := ctrl.NewControllerManagedBy(mgr).
-		For(&plumev1alpha1.Agent{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&assaydv1alpha1.Agent{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&appsv1.Deployment{}).
 		Complete(r); err != nil {
 		t.Fatalf("register: %v", err)
@@ -277,10 +277,10 @@ func TestReconcilerIsSafeUnderGenerationChangedPredicate(t *testing.T) {
 	}
 
 	ns := newNamespace(t)
-	a := &plumev1alpha1.Agent{
+	a := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "predicated", Namespace: ns},
-		Spec: plumev1alpha1.AgentSpec{
-			Runtime: &plumev1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
+		Spec: assaydv1alpha1.AgentSpec{
+			Runtime: &assaydv1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:6d5d9666a268df6f000000000000000000000000000000000000000000000000"},
 		},
 	}
 	if err := k8s.Create(ctx, a); err != nil {

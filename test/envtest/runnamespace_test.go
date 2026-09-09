@@ -15,9 +15,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	plumev1alpha1 "github.com/Quinyte/plume/api/v1alpha1"
-	"github.com/Quinyte/plume/internal/controller"
-	"github.com/Quinyte/plume/internal/revision"
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // Design 02 A42/A60: the operator-owned run namespace and the binding record
@@ -49,13 +49,13 @@ func getRunNamespace(t *testing.T, ns string) *corev1.Namespace {
 	return &run
 }
 
-func runNamespaceCondition(t *testing.T, a *plumev1alpha1.Agent, reason string) *metav1.Condition {
+func runNamespaceCondition(t *testing.T, a *assaydv1alpha1.Agent, reason string) *metav1.Condition {
 	t.Helper()
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
-	c := condition(&live, plumev1alpha1.CondRunNamespaceUnavailable)
+	c := condition(&live, assaydv1alpha1.CondRunNamespaceUnavailable)
 	if c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatalf("RunNamespaceUnavailable is not True; phase=%s conditions=%+v",
 			live.Status.Phase, live.Status.Conditions)
@@ -68,9 +68,9 @@ func runNamespaceCondition(t *testing.T, a *plumev1alpha1.Agent, reason string) 
 
 // nothingWritten asserts the operator wrote no material and no workload into a
 // namespace it refused — the property every refusal row exists for.
-func nothingWritten(t *testing.T, a *plumev1alpha1.Agent, ns string) {
+func nothingWritten(t *testing.T, a *assaydv1alpha1.Agent, ns string) {
 	t.Helper()
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatalf("get agent: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestAPreCreatedRunNamespaceIsRefused(t *testing.T) {
 	got := settle(t, newReconciler(false), a)
 
 	c := runNamespaceCondition(t, a, controller.ReasonNotCreatedByOperator)
-	if got.Status.Phase != plumev1alpha1.PhaseDegraded {
+	if got.Status.Phase != assaydv1alpha1.PhaseDegraded {
 		t.Errorf("phase is %s, want Degraded: a refused namespace is terminal", got.Status.Phase)
 	}
 	if !strings.Contains(c.Message, runNS(ns)) || !strings.Contains(c.Message, "To recover") {
@@ -343,7 +343,7 @@ func TestARecreatedSourceNamespaceTearsDownTheOldRunNamespace(t *testing.T) {
 	}
 	got := settle(t, r, a)
 	runNamespaceCondition(t, a, controller.ReasonTerminating)
-	if got.Status.Phase != plumev1alpha1.PhasePending {
+	if got.Status.Phase != assaydv1alpha1.PhasePending {
 		t.Errorf("phase %s, want Pending: Terminating clears by itself", got.Status.Phase)
 	}
 	if run := getRunNamespace(t, ns); run.DeletionTimestamp.IsZero() {
@@ -369,7 +369,7 @@ func TestTheLastAgentTearsDownTheRunNamespaceAndAnotherKeepsIt(t *testing.T) {
 	if err := k8s.Delete(context.Background(), a); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err == nil {
 		reconcileOnce(t, r, &live)
 	}
@@ -431,7 +431,7 @@ func TestATerminatingBindingFlipsBackWhenAnAgentArrives(t *testing.T) {
 	}
 	// And the condition CLEARS. It is owned: an Agent that once waited must not
 	// carry RunNamespaceUnavailable=True beside Ready=True forever.
-	if c := condition(&got, plumev1alpha1.CondRunNamespaceUnavailable); c != nil && c.Status == metav1.ConditionTrue {
+	if c := condition(&got, assaydv1alpha1.CondRunNamespaceUnavailable); c != nil && c.Status == metav1.ConditionTrue {
 		t.Errorf("RunNamespaceUnavailable stayed True after the namespace was restored:\n%s", c.Message)
 	}
 }
@@ -471,7 +471,7 @@ func TestARunNamespaceDeletedBySomeoneElseIsWaitedFor(t *testing.T) {
 	}
 	got := settle(t, r, a)
 	runNamespaceCondition(t, a, controller.ReasonTerminating)
-	if got.Status.Phase != plumev1alpha1.PhasePending {
+	if got.Status.Phase != assaydv1alpha1.PhasePending {
 		t.Errorf("phase %s, want Pending", got.Status.Phase)
 	}
 	if st := getBinding(t, ns).Data["state"]; st != "Terminating" {
@@ -496,7 +496,7 @@ func TestAnInvalidBindingRecordIsTerminalAndNamesTheField(t *testing.T) {
 	if !strings.Contains(c.Message, "Bouncing") {
 		t.Errorf("the message does not name the bad value:\n%s", c.Message)
 	}
-	if got.Status.Phase != plumev1alpha1.PhaseDegraded {
+	if got.Status.Phase != assaydv1alpha1.PhaseDegraded {
 		t.Errorf("phase %s, want Degraded", got.Status.Phase)
 	}
 	b = getBinding(t, ns)
@@ -512,7 +512,7 @@ func TestAnInvalidBindingRecordIsTerminalAndNamesTheField(t *testing.T) {
 	}
 }
 
-// Without the admission policies that reserve the plume.dev namespace labels,
+// Without the admission policies that reserve the assayd.dev namespace labels,
 // the operator fail-closes: no run namespace, a condition that says why.
 func TestRunNamespaceRefusesWithoutLabelAuthority(t *testing.T) {
 	ns := newNamespace(t)
@@ -526,7 +526,7 @@ func TestRunNamespaceRefusesWithoutLabelAuthority(t *testing.T) {
 	if !strings.Contains(c.Message, controller.NamespaceLabelPolicyName) {
 		t.Errorf("the message does not name the missing policy:\n%s", c.Message)
 	}
-	if got.Status.Phase != plumev1alpha1.PhaseDegraded {
+	if got.Status.Phase != assaydv1alpha1.PhaseDegraded {
 		t.Errorf("phase %s, want Degraded", got.Status.Phase)
 	}
 	if _, err := getBindingMaybe(ns); err == nil {
@@ -547,7 +547,7 @@ func TestRunNamespaceRefusesWithoutLabelAuthority(t *testing.T) {
 				MatchConstraints: &admissionv1.MatchResources{ResourceRules: []admissionv1.NamedRuleWithOperations{{
 					RuleWithOperations: admissionv1.RuleWithOperations{
 						Operations: []admissionv1.OperationType{admissionv1.Create},
-						Rule: admissionv1.Rule{APIGroups: []string{"plume.dev"}, APIVersions: []string{"v1alpha1"},
+						Rule: admissionv1.Rule{APIGroups: []string{"assayd.dev"}, APIVersions: []string{"v1alpha1"},
 							Resources: []string{"nothing-matches-this"}}}}}},
 				Validations: []admissionv1.Validation{{Expression: "true"}}}}
 		if err := k8s.Create(context.Background(), p); err != nil {
@@ -570,7 +570,7 @@ func TestRunNamespaceRefusesWithoutLabelAuthority(t *testing.T) {
 	if _, err := getBindingMaybe(ns); err != nil {
 		t.Error("the Agent did not recover once the label authority appeared")
 	}
-	if c := condition(&got, plumev1alpha1.CondRunNamespaceUnavailable); c != nil && c.Status == metav1.ConditionTrue {
+	if c := condition(&got, assaydv1alpha1.CondRunNamespaceUnavailable); c != nil && c.Status == metav1.ConditionTrue {
 		t.Errorf("LabelAuthorityAbsent stayed True after the policies appeared:\n%s", c.Message)
 	}
 	// Presence means policy AND binding: a policy without its binding validates
@@ -690,7 +690,7 @@ func TestAWorkloadWithoutTheAgentsUIDIsRefused(t *testing.T) {
 		t.Fatalf("plant: %v", err)
 	}
 	got := settle(t, newReconciler(false), a)
-	c := condition(&got, plumev1alpha1.CondRevisionHashCollision)
+	c := condition(&got, assaydv1alpha1.CondRevisionHashCollision)
 	if c == nil || c.Status != metav1.ConditionTrue || !strings.Contains(c.Message, "UID") {
 		t.Fatalf("a workload carrying the right name, labels and digest but another owner's UID "+
 			"was accepted; conditions=%+v", got.Status.Conditions)
@@ -714,7 +714,7 @@ func TestARefusedRunNamespaceIsNotReady(t *testing.T) {
 	}
 	a := mustCreateAgent(t, ns, "notready", nil)
 	got := settle(t, newReconciler(false), a)
-	c := condition(&got, plumev1alpha1.CondReady)
+	c := condition(&got, assaydv1alpha1.CondReady)
 	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != "RunNamespaceUnavailable" {
 		t.Errorf("Ready is %+v; want False with reason RunNamespaceUnavailable", c)
 	}
@@ -745,7 +745,7 @@ func TestADrainingWorkloadKeepsTheRunNamespace(t *testing.T) {
 	if err := k8s.Delete(context.Background(), a); err != nil {
 		t.Fatalf("delete alpha: %v", err)
 	}
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err == nil {
 		reconcileOnce(t, r, &live)
 	}
@@ -780,7 +780,7 @@ func TestADeletingBindingDoesNotFlipBack(t *testing.T) {
 	}
 	got := settle(t, r, a)
 	runNamespaceCondition(t, a, controller.ReasonTerminating)
-	if got.Status.Phase != plumev1alpha1.PhasePending {
+	if got.Status.Phase != assaydv1alpha1.PhasePending {
 		t.Errorf("phase %s, want Pending", got.Status.Phase)
 	}
 	if st := getBinding(t, ns).Data["state"]; st != "Deleting" {
@@ -816,7 +816,7 @@ func TestTheCrashGapRecoveryWaitsRatherThanWedging(t *testing.T) {
 	}
 	got := settle(t, r, a) // check 9, then the passes after it
 	c := runNamespaceCondition(t, a, controller.ReasonTerminating)
-	if got.Status.Phase != plumev1alpha1.PhasePending {
+	if got.Status.Phase != assaydv1alpha1.PhasePending {
 		t.Errorf("phase %s with %q; the recovery wedged terminally on the operator's own namespace",
 			got.Status.Phase, c.Reason)
 	}
@@ -850,7 +850,7 @@ func TestARecreatedSourceNamespaceWhileCreatingDiscardsTheRecord(t *testing.T) {
 	}
 	got := settle(t, r, a)
 	runNamespaceCondition(t, a, controller.ReasonTerminating)
-	if got.Status.Phase == plumev1alpha1.PhaseDegraded {
+	if got.Status.Phase == assaydv1alpha1.PhaseDegraded {
 		t.Fatal("the operator went terminal on a record it wrote itself")
 	}
 	if getRunNamespace(t, ns).DeletionTimestamp.IsZero() {
@@ -925,7 +925,7 @@ func TestWorkloadDeletionAuthorityIsTheName(t *testing.T) {
 	a := mustCreateAgent(t, ns, "nameauth", nil)
 	r := newReconciler(false)
 	settle(t, r, a)
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatal(err)
 	}
@@ -998,7 +998,7 @@ func TestAnActiveWorkloadWithoutTheAgentsUIDIsNotServing(t *testing.T) {
 	markAvailable(t, ns, key.Name, 1)
 	// A rollout: the desired revision moves and is not yet available, so the
 	// operator asks whether the ACTIVE one still serves.
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatal(err)
 	}
@@ -1007,7 +1007,7 @@ func TestAnActiveWorkloadWithoutTheAgentsUIDIsNotServing(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = settle(t, r, &live)
-	if c := condition(&got, plumev1alpha1.CondReady); c != nil && c.Status == metav1.ConditionTrue {
+	if c := condition(&got, assaydv1alpha1.CondReady); c != nil && c.Status == metav1.ConditionTrue {
 		t.Fatalf("an available squatter under the active name, with the right digest and another "+
 			"owner's UID, was reported as still serving during a rollout: %s", c.Message)
 	}
@@ -1069,7 +1069,7 @@ func (c *refuseQuotaCreate) Create(ctx context.Context, obj client.Object, opts 
 func TestPreA42LeftoversAreCollected(t *testing.T) {
 	ns := newNamespace(t)
 	a := agentWithPrompt(t, ns, "legacy")
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
 		t.Fatal(err)
 	}
@@ -1109,16 +1109,16 @@ func TestPreA42LeftoversAreCollected(t *testing.T) {
 func TestAnExternalAgentDoesNotKeepTheRunNamespace(t *testing.T) {
 	ns := newNamespace(t)
 	a := agentWithPrompt(t, ns, "runtime")
-	mustCreateAgent(t, ns, "external", func(x *plumev1alpha1.Agent) {
+	mustCreateAgent(t, ns, "external", func(x *assaydv1alpha1.Agent) {
 		x.Spec.Runtime = nil
-		x.Spec.External = &plumev1alpha1.ExternalAgent{Endpoint: "https://agent.example.com"}
+		x.Spec.External = &assaydv1alpha1.ExternalAgent{Endpoint: "https://agent.example.com"}
 	})
 	r := newReconciler(false)
 	settle(t, r, a)
 	if err := k8s.Delete(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
-	var live plumev1alpha1.Agent
+	var live assaydv1alpha1.Agent
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err == nil {
 		reconcileOnce(t, r, &live)
 	}
