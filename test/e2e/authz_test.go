@@ -155,8 +155,10 @@ func applyAPIKeys(t *testing.T, ctx context.Context, runNS string, keys map[stri
 // applyAuthzPolicy attaches authentication and one authorization rule to the
 // route. The policy lives in the run namespace because AgentgatewayPolicy's
 // targetRefs "must be in the same namespace as the policy" — which is also
-// where design 03 3.2 puts it, for the unrelated reason that a cross-namespace
-// backendRef would need a ReferenceGrant.
+// where design 03 3.2 puts it, for the SAME reason and not a different one: its
+// table gives "a policy attaches to a route; they cannot be split across
+// namespaces" (03:161). The ReferenceGrant argument is the HTTPRoute row's, one
+// line above it.
 func applyAuthzPolicy(t *testing.T, ctx context.Context, runNS, wl, expr string) *unstructured.Unstructured {
 	t.Helper()
 	build := func() *unstructured.Unstructured {

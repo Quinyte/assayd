@@ -140,9 +140,12 @@ func handler() http.Handler {
 	// exists so a test can prove a request reached THIS revision's Service and
 	// got an answer naming the revision, which is what ADR-0030 step 2 needed.
 	//
-	// Implementing the real method set belongs with the client that will call it
-	// — design 03's route — not with a fixture that would then be the only thing
-	// in the repository claiming to speak A2A.
+	// Implementing the real method set belongs with the client that will call it,
+	// and that client is design 08's: `assayd invoke <agent>` is named there as
+	// an "A2A client for testing" (08:22, and 08:14's primitives line). This
+	// comment used to say "design 03's route", which was wrong — design 03 emits
+	// routes and speaks no A2A. Not here either: a fixture that grew the method
+	// set would become the only thing in the repository claiming to speak A2A.
 	mux.HandleFunc("/assayd-test/echo", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)

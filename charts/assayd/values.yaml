@@ -101,8 +101,11 @@ gateway:
   # assayd-system while this read `.Values.namespace` let an ordinary test
   # identity attach one.
   #
-  # Empty means the release's own namespace, which is where a single-namespace
-  # install puts everything.
+  # Empty means `.Values.namespace` above -- the namespace the OPERATOR runs in,
+  # which is where a single-namespace install puts everything. It is NOT the Helm
+  # release namespace: hack/e2e.sh installs the release into `default` while the
+  # operator runs in `assayd-system`, so this default must not be read as
+  # "wherever you helm-installed to".
   namespace: ""
 
 # Design 07 A5.9: the identities permitted to write the reserved assayd.dev

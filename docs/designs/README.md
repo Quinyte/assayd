@@ -12,7 +12,7 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 4 | Receipt tap + receipt envelope schema | P1 | M | r2 — critique **PASS** (`04-…`, `reviews/04-review.md`; awaiting user approval + ADR-0021) |
 | 5 | Agent directory (OASF on JetStream KV) | P1 | S | r2 — critique **PASS** (`05-…`, `reviews/05-review.md`; awaiting user approval, ADR-0022) |
 | 6 | Identity glue | P1 | M | r2 — critique **PASS** (`06-…`, `reviews/06-review.md`; awaiting user approval, ADR-0022) |
-| 7 | Umbrella chart, profiles, e2e CI | P1 | M | r2 — critique **PASS** (`07-…`, `reviews/07-review.md`; awaiting user approval, ADR-0022); amendments A1–A5, **A5 (2026-09-03) uncritiqued** — run-namespace mechanics the chart ships and the operator materializes |
+| 7 | Umbrella chart, profiles, e2e CI | P1 | M | r2 — critique **PASS** (`07-…`, `reviews/07-review.md`; awaiting user approval, ADR-0022); amendments A1–A6, **A5 (2026-09-03) and A6 (2026-09-09) uncritiqued** — A5 is run-namespace mechanics; A6 is ADR-0030 step 3, the hand-authored gateway/identity/network/MCP path and the three defects executing it found |
 | 8 | CLI | P1+ | L | r2 — critique **PASS** (`08-…`, `reviews/08-review.md`; awaiting user approval, ADR-0022) |
 | 9 | SDK templates | P1 | M | r2 — critique **PASS** (`09-…`, `reviews/09-review.md`; awaiting user approval, ADR-0022) |
 | 10 | Observability pack | P1+ | M | r2 — critique **PASS** (`10-…`, `reviews/10-review.md`; awaiting user approval, ADR-0022) |

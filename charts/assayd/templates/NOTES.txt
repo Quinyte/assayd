@@ -1,0 +1,64 @@
+{{- /*
+Owed by design 07 A1 since 2026-08-26 and written 2026-09-09.
+
+A1: NOTES.txt "is one of the two legs of `GovernanceSkipped`'s NFR-8 loudness
+claim (the other is the per-Agent condition), so it must state, when
+`gateway.enabled` is false, that agents are running **ungoverned**: no budgets,
+no authn, no tool filtering at the gateway." A5.4 adds the NetworkPolicy
+sentence. Design 03 §3.1 and §5 name this file twice as the loud half of the
+declared-ungoverned tier.
+
+This is also the first thing in the chart that READS `gateway.enabled`. Until
+now the value existed and nothing consumed it, which is the shape of a promise
+with no enforcement — the thing rule 8 and NFR-8 exist to prevent.
+*/ -}}
+assayd {{ .Chart.AppVersion }} installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
+
+The agent-operator runs in {{ .Values.namespace }}. Create an Agent and it will
+deploy: `kubectl get agents -A`.
+
+{{ if not .Values.gateway.enabled -}}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  YOUR AGENTS RUN UNGOVERNED. This is a real tier, not a warning to dismiss.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+`gateway.enabled` is false, so no traffic passes through a gateway and NOTHING
+below is enforced for any Agent this release runs:
+
+  * no token budgets and no rate limits    - an agent can spend without bound
+  * no authentication at the gateway       - callers are not identified
+  * no tool filtering                      - an agent reaches every tool its
+                                             MCP servers offer, not a declared
+                                             subset
+  * no NetworkPolicy, in any namespace     - nothing stops traffic reaching an
+                                             agent Pod directly, so any control
+                                             a gateway would apply is also
+                                             bypassable
+
+Every Agent carries `GovernanceSkipped=GatewayDisabled` in its conditions and
+stays `Ready`: you were promised nothing here, so nothing is broken. That
+condition and this message are the whole of the notice you get.
+
+  kubectl get agent <name> -o jsonpath='{.status.conditions}'
+
+Turning it on is not a flag flip today. This chart ships no agentgateway
+subchart, so setting `gateway.enabled: true` without installing the Gateway API
+and agentgateway CRDs yourself produces `GatewayIncompatible=CRDsAbsent`,
+withholds `Ready` and pages — deliberately, because an operator who asked for
+governed traffic and did not get it must not be told everything is fine.
+
+Also not enforced yet, independent of the gateway: an Agent Card's signature is
+not verified, its advertised skills are not cross-checked against the CR's
+grants, and no registration deadline is counted. See `docs/designs/02-*.md` §5.
+{{- else -}}
+`gateway.enabled` is true. Verify the Gateway API and agentgateway CRDs are
+installed, and check each Agent for `GatewayIncompatible` — a declared gateway
+that is missing withholds `Ready` rather than degrading quietly:
+
+  kubectl get agents -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,PHASE:.status.phase
+
+Note that the policy compiler does not exist yet: no `AgentgatewayPolicy` or
+`AgentgatewayBackend` is emitted by anything in this release, so budgets, rate
+limits, gateway authn and tool filtering are still not enforced. Setting this
+value does not make them so.
+{{- end }}
