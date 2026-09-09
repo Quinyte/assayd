@@ -131,6 +131,22 @@ docker build ${DOCKER_BUILD_NETWORK:+--network "${DOCKER_BUILD_NETWORK}"} \
 # runs, so it cannot. Rather than push to a registry that is not there — which is
 # what a first version did, breaking the kind lane outright — the responder tests
 # are k3d-only and say so where it is visible.
+# Design 07 A5.4: "Enforcement is the CNI's, not Kubernetes'." A NetworkPolicy on
+# a cluster whose CNI does not implement the API is ACCEPTED and does nothing --
+# it fails green, which is the worst way for a control to fail. k3s runs a
+# network-policy controller; kind's default CNI does not. So the suite is told
+# which lane it is in and reports the axis unverified rather than claiming it.
+#
+# Measured on k3d/k3s v1.33.6 before this was written: with a deny-all ingress
+# policy a cross-namespace request went from code=200 to code=000, and with an
+# allow rule for one namespace that namespace got 200 while another got 000 at
+# the same moment.
+if [ "${DISTRO}" = "k3d" ]; then
+  export ASSAYD_E2E_NETPOL_ENFORCED=1
+else
+  export ASSAYD_E2E_NETPOL_SKIP="NetworkPolicy enforcement is the CNI's; ${DISTRO}'s default CNI does not implement it, so a policy here is accepted and does nothing (design 07 A5.4)"
+fi
+
 if [ "${DISTRO}" != "k3d" ]; then
   export ASSAYD_E2E_RESPONDER_SKIP="the responder needs a registry wired into the cluster at create time; ${DISTRO} clusters are created outside this script, so only the k3d lane runs them (design 02 §5)"
   echo "==> responder tests: NOT RUN on ${DISTRO} — ${ASSAYD_E2E_RESPONDER_SKIP}"
