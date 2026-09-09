@@ -36,6 +36,11 @@ IMAGE="assayd-operator:${IMAGE_TAG}"
 REG_NAME="assayd-e2e-registry"
 REG_PORT="5111"
 RESPONDER_REPO="assayd-responder"
+# Pinned, not floated. agentgateway is the component every governance claim in
+# this project rests on, and design 03 is written against a specific release.
+GWAPI_VERSION="${GWAPI_VERSION:-v1.6.0}"
+AGW_VERSION="${AGW_VERSION:-1.5.0}"
+GATEWAY_NS="${GATEWAY_NS:-assayd-gateway}"
 
 case "${DISTRO}" in
 k3d)
@@ -160,16 +165,99 @@ esac
 
 echo "==> installing the chart"
 # CRDs ship in the chart's crds/ directory, so this installs them too.
+# gateway.namespace is set here and NOT only in the gateway block below, because
+# it is what assayd-gateway-routes compares a route's parentRef against. Render
+# it wrong and the reservation matches nothing and admits any author, silently.
+# It is set on every distro so the rendered policy names the namespace the
+# Gateway would occupy, rather than defaulting to the operator's.
 helm upgrade --install assayd charts/assayd \
   -f charts/assayd/values-local.yaml \
   --set operator.image.repository=assayd-operator \
   --set operator.image.tag="${IMAGE_TAG}" \
   --set operator.image.pullPolicy=Never \
+  --set gateway.namespace="${GATEWAY_NS}" \
   --wait --timeout 5m
+
+# A REAL gateway, so that "governance becomes real at the gateway" can be
+# measured rather than asserted.
+#
+# The chart carries no agentgateway subchart (design 07 A1) and `gateway.enabled`
+# gates only the admission policy, so the suite installs the dependency itself.
+# ADR-0030 step 3 says to author and execute the exact resources FIRST and encode
+# the mapping afterwards; this is that first half. The operator does not emit
+# routes yet — design 03 is RE-OPENED — so the route in the gateway test is
+# hand-authored, and the test says so.
+#
+# The listener shape is design 03's, not invented here: `allowedRoutes.namespaces
+# .from: Selector` matching `assayd.dev/run-namespace: "true"`, the label design
+# 02 A42's operator stamps at run-namespace creation. A route whose namespace the
+# listener does not admit is rejected, so this is the whole of the cross-namespace
+# consent the run-namespace move needs.
+if [ "${DISTRO}" = "k3d" ] && [ "${ASSAYD_E2E_GATEWAY:-1}" = "1" ]; then
+  echo "==> installing Gateway API + agentgateway ${AGW_VERSION}"
+  kubectl apply -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/${GWAPI_VERSION}/standard-install.yaml" >/dev/null
+  helm upgrade --install agentgateway-crds     oci://ghcr.io/agentgateway/charts/agentgateway-crds --version "${AGW_VERSION}"     -n agentgateway --create-namespace >/dev/null
+  helm upgrade --install agentgateway     oci://ghcr.io/agentgateway/charts/agentgateway --version "${AGW_VERSION}"     -n agentgateway --wait --timeout 5m >/dev/null
+  # The Gateway gets its OWN namespace, and it is NOT PodSecurity-restricted.
+  #
+  # Measured, not assumed: with the Gateway in assayd-system the data-plane
+  # Deployment was created and its ReplicaSet could never make a pod --
+  #   violates PodSecurity "restricted:latest": seccompProfile (pod or container
+  #   "agentgateway" must set securityContext.seccompProfile.type ...)
+  # -- because charts/assayd/templates/namespace.yaml enforces `restricted` on
+  # assayd-system and agentgateway v1.5.0's generated proxy sets no
+  # seccompProfile. It is the ONLY field it fails on, and AgentgatewayParameters
+  # v1alpha1 cannot supply it: `.spec.deployment` overrides `metadata` only
+  # (labels and annotations), with no pod securityContext anywhere in the schema.
+  # So this is not a policy assayd can meet by configuring the vendor.
+  #
+  # Design 03 3.2 already says gateway-scoped resources live in "the gateway's
+  # own namespace", so a separate namespace is that design's shape rather than a
+  # workaround for this. assayd-system stays `restricted`; the vendored data
+  # plane gets `baseline`, which it does satisfy.
+  echo "==> creating the Gateway in its own namespace"
+  kubectl apply -f - >/dev/null <<GWEOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${GATEWAY_NS}
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: assayd
+  namespace: ${GATEWAY_NS}
+spec:
+  gatewayClassName: agentgateway
+  listeners:
+  - name: http
+    port: 8080
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            assayd.dev/run-namespace: "true"
+GWEOF
+  kubectl -n "${GATEWAY_NS}" wait --for=condition=Programmed gateway/assayd --timeout=180s >/dev/null
+  # Programmed is NOT enough. The first run of this harness reported a Programmed
+  # Gateway whose Service had zero endpoints, and the test then failed on a
+  # connection refused that the harness had already called healthy. Wait for the
+  # data plane the Service actually routes to.
+  # 600s, not 180s: a cold pull of the agentgateway image alone took over 3m.
+  kubectl -n "${GATEWAY_NS}" rollout status deploy/assayd --timeout=600s >/dev/null
+  export ASSAYD_E2E_GATEWAY_NS="${GATEWAY_NS}"
+  export ASSAYD_E2E_GATEWAY_NAME="assayd"
+  echo "    gateway: ${GATEWAY_NS}/assayd, listener admits assayd.dev/run-namespace=true"
+fi
 
 # The suite asserts it is talking to THIS build, so a stale pod can never again
 # look like a passing run.
 export ASSAYD_E2E_IMAGE="${IMAGE}"
 
 echo "==> running e2e suite"
-ASSAYD_E2E=1 go test ./test/e2e/... -count=1 -timeout 20m -v
+ASSAYD_E2E=1 go test ./test/e2e/... -count=1 -timeout 20m -v ${E2E_RUN:+-run "${E2E_RUN}"}

@@ -202,9 +202,29 @@ func waitAvailable(t *testing.T, ctx context.Context, workload string, d time.Du
 // the test process's own machine would not be.
 func httpInCluster(t *testing.T, ctx context.Context, tag, url, postBody string) string {
 	t.Helper()
-	cmd := "curl -sS --max-time 20 -o /dev/termination-log " + url
+	return httpInClusterHost(t, ctx, tag, url, "", postBody)
+}
+
+// httpInClusterHost is httpInCluster with an explicit Host header, which a
+// gateway needs: the route matches on hostname, and the request is addressed to
+// the Gateway's Service rather than to the agent.
+func httpInClusterHost(t *testing.T, ctx context.Context, tag, url, host, postBody string) string {
+	t.Helper()
+	hostFlag := ""
+	if host != "" {
+		hostFlag = "-H 'Host: " + host + "' "
+	}
+	// Retries because the probe raced cluster DNS, not because the path is
+	// doubtful: a run that installed agentgateway alongside the suite produced
+	// curl exit 6 ("could not resolve") against a Service that resolved and
+	// answered 200 seconds later, from the same namespace. Five retries over ~10s
+	// absorb a CoreDNS blip on a freshly created Service without hiding a name
+	// that never resolves.
+	const retry = "--retry 5 --retry-delay 2 --retry-all-errors --retry-connrefused "
+	cmd := "curl -sS --max-time 20 " + retry + hostFlag + "-o /dev/termination-log " + url
 	if postBody != "" {
-		cmd = "curl -sS --max-time 20 -X POST -H 'Content-Type: application/json' " +
+		cmd = "curl -sS --max-time 20 " + retry + hostFlag +
+			"-X POST -H 'Content-Type: application/json' " +
 			"-d '" + postBody + "' -o /dev/termination-log " + url
 	}
 	name := "probe-" + tag

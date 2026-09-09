@@ -1,6 +1,6 @@
 # Design 07: Umbrella chart, profiles, e2e CI
 
-- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A5 below, A5 (2026-09-03) not yet critiqued
+- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A6 below; A5 (2026-09-03) and A6 (2026-09-09) not yet critiqued
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0002 (rules 5/6), 0012 (ambient profile), NFR-1/3/7/8 · interfaces: every P1 design (it packages them)
 
@@ -240,3 +240,48 @@ The permitted identities are rendered **into** the expression from values — th
 Unchanged. Nothing here adds a pod or a disk; the run namespace holds the same Agent Pods that ran in the tenant namespace before.
 
 **Owed**: the SPIRE and agentgateway subcharts that would render A5.2 and A5.3; `NOTES.txt` (A1) gaining the NetworkPolicy sentence; the e2e cell that proves NetworkPolicy enforcement on k3d and reports it unverified on kind; A5.9's policies and their negative e2e, with the A42 implementation.
+
+## A6 (2026-09-09) — the gateway path was authored and executed, and three things in A5 were wrong
+
+ADR-0030 step 3 says: *first author and execute the exact resources; then encode that mapping.* This amendment is the first half. `hack/e2e.sh` now installs Gateway API v1.6.0 and agentgateway 1.5.0 on k3d, creates the Gateway, and `TestAnAgentAnswersThroughTheGateway` sends a request that an agent answers **through it**. Everything below was measured on that cluster, not derived.
+
+### A6.1 The gateway RBAC has landed, ahead of the compiler and by one kind
+
+A5.7's table lists no gateway kind, and the sentence under it — "The `ClusterRole` today grants none of these. They land with the A42 implementation and the generated file, not before" — **is now false for four of its six rows.** `namespaces`, `validatingadmissionpolicies`/`validatingadmissionpolicybindings`, `configmaps`/`secrets` `+update`, and `resourcequotas`/`limitranges` all shipped with A42. Only `pods/log` and `networkpolicies` are still ungranted, and each is still correctly so. Read that sentence as scoped to those two.
+
+The table gains one row:
+
+| Grant | Why | What bounds it |
+|---|---|---|
+| `httproutes` (`gateway.networking.k8s.io`): `get`, `list`, `watch`, `create`, `update`, `patch`, `delete`; `httproutes/status`: `get` | a route in the run namespace is what puts an agent behind the Gateway | routes are authored into `assayd-run-` namespaces only, and A5.9's policy independently refuses any author but the operator. `AgentgatewayBackend` and `AgentgatewayPolicy` are **not** granted: they land with the compiler that emits them, and a verb granted ahead of its code is rule 7 in RBAC form |
+
+**This gap was invisible from either side.** A5.9's policy names the operator's ServiceAccount and therefore *permitted* it to author routes; the API server then refused the same request for want of RBAC. Neither half was wrong on its own and the path did not work — the admission reservation and the RBAC grant had simply never both existed at once. It surfaced only because a test finally sent traffic.
+
+### A6.2 The reservation compared against the wrong namespace, and failed open
+
+`assayd-gateway-routes` decided whether a route targets the assayd Gateway by comparing the `parentRef`'s namespace to **`.Values.namespace`** — the namespace the *operator* runs in. The Gateway's namespace is a different thing, and design 03 §3.2 already said so: gateway-scoped resources live in "the gateway's own namespace".
+
+Moving the Gateway out of `assayd-system` made `targetsAssayd` false, the policy matched nothing, and an ordinary test identity attached a route to the Gateway. **The failure is silent and in the permissive direction** — no error, no event; the route is simply accepted, and a principal who can author one publishes an ungoverned path to a workload, which is the whole thing A5.9 exists to prevent.
+
+The chart gains `gateway.namespace`, defaulting to the release namespace so a single-namespace install is unchanged, and the CEL compares against that. `hack/e2e.sh` sets it on **every** distro, including those that install no Gateway, so the rendered policy always names the namespace a Gateway would occupy rather than falling back to the operator's.
+
+### A6.3 agentgateway's proxy cannot run in the namespace this chart hardens
+
+`charts/assayd/templates/namespace.yaml` enforces PodSecurity `restricted` on `assayd-system`. agentgateway v1.5.0's generated proxy pod sets no `seccompProfile`, so with the Gateway in `assayd-system` the data-plane Deployment was created and its ReplicaSet could never produce a pod:
+
+```
+violates PodSecurity "restricted:latest": seccompProfile (pod or container
+"agentgateway" must set securityContext.seccompProfile.type to "RuntimeDefault" or "Localhost")
+```
+
+It is the **only** field it fails on, and assayd cannot supply it by configuring the vendor: `AgentgatewayParameters` v1alpha1's `.spec.deployment` overrides `metadata` — labels and annotations — and there is no pod `securityContext` anywhere in that CRD's schema. So the Gateway gets its own namespace at `baseline`, which the proxy does satisfy, and `assayd-system` stays `restricted`. This is design 03 §3.2's shape rather than a workaround for it, but the constraint is real and belongs in the record: **the chart cannot host the agentgateway data plane in `assayd-system` at any PSA level it is willing to run there.**
+
+### A6.4 `Programmed=True` is not "the gateway can serve"
+
+The harness waited on the Gateway's `Programmed` condition and got `True` — with a `LoadBalancer` Service whose EndpointSlice was empty, because the pod above never existed. The test then failed on a connection refused the harness had already reported as healthy. It now waits on the data-plane Deployment's rollout as well. Any future readiness check on a Gateway should do the same: `Programmed` describes the control plane's acceptance of the object, not the existence of anything serving it.
+
+### A6.5 What A5.9 owed, and what is still owed
+
+The negative e2e A5.9 owed now exists, in both halves: `TestNamespaceLabelsAreReservedToTheOperator` for the label policy, and `TestAnAgentAnswersThroughTheGateway`'s negative control for the route policy — which asserts the refusal names `assayd-gateway-routes`, because "it was refused" is not evidence about which rule refused it. That control is not decorative: it is what caught A6.2.
+
+**Still owed, and not narrowed by this amendment**: the chart ships no Gateway (`gateway.enabled` defaults to `false` and is read by nothing), so the Gateway in the e2e is created by the harness. The **operator does not emit routes** — the test authors one while impersonating the operator's ServiceAccount, which proves the identity reservation and the RBAC grant and proves nothing about a compiler that does not exist. `AgentgatewayBackend`, `AgentgatewayPolicy`, the SPIRE subchart, `NOTES.txt`'s NetworkPolicy sentence and the NetworkPolicy enforcement cell all still stand where A5 left them.

@@ -68,6 +68,14 @@ spec:
   policyName: assayd-namespace-labels
   validationActions: ["Deny"]
 ---
+{{- /*
+The GATEWAY's namespace, which is not the operator's. This read
+`.Values.namespace` until an e2e moved the Gateway to its own namespace and an
+ordinary identity then attached a route: the CEL compared against the operator's
+namespace, `targetsAssayd` went false, and the reservation matched nothing.
+Fail-open, and silent -- the route is simply accepted.
+*/ -}}
+{{- $gwNS := .Values.gateway.namespace | default .Values.namespace -}}
 # A namespace the Gateway listener admits is not a grant to author routes into
 # it: an HTTPRoute whose parentRefs name the assayd Gateway is admitted only
 # from the operator identity (design 07 A5.3/A5.9). Matches nothing until the
@@ -91,7 +99,7 @@ spec:
     # API), so a bare-name ref from inside the Gateway's namespace targets it
     # too; request.namespace is the route's.
     - name: targetsAssayd
-      expression: {{ printf "has(object.spec.parentRefs) && object.spec.parentRefs.exists(p, p.name == %s && (has(p.namespace) ? p.namespace : request.namespace) == %s)" (.Values.gateway.name | toJson) (.Values.namespace | toJson) | quote }}
+      expression: {{ printf "has(object.spec.parentRefs) && object.spec.parentRefs.exists(p, p.name == %s && (has(p.namespace) ? p.namespace : request.namespace) == %s)" (.Values.gateway.name | toJson) ($gwNS | toJson) | quote }}
     - name: operator
       expression: {{ printf "request.userInfo.username in %s" (toJson $operators) | quote }}
   validations:

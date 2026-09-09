@@ -40,3 +40,18 @@ Both need a real v1.5.0 cluster with the existing conformance cases re-run again
 2. Keep §3.5's negative results; they survive. Correct only the unboundedness clause, and correct it to a *listener-shared* bound, not a per-Agent one.
 3. Re-run §2.1 and §2.8 on v1.5.0 before any further work on the apply barrier or `Withdraw` — those are the two mechanisms most of A46–A50 exist to serve.
 4. Delete any negative-`burst` handling written for v1.4.1; the API now refuses it.
+
+## Addendum, 2026-09-09 — two properties measured on a live cluster
+
+Found while making assayd's e2e send real traffic through a Gateway (k3d, Kubernetes v1.33.6, Gateway API v1.6.0, agentgateway charts 1.5.0, `cr.agentgateway.dev/agentgateway:v1.5.0`). Neither is in the release notes and both change where the data plane can be installed.
+
+**1. The managed proxy cannot run in a PodSecurity `restricted` namespace, and cannot be configured to.** The generated proxy pod sets no `seccompProfile`, so admission refuses it:
+
+```
+violates PodSecurity "restricted:latest": seccompProfile (pod or container
+"agentgateway" must set securityContext.seccompProfile.type to "RuntimeDefault" or "Localhost")
+```
+
+That is the only field it fails on — everything else `restricted` demands, it already satisfies. And it cannot be supplied from outside: `AgentgatewayParameters` v1alpha1 exposes `daemonSet`, `deployment`, `env`, `horizontalPodAutoscaler`, `image`, `istio`, `logging`, `modelCatalog`, `podDisruptionBudget`, `rawConfig`, `resources`, `service`, `serviceAccount`, `shutdown`, `spiffe` and `workload`, and `.spec.deployment` overrides `metadata` only — labels and annotations. There is no pod `securityContext` anywhere in the schema. A namespace at `baseline` works.
+
+**2. `Programmed=True` does not mean anything is serving.** The Gateway reported `Accepted=True` and `Programmed=True` with the message "Successfully programmed Gateway", and every listener condition healthy, while its `LoadBalancer` Service had an empty EndpointSlice and the data-plane Deployment sat at `0/1` with `ReplicaFailure` from the constraint above. `Programmed` describes the control plane's acceptance of the object. Wait on the data-plane Deployment's rollout as well before sending traffic — the failure mode is otherwise a green readiness check followed by a connection refused.

@@ -161,6 +161,22 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 // +kubebuilder:rbac:groups=assayd.dev,resources=agents/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=assayd.dev,resources=agents/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// HTTPRoutes, in the run namespace, attaching to the assayd Gateway.
+//
+// Design 07 A5.7's RBAC table lists none of the gateway kinds and says so —
+// "the ClusterRole today grants none of these. They land with the A42
+// implementation" — and A42 has landed. Measured on a live cluster before this
+// marker existed: the admission policy correctly PERMITTED the operator to
+// author a route (design 07 A5.9 names its ServiceAccount) and the API server
+// then refused it for want of RBAC. The two halves of the design had never both
+// been implemented, so neither half was wrong and the path did not work.
+//
+// Only `httproutes`. The AgentgatewayBackend and AgentgatewayPolicy grants land
+// with the compiler that emits them; granting them now would be standing
+// privilege with no consumer.
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes/status,verbs=get
+
 // Services are per revision and share the workload's name shape; the operator
 // creates one with each revision and collects it when that revision leaves the
 // retained set, so it needs delete as well as create.

@@ -87,6 +87,23 @@ namespace: assayd-system
 gateway:
   enabled: false
   name: assayd
+  # The namespace the Gateway object lives in, which is NOT the namespace the
+  # operator runs in. Design 03 3.2 puts gateway-scoped resources in "the
+  # gateway's own namespace", and agentgateway forces the separation anyway:
+  # its v1.5.0 proxy sets no seccompProfile and AgentgatewayParameters cannot
+  # supply one, so the proxy cannot run in assayd-system, which the chart
+  # enforces as PodSecurity `restricted`.
+  #
+  # This is load-bearing, not cosmetic. assayd-gateway-routes reserves route
+  # authorship by comparing the parentRef's namespace to THIS value; point it
+  # at the wrong namespace and the reservation matches nothing and silently
+  # permits any identity to attach a route. Measured: moving the Gateway out of
+  # assayd-system while this read `.Values.namespace` let an ordinary test
+  # identity attach one.
+  #
+  # Empty means the release's own namespace, which is where a single-namespace
+  # install puts everything.
+  namespace: ""
 
 # Design 07 A5.9: the identities permitted to write the reserved assayd.dev
 # namespace labels. The operator's own ServiceAccount is always permitted;
