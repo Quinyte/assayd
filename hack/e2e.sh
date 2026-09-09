@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Quinyte
+# SPDX-License-Identifier: Apache-2.0
 # e2e against a real cluster — design 07 §5's matrix, runnable locally.
 #
 # Deliberately fails loudly rather than skipping: a skipped e2e is an untested

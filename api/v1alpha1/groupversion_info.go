@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Package v1alpha1 contains the assayd platform API.
 //
 // Group is assayd.dev — a codename per ADR-0001; renaming before public release

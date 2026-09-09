@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Quinyte
+# SPDX-License-Identifier: Apache-2.0
 # The e2e's MCP tool server: a real Streamable HTTP MCP server with two tools,
 # so that ADR-0030's "one MCP tool call through the gateway" can be measured
 # rather than asserted. Nothing in this repository could make an MCP call before

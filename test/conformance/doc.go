@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Package conformance pins the dependency contract this platform's design
 // asserts, against the artifact a cluster actually installs.
 //

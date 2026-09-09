@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Package-level leaf machinery, in a non-test file because TWO test packages
 // need it: internal/revision compares hashes, and test/envtest validates that
 // each specimen is actually admissible before believing the comparison.

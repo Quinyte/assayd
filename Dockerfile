@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Quinyte
+# SPDX-License-Identifier: Apache-2.0
 # Two stages: build with the toolchain, ship without it.
 # --platform=$BUILDPLATFORM pins this stage to the RUNNER's architecture, and Go
 # cross-compiles to $TARGETARCH from there. Without it, buildx runs the arm64

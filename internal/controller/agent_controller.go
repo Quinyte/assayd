@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Package controller holds the agent-operator's reconcilers.
 //
 // Design 02 §4 states the loop; this file implements the slice that needs no

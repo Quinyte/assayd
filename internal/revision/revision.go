@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Package revision computes the identity of an Agent revision.
 //
 // A revision is what an eval gate gates and what a rollback rolls back to, so

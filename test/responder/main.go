@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Command responder is the smallest agent that is actually an agent: it serves
 // an A2A Agent Card and answers one task.
 //

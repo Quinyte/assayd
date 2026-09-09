@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Package envtest runs the platform's types and controllers against a real
 // Kubernetes API server (etcd + kube-apiserver, no kubelet). It is the layer
 // where defaulting, CEL validation, status subresources, and controller

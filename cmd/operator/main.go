@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Command operator runs the assayd agent-operator.
 //
 // The wiring here is deliberately small and deliberately unforgiving: every

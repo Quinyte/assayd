@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Package e2e runs against a real cluster (k3d), with a real kubelet.
 //
 // This is the layer envtest cannot reach. envtest runs etcd and kube-apiserver

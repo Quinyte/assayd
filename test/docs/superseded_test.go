@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Package docs holds the gate that keeps a superseded guarantee from surviving
 // in the text an implementer actually builds from.
 //

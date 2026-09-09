@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Quinyte
+# SPDX-License-Identifier: Apache-2.0
 # Provision a throwaway cluster, install the pinned agentgateway, run the cluster
 # conformance suite, tear down. Separate from CLUSTER=assayd-local so `make e2e`
 # is unaffected.

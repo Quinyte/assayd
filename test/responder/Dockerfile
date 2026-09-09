@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Quinyte
+# SPDX-License-Identifier: Apache-2.0
 # The e2e's agent image: a real container that serves an A2A card and answers a
 # task. It replaces `registry.k8s.io/pause`, which served nothing, so no test in
 # this repository ever sent a request to an agent.

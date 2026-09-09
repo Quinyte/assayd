@@ -1,5 +1,8 @@
 //go:build cluster
 
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Cluster conformance. Every assertion here was first observed by hand in a
 // spike (docs/research/agentgateway-v1.4.1-spike.md) and is pinned so that an
 // upstream behaviour change fails a test rather than silently invalidating a

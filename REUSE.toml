@@ -1,0 +1,59 @@
+# REUSE 3.3 (https://reuse.software/spec-3.3/).
+#
+# Source files carry their own SPDX headers. This file covers everything where a
+# header would be noise or would end up in rendered output: Helm templates emit
+# their comments into the manifests they produce, generated CRD YAML is
+# overwritten by `make manifests`, and a licence header at the top of every
+# design document would be read before the document.
+#
+# The point of machine-readable licensing is that a scanner is materially more
+# accurate against SPDX identifiers than against pasted licence text, and the
+# Linux Foundation's guidance asks for per-file identifiers. Covering a tree in
+# bulk here is the specification's own answer to files that cannot carry one.
+
+version = 1
+SPDX-PackageName = "assayd"
+SPDX-PackageSupplier = "Quinyte <engineer@quinyte.com>"
+SPDX-PackageDownloadLocation = "https://github.com/Quinyte/assayd"
+
+# Documentation: designs, ADRs, research notes, and the root-level project files.
+[[annotations]]
+path = ["docs/**", "*.md", "AGENTS.md", "CLAUDE.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Quinyte"
+SPDX-License-Identifier = "Apache-2.0"
+
+# The chart. Templates are excluded from per-file headers because a `#` comment
+# in a Helm template is rendered into the user's cluster manifests.
+[[annotations]]
+path = ["charts/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Quinyte"
+SPDX-License-Identifier = "Apache-2.0"
+
+# Generated CRDs and RBAC. `make manifests` rewrites these wholesale, so a header
+# committed here would be dropped on the next regeneration; the Go markers they
+# are generated from carry the header instead.
+[[annotations]]
+path = ["config/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Quinyte"
+SPDX-License-Identifier = "Apache-2.0"
+
+# Repository metadata, CI, module files, and the agent/skill definitions.
+[[annotations]]
+path = [".github/**", ".claude/**", "go.mod", "go.sum", ".gitignore", "LICENSE", "NOTICE"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Quinyte"
+SPDX-License-Identifier = "Apache-2.0"
+
+# THIRD PARTY, and deliberately not swept into the block above. This is the
+# agentgateway CRD chart, vendored as e2e test data. It is Apache-2.0 like this
+# project, but the copyright is Solo.io's, and annotating someone else's
+# artefact with our copyright line would be a false claim — which is precisely
+# the kind of thing a licence scanner exists to catch.
+[[annotations]]
+path = ["test/conformance/testdata/agentgateway-crds-1.4.1.tgz"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Solo.io, Inc."
+SPDX-License-Identifier = "Apache-2.0"

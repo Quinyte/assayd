@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Command mcpserver is the smallest thing that is actually an MCP server: it
 // speaks Streamable HTTP, answers `initialize`, lists two tools and calls them.
 //

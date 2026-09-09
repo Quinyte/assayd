@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Quinyte
+# SPDX-License-Identifier: Apache-2.0
 # assayd — the loop: nothing merges without green tests and a critic PASS.
 SHELL := /bin/bash
 GOBIN := $(shell go env GOPATH)/bin
@@ -34,7 +36,7 @@ $(SETUP_ENVTEST):
 ## ---------- generate ----------
 .PHONY: generate manifests
 generate: $(CONTROLLER_GEN) ## deepcopy funcs
-	$(CONTROLLER_GEN) object paths=./api/...
+	$(CONTROLLER_GEN) object:headerFile=hack/boilerplate.go.txt paths=./api/...
 manifests: $(CONTROLLER_GEN) ## CRDs + RBAC
 	$(CONTROLLER_GEN) crd rbac:roleName=assayd-operator paths=./... output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
 

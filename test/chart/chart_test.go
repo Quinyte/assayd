@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+
 // Package chart tests what `helm template` renders.
 //
 // A chart is where a platform's doctrine becomes deployable or quietly stops
