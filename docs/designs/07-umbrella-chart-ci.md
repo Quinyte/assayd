@@ -299,3 +299,24 @@ Governance at the gateway is theatre while the gateway is bypassable, and until 
 **A5.4's mutation requirement — "deleting either allow rule must fail it" — was run, not assumed.** Dropping the gateway peer failed the permitted path, with agentgateway itself reporting `upstream call failed: Connect: Connection refused`, so the denial was at the agent rather than the route. Dropping the operator peer failed card registration. Not applying the policy at all returned `code=200` on the direct probe, which is what protects the negative control from passing for the wrong reason. All three killed.
 
 One observation for design 02 and design 10 rather than for here: with the operator peer removed, the Agent reached `phase: Ready` carrying a card entry whose `Digest` was **empty** — a recorded failed attempt, not a registration. A5.4 predicted the shape of this ("looks like a card bug"); a test that broke on the presence of any card entry would have passed straight through it, and this one nearly did.
+
+### A6.7 The identity leg: the gateway refuses a principal
+
+`TestTheGatewayRefusesADisallowedPrincipal` completes ADR-0030 step 3's hand-authored path. The network-rules leg proved the gateway cannot be bypassed, which is a precondition for governance rather than governance itself — with only that policy in place, whatever reaches the gateway is served. This is the other half: a caller presenting a **valid** credential that authenticates it as the wrong principal is refused **by the gateway, on the strength of who it is**, while a permitted principal is served on the same route seconds later.
+
+The mechanism is agentgateway's own, hand-authored: `AgentgatewayPolicy` with `traffic.apiKeyAuthentication` reading a ConfigMap of `sha256:` key hashes with arbitrary `metadata`, and `traffic.authorization` carrying one CEL rule, `apiKey.group == "trusted"`. The policy lives in the run namespace because `targetRefs` "must be in the same namespace as the policy" — which is where design 03 §3.2 already puts it, for the unrelated reason that a cross-namespace `backendRef` needs a `ReferenceGrant`.
+
+**Nothing in assayd emits any of this, before or after.** No compiler exists, design 03 stays RE-OPENED, and no `agentgatewaypolicies` RBAC is granted. What has changed is that the mapping a compiler will have to produce is now known to be one the gateway honours.
+
+Measured, and each distinction is load-bearing:
+
+| Caller | Result |
+|---|---|
+| permitted principal (`group: trusted`) | `200`, and the body is the agent's own answer |
+| **disallowed principal** (`group: rogue`) — a valid credential | **`403`** |
+| no credential | `401` |
+| unknown credential | `401` |
+
+**`401` and `403` are different claims and the compiler must not conflate them**, exactly as A6.4's note on `503` versus `429` at the gateway. `401` is "I do not know you"; `403` is "I know you and no". Two mutations establish that the split is real rather than incidental: flipping the rule to permit `rogue` **inverted both outcomes**, so the rule is what decides; and removing `traffic.authorization` while keeping authentication left the anonymous caller at `401` and gave the disallowed principal **`200`**, so the `403` is authorization and not a side effect of authenticating.
+
+Two operational notes for whoever writes the compiler. `Accepted=True` on an `AgentgatewayPolicy` is not enforcement — the policy reaches `Accepted` **and** `Attached` before the proxy applies it, so the test waits for an anonymous request to actually be refused; this is the same shape as A6.4's `Programmed=True` on a Gateway with no endpoints, and it is the second time in this amendment that a control-plane condition described configuration rather than behaviour. And `Attached` must be asserted alongside `Accepted`: a policy whose `targetRefs` name nothing is still valid, enforces nothing, and would leave every refusal below it reading as a success.
