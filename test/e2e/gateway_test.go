@@ -159,14 +159,21 @@ func TestAnAgentAnswersThroughTheGateway(t *testing.T) {
 // assertRouteAccepted fails with the listener's own reason rather than a 404
 // forty seconds later, because "the route was not admitted" and "the agent is
 // down" look identical from the client.
-func assertRouteAccepted(t *testing.T, ctx context.Context, route *unstructured.Unstructured, wl string) {
+// assertRouteAccepted waits for the Gateway listener to accept the route.
+//
+// It reads the route's OWN namespace and name rather than the run namespace it
+// was first written for: a second listener now admits the MCP tool namespace,
+// and a helper that looked in one fixed place would have reported "never
+// accepted" for a route that was accepted somewhere else.
+func assertRouteAccepted(t *testing.T, ctx context.Context, route *unstructured.Unstructured, _ string) {
+	ns, name := route.GetNamespace(), route.GetName()
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Minute)
 	var last string
 	for time.Now().Before(deadline) {
 		var got unstructured.Unstructured
 		got.SetGroupVersionKind(route.GroupVersionKind())
-		if err := k8s.Get(ctx, types.NamespacedName{Namespace: runNS, Name: wl}, &got); err == nil {
+		if err := k8s.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &got); err == nil {
 			parents, _, _ := unstructured.NestedSlice(got.Object, "status", "parents")
 			for _, p := range parents {
 				pm, ok := p.(map[string]any)
@@ -190,9 +197,9 @@ func assertRouteAccepted(t *testing.T, ctx context.Context, route *unstructured.
 		}
 		time.Sleep(3 * time.Second)
 	}
-	t.Fatalf("the Gateway listener never accepted the route (%s). The listener admits "+
-		"namespaces by the assayd.dev/run-namespace label; if that label is missing from %s "+
-		"the route is rejected and every request 404s with no other signal.", last, runNS)
+	t.Fatalf("the Gateway listener never accepted route %s/%s (%s). A listener admits routes "+
+		"only from namespaces its allowedRoutes selector matches; if %s does not match, the "+
+		"route is rejected and every request 404s with no other signal.", ns, name, last, ns)
 }
 
 func gatewayService(t *testing.T, ctx context.Context, ns, name string) string {

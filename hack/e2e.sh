@@ -36,11 +36,13 @@ IMAGE="assayd-operator:${IMAGE_TAG}"
 REG_NAME="assayd-e2e-registry"
 REG_PORT="5111"
 RESPONDER_REPO="assayd-responder"
+MCPSERVER_REPO="assayd-mcpserver"
 # Pinned, not floated. agentgateway is the component every governance claim in
 # this project rests on, and design 03 is written against a specific release.
 GWAPI_VERSION="${GWAPI_VERSION:-v1.6.0}"
 AGW_VERSION="${AGW_VERSION:-1.5.0}"
 GATEWAY_NS="${GATEWAY_NS:-assayd-gateway}"
+TOOLS_NS="${TOOLS_NS:-assayd-e2e-tools}"
 
 case "${DISTRO}" in
 k3d)
@@ -171,6 +173,21 @@ fi
 # The NODE resolves the registry by its container name, not by localhost.
 export ASSAYD_E2E_RESPONDER_IMAGE="k3d-${REG_NAME}:${REG_PORT}/${RESPONDER_REPO}@${RESPONDER_DIGEST}"
 echo "    responder: ${ASSAYD_E2E_RESPONDER_IMAGE}"
+
+echo "==> building and pushing the MCP tool server"
+docker build ${DOCKER_BUILD_NETWORK:+--network "${DOCKER_BUILD_NETWORK}"} \
+  -t "localhost:${REG_PORT}/${MCPSERVER_REPO}:${IMAGE_TAG}" \
+  -f test/mcpserver/Dockerfile .
+docker push "localhost:${REG_PORT}/${MCPSERVER_REPO}:${IMAGE_TAG}" >/dev/null
+MCPSERVER_DIGEST="$(docker inspect \
+  --format '{{index .RepoDigests 0}}' \
+  "localhost:${REG_PORT}/${MCPSERVER_REPO}:${IMAGE_TAG}" | cut -d@ -f2)"
+if [ -z "${MCPSERVER_DIGEST}" ]; then
+  echo "ERROR: could not read the MCP server's repo digest after pushing" >&2
+  exit 1
+fi
+export ASSAYD_E2E_MCP_IMAGE="k3d-${REG_NAME}:${REG_PORT}/${MCPSERVER_REPO}@${MCPSERVER_DIGEST}"
+echo "    mcpserver: ${ASSAYD_E2E_MCP_IMAGE}"
 fi
 
 echo "==> loading the image into ${DISTRO}"
@@ -258,7 +275,25 @@ spec:
         selector:
           matchLabels:
             assayd.dev/run-namespace: "true"
+  # A second listener for the MCP tool server, which is NOT an agent and does
+  # not belong in an operator-owned run namespace. It is selected by the
+  # namespace's own kubernetes.io/metadata.name rather than by an assayd.dev
+  # label: those keys are reserved to the operator by A5.9's admission policy,
+  # and a test that minted one would be forging the very authority that policy
+  # exists to hold. Routes here are still authored by the operator identity --
+  # assayd-gateway-routes reserves every route naming this Gateway, whichever
+  # listener it attaches to.
+  - name: tools
+    port: 8081
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            kubernetes.io/metadata.name: ${TOOLS_NS}
 GWEOF
+  kubectl create ns "${TOOLS_NS}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl -n "${GATEWAY_NS}" wait --for=condition=Programmed gateway/assayd --timeout=180s >/dev/null
   # Programmed is NOT enough. The first run of this harness reported a Programmed
   # Gateway whose Service had zero endpoints, and the test then failed on a
@@ -268,6 +303,7 @@ GWEOF
   kubectl -n "${GATEWAY_NS}" rollout status deploy/assayd --timeout=600s >/dev/null
   export ASSAYD_E2E_GATEWAY_NS="${GATEWAY_NS}"
   export ASSAYD_E2E_GATEWAY_NAME="assayd"
+  export ASSAYD_E2E_TOOLS_NS="${TOOLS_NS}"
   echo "    gateway: ${GATEWAY_NS}/assayd, listener admits assayd.dev/run-namespace=true"
 fi
 
