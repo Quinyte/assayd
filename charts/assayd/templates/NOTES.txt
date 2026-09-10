@@ -42,23 +42,49 @@ condition and this message are the whole of the notice you get.
   kubectl get agent <name> -o jsonpath='{.status.conditions}'
 
 Turning it on is not a flag flip today. This chart ships no agentgateway
-subchart, so setting `gateway.enabled: true` without installing the Gateway API
-and agentgateway CRDs yourself produces `GatewayIncompatible=CRDsAbsent`,
-withholds `Ready` and pages — deliberately, because an operator who asked for
-governed traffic and did not get it must not be told everything is fine.
+subchart, so `gateway.enabled: true` requires that you install the Gateway API
+and agentgateway CRDs yourself. Without them the OPERATOR REFUSES TO START, and
+its last log line names the missing kind — deliberately, because an operator who
+asked for governed traffic and did not get it must not be told everything is
+fine. Design 03 §3.1 asks for `GatewayIncompatible=CRDsAbsent` on each Agent
+instead, which is the friendlier half of the same fail-closed answer and is not
+implemented; this note says what the code does, not what the design wants.
+
+And turning it on still governs nothing. See below.
 
 Also not enforced yet, independent of the gateway: an Agent Card's signature is
 not verified, its advertised skills are not cross-checked against the CR's
 grants, and no registration deadline is counted. See `docs/designs/02-*.md` §5.
 {{- else -}}
-`gateway.enabled` is true. Verify the Gateway API and agentgateway CRDs are
-installed, and check each Agent for `GatewayIncompatible` — a declared gateway
-that is missing withholds `Ready` rather than degrading quietly:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  YOUR AGENTS ARE REACHABLE AND STILL UNGOVERNED.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  kubectl get agents -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,PHASE:.status.phase
+`gateway.enabled` is true, so the operator emits ONE resource per Agent:
 
-Note that the policy compiler does not exist yet: no `AgentgatewayPolicy` or
-`AgentgatewayBackend` is emitted by anything in this release, so budgets, rate
-limits, gateway authn and tool filtering are still not enforced. Setting this
-value does not make them so.
+  * an `HTTPRoute` in `assayd-run-<agent-namespace>`, attached to Gateway
+    `{{ .Values.gateway.namespace | default .Values.namespace }}/{{ .Values.gateway.name }}` on listener `http`, matching the host
+    `<agent>.<agent-namespace>.{{ .Values.gateway.hostnameSuffix | default "assayd.internal" }}` and forwarding to that
+    revision's Service
+
+That is a PATH, not a guarantee. The policy compiler does not exist: no
+`AgentgatewayPolicy` and no `AgentgatewayBackend` is emitted by anything in this
+release, so requests arriving on that host are UNAUTHENTICATED, and there are
+still no budgets, no rate limits and no tool filtering. Every Agent therefore
+still carries `GovernanceSkipped` — now with reason `PolicyCompilerAbsent`:
+
+  kubectl get agent <name> -o jsonpath='{.status.conditions}'
+
+No NetworkPolicy is materialized in any namespace either, so an agent Pod
+remains reachable directly and anything the gateway would apply is bypassable.
+
+The Gateway object itself is yours to create — this chart ships no agentgateway
+subchart. Its listener must admit the run namespaces, or every route is rejected
+and every request 404s with no other signal:
+
+  allowedRoutes: {namespaces: {from: Selector,
+    selector: {matchLabels: {assayd.dev/run-namespace: "true"}}}}
+
+The host above is a routing key matched against the `Host` header. Nothing here
+creates DNS for it.
 {{- end }}

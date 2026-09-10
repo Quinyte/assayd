@@ -32,6 +32,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 	"github.com/Quinyte/assayd/internal/controller"
 )
@@ -41,6 +43,11 @@ var scheme = runtime.NewScheme()
 func init() {
 	utilruntimeMust(clientgoscheme.AddToScheme(scheme))
 	utilruntimeMust(assaydv1alpha1.AddToScheme(scheme))
+	// Registered unconditionally, even where gateway.enabled is false: a scheme
+	// entry starts no informer and reads no CRD, and a scheme that depended on a
+	// flag would make "the type is unknown" a second, later way for the disabled
+	// tier to fail.
+	utilruntimeMust(gatewayv1.Install(scheme))
 }
 
 func main() {
@@ -58,6 +65,7 @@ func run() error {
 		leaderElect       bool
 		gateCheckTTL      time.Duration
 		operatorNamespace string
+		gateway           controller.GatewayConfig
 	)
 	// The namespace the operator runs in: where the run-namespace binding
 	// records live (design 02 A60). Defaults to the ServiceAccount namespace
@@ -71,6 +79,26 @@ func run() error {
 			"workload as ASSAYD_GATEWAY_URL (design 02 §11). Empty — the default — injects nothing, "+
 			"because the chart ships no gateway subchart yet and a placeholder address would look "+
 			"like an outage rather than an absent tier")
+	// Design 03 §3.1: whether anything is emitted at the gateway is DECLARED,
+	// never discovered, so that `true` with the CRDs absent can only mean a
+	// broken install. P1 ships `false` and these three then decide nothing.
+	flag.BoolVar(&gateway.Enabled, "gateway-enabled", false,
+		"emit each Agent's serving HTTPRoute into its run namespace, attached to the Gateway named "+
+			"by --gateway-name/--gateway-namespace. False — the default and what P1 ships — emits "+
+			"NOTHING and puts GovernanceSkipped=GatewayDisabled on every Agent (design 03 §3.1). "+
+			"True emits the route and STILL enforces no budget, rate limit, authentication or tool "+
+			"allowlist: no policy compiler exists, so this publishes a path, not a guarantee")
+	flag.StringVar(&gateway.Name, "gateway-name", "",
+		"the Gateway an emitted route's parentRef names. Required when --gateway-enabled is set; "+
+			"design 07 A5.9's admission policy reserves route authorship by comparing this name")
+	flag.StringVar(&gateway.Namespace, "gateway-namespace", "",
+		"the namespace the Gateway lives in. This is NOT the namespace the operator runs in — "+
+			"design 07 A6.2 measured the route reservation failing open, silently and in the "+
+			"permissive direction, when the two were conflated. Required when --gateway-enabled is set")
+	flag.StringVar(&gateway.HostnameSuffix, "gateway-hostname-suffix", controller.DefaultGatewayHostnameSuffix,
+		"appended to <agent>.<agent-namespace> to form the hostname an emitted route matches. No "+
+			"design settles this, so it is assayd's choice and configurable. It is a ROUTING KEY "+
+			"matched against the Host header, not an address: nothing here creates DNS for it")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metric endpoint binds to")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "address the probe endpoint binds to")
 	flag.BoolVar(&leaderElect, "leader-elect", true,
@@ -153,7 +181,7 @@ func run() error {
 	labelAuthority := controller.LabelAuthorityPresent(mgr.GetAPIReader())
 	agents, err := controller.NewAgentReconciler(mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme(),
 		operatorNamespace, func() bool { return detector.Installed() }, labelAuthority,
-		controller.InjectedEnvConfig{GatewayURL: gatewayURL})
+		controller.InjectedEnvConfig{GatewayURL: gatewayURL}, gateway)
 	if err != nil {
 		return fmt.Errorf("build agent reconciler: %w", err)
 	}
@@ -202,7 +230,8 @@ func run() error {
 	}
 
 	ctrl.Log.Info("starting agent-operator",
-		"leaderElection", leaderElect, "evalSuiteCheckInterval", gateCheckTTL)
+		"leaderElection", leaderElect, "evalSuiteCheckInterval", gateCheckTTL,
+		"gatewayEnabled", gateway.Enabled, "gateway", gateway.Namespace+"/"+gateway.Name)
 	if err := mgr.Start(ctx); err != nil {
 		return fmt.Errorf("manager exited: %w", err)
 	}

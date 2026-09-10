@@ -85,7 +85,29 @@ namespace: assayd-system
 # Gateway exists, so that the first route anyone authors against it is already
 # governed.
 gateway:
+  # false -- what P1 ships -- means the operator emits NOTHING at the gateway and
+  # puts GovernanceSkipped=GatewayDisabled on every Agent (design 03 3.1).
+  #
+  # true makes the operator emit ONE resource per Agent: the serving HTTPRoute,
+  # into the run namespace, attached to the Gateway named below. It emits no
+  # AgentgatewayPolicy and no AgentgatewayBackend, because the policy compiler
+  # does not exist -- so turning this on publishes a PATH to each agent and
+  # enforces no budget, no rate limit, no authentication and no tool allowlist.
+  # The Agent still carries GovernanceSkipped, with reason PolicyCompilerAbsent.
+  #
+  # The Gateway API CRDs must be installed: with this true and them absent the
+  # operator refuses to start rather than reporting everything is fine. The
+  # chart does not install them and neither does it ship a Gateway (A1).
   enabled: false
+  # The Gateway an emitted route's parentRef names. Fixed here because the
+  # route-authoring admission policy must know it before the Gateway exists.
+  #
+  # The LISTENER is not configurable: an emitted route always attaches to the
+  # listener named `http` (design 07 A5.3), because nothing in this chart renders
+  # a Gateway and there is no value to read one from. Name your listener
+  # something else and every route reports `NoMatchingParent`, every request
+  # 404s, and the Agent still says Ready -- the operator does not read route
+  # status. Said here because nothing else would say it.
   name: assayd
   # The namespace the Gateway object lives in, which is NOT the namespace the
   # operator runs in. Design 03 3.2 puts gateway-scoped resources in "the
@@ -107,6 +129,24 @@ gateway:
   # operator runs in `assayd-system`, so this default must not be read as
   # "wherever you helm-installed to".
   namespace: ""
+
+  # The suffix appended to `<agent>.<agent-namespace>` to form the hostname the
+  # emitted serving route matches. NO DESIGN SETTLES THIS: design 03 3.2 fixes
+  # where the route lives and what names the object and says nothing about the
+  # host it matches, so this is assayd's choice and it is configurable rather
+  # than presented as the design's.
+  #
+  # It is a ROUTING KEY, matched against the request's Host header -- not an
+  # address. Nothing in this chart creates DNS for it, so reaching an agent by
+  # this name from outside the cluster needs a record an administrator provides.
+  # `.internal` is ICANN-reserved for private use, so it cannot collide with a
+  # name anyone can register.
+  #
+  # Set here rather than left to the binary's own default, and the template
+  # renders the flag only when this is non-empty -- so an overlay that replaces
+  # the whole `gateway:` map falls back to the operator's compiled-in default
+  # instead of passing it an empty string.
+  hostnameSuffix: assayd.internal
 
 # Design 07 A5.9: the identities permitted to write the reserved assayd.dev
 # namespace labels. The operator's own ServiceAccount is always permitted;

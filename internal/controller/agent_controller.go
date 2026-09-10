@@ -30,6 +30,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -38,6 +39,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 	"github.com/Quinyte/assayd/internal/revision"
@@ -106,6 +109,11 @@ type AgentReconciler struct {
 	// gateway address, and in time the KG and task-store coordinates. Operator
 	// configuration, so one cluster has one answer (A65).
 	InjectedEnv InjectedEnvConfig
+	// Gateway is `gateway.enabled` and the Gateway a serving route attaches to
+	// (design 03 §3.1: declared, never discovered). Zero value — disabled — is
+	// what P1 ships, and NewAgentReconciler refuses an enabled one that names no
+	// Gateway.
+	Gateway GatewayConfig
 
 	installMu  sync.Mutex
 	installUID string
@@ -118,7 +126,8 @@ type AgentReconciler struct {
 // wiring a manager cannot silently decide ADR-0006's fate by omission.
 func NewAgentReconciler(c client.Client, reader client.Reader, scheme *runtime.Scheme,
 	operatorNamespace string, evalSuiteInstalled func() bool,
-	labelAuthority func(context.Context) (bool, error), injected InjectedEnvConfig) (*AgentReconciler, error) {
+	labelAuthority func(context.Context) (bool, error), injected InjectedEnvConfig,
+	gateway GatewayConfig) (*AgentReconciler, error) {
 	switch {
 	case c == nil:
 		return nil, fmt.Errorf("agent reconciler: client is required")
@@ -138,10 +147,23 @@ func NewAgentReconciler(c client.Client, reader client.Reader, scheme *runtime.S
 		return nil, fmt.Errorf("agent reconciler: labelAuthority is required — without design 07 A5.9's " +
 			"admission policies the assayd.dev namespace labels are forgeable, and whether they are " +
 			"installed must be checked rather than assumed")
+	case gateway.Enabled && gateway.Name == "":
+		return nil, fmt.Errorf("agent reconciler: --gateway-enabled is set and --gateway-name is empty; " +
+			"a route's parentRef must name the Gateway it attaches to, and design 07 A5.9's admission " +
+			"policy reserves authorship by comparing that very name")
+	case gateway.Enabled && gateway.Namespace == "":
+		return nil, fmt.Errorf("agent reconciler: --gateway-enabled is set and --gateway-namespace is " +
+			"empty. It is NOT the operator's namespace: design 07 A6.2 measured the route reservation " +
+			"failing open — silently, in the permissive direction — when the two were conflated, so " +
+			"there is no safe default to infer here")
+	case gateway.Enabled && gateway.HostnameSuffix == "":
+		return nil, fmt.Errorf("agent reconciler: --gateway-enabled is set and --gateway-hostname-suffix " +
+			"is empty; a route with no hostname matches every request on the listener, so every Agent " +
+			"would answer for every other")
 	}
 	return &AgentReconciler{Client: c, Reader: reader, Scheme: scheme, OperatorNamespace: operatorNamespace,
 		EvalSuiteInstalled: evalSuiteInstalled, LabelAuthorityPresent: labelAuthority,
-		InjectedEnv: injected}, nil
+		InjectedEnv: injected, Gateway: gateway}, nil
 }
 
 // installIdentity is the operator namespace's UID, stamped on run namespaces
@@ -174,11 +196,13 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 // then refused it for want of RBAC. The two halves of the design had never both
 // been implemented, so neither half was wrong and the path did not work.
 //
-// Only `httproutes`. The AgentgatewayBackend and AgentgatewayPolicy grants land
-// with the compiler that emits them; granting them now would be standing
-// privilege with no consumer.
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes/status,verbs=get
+// Only `httproutes`, and only the verbs the emitter calls: get, list and watch
+// through the cache, create, update, delete. The AgentgatewayBackend and
+// AgentgatewayPolicy grants land with the compiler that emits them; granting
+// them now would be standing privilege with no consumer — and the same rule
+// removed `patch` and `httproutes/status: get` here (design 07 A6.11), which
+// were granted with A6 and never called: route status is not read.
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;delete
 
 // Services are per revision and share the workload's name shape; the operator
 // creates one with each revision and collects it when that revision leaves the
@@ -296,6 +320,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	r.assessGates(&agent, conds)
 	r.assessSandbox(&agent, conds)
 	r.assessTaskState(&agent, status, conds)
+	r.assessGovernance(conds)
 
 	// A42/A60: everything below goes into the operator-owned run namespace, and
 	// the operator must be able to prove it created that namespace before it
@@ -700,6 +725,49 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			fmt.Sprintf("revision %s is serving", desired))
 	}
 
+	// The route is emitted AFTER the switch above, from status.activeRevision —
+	// the revision that is SERVING, never the desired one. A candidate coming up
+	// must not take the hostname from the revision still answering on it, which
+	// is the whole reason design 02 gives a Service to every revision. With the
+	// gateway declared off this does nothing at all (design 03 §3.1's table).
+	if rerr := r.reconcileServingRoute(ctx, &agent, runNS,
+		status.ActiveRevision, status.ActiveRevisionDigest); rerr != nil {
+		// A route that could not be written means this agent is not reachable
+		// through the Gateway, and on a gateway-enabled install that is not
+		// Ready. What is NOT checked is whether the route was ACCEPTED: design
+		// 03 §3.1 says Ready "requires accepted routes" and the operator does
+		// not read route status, so a route the listener rejects — a hostname
+		// clash, a namespace the selector does not admit — still leaves this
+		// Agent reporting Ready. Stated rather than implied.
+		//
+		// A LOST RACE IS NOT A DEGRADATION. An AlreadyExists from a stale
+		// informer cache, or a Conflict from a concurrent write, resolves on the
+		// next pass; flipping Ready for it would page the on-call for cache lag.
+		// Those return the error so the queue retries with backoff and change no
+		// condition, which is the same treatment ensureService gives the same
+		// races.
+		if !transientRouteWrite(rerr) {
+			msg := rerr.Error()
+			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "RouteApplyFailed", msg)
+			conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "RouteApplyFailed", msg)
+			// Assert Degraded, do not merely set the phase. CondDegraded is owned
+			// and non-sticky, so a path that sets the phase without the condition
+			// actively CLEARS it — and design 10 alerts on the condition, so this
+			// would page nobody while the agent was unreachable. The identical
+			// defect is recorded two hundred lines above, on the
+			// WorkloadUnavailable branch; it was reintroduced here and caught by
+			// the independent review of A6.10.
+			conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "RouteApplyFailed", msg)
+			status.Phase = assaydv1alpha1.PhaseDegraded
+		}
+		status.Conditions = conds.merge(agent.Status.Conditions)
+		status.ObservedGeneration = agent.Generation
+		if err := r.writeStatus(ctx, &agent, status); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, rerr
+	}
+
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation
 	if err := r.writeStatus(ctx, &agent, status); err != nil {
@@ -721,6 +789,11 @@ func (r *AgentReconciler) reportUnreconcilable(ctx context.Context, agent *assay
 	status := agent.Status.DeepCopy()
 	status.Phase = assaydv1alpha1.PhaseDegraded
 	conds := newConditionSet(agent.Generation)
+	// Design 03 §3.1 puts the tier condition on EVERY Agent, and an Agent that
+	// cannot be reconciled is still one. Owned and asserted nowhere else on this
+	// path, it would otherwise be CLEARED here — so an Agent that went degraded
+	// would silently lose the record of which tier it runs in.
+	r.assessGovernance(conds)
 	conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "NoWorkloadSpecified",
 		"neither spec.runtime nor spec.external is set, so there is nothing to reconcile; "+
 			"set exactly one of them")
@@ -739,6 +812,10 @@ func (r *AgentReconciler) reconcileExternal(ctx context.Context, agent *assaydv1
 	conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "ExternalRegistrationUnimplemented",
 		"external agents need OAuth client provisioning (design 06) and card fetch (§3.4), "+
 			"neither of which is implemented; the agent is held rather than reported ready")
+	// Design 03 §3.1 puts GovernanceSkipped on EVERY Agent, not on the ones that
+	// happen to run here. An external agent is the case where an ungoverned tier
+	// matters most: nothing about it is in this cluster except the record.
+	r.assessGovernance(conds)
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation
 	return ctrl.Result{}, r.writeStatus(ctx, agent, status)
@@ -896,6 +973,7 @@ func (r *AgentReconciler) reportUnresolvedSources(ctx context.Context, agent *as
 	r.assessGates(agent, conds)
 	r.assessSandbox(agent, conds)
 	r.assessTaskState(agent, status, conds)
+	r.assessGovernance(conds)
 
 	names := make([]string, 0, len(unresolved))
 	for _, u := range unresolved {
@@ -1468,6 +1546,22 @@ func (r *AgentReconciler) finalize(ctx context.Context, agent *assaydv1alpha1.Ag
 	case err != nil:
 		return ctrl.Result{}, fmt.Errorf("read run namespace %s: %w", runNS, err)
 	case run.DeletionTimestamp.IsZero():
+		// The route goes FIRST, and the order is the point: §3.7 revokes gateway
+		// routes in reverse apply order, so traffic stops arriving before the
+		// workload it was arriving at disappears. It is not a drain — draining
+		// to weight 0 while honouring taskTimeout is still owed, and the TODO
+		// above still names it.
+		//
+		// Guarded on the declared gateway, and not for symmetry: a disabled
+		// install has no reason to carry the Gateway API CRDs, the List would
+		// fail with a no-matching-kind error, and a finalizer that returns an
+		// error never releases — every Agent in the cluster would become
+		// undeletable the moment someone tried.
+		if r.Gateway.Enabled {
+			if err := r.collectRoutes(ctx, agent, runNS, ""); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		owned, err := r.ownedWorkloads(ctx, agent, runNS)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -1546,12 +1640,34 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 		return out
 	})
-	if err := ctrl.NewControllerManagedBy(mgr).
+	agents := ctrl.NewControllerManagedBy(mgr).
 		For(&assaydv1alpha1.Agent{}).
 		Watches(&appsv1.Deployment{}, byAgentLabels).
 		Watches(&corev1.ResourceQuota{}, byNamespace).
-		Watches(&corev1.LimitRange{}, byNamespace).
-		Complete(r); err != nil {
+		Watches(&corev1.LimitRange{}, byNamespace)
+	// Routes are watched only where they exist. Registering the watch
+	// unconditionally would start a cluster-wide informer on a kind a P1
+	// install has no CRD for, and the manager would fail to start — so the
+	// declared-off tier would break the operator outright.
+	//
+	// Declared ON with the CRDs absent is design 03 §3.1's broken-install row,
+	// and this refuses to start rather than reporting it per-Agent. The
+	// GatewayIncompatible=CRDsAbsent condition that row calls for is NOT
+	// implemented; what is implemented is fail-closed and loud, which is the
+	// half of that row that matters, and this comment is where the other half
+	// is owed from.
+	if r.Gateway.Enabled {
+		if _, err := mgr.GetRESTMapper().RESTMapping(
+			schema.GroupKind{Group: gatewayv1.GroupName, Kind: "HTTPRoute"}, "v1"); err != nil {
+			return fmt.Errorf("--gateway-enabled is set and this cluster serves no "+
+				"gateway.networking.k8s.io/v1 HTTPRoute: %w. Install the Gateway API CRDs, or "+
+				"unset gateway.enabled to run the declared-ungoverned tier (design 03 §3.1). "+
+				"Starting without them would emit no route while every Agent reported nothing "+
+				"wrong, which is the fail-open this refuses", err)
+		}
+		agents = agents.Watches(&gatewayv1.HTTPRoute{}, byAgentLabels)
+	}
+	if err := agents.Complete(r); err != nil {
 		return err
 	}
 	// The Namespace-keyed reconciler exists so the Terminating/Deleting handler
