@@ -61,13 +61,7 @@ func TestTheGatewayIsTheOnlyWayIn(t *testing.T) {
 		t.Skip("NetworkPolicy enforcement UNVERIFIED, not passed: " + reason)
 	}
 
-	gwNS := os.Getenv("ASSAYD_E2E_GATEWAY_NS")
-	gwName := os.Getenv("ASSAYD_E2E_GATEWAY_NAME")
-	if gwNS == "" || gwName == "" {
-		t.Fatal("ASSAYD_E2E_GATEWAY_NS/NAME unset; this test needs a real Gateway to be the " +
-			"permitted path, and proving a denial without one would prove only that the " +
-			"agent is unreachable")
-	}
+	gwNS, gwName := requireGateway(t)
 
 	ctx := context.Background()
 	ensureNamespace(t, ctx, "assayd-e2e")

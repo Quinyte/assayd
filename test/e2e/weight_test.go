@@ -6,7 +6,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -47,11 +46,7 @@ func TestWeightZeroActuallyContains(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
 	img := responderImage(t)
-	gwNS, gwName := os.Getenv("ASSAYD_E2E_GATEWAY_NS"), os.Getenv("ASSAYD_E2E_GATEWAY_NAME")
-	if gwNS == "" || gwName == "" {
-		t.Fatal("ASSAYD_E2E_GATEWAY_NS/NAME unset; weights are a gateway mechanism and there " +
-			"is nothing to measure without one")
-	}
+	gwNS, gwName := requireGateway(t)
 	ctx := context.Background()
 	ensureNamespace(t, ctx, "assayd-e2e")
 

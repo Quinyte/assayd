@@ -46,9 +46,9 @@ func TestAnAgentCallsAnMCPToolThroughTheGateway(t *testing.T) {
 		t.Fatal("ASSAYD_E2E_MCP_IMAGE is unset; `make e2e` builds the MCP server and pushes " +
 			"it to the suite's registry")
 	}
-	gwNS, gwName := os.Getenv("ASSAYD_E2E_GATEWAY_NS"), os.Getenv("ASSAYD_E2E_GATEWAY_NAME")
+	gwNS, gwName := requireGateway(t)
 	toolsNS := os.Getenv("ASSAYD_E2E_TOOLS_NS")
-	if gwNS == "" || gwName == "" || toolsNS == "" {
+	if toolsNS == "" {
 		t.Fatal("ASSAYD_E2E_GATEWAY_NS/NAME or ASSAYD_E2E_TOOLS_NS unset; the harness creates " +
 			"the Gateway, its `tools` listener and the namespace that listener admits")
 	}
