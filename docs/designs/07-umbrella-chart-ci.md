@@ -1,6 +1,6 @@
 # Design 07: Umbrella chart, profiles, e2e CI
 
-- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A6 below; A5 (2026-09-03), A6 (2026-09-09) and A6.10 (2026-09-10) not yet critiqued
+- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A6 below; A5 (2026-09-03), A6 (2026-09-09), A6.10 (2026-09-10) and A6.11 (2026-09-11) not yet critiqued
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0002 (rules 5/6), 0012 (ambient profile), NFR-1/3/7/8 · interfaces: every P1 design (it packages them)
 
@@ -383,3 +383,52 @@ ADR-0030 step 3 says: *first author and execute the exact resources; then encode
 - **The stickiness assertion read the map instead of observing `merge()`** — `if !stickyTypes[CondGovernanceSkipped]` compared a map to itself, and **deleting `merge()`'s entire sticky arm left it passing**. That is the ninth-and-tenth test in this repository to pass with its subject deleted, and it was guarding precisely the sentence above about the condition flipping to `False` rather than vanishing. It asserts the transition now, for a normal-true type and an abnormal-true one together.
 
 **Still owed.** The chart ships no Gateway and no agentgateway subchart (A1) — the e2e's Gateway is still the harness's. §3.1's `true → false` transition runs no teardown: with the gateway declared off the operator emits nothing **and sweeps nothing**, so a route left by an install that was once enabled stays until the operator is re-enabled or a human removes it. Route ACCEPTANCE is not read: §3.1 says `Ready` "requires accepted routes" and the operator does not look at route status, so a route the listener rejects still leaves its Agent `Ready`. And `GatewayIncompatible=CRDsAbsent` is owed as the per-Agent form of the refusal above — with the operational cost of the refusal named rather than left to be discovered: it freezes *all* reconciliation and *all* deletion fleet-wide, not only governance. Design 03's §3.1 table has no row for `gateway.enabled: true` and does not carry the `PolicyCompilerAbsent` reason this operator writes; that belongs in design 03 and is not added here, because that document is not this amendment's to edit beyond its Status line. The listener an emitted route attaches to is the hard-coded `http` with no value behind it, and its failure mode is silent (`NoMatchingParent`, 404s, `Ready` unaffected) — `values.yaml` says so beside `gateway.name` rather than the chart pretending to configure it.
+
+### A6.11 (2026-09-11) — the second review of A6.10: the route took its port from the wrong revision, and three tests could not fail
+
+A second independent review of A6.10 returned **REVISE**: two blockers, three majors, six minors. It is recorded as its own amendment rather than folded into A6.10, because A6.10 already records the first review and a record is not rewritten.
+
+**The route's port came from the desired spec; its backend came from the serving revision.** The emitter rendered `backendRef.name` from `status.activeRevision` and `backendRef.port` from `agent.Spec.Runtime`. Those describe different revisions for the whole of every rollout. A port is behaviour surface (ADR-0031), so a port edit mints R2 while R1 keeps answering on its old port, and `ensureService` renders only the desired revision's Service, so R1's Service never learns the new port. If R2 never came up — a bad image, a crashloop — the operator rewrote the serving route to `<agent>-R1:<new port>`. R1's Service does not publish that port. Every request through the gateway failed from then on, and nothing said so, because the operator does not read route status. An edit that was never promoted took down the revision that was still healthy. That is the failure the per-revision Service exists to prevent. A pinned rollback across a port change was worse: `ensureService` does not run at all under a pin.
+
+The port is now read off the serving revision's Service, by the port name `a2a` (`servingBackendPort`). A missing Service or a missing port is an error, reported as `RouteApplyFailed` and `Degraded`, and the port is never guessed. `TestAPortChangeThatNeverComesUpDoesNotMoveTheServingRoute` edits the port, leaves R2 unavailable, and asserts that the route still names R1 at the port R1's Service publishes. It then promotes R2 and asserts that the route follows, port included. A unit test asserted the defect as correct: it compared the route's port with the spec while rendering against an unrelated revision. That test is replaced.
+
+**`equalRoute` did not own `backendRefs[].filters` or `backendRefs[].namespace`.** This is the attack the first review caught at `rules[].filters`, one level down. The reviewer reproduced both on unmodified source. A `RequestMirror` on the backendRef survived every reconcile. A `namespace` on the ref also survived: it needs a `ReferenceGrant` nobody wrote, so the agent went off the air while it reported `Ready`. Both fields are compared now. `rules[].retry` and `rules[].sessionPersistence` are not gaps, because the standard-channel CRD strips them.
+
+**Three tests could not fail for the reason they claimed.**
+
+- The `Ready=False` assertion on the route-failure path was nested inside `if Ready != True`. So `Ready=True`, the one outcome the test existed to forbid, skipped the check. Deleting the reconciler's `Ready=False` for that path left the test green. The assertion is now one guard.
+- The drift test planted a mirror and a narrowed match in one update. The writer replaces `spec.rules` wholesale, so either comparison firing corrected both, and deleting either one left the test green. A6.10 said this pair was killed by mutation, and that was false.
+- Nothing pinned the `parentRefs` and `hostnames` comparisons. Deleting either one left the whole envtest suite green.
+
+`TestTheOperatorCorrectsDriftOnEachFieldOfTheRouteItEmitted` replaces the drift test. It has one planted drift per case and six cases. Each case first asserts that the drift survived the API server, because a field the CRD strips would make the case measure nothing. It then asserts that the whole spec returns to what it was.
+
+**Design 03 §3.2's collision check now exists for routes, and it keys on the Agent's identity.** §3.2 says a name collision is "a compile error naming both inputs, never a silent reuse". Before this change, update authority was looser than delete authority. The sweep required the `agent-uid` label to match before it deleted a route. The converge path rewrote whatever it found under the name. Now a route at an Agent's name that carries another Agent's name or namespace labels is refused and left untouched. The refusal names both Agents and is reported as `RouteApplyFailed` and `Degraded`.
+
+A route whose UID differs but whose name and namespace labels match this Agent belongs to a predecessor, and it is adopted. An Agent deleted while the gateway was declared off sweeps nothing, so refusing that route would block a recreated Agent forever behind a route nothing removes. A route with no identity labels is also adopted. None of this is evidence against an attacker, because a label needs only `update` to forge. Forging the labels to differ gets a refusal for an Agent whose run namespace the forger can already write. Forging them to match gets an adoption that overwrites the forger's spec. `TestARouteAnotherAgentOwnsIsRefusedNotTakenOver` and `TestAPredecessorsRouteIsAdoptedNotRefused` pin the two halves.
+
+**Removed, because nothing used them.**
+
+- **RBAC:** `httproutes: patch` and `httproutes/status: get`. A6 granted them and no code ever called them: the emitter uses get, list, watch, create, update and delete, and route status is not read. A6.10 cited "a verb granted ahead of its code is rule 7 in RBAC form" for the agentgateway kinds and left these two in place.
+- **Code:** `ownedRoutes`' no-matching-kind arm. It was meant to let the finalizer release if Gateway API were uninstalled under a running operator, but it could not fire. It runs only with the gateway enabled, which means `SetupWithManager` had already proved the CRD and started a cache-backed informer, and a `List` against a started informer answers from the cache, not the RESTMapper. Nobody has measured what uninstalling Gateway API under a running operator does; that is owed.
+
+**`NOTES.txt` printed a hostname the operator might not use.** It interpolated `gateway.hostnameSuffix` unconditionally, while `operator.yaml` passes `--gateway-hostname-suffix` only when the value is set. An overlay that cleared the value got `<agent>.<ns>.` in the notes while the binary used `assayd.internal`. The notes now fall back to the same default. No test pins this, because `helm template` does not render `NOTES.txt`.
+
+**Added to A6.10's "Still owed".** Design 10 §5 pages on `GatewayIncompatible=CRDsAbsent`, keyed on the reason. A6.10 made a missing CRD a refusal to start instead of that condition, so the page can never fire until the condition exists. The only signal is the operator pod's own CrashLoop.
+
+**Measured by mutation, against a real API server.** Every mutation below compiles, and each one fails exactly the test named:
+
+| Mutation | Finding | Result |
+|---|---|---|
+| Render the route's port from `port(agent.Spec.Runtime)` again | B1 | killed: `TestAPortChangeThatNeverComesUpDoesNotMoveTheServingRoute` |
+| Stop comparing `backendRefs[].filters` | B2 | killed: only the `rules[].backendRefs[].filters` case |
+| Stop comparing `backendRefs[].namespace` | B2 | killed: only the `rules[].backendRefs[].namespace` case |
+| Stop comparing `rules[].filters` | M4 | killed: only the `rules[].filters` case |
+| `equalMatches` always returns true | M4 | killed: only the `rules[].matches` case |
+| `equalParentRef` always returns true | M5 | killed: only the `parentRefs` case |
+| Per-hostname comparison never differs | M5 | killed: only the `hostnames` case |
+| Drop the route-failure path's `Ready=False` | M3 | killed: `TestARouteThatCannotBeWrittenIsALoudDegradation` |
+| Skip `routeCollision` | m9 | killed: `TestARouteAnotherAgentOwnsIsRefusedNotTakenOver` |
+| Refuse on any UID mismatch, predecessors included | m9 | killed: `TestAPredecessorsRouteIsAdoptedNotRefused` |
+
+Each drift mutation failed exactly one of the six cases, and no other. That is the property the single combined test lacked. The first two M5 mutations deleted the body of the comparison loop, which left the loop variable unused, so they **did not compile**. They are INVALID and prove nothing. They were replaced by the two rows above, which compile.
+
