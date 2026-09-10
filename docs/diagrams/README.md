@@ -17,6 +17,8 @@ Gallery artifact: https://claude.ai/code/artifact/90cd9501-5d83-4921-8822-4fce4c
 
 `.webp` variants (1600px) are the embed-sized copies used by the gallery.
 
+Plates `01-architecture` and `07-what-runs` were re-rendered on 2026-09-10 from the prompts below, after the rename; the other six are unchanged from the original set.
+
 ## Validation notes (each plate was opened and checked)
 
 Every plate passed on: label accuracy and spelling, exactly one gold beat, flat colors, grid alignment,

@@ -1,8 +1,8 @@
 # assayd — Architecture v1.0
 
-> **assayd** is a neutral internal codename (previously "graphene" in early drafts — same project; rename before any public release is a tracked task, ADR-0001). A rendered version with figures lives at `docs/architecture.html`; the generated plates live in `docs/diagrams/`.
+> **assayd** is the project's permanent name, not a codename — ADR-0001 Amendment 1 records the rename from the "plume" working title (and "graphene" before that) as **done**, with `assayd.dev` authoritative and the API group. An earlier version of this line still called it "a neutral internal codename … rename before any public release is a tracked task", which was true when written and is now the first thing a reader of this document would get wrong. A rendered version with figures lives at `docs/architecture.html`; the plates live in `docs/diagrams/`.
 
-- **Status**: **design phase complete** · 2026-08-20 — 27/27 component designs approved, each through independent adversarial critique; 26 ADRs recorded. Implementation may begin.
+- **Status**: **superseded in part — read §18 before relying on this document.** Its original header said "design phase complete · 27/27 component designs approved, each through independent adversarial critique; 26 ADRs recorded. Implementation may begin." **Two of those are now false.** Designs **02 and 03** are `critique pending — not approved` by their own Status lines, and there are **32 ADRs**, not 26. ADR-0030 narrowed delivery to one end-to-end slice and demoted five designs to hypotheses. `docs/designs/README.md` arbitrates design status and a design's own Status line beats any summary, including this one.
 - **Thesis**: A radically lightweight, Kubernetes-native agent platform. The domain is a pluggable knowledge graph; everything else is an open standard with a thin binding.
 
 ## 00 · What v1.0 incorporates
@@ -59,6 +59,8 @@ Identity: SPIRE issues SVIDs to agent pods and the gateway; the platform IdP (Zi
 **Color rule in all figures** (see architecture.html): accent = assayd-built; grey = adopted open components. Very little is accent — that is the thesis.
 
 ## 03 · The API surface
+
+> **Designed, not shipped.** One CRD exists today: `Agent` (`config/crd/assayd.dev_agents.yaml`). The rest of this section is the target surface.
 
 | CRD | Declares | Reconciled by |
 |---|---|---|
@@ -414,6 +416,8 @@ kagent answers "how do I run an agent on k8s"; assayd answers "how do I run an a
 
 ## 17 · Weight budget — core tier
 
+> **Designed, not shipped.** The chart deploys one workload today — `assayd-agent-operator`. The budget below is the target.
+
 agent-operator 1 (the only assayd-code pod) · agentgateway 1–2 · SPIRE 2 · Zitadel 1 (on our Postgres) · NATS 1 · Postgres 1 · OpenObserve 1 ≈ **8 pods**.
 
 **Beyond core, as designed**: `plus` adds workflow-operator (a standing controller) + workflow-runtime (which scales 0→N with trigger registrations) — +2, OpenFGA with its co-located ext-authz adapter (+1), model-operator (+1), and optionally Argo and Phoenix. Enterprise adds tenant-operator (+1). Per managed knowledge graph: adapter + backend (2 workload pods). Generative serving adds KServe's `llmisvc` controller at plus tier and **+1 endpoint-picker (EPP) per inference pool** alongside the vLLM serving pods — the same workload category (design 25 A1). A hard-isolated tenant costs ~4–5 pods core-only (NATS, Postgres, Zitadel, OpenObserve and the gateway stay shared), +2–3 at plus.
@@ -431,7 +435,11 @@ Runs anywhere: no LoadBalancer requirement, `local-path` storage, no managed-ide
 
 Discipline: the differentiation only exists once P2/P3 ship — never polish the runtime layer at their expense.
 
-**Status**: all five phases are **designed and approved** (27/27, each critique-passed). Implementation has begun with the test harness: the Agent types, the generated CRD, and an envtest control plane that pins design 02's contract — including the ergonomics rules of ADR-0027 — against a real API server. Per ADR-0022, the P1 slice can begin with designs **02 (agent-operator) + 03 (policy compiler) + 07 (chart/CI) concurrently**; the first milestone is the mechanized demo the CI matrix is specified around — two agents from different SDKs collaborating through the gateway on k3d, fully receipted.
+**Status — read this before the build order above.** An earlier version of this line said all five phases were "designed and approved (27/27, each critique-passed)". **That was false and is withdrawn.** It is the same sentence `CLAUDE.md` records as "the first thing every contributor read", and it survived here after being corrected everywhere else. Design 02's own header says it is not approved; design 03's says critique pending, not approved, do not implement. `docs/designs/README.md` arbitrates, and a design's own Status line beats any summary — including this one.
+
+**The build order above is superseded by ADR-0030 and is kept for context, not as a plan.** The delivery commitment is now **one end-to-end slice**, not five phases: a single-team managed-container Agent, one pinned gateway release, one identity mechanism, carried until one agent completes one A2A task and one MCP tool call through the gateway with a disallowed principal failing against a permitted control. Designs **21, 23, 25, 26, 27** and the unimplemented parts of **11–14** and **18–19** are **hypotheses** — research retained, not prerequisites and not supported promises.
+
+**What actually runs today** is narrower than any section above implies: the agent-operator, its CRD, the chart, an agent that answers through a real gateway, an MCP tool call through it, and a principal refused by identity at it. **The policy compiler does not exist**, so no budget, rate limit, gateway authentication or tool filter is enforced for any agent, and the chart ships no gateway. `CLAUDE.md` and `AGENTS.md` carry the current position in a paragraph maintained for exactly this purpose; `docs/designs/02-agent-crd-operator.md` §5 is the authoritative list of what is stated and not enforced.
 
 ## 19 · Risks held honestly
 
@@ -447,10 +455,11 @@ Discipline: the differentiation only exists once P2/P3 ship — never polish the
 | Research has a shelf life | Notes are dated 2026-08 with re-verify dates; pinned versions (agentgateway minimum, semconv SHA, Unsloth BuiltinTrainer status) will move — open item R1 tracks the gateway version wording |
 | Design ≠ validated | These plans survived adversarial review, not execution. First implementation will test what no review can: agentgateway policy-overlap behavior (research item R1, reproducing test), DBOS-in-Job resume, interpreter determinism |
 | Zitadel AGPL | used unmodified/self-hosted (fine); Keycloak profile exists for allergic enterprises |
+| **agentgateway's steward was never named here** | It is Apache-2.0 and **Linux Foundation-governed, under the Agentic AI Foundation** — co-founded by Anthropic, Block and OpenAI — rather than CNCF. Recorded as a risk **reduced**, not merely a difference: the most load-bearing external dependency in this stack sits in a neutral foundation alongside **MCP**, so the two contracts assayd is least able to replace are governed together. It is also the one dependency not on the CNCF track, and ADR-0015 Amendment 1 makes AAIF assayd's own target for that reason (`research/licensing-open-core-2026-09.md`) |
 
 ## 20 · The decision record
 
-Every claim above is backed by an ADR and a critique-passed design. The corpus lives in the repo: `docs/decisions/` (27 ADRs), `docs/designs/` (27 designs + `reviews/`), `docs/research/` (12 dated notes).
+Most claims above are backed by an ADR and a design that survived adversarial critique — but **"critique-passed" is not "approved", and two central designs are neither**: 02 and 03 both read `critique pending`. Surviving a review is evidence about the prose, not about the component. The corpus lives in the repo: `docs/decisions/` (32 ADRs), `docs/designs/` (27 designs + `reviews/`), `docs/research/` (12 dated notes).
 
 ### ADRs
 
