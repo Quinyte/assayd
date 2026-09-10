@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Quinyte
+# SPDX-License-Identifier: Apache-2.0
+
+# Every path, one owner, until there is a second maintainer (MAINTAINERS.md
+# records single-maintainership as a stated risk rather than an omission).
+# A review is requested automatically on every pull request.
+* @ejs-5
+
+# Called out separately because a change here changes what the project is
+# allowed to promise, not how it behaves.
+/LICENSE            @ejs-5
+/NOTICE             @ejs-5
+/SECURITY.md        @ejs-5
+/GOVERNANCE.md      @ejs-5
+/MAINTAINERS.md     @ejs-5
+/docs/decisions/    @ejs-5
