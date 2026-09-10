@@ -120,8 +120,21 @@ func TestGatewayAPIHasNoSessionPersistenceHere(t *testing.T) {
 	crd.SetGroupVersionKind(schema.GroupVersionKind{
 		Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"})
 	if err := k8s.Get(ctx, client.ObjectKey{Name: "httproutes.gateway.networking.k8s.io"}, &crd); err != nil {
-		t.Skipf("no Gateway API installed: %v", err)
+		// PASSES rather than skips. With no Gateway API installed there is no
+		// HTTPRoute CRD, so `sessionPersistence` cannot exist and the hazard is
+		// definitively unreachable — that is a verified property of the cluster,
+		// not an unverified axis. Skipping here left the guard checked on only one
+		// of the two e2e lanes while reading as though both were covered.
+		t.Logf("no Gateway API on this cluster (%v), so sessionPersistence cannot exist "+
+			"and GEP-1619's rule is unreachable here", err)
+		return
 	}
+
+	// Counted, because "found no sessionPersistence" and "never looked" are the
+	// same green otherwise: every `continue` below is a version this test did not
+	// inspect, and a schema reshape upstream would turn the whole loop into a
+	// vacuous pass.
+	inspected := 0
 	versions, _, _ := unstructured.NestedSlice(crd.Object, "spec", "versions")
 	for _, v := range versions {
 		vm, ok := v.(map[string]any)
@@ -137,15 +150,23 @@ func TestGatewayAPIHasNoSessionPersistenceHere(t *testing.T) {
 			"schema", "openAPIV3Schema", "properties", "spec", "properties",
 			"rules", "items", "properties")
 		if !found {
+			t.Errorf("HTTPRoute %s: could not reach spec.rules[].properties in the CRD schema, "+
+				"so this version was NOT checked for sessionPersistence. The shape moved and "+
+				"this guard would otherwise pass without looking", name)
 			continue
 		}
+		inspected++
 		if _, has := rule["sessionPersistence"]; has {
 			t.Errorf("HTTPRoute %s carries sessionPersistence, so this cluster is on the "+
 				"EXPERIMENTAL channel and GEP-1619's rule is now reachable: persistence "+
 				"outranks weight and is maintained even at weight 0. Design 02's five "+
-				"weight-0 containment paths (02:186, 261, 272, 366, 496) need a second "+
-				"mechanism — route withdrawal — before anything enables it", name)
+				"weight-0 containment paths need a second mechanism — route withdrawal — "+
+				"before anything enables it", name)
 		}
+	}
+	if inspected == 0 {
+		t.Fatal("the HTTPRoute CRD exists but no served version was inspected, so this " +
+			"guard proved nothing about sessionPersistence")
 	}
 }
 
