@@ -16,6 +16,13 @@ import (
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
+// ServicePortName names the one port a revision's Service publishes. It is
+// exported because the emitted route reads the port OFF this Service rather
+// than off the Agent's spec (see servingBackendPort), and a port selected by
+// index instead of by name would silently follow whatever a future second port
+// happened to be ordered first.
+const ServicePortName = "a2a"
+
 // A Service is per REVISION, not per Agent, and that is the whole point.
 //
 // Design 02 §3.2 said "the Service", singular, and nothing created one at all —
@@ -58,7 +65,13 @@ func (r *AgentReconciler) serviceFor(agent *assaydv1alpha1.Agent, runNS, rev str
 			Selector: selector,
 			Type:     corev1.ServiceTypeClusterIP,
 			Ports: []corev1.ServicePort{{
-				Name:     "a2a",
+				Name: ServicePortName,
+				// The port as of the revision that MINTED this Service, which is
+				// this Agent's spec only while `rev` is the desired revision. A
+				// Service is never re-rendered for a revision that has left
+				// `desired`, so R1's Service keeps R1's port after a port edit
+				// mints R2 — which is exactly why the emitted route may not read
+				// the port off the spec (design 07 A6.11).
 				Port:     port(agent.Spec.Runtime),
 				Protocol: corev1.ProtocolTCP,
 				// By NAME, not number. The container port is behaviour surface
@@ -66,7 +79,7 @@ func (r *AgentReconciler) serviceFor(agent *assaydv1alpha1.Agent, runNS, rev str
 				// Deployment and its own Service — but naming the target means the
 				// two halves of one revision can never disagree about it even if a
 				// future change makes them render separately.
-				TargetPort: intstr.FromString("a2a"),
+				TargetPort: intstr.FromString(ServicePortName),
 			}},
 		},
 	}

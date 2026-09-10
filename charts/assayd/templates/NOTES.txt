@@ -64,7 +64,7 @@ grants, and no registration deadline is counted. See `docs/designs/02-*.md` §5.
 
   * an `HTTPRoute` in `assayd-run-<agent-namespace>`, attached to Gateway
     `{{ .Values.gateway.namespace | default .Values.namespace }}/{{ .Values.gateway.name }}` on listener `http`, matching the host
-    `<agent>.<agent-namespace>.{{ .Values.gateway.hostnameSuffix }}` and forwarding to that
+    `<agent>.<agent-namespace>.{{ .Values.gateway.hostnameSuffix | default "assayd.internal" }}` and forwarding to that
     revision's Service
 
 That is a PATH, not a guarantee. The policy compiler does not exist: no

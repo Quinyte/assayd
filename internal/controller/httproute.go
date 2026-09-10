@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -146,6 +146,16 @@ func ServingRouteName(agentName string) (string, error) {
 
 // servingRouteFor renders the route for one Agent, pointing at one revision.
 //
+// `backendPort` is the port that revision's SERVICE publishes, and it is a
+// parameter precisely so that it cannot be read off `agent.Spec`. The spec is
+// the DESIRED revision; the route names the SERVING one. They differ for the
+// whole of every rollout, and a port edit is behaviour surface (ADR-0031), so it
+// mints a new revision while the old one keeps answering on the old port. An
+// earlier version read `port(agent.Spec.Runtime)` here: a port edit whose
+// revision never came up rewrote the serving route to `<agent>-R1:<new port>`,
+// a port R1's Service does not publish, and took down the revision that was
+// still healthy — the exact failure the per-revision Service exists to prevent.
+//
 // **Ownership is a label AND the name is the deletion authority** (design 03
 // §3.2). No ownerReference: the Agent is in another namespace, and a
 // cross-namespace ownerReference is treated as ABSENT with an
@@ -156,14 +166,16 @@ func ServingRouteName(agentName string) (string, error) {
 // reconcile request and what the list selector narrows on. None of the four is
 // evidence: a label needs only `update` to forge, so ownedRoutes additionally
 // requires the immutable NAME to match.
-func (r *AgentReconciler) servingRouteFor(agent *assaydv1alpha1.Agent, runNS, rev, name string) *gatewayv1.HTTPRoute {
+func (r *AgentReconciler) servingRouteFor(
+	agent *assaydv1alpha1.Agent, runNS, rev, name string, servicePort int32,
+) *gatewayv1.HTTPRoute {
 	group := gatewayv1.Group(gatewayv1.GroupName)
 	gwKind := gatewayv1.Kind("Gateway")
 	svcGroup := gatewayv1.Group("")
 	svcKind := gatewayv1.Kind("Service")
 	gwNS := gatewayv1.Namespace(r.Gateway.Namespace)
 	section := gatewayv1.SectionName(GatewayListenerName)
-	backendPort := gatewayv1.PortNumber(port(agent.Spec.Runtime))
+	backendPort := gatewayv1.PortNumber(servicePort)
 	weight := int32(100)
 
 	return &gatewayv1.HTTPRoute{
@@ -277,15 +289,20 @@ func (r *AgentReconciler) reconcileServingRoute(
 func (r *AgentReconciler) ensureServingRoute(
 	ctx context.Context, agent *assaydv1alpha1.Agent, runNS, rev, digest, name string,
 ) error {
-	desired := r.servingRouteFor(agent, runNS, rev, name)
+	svcPort, err := r.servingBackendPort(ctx, agent, runNS, rev)
+	if err != nil {
+		return err
+	}
+	desired := r.servingRouteFor(agent, runNS, rev, name, svcPort)
 	// Corroboration only, exactly as on the workload and the Service: which
 	// projection the revision this route points at was rendered from. Nothing
-	// branches on it — the route carries no collision rule, because its name
-	// carries no revision to collide.
+	// branches on it. The collision rule is on the Agent's IDENTITY instead —
+	// see routeCollision — because the route's name carries no revision to
+	// collide on.
 	desired.Annotations = map[string]string{RevisionDigestAnnotation: digest}
 
 	var existing gatewayv1.HTTPRoute
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	err = r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
 	switch {
 	case apierrors.IsNotFound(err):
 		if cerr := r.Create(ctx, desired); cerr != nil {
@@ -301,6 +318,9 @@ func (r *AgentReconciler) ensureServingRoute(
 		return nil
 	case err != nil:
 		return fmt.Errorf("get route %s in %s: %w", desired.Name, runNS, err)
+	}
+	if cerr := routeCollision(agent, &existing); cerr != nil {
+		return cerr
 	}
 
 	updated := existing.DeepCopy()
@@ -385,7 +405,16 @@ func equalRoute(a, b *gatewayv1.HTTPRoute) bool {
 			return false
 		}
 		for j := range x {
-			if x[j].Name != y[j].Name ||
+			// Filters and Namespace are owned for the reason Filters is owned
+			// one level up, and a first version compared neither. A
+			// RequestMirror on the backendRef copies every request elsewhere
+			// exactly as one on the rule does; a namespace on the ref needs a
+			// ReferenceGrant nobody wrote, so it resolves to nothing and the
+			// agent is off the air while reporting Ready. Both survived every
+			// reconcile until they were compared.
+			if len(x[j].Filters) != len(y[j].Filters) ||
+				!eqPtr(x[j].Namespace, y[j].Namespace) ||
+				x[j].Name != y[j].Name ||
 				!eqPtr(x[j].Port, y[j].Port) ||
 				!eqPtr(x[j].Weight, y[j].Weight) ||
 				!eqPtr(x[j].Kind, y[j].Kind) ||
@@ -449,6 +478,87 @@ func transientRouteWrite(err error) bool {
 // rather than recursing into, for the reason ensureWorkload records at length.
 var errRouteRaceLost = errors.New("a route appeared between the read and the create")
 
+// servingBackendPort is the port the SERVING revision's Service publishes,
+// read off that Service by port name. See servingRouteFor for why it may not be
+// read off the Agent's spec.
+//
+// A Service that is missing, or that publishes no `a2a` port, is an error and
+// not a guess: a route whose port is invented sends traffic to nothing and
+// reports nothing, while an error here reaches RouteApplyFailed and Degraded.
+// It is not transient either. ensureService converges only the DESIRED
+// revision's Service, so a serving revision's Service that somebody deleted
+// is not coming back on its own.
+func (r *AgentReconciler) servingBackendPort(
+	ctx context.Context, agent *assaydv1alpha1.Agent, runNS, rev string,
+) (int32, error) {
+	var svc corev1.Service
+	key := client.ObjectKey{Namespace: runNS, Name: WorkloadName(agent.Name, rev)}
+	if err := r.Get(ctx, key, &svc); err != nil {
+		return 0, fmt.Errorf("read the serving revision's Service %s, whose port the route "+
+			"must use: %w", key, err)
+	}
+	for _, p := range svc.Spec.Ports {
+		if p.Name == ServicePortName {
+			return p.Port, nil
+		}
+	}
+	return 0, fmt.Errorf("the serving revision's Service %s publishes no port named %q, so "+
+		"there is no port a route could name", key, ServicePortName)
+}
+
+// routeCollisionError is design 03 §3.2's collision check for the one resource
+// this operator emits: "a suffix collision is a compile error naming both
+// inputs, never a silent reuse". It is not transient, so the caller reports it
+// as RouteApplyFailed and Degraded rather than retrying quietly.
+type routeCollisionError struct {
+	name, ns                         string
+	ownerNamespace, ownerAgent       string
+	claimantNamespace, claimantAgent string
+}
+
+func (e *routeCollisionError) Error() string {
+	return fmt.Sprintf("route %s/%s is already the serving route of Agent %s/%s, and Agent %s/%s "+
+		"maps to the same name. Two Agents' emitted names collided (design 03 §3.2); the route "+
+		"is left as it is rather than taken over", e.ns, e.name,
+		e.ownerNamespace, e.ownerAgent, e.claimantNamespace, e.claimantAgent)
+}
+
+// routeCollision refuses to converge a route that another Agent owns.
+//
+// The collision §3.2 guards against is between AGENTS, not revisions: the name
+// carries no revision, so the question is whether two different Agents map to
+// one name. EmittedName makes that a 64-bit hash collision, and this is what
+// turns one into a refusal naming both inputs rather than one Agent quietly
+// rewriting another's route. Before it, update authority was looser than
+// delete authority — the sweep required the UID label to match before
+// deleting, while the converge path rewrote whatever it found by name.
+//
+// What counts as ANOTHER Agent is the name and namespace on the labels, not the
+// UID alone, and that is deliberate. A route whose UID differs but whose name
+// and namespace are this Agent's is a PREDECESSOR's: an Agent deleted while the
+// gateway was declared off sweeps nothing (reconcileServingRoute), and one
+// recreated under the same name must adopt that route rather than be wedged by
+// it forever. A route with no identity labels at all is adopted for the same
+// reason. None of this is evidence against an attacker — a label needs only
+// `update` to forge — and it does not claim to be: forging the labels buys a
+// refusal of an Agent whose run namespace the forger can already write, and
+// forging them to match buys an adoption that rewrites the forger's spec.
+func routeCollision(agent *assaydv1alpha1.Agent, existing *gatewayv1.HTTPRoute) error {
+	uid, ok := existing.Labels[LabelAgentUID]
+	if !ok || uid == string(agent.UID) {
+		return nil
+	}
+	ownerAgent, ownerNS := existing.Labels[LabelAgent], existing.Labels[LabelAgentNamespace]
+	if ownerAgent == agent.Name && ownerNS == agent.Namespace {
+		return nil
+	}
+	return &routeCollisionError{
+		name: existing.Name, ns: existing.Namespace,
+		ownerNamespace: ownerNS, ownerAgent: ownerAgent,
+		claimantNamespace: agent.Namespace, claimantAgent: agent.Name,
+	}
+}
+
 // ownedRoutes returns the routes this operator emitted for THIS Agent, by the
 // same authority as ownedWorkloads and ownedServices: the immutable NAME, which
 // a victim object cannot be renamed into, corroborated by the Agent's UID.
@@ -467,15 +577,16 @@ func (r *AgentReconciler) ownedRoutes(
 		client.InNamespace(runNS),
 		client.MatchingLabels{LabelAgent: agent.Name},
 	); err != nil {
-		if meta.IsNoMatchError(err) {
-			// The Gateway API CRDs went away under a running, gateway-enabled
-			// operator. There is no kind, so there are no routes — which is the
-			// honest answer and, more importantly, not an error: the FINALIZER
-			// sweeps through here, and a finalizer that returns an error never
-			// releases, so every Agent in the cluster would become undeletable
-			// the moment somebody uninstalled Gateway API.
-			return nil, nil
-		}
+		// No NoMatch arm. An earlier version returned "no routes" on a
+		// no-matching-kind error, for a finalizer that would otherwise never
+		// release if Gateway API were uninstalled under a running operator. It
+		// could not fire: this runs only when the gateway is enabled, which
+		// means SetupWithManager already proved the CRD and started a
+		// cache-backed informer, and a List against a started informer answers
+		// from the cache rather than from the RESTMapper. Insurance against a
+		// failure it does not catch reads as load-bearing and is not; what
+		// uninstalling Gateway API under a running operator does is unmeasured
+		// (design 07 A6.11).
 		return nil, fmt.Errorf("list routes for %s/%s: %w", agent.Namespace, agent.Name, err)
 	}
 	owned := make([]gatewayv1.HTTPRoute, 0, len(list.Items))

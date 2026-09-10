@@ -196,11 +196,13 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 // then refused it for want of RBAC. The two halves of the design had never both
 // been implemented, so neither half was wrong and the path did not work.
 //
-// Only `httproutes`. The AgentgatewayBackend and AgentgatewayPolicy grants land
-// with the compiler that emits them; granting them now would be standing
-// privilege with no consumer.
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes/status,verbs=get
+// Only `httproutes`, and only the verbs the emitter calls: get, list and watch
+// through the cache, create, update, delete. The AgentgatewayBackend and
+// AgentgatewayPolicy grants land with the compiler that emits them; granting
+// them now would be standing privilege with no consumer — and the same rule
+// removed `patch` and `httproutes/status: get` here (design 07 A6.11), which
+// were granted with A6 and never called: route status is not read.
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;delete
 
 // Services are per revision and share the workload's name shape; the operator
 // creates one with each revision and collects it when that revision leaves the
