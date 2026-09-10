@@ -45,4 +45,12 @@ Release images are signed with keyless [cosign](https://docs.sigstore.dev/) and 
 
 ## Regulatory
 
-assayd is not yet published. EU CRA reporting obligations attach to a product placed on the market; when this repository goes public, this policy is the documented vulnerability-handling process that obligation requires, and this section will name the responsible entity.
+**assayd is stewarded by Quinyte.**
+
+Under the EU Cyber Resilience Act, an **open-source software steward** is an entity that supports a CRA-in-scope free-and-open-source product *for commercial purposes* without placing it on the market itself. That is Quinyte's position for the Apache-2.0 core: stewards are **not** subject to CRA fines, and carry three duties — a documented policy for secure development and vulnerability handling (this document), cooperation with market-surveillance authorities on request, and reporting of actively exploited vulnerabilities and severe incidents on the manufacturer clock (24-hour early warning, 72-hour notification, 14-day final report after a patch ships).
+
+**A commercial offering would be a different category.** ADR-0015 describes paid enterprise modules. If and when any of those is placed on the EU market, Quinyte is a **manufacturer** for that product, not a steward for it, and the heavier obligations attach — conformity assessment, technical documentation and CE marking, in force from 11 December 2027. The free core does not inherit those by being adjacent to it. Nothing is on the market today.
+
+**This is a stated position, not a legal opinion.** Which category attaches turns on facts about how the project is supported and distributed, and it should be confirmed by counsel before the first commercial release rather than inherited from this paragraph.
+
+Reporting obligations began 11 September 2026 and attach on the day a product is placed on the market. This policy exists so that day is not the day the process is invented.
