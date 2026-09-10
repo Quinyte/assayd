@@ -52,7 +52,7 @@ func startManager(t *testing.T) manager.Manager {
 
 	r, err := controller.NewAgentReconciler(mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme(),
 		operatorNamespace, func() bool { return false }, labelAuthorityPresent,
-		controller.InjectedEnvConfig{})
+		controller.InjectedEnvConfig{}, controller.GatewayConfig{})
 	if err != nil {
 		t.Fatalf("build reconciler: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestReconcilerIsSafeUnderGenerationChangedPredicate(t *testing.T) {
 
 	r, err := controller.NewAgentReconciler(mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme(),
 		operatorNamespace, func() bool { return false }, labelAuthorityPresent,
-		controller.InjectedEnvConfig{})
+		controller.InjectedEnvConfig{}, controller.GatewayConfig{})
 	if err != nil {
 		t.Fatalf("build reconciler: %v", err)
 	}

@@ -198,30 +198,20 @@ k3d)  k3d image import "${IMAGE}" -c "${CLUSTER}" ;;
 kind) kind load docker-image "${IMAGE}" --name "${CLUSTER}" ;;
 esac
 
-echo "==> installing the chart"
-# CRDs ship in the chart's crds/ directory, so this installs them too.
-# gateway.namespace is set here and NOT only in the gateway block below, because
-# it is what assayd-gateway-routes compares a route's parentRef against. Render
-# it wrong and the reservation matches nothing and admits any author, silently.
-# It is set on every distro so the rendered policy names the namespace the
-# Gateway would occupy, rather than defaulting to the operator's.
-helm upgrade --install assayd charts/assayd \
-  -f charts/assayd/values-local.yaml \
-  --set operator.image.repository=assayd-operator \
-  --set operator.image.tag="${IMAGE_TAG}" \
-  --set operator.image.pullPolicy=Never \
-  --set gateway.namespace="${GATEWAY_NS}" \
-  --wait --timeout 5m
-
 # A REAL gateway, so that "governance becomes real at the gateway" can be
 # measured rather than asserted.
 #
-# The chart carries no agentgateway subchart (design 07 A1) and `gateway.enabled`
-# gates only the admission policy, so the suite installs the dependency itself.
-# ADR-0030 step 3 says to author and execute the exact resources FIRST and encode
-# the mapping afterwards; this is that first half. The operator does not emit
-# routes yet — design 03 is RE-OPENED — so the route in the gateway test is
-# hand-authored, and the test says so.
+# The chart carries no agentgateway subchart (design 07 A1), so the suite
+# installs the dependency itself. ADR-0030 step 3 says to author and execute the
+# exact resources FIRST and encode the mapping afterwards; the first half was
+# design 07 A6 and the second is now in the operator — the serving route in the
+# gateway test is EMITTED, not hand-authored. The weighted, MCP and authz
+# resources are still hand-authored, because nothing emits those.
+#
+# This runs BEFORE the chart install, and the order is load-bearing: with
+# gateway.enabled=true and no HTTPRoute kind served by the cluster the operator
+# refuses to start (design 03 §3.1's broken-install row, fail-closed), so
+# `helm --wait` would time out on a rollout that can never complete.
 #
 # The listener shape is design 03's, not invented here: `allowedRoutes.namespaces
 # .from: Selector` matching `assayd.dev/run-namespace: "true"`, the label design
@@ -306,15 +296,48 @@ GWEOF
   export ASSAYD_E2E_GATEWAY_NS="${GATEWAY_NS}"
   export ASSAYD_E2E_GATEWAY_NAME="assayd"
   export ASSAYD_E2E_TOOLS_NS="${TOOLS_NS}"
+  # The operator is told the same three things the tests derive the emitted
+  # route's identity from. The suffix is the chart's own default and is passed
+  # explicitly, so a change to that default breaks this line rather than
+  # silently moving every hostname the suite asserts on.
+  GATEWAY_SETTINGS=(--set gateway.enabled=true --set gateway.name=assayd
+    --set gateway.hostnameSuffix=assayd.internal)
+  export ASSAYD_E2E_GATEWAY_HOSTNAME_SUFFIX="assayd.internal"
   echo "    gateway: ${GATEWAY_NS}/assayd, listener admits assayd.dev/run-namespace=true"
 else
   # Every gateway-dependent test SKIPS on this reason and reports its axis
   # unverified, rather than failing. A test that fails because the harness did
   # not install a dependency is reporting on the harness, not on the platform --
   # and the kind lane found exactly that when these tests were k3d-only.
-  export ASSAYD_E2E_GATEWAY_SKIP="no gateway on this lane: hack/e2e.sh installs Gateway API and agentgateway only on k3d (DISTRO=${DISTRO}), so the gateway path is UNVERIFIED here rather than broken"
+  if [ "${DISTRO}" = "k3d" ]; then
+    # Deliberately off, on a lane that could have had one. It reads as a
+    # contradiction otherwise: the old message said "only on k3d (DISTRO=k3d)".
+    export ASSAYD_E2E_GATEWAY_SKIP="no gateway on this run: ASSAYD_E2E_GATEWAY=0 turned the install off deliberately, so the gateway path is UNVERIFIED here rather than broken. gateway.enabled is false, which is the tier TestTheDeclaredUngovernedTierEmitsNoRoute measures"
+  else
+    export ASSAYD_E2E_GATEWAY_SKIP="no gateway on this lane: hack/e2e.sh installs Gateway API and agentgateway only on k3d (DISTRO=${DISTRO}), so the gateway path is UNVERIFIED here rather than broken"
+  fi
   echo "==> gateway tests: NOT RUN on ${DISTRO} — ${ASSAYD_E2E_GATEWAY_SKIP}"
+  # gateway.enabled stays FALSE, which is what P1 ships. That is not a hole in
+  # this run: it is the row design 03 §3.1 calls the declared-ungoverned tier,
+  # and TestTheDeclaredUngovernedTierEmitsNoRoute measures it here.
+  GATEWAY_SETTINGS=()
 fi
+
+echo "==> installing the chart"
+# CRDs ship in the chart's crds/ directory, so this installs them too.
+# gateway.namespace is set here and NOT only with the gateway block above,
+# because it is what assayd-gateway-routes compares a route's parentRef against.
+# Render it wrong and the reservation matches nothing and admits any author,
+# silently. It is set on every distro so the rendered policy names the namespace
+# the Gateway would occupy, rather than defaulting to the operator's.
+helm upgrade --install assayd charts/assayd \
+  -f charts/assayd/values-local.yaml \
+  --set operator.image.repository=assayd-operator \
+  --set operator.image.tag="${IMAGE_TAG}" \
+  --set operator.image.pullPolicy=Never \
+  --set gateway.namespace="${GATEWAY_NS}" \
+  ${GATEWAY_SETTINGS[@]+"${GATEWAY_SETTINGS[@]}"} \
+  --wait --timeout 5m
 
 # The suite asserts it is talking to THIS build, so a stale pod can never again
 # look like a passing run.

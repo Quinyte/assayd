@@ -71,6 +71,13 @@ var ownedTypes = map[assaydv1alpha1.ConditionType]bool{
 	// stale RevisionMaterialUnavailable=True forever — merge()'s default arm
 	// carries an unowned type forward as "another controller's".
 	assaydv1alpha1.CondRevisionMaterialUnavailable: true,
+	// Design 03 §3.1's tier condition. Owned AND sticky: see stickyTypes.
+	assaydv1alpha1.CondGovernanceSkipped: true,
+	// Abnormal-true and owned, NOT sticky: it reports a route this operator
+	// could not write, and its absence means the route was written. The
+	// compiler design 03 describes will write the other apply failures onto
+	// this same type; nothing else does today.
+	assaydv1alpha1.CondPolicyApplyIncomplete: true,
 }
 
 // stickyTypes are owned conditions that must stay in the list once set, flipped
@@ -86,6 +93,13 @@ var stickyTypes = map[assaydv1alpha1.ConditionType]bool{
 	assaydv1alpha1.CondReady:       true,
 	assaydv1alpha1.CondProgressing: true,
 	assaydv1alpha1.CondGatesPassed: true,
+	// GovernanceSkipped is NORMAL-true and design 03 §3.1 classifies it for the
+	// whole type: `True` is the ordinary state of a declared-ungoverned tier, so
+	// dropping it when it stops applying would erase the record of which tier an
+	// install chose. It flips to False rather than disappearing — which is why
+	// it must not share a type with GatewayIncompatible, an incident whose
+	// absence correctly means "not degraded".
+	assaydv1alpha1.CondGovernanceSkipped: true,
 }
 
 // merge folds this pass's assertions into the existing conditions.
