@@ -631,6 +631,78 @@ func TestOperatorIsToldItsNamespace(t *testing.T) {
 	}
 }
 
+// operatorArgs is the rendered operator container's args, for the tests that
+// pin what the chart tells the binary.
+func operatorArgs(t *testing.T, extra ...string) []string {
+	t.Helper()
+	deps := kindsOf(render(t, extra...), "Deployment")
+	if len(deps) != 1 {
+		t.Fatalf("want one Deployment, got %d", len(deps))
+	}
+	containers, _ := dig(dig(dig(deps[0], "spec"), "template"), "spec")["containers"].([]any)
+	if len(containers) == 0 {
+		t.Fatal("no containers")
+	}
+	c, _ := containers[0].(map[string]any)
+	return toStrings(c["args"])
+}
+
+// The gateway values must REACH the binary, and this is the cheap gate for it.
+//
+// Design 07 A6.10 records a mutation — rendering `--gateway-enabled=false`
+// regardless of the value — that only the k3d e2e lane caught. An e2e lane is
+// the expensive gate and the one a contributor does not run; a value that
+// silently stops reaching the operator would ship green through `make test` and
+// through the kind lane, where `gateway.enabled` is false and the argument's
+// value is unobservable.
+func TestTheGatewayValuesReachTheOperator(t *testing.T) {
+	off := operatorArgs(t)
+	if !contains(off, "--gateway-enabled=false") {
+		t.Errorf("the default install does not tell the operator the gateway is off: %v. P1 ships "+
+			"`gateway.enabled: false` and design 03 §3.1 makes that a declared tier, not an "+
+			"absence — the operator has to be TOLD, or it decides by its own default.", off)
+	}
+
+	on := operatorArgs(t, "--set", "gateway.enabled=true",
+		"--set", "gateway.namespace=somewhere-else",
+		"--set", "gateway.name=gw", "--set", "gateway.hostnameSuffix=example.test")
+	for _, want := range []string{
+		"--gateway-enabled=true",
+		"--gateway-name=gw",
+		"--gateway-namespace=somewhere-else",
+		"--gateway-hostname-suffix=example.test",
+	} {
+		if !contains(on, want) {
+			t.Errorf("the operator is not passed %s: %v", want, on)
+		}
+	}
+	// THE regression this test exists for. Design 07 A6.2 measured the route
+	// reservation failing open — silently, in the permissive direction — because
+	// the Gateway's namespace was conflated with the operator's. The route the
+	// operator authors and the CEL that reserves route authorship must name one
+	// namespace, so a `gateway.namespace` that quietly fell back to
+	// `.Values.namespace` while admission.yaml's $gwNS did not is the same
+	// failure from the other end.
+	if contains(on, "--gateway-namespace=assayd-system") {
+		t.Error("gateway.namespace was set to somewhere-else and the operator was told " +
+			"assayd-system. The Gateway's namespace is not the operator's: A6.2 measured an " +
+			"ordinary identity attaching a route when those two were conflated.")
+	}
+}
+
+// And the fallback, which admission.yaml's `$gwNS` performs identically. A
+// single-namespace install must be unchanged, so an unset value means the
+// namespace the OPERATOR runs in — not the Helm release namespace, which
+// hack/e2e.sh proves is a different thing by installing into `default`.
+func TestAnUnsetGatewayNamespaceFallsBackToTheOperators(t *testing.T) {
+	args := operatorArgs(t, "--set", "gateway.enabled=true", "--set", "namespace=assayd-elsewhere")
+	if !contains(args, "--gateway-namespace=assayd-elsewhere") {
+		t.Errorf("an unset gateway.namespace did not fall back to .Values.namespace: %v. "+
+			"admission.yaml renders `$gwNS` with the same `| default .Values.namespace`, and if "+
+			"the two disagree the reservation guards a namespace no route names.", args)
+	}
+}
+
 // Every rendered document carries apiVersion and kind. `helm template` does
 // not validate that and `helm upgrade` does: a Helm whitespace trim once glued
 // a policy's apiVersion onto the comment line above it, so `helm template`

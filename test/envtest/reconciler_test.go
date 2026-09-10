@@ -70,6 +70,17 @@ func newReconciler(gatesInstalled bool) *controller.AgentReconciler {
 	return newReconcilerWithEnv(gatesInstalled, controller.InjectedEnvConfig{})
 }
 
+// newGatewayReconciler is one told the gateway is declared ON — the row design
+// 03 §3.1 calls "normal". Everything else is newReconciler's.
+func newGatewayReconciler(gwNS, gwName string) *controller.AgentReconciler {
+	r := newReconciler(false)
+	r.Gateway = controller.GatewayConfig{
+		Enabled: true, Name: gwName, Namespace: gwNS,
+		HostnameSuffix: controller.DefaultGatewayHostnameSuffix,
+	}
+	return r
+}
+
 // newReconcilerWithEnv builds one whose injected env contract is set, for the
 // tests that assert what reaches the container (A65).
 func newReconcilerWithEnv(gatesInstalled bool, injected controller.InjectedEnvConfig) *controller.AgentReconciler {

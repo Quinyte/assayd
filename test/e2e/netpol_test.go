@@ -14,11 +14,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/rest"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 	"github.com/Quinyte/assayd/internal/controller"
@@ -100,12 +97,18 @@ func TestTheGatewayIsTheOnlyWayIn(t *testing.T) {
 	applyIngressPolicy(t, ctx, runNS, gwNS, "assayd-system")
 
 	// 1. The permitted control: the gateway still gets through.
-	route := attachRoute(t, ctx, runNS, wl, gwNS, gwName, name+".assayd.test")
+	//
+	// On the OPERATOR'S route, not a hand-authored one. It used to author its
+	// own, which was correct while nothing emitted routes; keeping it now would
+	// leave two routes to one agent, and the one this test measured would not be
+	// the one a real install serves.
+	route := waitForEmittedRoute(t, ctx, name, 2*time.Minute)
 	assertRouteAccepted(t, ctx, route, wl)
+	host := emittedHostname(t, name, "assayd-e2e")
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
 	body := httpInClusterHost(t, ctx, "npgw",
 		fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/assayd-test/echo", gwSvc, gwNS),
-		name+".assayd.test", `{"message":{"parts":[{"text":"through the only way in"}]}}`)
+		host, `{"message":{"parts":[{"text":"through the only way in"}]}}`)
 	if !strings.Contains(body, `"agent":"`+name+`"`) {
 		t.Fatalf("the gateway did not answer while the policy was on, so the policy blocks the "+
 			"path it is supposed to permit: %s", body)
@@ -176,43 +179,6 @@ func assertOperatorRegistersUnderPolicy(t *testing.T, ctx context.Context, img s
 		"the policy blocks the operator's card fetch (design 07 A5.4: a policy that forgets "+
 		"the operator makes every candidate fail registration and looks like a card bug); "+
 		"cards=%+v phase=%q", live.Status.Cards, live.Status.Phase)
-}
-
-// attachRoute authors the HTTPRoute as the OPERATOR, which is the only identity
-// A5.9's admission policy permits, and returns it. The gateway test proves that
-// reservation; here the route is only the permitted path's plumbing.
-func attachRoute(t *testing.T, ctx context.Context, runNS, wl, gwNS, gwName, hostname string) *unstructured.Unstructured {
-	t.Helper()
-	build := func() *unstructured.Unstructured {
-		return &unstructured.Unstructured{Object: map[string]any{
-			"apiVersion": "gateway.networking.k8s.io/v1",
-			"kind":       "HTTPRoute",
-			"metadata":   map[string]any{"name": wl, "namespace": runNS},
-			"spec": map[string]any{
-				"parentRefs": []any{map[string]any{
-					"name": gwName, "namespace": gwNS, "sectionName": "http",
-				}},
-				"hostnames": []any{hostname},
-				"rules": []any{map[string]any{
-					"backendRefs": []any{map[string]any{"name": wl, "port": int64(8080)}},
-				}},
-			},
-		}}
-	}
-	cfg := rest.CopyConfig(restCfg)
-	cfg.Impersonate = rest.ImpersonationConfig{
-		UserName: "system:serviceaccount:assayd-system:assayd-agent-operator"}
-	asOperator, err := client.New(cfg, client.Options{Scheme: k8s.Scheme()})
-	if err != nil {
-		t.Fatalf("impersonating the operator: %v", err)
-	}
-	route := build()
-	_ = asOperator.Delete(ctx, build())
-	if err := asOperator.Create(ctx, route); err != nil {
-		t.Fatalf("author the route as the operator: %v", err)
-	}
-	t.Cleanup(func() { _ = asOperator.Delete(context.Background(), build()) })
-	return route
 }
 
 // applyIngressPolicy hand-authors design 07 A5.4's ingress half into the run
