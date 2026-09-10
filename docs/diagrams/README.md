@@ -17,19 +17,7 @@ Gallery artifact: https://claude.ai/code/artifact/90cd9501-5d83-4921-8822-4fce4c
 
 `.webp` variants (1600px) are the embed-sized copies used by the gallery.
 
-## ⚠ Plates 01 and 07 are STALE — they still say "plume"
-
-`01-architecture` reads **"plume operators"** in the control-plane band; `07-what-runs` reads **"the only plume code"** under `agent-operator`. The prompts below and the table above were corrected at the rename; **the rendered images were not**, and `01-architecture` is embedded in `architecture.html`.
-
-This is the failure ADR-0001 named in advance — a codename baked into something expensive to change. Text is cheap to rename with `sed`; a rendered image is not, which is exactly why the ADR said not to bake it in.
-
-**Regenerating needs a decision, not just a re-run.** These were produced with `nano_banana_pro` under the visualizer plugin's design system, so re-prompting reproduces the style but not deterministically — and there is **no editable source**, only prompts and pixels. Two options, and the second fixes the cause rather than the instance:
-
-1. **Re-prompt the two plates** from the corrected prompts. Fastest; keeps all eight visually consistent; leaves every future edit dependent on an image model.
-2. **Author these two as SVG.** Deterministic, diffable, and renameable by editing text — but breaks visual consistency with the other six until they follow.
-
-Until one is chosen, **do not treat plates 01 and 07 as current**, and prefer `architecture.md` §02 and §17, which say the same things in text and are correct.
-
+Plates `01-architecture` and `07-what-runs` were re-rendered on 2026-09-10 from the prompts below, after the rename; the other six are unchanged from the original set.
 
 ## Validation notes (each plate was opened and checked)
 
