@@ -192,7 +192,9 @@ func waitAvailable(t *testing.T, ctx context.Context, workload string, d time.Du
 const a2aSendMessage = "/message:send"
 
 // sendMessage is a SendMessageRequest with one text part and the fields the
-// proto marks REQUIRED — the responder refuses a body without them. The text
+// proto marks REQUIRED — the responder refuses a body without them. Every
+// helper that POSTs it also sends `A2A-Version: 1.0`: without that header the
+// spec reads a request as 0.3, and the responder refuses it. The text
 // must not contain a single quote: every probe hands the body to curl inside
 // one.
 func sendMessage(text string) string {
@@ -264,7 +266,7 @@ func httpInClusterHost(t *testing.T, ctx context.Context, tag, url, host, postBo
 	cmd := "curl -sS --max-time 20 " + retry + hostFlag + "-o /dev/termination-log " + url
 	if postBody != "" {
 		cmd = "curl -sS --max-time 20 " + retry + hostFlag +
-			"-X POST -H 'Content-Type: application/json' " +
+			"-X POST -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' " +
 			"-d '" + postBody + "' -o /dev/termination-log " + url
 	}
 	name := "probe-" + tag

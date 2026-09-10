@@ -158,11 +158,24 @@ func handler() http.Handler {
 	// So ONE method is real, and nothing else is claimed. What is NOT
 	// implemented: GetTask, ListTasks, CancelTask, streaming (the card says
 	// `streaming: false`), push notifications, the extended card, `tenant`,
-	// `configuration`, and the binding's error mapping — a refusal here is a
+	// `configuration`, any version but 1.0, and the binding's error mapping — a refusal here is a
 	// 400 with a plain JSON body, which a test may rely on for the status and not
 	// for the shape. Every task this returns is already TASK_STATE_COMPLETED,
 	// because echoing is synchronous; a caller asking GetTask for it gets a 404.
 	mux.HandleFunc("POST /message:send", func(w http.ResponseWriter, r *http.Request) {
+		// Version negotiation, which the first version of this handler did not
+		// do — so every request the e2e sent was, by the spec's own rule, a v0.3
+		// request answered with v1.0 shapes. Spec §3.6: a client MUST send
+		// `A2A-Version`, and an agent MUST read an empty value as 0.3 and MUST
+		// answer an unsupported version with VersionNotSupportedError. This agent
+		// speaks 1.0 only, so an absent header is refused along with a wrong one.
+		if v := r.Header.Get("A2A-Version"); v != a2aVersion {
+			if v == "" {
+				v = "0.3 (no A2A-Version header, which the spec reads as 0.3)"
+			}
+			refuse(w, "VersionNotSupportedError: this agent speaks A2A "+a2aVersion+", not "+v)
+			return
+		}
 		var req sendMessageRequest
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 			refuse(w, "the body is not a SendMessageRequest: "+err.Error())
@@ -180,6 +193,9 @@ func handler() http.Handler {
 		case m.MessageID == "":
 			refuse(w, "message.messageId is REQUIRED")
 			return
+		// Stricter than the proto, whose REQUIRED means only "not the default";
+		// the spec defines ROLE_USER as a message "from the client to the
+		// server", and this fixture holds a client to it.
 		case m.Role != "ROLE_USER":
 			refuse(w, fmt.Sprintf("message.role is %q; a message a client sends is ROLE_USER", m.Role))
 			return
@@ -191,6 +207,8 @@ func handler() http.Handler {
 			}
 		}
 		if len(texts) == 0 {
+			// Not a proto rule: `parts` is REQUIRED, and text-only is this agent's
+			// own input mode (`defaultInputModes: [text/plain]`).
 			refuse(w, "message.parts carries no text part, and text is the only mode this agent accepts")
 			return
 		}
@@ -214,7 +232,8 @@ func handler() http.Handler {
 			// revision answered; the gateway URL is REPORTED, never dialled.
 			Metadata: map[string]string{"agent": name, "gateway": gateway},
 		}}
-		w.Header().Set("Content-Type", "application/json")
+		// §11.1: the HTTP+JSON binding SHOULD answer as application/a2a+json.
+		w.Header().Set("Content-Type", a2aContentType)
 		if err := json.NewEncoder(w).Encode(out); err != nil {
 			log.Printf("encode task: %v", err)
 		}
@@ -277,8 +296,15 @@ type artifact struct {
 	Parts      []part `json:"parts"`
 }
 
+// a2aVersion is the only A2A version this agent speaks, and a2aContentType the
+// media type the HTTP+JSON binding answers in.
+const (
+	a2aVersion     = "1.0"
+	a2aContentType = "application/a2a+json"
+)
+
 func refuse(w http.ResponseWriter, why string) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", a2aContentType)
 	w.WriteHeader(http.StatusBadRequest)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": why})
 }

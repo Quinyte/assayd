@@ -112,15 +112,15 @@ func TestItCompletesASendMessageTask(t *testing.T) {
 	srv := httptest.NewServer(handler())
 	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/message:send", "application/json", strings.NewReader(
-		`{"message":{"messageId":"m-1","contextId":"c-1","role":"ROLE_USER","parts":[{"text":"hello"}]}}`))
-	if err != nil {
-		t.Fatalf("send message: %v", err)
-	}
+	resp := sendV1(t, srv.URL,
+		`{"message":{"messageId":"m-1","contextId":"c-1","role":"ROLE_USER","parts":[{"text":"hello"}]}}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("SendMessage answered %d: %s", resp.StatusCode, b)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/a2a+json" {
+		t.Errorf("SendMessage answered as %q; the HTTP+JSON binding answers as application/a2a+json", ct)
 	}
 
 	var out struct {
@@ -170,6 +170,87 @@ func TestItCompletesASendMessageTask(t *testing.T) {
 	}
 }
 
+// sendV1 posts a SendMessageRequest the way an A2A 1.0 client must: with
+// `A2A-Version: 1.0`, without which the spec reads the request as 0.3.
+func sendV1(t *testing.T, base, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, base+"/message:send", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("A2A-Version", "1.0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("send message: %v", err)
+	}
+	return resp
+}
+
+// decodeTask reads the task out of a SendMessageResponse.
+func decodeTask(t *testing.T, resp *http.Response) (id, text string) {
+	t.Helper()
+	defer resp.Body.Close()
+	var out struct {
+		Task *struct {
+			ID        string
+			Artifacts []struct{ Parts []struct{ Text string } }
+		}
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Task == nil ||
+		len(out.Task.Artifacts) == 0 || len(out.Task.Artifacts[0].Parts) == 0 {
+		t.Fatalf("not a SendMessageResponse carrying a task with an artifact: err=%v %+v", err, out)
+	}
+	return out.Task.ID, out.Task.Artifacts[0].Parts[0].Text
+}
+
+// A task id is minted per task. Two tasks sharing one would make a later
+// GetTask — or any receipt keyed on the id — answer for the wrong one.
+func TestEachTaskGetsItsOwnID(t *testing.T) {
+	srv := httptest.NewServer(handler())
+	defer srv.Close()
+	body := `{"message":{"messageId":"m","role":"ROLE_USER","parts":[{"text":"x"}]}}`
+	a, _ := decodeTask(t, sendV1(t, srv.URL, body))
+	b, _ := decodeTask(t, sendV1(t, srv.URL, body))
+	if a == "" || a == b {
+		t.Errorf("two tasks got ids %q and %q; each task's id must be its own", a, b)
+	}
+}
+
+// Every text part is answered, not only the first.
+func TestEveryTextPartIsEchoed(t *testing.T) {
+	srv := httptest.NewServer(handler())
+	defer srv.Close()
+	_, text := decodeTask(t, sendV1(t, srv.URL,
+		`{"message":{"messageId":"m","role":"ROLE_USER","parts":[{"text":"one"},{"text":"two"}]}}`))
+	if text != "echo: one two" {
+		t.Errorf("a two-part message was answered %q, want %q", text, "echo: one two")
+	}
+}
+
+// Version negotiation (spec §3.6): an agent reads an absent A2A-Version as 0.3
+// and refuses a version it does not speak. This one speaks 1.0 only.
+func TestItRefusesAnyVersionButOnePointZero(t *testing.T) {
+	srv := httptest.NewServer(handler())
+	defer srv.Close()
+	body := `{"message":{"messageId":"m","role":"ROLE_USER","parts":[{"text":"x"}]}}`
+	for _, v := range []string{"", "0.3", "9.9"} {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/message:send", strings.NewReader(body))
+		if v != "" {
+			req.Header.Set("A2A-Version", v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(b), "VersionNotSupportedError") {
+			t.Errorf("A2A-Version %q was answered %d %s; want 400 VersionNotSupportedError", v, resp.StatusCode, b)
+		}
+	}
+}
+
 // What is not a SendMessageRequest is refused — including the body every e2e in
 // this repository sent before the method was real. A fixture that accepted it
 // would let a caller that is not speaking A2A pass every assertion made against
@@ -187,10 +268,7 @@ func TestItRefusesWhatIsNotASendMessageRequest(t *testing.T) {
 		{"not JSON", `hello`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := http.Post(srv.URL+"/message:send", "application/json", strings.NewReader(tc.body))
-			if err != nil {
-				t.Fatalf("post: %v", err)
-			}
+			resp := sendV1(t, srv.URL, tc.body)
 			resp.Body.Close()
 			if resp.StatusCode != http.StatusBadRequest {
 				t.Errorf("%s was answered %d, want 400", tc.name, resp.StatusCode)
