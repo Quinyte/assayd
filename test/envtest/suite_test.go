@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,9 +32,27 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 	"github.com/Quinyte/assayd/internal/controller"
 )
+
+// gatewayAPICRDDir returns the standard Gateway API CRD directory inside the
+// module cache, for the version go.mod pins. `go list` is asked rather than the
+// module cache path being assembled by hand, so the answer cannot disagree with
+// the version the binary is built from.
+func gatewayAPICRDDir() (string, error) {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "sigs.k8s.io/gateway-api").Output()
+	if err != nil {
+		return "", fmt.Errorf("go list sigs.k8s.io/gateway-api: %w", err)
+	}
+	dir := filepath.Join(strings.TrimSpace(string(out)), "config", "crd", "standard")
+	if _, err := os.Stat(dir); err != nil {
+		return "", fmt.Errorf("the pinned gateway-api module has no %s: %w", dir, err)
+	}
+	return dir, nil
+}
 
 var (
 	cfg    *rest.Config
@@ -53,13 +72,25 @@ func TestMain(m *testing.M) {
 	must(clientgoscheme.AddToScheme(scheme), "register core scheme")
 	must(apiextensionsv1.AddToScheme(scheme), "register apiextensions scheme")
 	must(assaydv1alpha1.AddToScheme(scheme), "register assayd scheme")
+	must(gatewayv1.Install(scheme), "register the Gateway API scheme")
+
+	// The Gateway API CRDs come from the PINNED module in go.mod, not from a
+	// copy in this repository. A vendored copy would be a fixture: it could
+	// drift from the version the operator compiles against and from the version
+	// hack/e2e.sh installs, and a route this suite accepted would then be one a
+	// real cluster rejects. ErrorIfCRDPathMissing below makes a bad path a
+	// failure rather than a silently gateway-less control plane.
+	gwCRDs, err := gatewayAPICRDDir()
+	must(err, "locate the Gateway API CRDs")
 
 	env := &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd")},
+		CRDDirectoryPaths: []string{
+			filepath.Join("..", "..", "config", "crd"),
+			gwCRDs,
+		},
 		ErrorIfCRDPathMissing: true,
 	}
 
-	var err error
 	cfg, err = env.Start()
 	must(err, "start control plane")
 

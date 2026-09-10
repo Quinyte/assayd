@@ -69,6 +69,18 @@ spec:
             - --leader-elect={{ .Values.operator.leaderElection }}
             - --operator-namespace=$(POD_NAMESPACE)
             - --eval-suite-check-interval={{ .Values.operator.evalSuiteCheckInterval }}
+            # Design 03 3.1: whether anything is emitted at the gateway is
+            # DECLARED, never discovered. gateway.namespace defaults to the
+            # operator's exactly as admission.yaml's $gwNS does, so the route the
+            # operator authors and the policy that reserves route authorship
+            # can never name two different namespaces -- which is the failure
+            # design 07 A6.2 measured, silent and in the permissive direction.
+            - --gateway-enabled={{ .Values.gateway.enabled }}
+            - --gateway-name={{ .Values.gateway.name }}
+            - --gateway-namespace={{ .Values.gateway.namespace | default .Values.namespace }}
+            {{- with .Values.gateway.hostnameSuffix }}
+            - --gateway-hostname-suffix={{ . }}
+            {{- end }}
             - --health-probe-bind-address=:8081
             {{- if .Values.operator.metrics.enabled }}
             - --metrics-bind-address=:{{ .Values.operator.metrics.port }}

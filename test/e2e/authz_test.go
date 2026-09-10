@@ -33,12 +33,19 @@ import (
 // the strength of who it is**, while a permitted principal is served on the
 // same route in the same second.
 //
-// **Hand-authored, per ADR-0030, and not the compiler.** Design 03 is RE-OPENED
-// and its policy compiler does not exist; nothing in assayd emits an
-// AgentgatewayPolicy, and after this test nothing still does. What this
-// establishes is that the mapping the compiler will have to produce is one the
-// gateway actually honours — the 401/403 split included — so it can be written
-// against a measurement rather than a schema reading.
+// **The POLICY is hand-authored, per ADR-0030, and is not the compiler.** Design
+// 03 is not approved — its own Status line says do not implement it — and its
+// policy compiler does not exist; nothing in assayd emits an AgentgatewayPolicy,
+// and after this test nothing still does. What this establishes is that the
+// mapping the compiler will have to produce is one the gateway actually honours
+// — the 401/403 split included — so it can be written against a measurement
+// rather than a schema reading.
+//
+// The ROUTE the policy targets is no longer hand-authored: it is the one the
+// operator emits (design 07 A6.10), and it had to become that. A second route to
+// the same agent would sit beside the emitted one carrying no policy at all, so
+// the 401 and the 403 below would be measured on one route while an
+// unauthenticated path to the same workload stayed open one hostname over.
 func TestTheGatewayRefusesADisallowedPrincipal(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
@@ -67,10 +74,17 @@ func TestTheGatewayRefusesADisallowedPrincipal(t *testing.T) {
 	wl := controller.WorkloadName(name, rev)
 	waitAvailable(t, ctx, wl, 4*time.Minute)
 	runNS := controller.RunNamespaceName("assayd-e2e")
-	host := name + ".assayd.test"
 
-	route := attachRoute(t, ctx, runNS, wl, gwNS, gwName, host)
+	// The policy targets the route the OPERATOR emitted, not one this test
+	// authored. That is not tidiness: a hand-authored second route to the same
+	// agent would sit beside the emitted one carrying no policy at all, so the
+	// 401 and 403 below would be measured on a route while an unauthenticated
+	// path to the same workload stayed open one hostname over. The policy is
+	// still hand-authored — nothing in assayd emits an AgentgatewayPolicy, and
+	// after this test nothing still does.
+	route := waitForEmittedRoute(t, ctx, name, 2*time.Minute)
 	assertRouteAccepted(t, ctx, route, wl)
+	host := emittedHostname(t, name, "assayd-e2e")
 
 	// Two principals, distinguished only by the metadata their credential
 	// carries. Same route, same agent, same moment — so a difference in outcome
@@ -80,7 +94,7 @@ func TestTheGatewayRefusesADisallowedPrincipal(t *testing.T) {
 		permittedKey: "trusted",
 		refusedKey:   "rogue",
 	})
-	policy := applyAuthzPolicy(t, ctx, runNS, wl, `apiKey.group == "trusted"`)
+	policy := applyAuthzPolicy(t, ctx, runNS, route.GetName(), `apiKey.group == "trusted"`)
 	assertPolicyAttached(t, ctx, policy)
 
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
