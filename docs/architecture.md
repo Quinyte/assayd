@@ -46,6 +46,8 @@ Every design decision passes six rules. This is the product: competitors ship pl
 
 ## 02 · System overview
 
+> **Designed, not shipped — and three sentences below are false today.** One operator exists, `agent-operator`; there is no workflow-, model- or tenant-operator. No policy is compiled from the Agent CR: the policy compiler does not exist. Registration today reads the card only — directory publish and identity issuance are not implemented — and when `gateway.enabled` is set the operator emits the Agent's serving `HTTPRoute` (the first compiler slice) and nothing else. The chart deploys neither NATS nor Postgres.
+
 Three planes:
 
 - **Control plane** (GitOps): Git repo of CRs → Argo CD/Flux → **three core assayd operators** (agent, workflow, model) — plus the enterprise tenant-operator — which reconcile CRs into bindings — routes, identity, gates. The CLI is sugar over CRs.
@@ -129,6 +131,8 @@ spec:
 
 ## 04 · The KnowledgeGraph contract — the differentiator
 
+> **Designed, not shipped.** No `KnowledgeGraph` CRD exists; `Agent` is the only CRD (§03).
+
 **The domain is data, not code.** New vertical = new `KnowledgeGraph` CR, everything else reused.
 
 ```yaml
@@ -155,6 +159,8 @@ Three properties nobody else has:
 
 ## 05 · Communication & durability
 
+> **Designed, not shipped.** The chart deploys none of NATS, DBOS or Argo, and the `plus` tier refuses to render by design (`charts/assayd/templates/_helpers.tpl`). In the exposure table only A2A through the gateway is proven today; read the other rows as roadmap.
+
 "Workflow engine" is three jobs; conflating them is how platforms get heavy:
 
 | Job | Binding | Why · weight |
@@ -177,6 +183,8 @@ Symmetry rule: consume open standards **and publish over the same ones**. A decl
 | `App` → bundle | product surface | curated versioned offering |
 
 ## 06 · Security plane — zero-trust, no mesh
+
+> **Designed, not shipped.** None of these bindings runs today: no SPIRE, Zitadel or OpenFGA is deployed; no policy is compiled; the sandbox CRD is not bound, so every sandboxed agent downgrades (`SandboxDowngraded`); no NetworkPolicy is materialized; and no image or card signature is verified — the chart's two admission policies reserve namespace labels and gateway routes, nothing else.
 
 **Guarantees live outside the agent.**
 
@@ -222,6 +230,8 @@ Most HIPAA technical safeguards are emergent: per-action attribution (on-behalf-
 
 ## 07 · Harness & observability
 
+> **Designed, not shipped.** No receipt pipeline, OTel export, OpenObserve or alert rules exist in the repository. The clause below saying alert rules are "shipped in the chart, each fixture-tested in CI" is false today and stands only as the target.
+
 - **Sessions & receipts**: every A2A task through the gateway recorded to JetStream — request/response, tool calls, model calls, cost, identity chain. Replayable. One stream = audit log + debugging substrate + eval-data collector.
 - **Traces**: OTel **GenAI semantic conventions**, adopted now, pinned to a commit SHA (see below — the conventions moved to an unreleased repo, so there is no version number to pin). Gateway emits spans per hop (even uninstrumented agents get traces); OpenLLMetry adds interior spans.
 - **Backend**: **OpenObserve** (single binary: metrics+logs+traces). **Phoenix** optional in plus.
@@ -230,6 +240,8 @@ Most HIPAA technical safeguards are emergent: per-action attribution (on-behalf-
 **As designed (ADR-0021, design 04)**: receipts derive from the gateway's own OTel export — one telemetry path, fanned out in the tap, so audit and observability cannot drift. `receipt_id` is **derived from the span** (UUIDv5 over trace+span) so `Nats-Msg-Id` dedup survives retries; delivery is *effectively-once within a sized, alarmed horizon*. Streams are **per-tenant, in the tenant's NATS account**. A **mandatory, non-configurable credential scrub** runs at every capture level. Receipt discrimination is **transport-derived** — only the gateway-SVID export listener mints receipts, so an agent emitting gateway-lookalike spans produces none. The semconv "pin" is a **commit SHA** of the unreleased `semantic-conventions-genai` repo, absorbed solely in the transform.
 
 ## 08 · Evals — semantic admission
+
+> **Designed, not shipped.** No `EvalSuite` CRD and no gate controller exist. Today a revision with declared gates holds at zero traffic indefinitely — `GatesPassed=False`, reason `GateControllerUnimplemented` — never promoted ungated, and never promoted at all.
 
 Agents and models **earn traffic**. Rollout: new version → HELD (no traffic) → Eval Job (DeepEval/Inspect) fed by the ontology-derived golden set + replayed production sessions → gate (score ≥ threshold) → pass: gateway-weighted canary → 100%; fail: rollback with the report in CR status + PR. Production traffic continuously becomes regression data.
 
@@ -248,6 +260,8 @@ spec:
 
 ## 09 · Drift & self-healing
 
+> **Designed, not shipped.** No drift detector or remediation controller exists; `ModelDrifted` is a declared condition type that nothing sets.
+
 Detectors write conditions; controllers act; humans see semantic health in `kubectl get agents`.
 
 | Drift | Detector | Action |
@@ -260,6 +274,8 @@ Detectors write conditions; controllers act; humans see semantic health in `kube
 **As designed (ADR-0025, design 20)**: every automated remediation requires **all four** guardrails — a deploy that **correlates in time** (otherwise the world changed, not the code, and rollback would be superstition), a **rate limit** of one action per target per day (flapping pages instead of looping), a **receipt** under `principal: drift:<controller>`, and an honored **manual-override** annotation. The same detector that set a condition clears it. Baselines **ratchet one way** (explicit rebaseline only). New installs run **alert-only for 14 days** — self-healing earns trust with evidence first. On core tier, rollback targets the last *serving* revision and the escalation says so: "last-serving, not last-proven".
 
 ## 10 · ModelHub (plus tier)
+
+> **Designed, not shipped.** No `Model` CRD and no model-operator exist.
 
 `Model` CR: train → package → eval-gate → serve; same EvalSuite gate as agents.
 
@@ -274,6 +290,8 @@ Detectors write conditions; controllers act; humans see semantic health in `kube
 **As designed (ADR-0026 + design 25 A1/A2)**: weighted model shifting uses Gateway API `backendRefs` weights, **not** `AgentgatewayModel`, which ADR-0028 records as experimental and disabled by default. KServe **split its API at v0.17**, and the generative path — `LLMInferenceService` — **is built on llm-d**. So the honest statement is that assayd binds llm-d *transitively* through KServe **for generative serving** (the classic `InferenceService` path does not involve it), not "only for one giant model" as v0.1 had it. Generative pools bind at the gateway as a **GAIE `InferencePool`** (OSS in agentgateway), which means KV-cache-aware routing and prefill/decode disaggregation arrive by binding a contract rather than building anything — while budgets, receipts, authz and egress allowlists stay exactly where they always are. Because llm-d is Sandbox-stage and moving fast, assayd pins the two **contracts** (`LLMInferenceService`, `InferencePool`) and never llm-d internals. **KServe runs in RawDeployment mode — a stated constraint, not a default.** It is what lets KServe run without Knative or Istio, which is the only reason binding it respects the pod budget (rule 5) and the meshless core (ADR-0012); Serverless mode is forbidden and CI asserts no Knative CRDs are required. Kits are the **only serving source** (signed, digest-pinned), resolved by a chart-shipped `ClusterStorageContainer` from `kit://` URIs. The shadow InferenceService gets a **candidate-only route admitting just the eval run principal**; general Backend registration happens only on pass. The operator **writes `internal/<model>` pricing rows** at serve time so agent policy compilation can never fail on an unpriced in-cluster model. Traffic shifts at the gateway via virtual models — never a second canary system. Models gate through design 16's flow with **their own metric family** (§08).
 
 ## 11 · Developer experience — the golden path
+
+> **Designed, not shipped.** No CLI exists in the repository; none of the commands below can be run.
 
 Target: **empty directory → agent answering from a KG on a local cluster in under 15 minutes.** Lifecycle = five commands: `init → dev → invoke → build → deploy`.
 
@@ -334,6 +352,8 @@ One `Connector` CR declares a system-of-record with three optional facets; crede
 
 ## 13 · Graph engineering
 
+> **Designed, not shipped.** No `KnowledgeGraph` CRD, no CLI and no provider adapter exist.
+
 ### The ontology document
 
 One reviewed YAML artifact per domain — entities, relations, invariants, probes. Everything derives from it.
@@ -372,6 +392,8 @@ Snapshot per change (namespace-per-version); `assayd kg diff v11 v12`; re-embedd
 
 ## 14 · Loop engineering
 
+> **Designed, not shipped.** No lineage, approval-voucher or kill-switch code exists in the operator.
+
 Two loops, separated: the **inner loop** (user-owned scaffold) and the **governance ring** (platform-enforced at the data plane — holds for black-box agents).
 
 - **Inner loop** (~100 lines, yours): assemble (card + KG bundle + skills) → act (via gateway) → observe → stop-check. Skills = versioned, governed instruction assets loaded per task by a router. Named termination reasons: `goal_met · budget · max_depth · timeout · interrupted`. Receipt per iteration.
@@ -380,6 +402,8 @@ Two loops, separated: the **inner loop** (user-owned scaffold) and the **governa
 **As designed (ADR-0025, design 22)**: lineage enforcement is **stateless in-proxy CEL** over a gateway-owned header — no cycle-detection service, no shared state; the lineage *is* the state, and client-supplied values are stripped. Default is **any-revisit-denied**, with opt-in occurrence-counted reentry (`allowReentry`/`maxVisits`) for legitimate callback patterns. Approvals are **durable typed pendings**: the interceptor records the request and returns a retryable `APPROVAL_PENDING`; on approval it issues a **single-use voucher the gateway consumes** — the operator binary never sits in the tool-call data path. Kill is a **sticky guard state**, exited only by explicit revive.
 
 ## 15 · Extension model — the pattern charter
+
+> **Designed, not shipped.** None of the provider slots below exists as an interface in code, and no `Pack` CRD or CLI exists.
 
 **Two planes, hard boundary**: slow plane = engine (operators, gateway binding, substrate — ships rarely); fast plane = **technique plane** (ontologies, skills, policies, filters, drivers, templates — versioned data artifacts). New technique = artifact publish, never a platform release.
 
@@ -394,6 +418,8 @@ Two loops, separated: the **inner loop** (user-owned scaffold) and the **governa
 **As designed (ADR-0024, design 18)**: `pack/v1` has a **closed facet catalog** (filters, skills, templates, patterns, readers, catalog, runners, dashboards, signals) — a new facet kind is a contract revision, which is what keeps packs data. **Exactly one has been granted**: ADR-0026 approves a tenth, `profile`, for compliance bundles — named as an exception rather than absorbed silently. Pack CRs are cluster-scoped; trust roots in a **signer allowlist** with provenance displayed wherever pack content is offered. Because multiple sources can now contribute to one gateway concern, filters carry **priority bands** and merge deterministically — platform and compliance bands outrank pack bands by construction, and a same-field collision is a hard install error. Pack filters route **through the policy compiler**, so a pack cannot become a gateway-config backdoor.
 
 ## 16 · Competitive positioning
+
+> **The assayd column states the target, not what ships.** Only the gateway-path row is true today; eval-as-admission, session replay, drift controllers and the Postgres+NATS substrate are designed, not built.
 
 | | kagent (CNCF/Solo.io) | Rossoctl (ex-Kagenti, IBM) | Dapr Agents | assayd |
 |---|---|---|---|---|
@@ -422,7 +448,7 @@ agent-operator 1 (the only assayd-code pod) · agentgateway 1–2 · SPIRE 2 · 
 
 **Beyond core, as designed**: `plus` adds workflow-operator (a standing controller) + workflow-runtime (which scales 0→N with trigger registrations) — +2, OpenFGA with its co-located ext-authz adapter (+1), model-operator (+1), and optionally Argo and Phoenix. Enterprise adds tenant-operator (+1). Per managed knowledge graph: adapter + backend (2 workload pods). Generative serving adds KServe's `llmisvc` controller at plus tier and **+1 endpoint-picker (EPP) per inference pool** alongside the vLLM serving pods — the same workload category (design 25 A1). A hard-isolated tenant costs ~4–5 pods core-only (NATS, Postgres, Zitadel, OpenObserve and the gateway stay shared), +2–3 at plus.
 
-**The budget is CI-enforced, not aspirational**: a job counts rendered pods against `weight-budget.yaml` and a second job checks stateful workloads against a reasoned allowlist — a PR that adds either fails unless it edits the ledger in the same commit.
+**The budget is CI-enforced, not aspirational**: a job counts rendered pods in `TestCorePodBudget` (and stateful workloads in `TestStatefulDependencyAllowlist`, both in `test/chart/chart_test.go`) and a second job checks stateful workloads against a reasoned allowlist — a PR that adds either fails unless it edits the ledger in the same commit.
 
 Runs anywhere: no LoadBalancer requirement, `local-path` storage, no managed-identity deps; sandbox degrades gracefully (`SandboxDowngraded` condition, never silent); named `--profile local` collapses replicas explicitly. CI runs e2e on k3d + kind every merge.
 
