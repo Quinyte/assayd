@@ -98,8 +98,8 @@ func TestTheGatewayRefusesADisallowedPrincipal(t *testing.T) {
 	assertPolicyAttached(t, ctx, policy)
 
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
-	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/assayd-test/echo", gwSvc, gwNS)
-	const body = `{"message":{"parts":[{"text":"who am i"}]}}`
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gwSvc, gwNS) + a2aSendMessage
+	body := sendMessage("who am i")
 
 	// The policy is Attached before it is ENFORCING — the gateway is configured
 	// through its own control plane, so there is a window in which the route is
@@ -129,7 +129,7 @@ func TestTheGatewayRefusesADisallowedPrincipal(t *testing.T) {
 			"is supposed to admit, so the refusals above prove only that the route is shut", code)
 	}
 	answer := httpInClusterHostKey(t, ctx, "authz-body", url, host, permittedKey, body)
-	if !strings.Contains(answer, `"agent":"`+name+`"`) {
+	if agent, _ := completedTask(t, answer); agent != name {
 		t.Errorf("the permitted principal got a 200 that is not the agent's answer, so the "+
 			"gateway admitted the request without delivering it: %s", answer)
 	}
@@ -281,7 +281,7 @@ func probeCode(t *testing.T, ctx context.Context, tag, url, host, apiKey, postBo
 		auth = "-H 'Authorization: Bearer " + apiKey + "' "
 	}
 	cmd := fmt.Sprintf(
-		"curl -sS --max-time 15 -X POST -H 'Host: %s' -H 'Content-Type: application/json' %s"+
+		"curl -sS --max-time 15 -X POST -H 'Host: %s' -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' %s"+
 			"-d '%s' -o /dev/null -w '%%{http_code}' %s > /dev/termination-log 2>/dev/null; exit 0",
 		host, auth, postBody, url)
 	return runProbe(t, ctx, "code-"+tag, cmd)
@@ -293,7 +293,7 @@ func httpInClusterHostKey(t *testing.T, ctx context.Context, tag, url, host, api
 	t.Helper()
 	cmd := fmt.Sprintf(
 		"curl -sS --max-time 20 --retry 3 --retry-delay 2 --retry-all-errors "+
-			"-X POST -H 'Host: %s' -H 'Authorization: Bearer %s' -H 'Content-Type: application/json' "+
+			"-X POST -H 'Host: %s' -H 'Authorization: Bearer %s' -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' "+
 			"-d '%s' -o /dev/termination-log %s; exit 0",
 		host, apiKey, postBody, url)
 	return runProbe(t, ctx, "body-"+tag, cmd)

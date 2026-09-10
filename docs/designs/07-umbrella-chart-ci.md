@@ -1,6 +1,6 @@
 # Design 07: Umbrella chart, profiles, e2e CI
 
-- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A6 below; A5 (2026-09-03), A6 (2026-09-09), A6.10 (2026-09-10) and A6.11 (2026-09-11) not yet critiqued
+- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A6 below; A5 (2026-09-03), A6 (2026-09-09), A6.10 (2026-09-10), A6.11 and A6.12 (2026-09-11) not yet critiqued
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0002 (rules 5/6), 0012 (ambient profile), NFR-1/3/7/8 · interfaces: every P1 design (it packages them)
 
@@ -440,4 +440,49 @@ Each drift mutation failed exactly one case, and no other. That is the property 
 | Never compare labels | re-review MINOR | killed: only the `metadata.labels[agent-uid]` case |
 
 The same review corrected two sentences above: `retry` and `sessionPersistence` are not gaps only on the standard channel, and adoption is keyed on the `agent-uid` label alone.
+
+### A6.12 (2026-09-11) — the A2A half is literal: an agent completes a `SendMessage` task through the gateway
+
+A6.8 recorded what the MCP leg did not complete. ADR-0030's clause is "one agent completes one **A2A task** and one MCP tool call through the gateway", and A6.8 said the A2A half was not literal: `test/responder` served a conformant card and answered on `/assayd-test/echo`, which is on no A2A binding, so an agent completed a *request* through the gateway and not an *A2A task*. That record stands as what was true on 2026-09-09. This amendment is what changed.
+
+**`test/responder` implements one A2A method, `SendMessage`, on the HTTP+JSON binding its card declares.** The request is `POST /message:send` carrying a `SendMessageRequest`. The response is a `SendMessageResponse` whose oneof carries a `Task` in `TASK_STATE_COMPLETED`. Field names and enum values are those protojson renders from `a2a.proto` @ `v1.0.1`. Every e2e request to an agent now uses it and sends `A2A-Version: 1.0`, and every answer is checked for a completed task — through `completedTask`, or, in the weighted split, by counting a backend only when its answer's state is `TASK_STATE_COMPLETED`. The five gateway tests do this: through the operator's route, after that route is recreated, under the authorization policy, beside the NetworkPolicy, and across the weighted split. So does the revision-Service test. `TestAnAgentAnswersThroughTheGateway` therefore completes an A2A task through the operator-emitted route. That is the A2A half of ADR-0030's clause for a **client**, not for an agent: the clause's subject is "one agent", and the MCP call in `TestAnAgentCallsAnMCPToolThroughTheGateway` (A6.8) is made by the harness's probe Pod, not by the responder, in a separate test against a separate backend. An agent that completes a task *by* calling a tool through the gateway is still owed.
+
+**The state is asserted, not only the echo.** Every test used to pass when the body contained its own words. A 200 carrying any JSON, such as a gateway error page or a different agent's shape, would have passed a test that looked only for the text it sent. `completedTask` requires the oneof to carry a task, and requires that task's state.
+
+**The responder refuses what is not a `SendMessageRequest`.** A body missing `messageId` or `role`, with the agent's role, or with no text part gets a 400. That includes the exact body every e2e sent before this amendment. A fixture that accepted it would let a caller that is not speaking A2A pass. The retired path returns 404, rather than staying beside the real method as a second, non-A2A way to get an answer.
+
+**A6.8 said the fixture is not the place to grow a method set, and that was half right.** The half that stands is that the A2A *client* is design 08's (`assayd invoke`, `08:22`), and this fixture must not become the only thing in the repository that claims to speak A2A. Exactly one method is implemented, and the source enumerates what is not: `GetTask`, `ListTasks`, `CancelTask`, streaming (the card says `streaming: false`), push notifications, the extended card, `tenant`, `configuration`, and the binding's error mapping. Any A2A version but 1.0 is refused: spec §3.6 has a client send `A2A-Version` and an agent read an absent header as 0.3, so the responder refuses an absent or other value with a 400 naming `VersionNotSupportedError`. Answers carry `Content-Type: application/a2a+json`, which the HTTP+JSON binding says they SHOULD. A refusal is a 400 with a plain body, and a test may rely on the status code, not the shape. Two refusals are this fixture's choices rather than the proto's: text is its only input mode, and it holds a client's message to `ROLE_USER`, which the spec defines as a message "from the client to the server" and the proto does not enforce. What overrode the other half is that ADR-0030's stop criterion is literal, and an agent cannot complete an A2A task without a server that speaks A2A. Design 09 owns the real server templates; this fixture is not one.
+
+**The review of this amendment found three things the first version claimed and did not do, and they are fixed rather than softened.** `countBackends` in the weighted-split test grepped only `"agent"` out of each answer, so a responder that never completed a task still passed it — the reviewer measured exactly that, 40 of 40; it now counts a backend only for a completed task and fails on any other. Nothing sent or checked `A2A-Version`, so by the spec's rule every request was a 0.3 request answered in 1.0 shapes; both sides now negotiate 1.0. And the sentence in CLAUDE.md and AGENTS.md said ADR-0030's clause was met, dropping its subject — the MCP call is the harness's, not an agent's; it now says so. Two responder behaviours were unmeasured — that each task gets its own id, and that every text part is echoed — and each has a test now.
+
+**The operator still speaks no A2A.** It reads the card (design 02 A68, A71) and nothing else. Design 02 §5's row is corrected by design 02 A73.
+
+**Measured by mutation.** Every mutation below compiles.
+
+| Mutation (`test/responder`) | Killed by |
+|---|---|
+| Accept a request with no `messageId` | the `no messageId` case of `TestItRefusesWhatIsNotASendMessageRequest`. The old echo body is still refused under this mutation, because it lacks a `role` too. |
+| Skip the `role` check | the `no role` and `the agent's role` cases |
+| Answer `"ok"` instead of `TASK_STATE_COMPLETED` | `TestItCompletesASendMessageTask` |
+| Encode a bare `Task` instead of the `SendMessageResponse` oneof | `TestItCompletesASendMessageTask` |
+| Serve every method, not only POST | `TestItRefusesWhatIsNotASendMessageRequest` (the 405) |
+| Drop the caller's `contextId` | `TestItCompletesASendMessageTask` |
+| Accept a message with no text part | the `no text part` case |
+| `test/responder` answers `TASK_STATE_WORKING`, measured on the e2e (k3d, `E2E_RUN=TestAnAgentAnswersThroughTheGateway$`) | `TestAnAgentAnswersThroughTheGateway` fails at `completedTask` with `the task is "TASK_STATE_WORKING", not TASK_STATE_COMPLETED`, through the gateway and on the operator's route |
+
+**Run on k3d.** `make e2e`: 18 PASS, and the only SKIPs are the sentinel and the declared-off test. `ASSAYD_E2E_GATEWAY=0 make e2e`: 13 PASS, including `TestAnAgentAnswersARequestThroughItsRevisionService`, which completes a task through the revision Service; the gateway tests skip. Both runs exit 0.
+
+**The review's fixes, measured.** Every mutation below compiles.
+
+| Mutation | Killed by |
+|---|---|
+| `countBackends`'s responder answers `TASK_STATE_WORKING` (e2e, `E2E_RUN=TestWeightZeroActuallyContains$`) | `TestWeightZeroActuallyContains`: answers that identify a backend without completing an A2A task. The reviewer's run of this same mutation **passed, 40 of 40**, before the fix |
+| The e2e helper sends no `A2A-Version` (e2e, `E2E_RUN=TestAnAgentAnswersThroughTheGateway$`) | `TestAnAgentAnswersThroughTheGateway` |
+| The responder skips the version check | `TestItRefusesAnyVersionButOnePointZero` |
+| The responder answers as `application/json` | `TestItCompletesASendMessageTask` |
+| Every task gets the same id | `TestEachTaskGetsItsOwnID`. A first version of this mutation did not compile and is INVALID |
+| Only the first text part is echoed | `TestEveryTextPartIsEchoed` |
+
+Re-run on k3d after the fixes: `make e2e` 18 PASS, `ASSAYD_E2E_GATEWAY=0 make e2e` 13 PASS, both exit 0.
+
 
