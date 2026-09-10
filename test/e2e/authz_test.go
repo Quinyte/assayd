@@ -98,8 +98,8 @@ func TestTheGatewayRefusesADisallowedPrincipal(t *testing.T) {
 	assertPolicyAttached(t, ctx, policy)
 
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
-	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/assayd-test/echo", gwSvc, gwNS)
-	const body = `{"message":{"parts":[{"text":"who am i"}]}}`
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gwSvc, gwNS) + a2aSendMessage
+	body := sendMessage("who am i")
 
 	// The policy is Attached before it is ENFORCING — the gateway is configured
 	// through its own control plane, so there is a window in which the route is
@@ -129,7 +129,7 @@ func TestTheGatewayRefusesADisallowedPrincipal(t *testing.T) {
 			"is supposed to admit, so the refusals above prove only that the route is shut", code)
 	}
 	answer := httpInClusterHostKey(t, ctx, "authz-body", url, host, permittedKey, body)
-	if !strings.Contains(answer, `"agent":"`+name+`"`) {
+	if agent, _ := completedTask(t, answer); agent != name {
 		t.Errorf("the permitted principal got a 200 that is not the agent's answer, so the "+
 			"gateway admitted the request without delivering it: %s", answer)
 	}

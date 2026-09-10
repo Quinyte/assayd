@@ -104,47 +104,119 @@ func TestTheCardIsByteStableAcrossFetches(t *testing.T) {
 	}
 }
 
-// The thing no test in this repository could do before: send a request to an
-// agent and get an answer.
-func TestItAnswersATask(t *testing.T) {
+// The thing no test in this repository could do before: send an A2A task to an
+// agent and have it completed — SendMessage on the HTTP+JSON binding.
+func TestItCompletesASendMessageTask(t *testing.T) {
 	t.Setenv("AGENT_NAME", "answerer")
 	t.Setenv("ASSAYD_GATEWAY_URL", "http://gw.assayd:8080")
 	srv := httptest.NewServer(handler())
 	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/assayd-test/echo", "application/json",
-		strings.NewReader(`{"message":{"parts":[{"text":"hello"}]}}`))
+	resp, err := http.Post(srv.URL+"/message:send", "application/json", strings.NewReader(
+		`{"message":{"messageId":"m-1","contextId":"c-1","role":"ROLE_USER","parts":[{"text":"hello"}]}}`))
 	if err != nil {
-		t.Fatalf("post task: %v", err)
+		t.Fatalf("send message: %v", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("SendMessage answered %d: %s", resp.StatusCode, b)
+	}
 
 	var out struct {
-		Status    struct{ State string }
-		Agent     string
-		Gateway   string
-		Artifacts []struct {
-			Parts []struct{ Text string }
+		Task *struct {
+			ID        string
+			ContextID string
+			Status    struct{ State string }
+			Artifacts []struct {
+				ArtifactID string
+				Parts      []struct{ Text string }
+			}
+			Metadata map[string]string
 		}
+		Message json.RawMessage
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.Status.State != "ok" {
-		t.Errorf("task state %q", out.Status.State)
+	// SendMessageResponse is a ONEOF: exactly one of task and message.
+	if out.Task == nil || out.Message != nil {
+		t.Fatalf("the response is not a SendMessageResponse carrying a task: task=%v message=%s",
+			out.Task, out.Message)
+	}
+	if out.Task.Status.State != "TASK_STATE_COMPLETED" {
+		t.Errorf("task state %q; A2A v1.0 puts enums on the wire by proto name, so a completed "+
+			"task is TASK_STATE_COMPLETED", out.Task.Status.State)
+	}
+	if out.Task.ID == "" {
+		t.Error("task.id is REQUIRED and the agent mints it")
+	}
+	if out.Task.ContextID != "c-1" {
+		t.Errorf("the caller's contextId was not kept: %q", out.Task.ContextID)
+	}
+	if len(out.Task.Artifacts) == 0 || out.Task.Artifacts[0].ArtifactID == "" ||
+		len(out.Task.Artifacts[0].Parts) == 0 || out.Task.Artifacts[0].Parts[0].Text != "echo: hello" {
+		t.Errorf("unexpected artifacts: %+v", out.Task.Artifacts)
 	}
 	// Naming the responder is what lets a rollout test prove WHICH revision
 	// answered, which is the whole point of per-revision Services.
-	if out.Agent != "answerer" {
-		t.Errorf("the answer does not name the agent that produced it: %q", out.Agent)
+	if out.Task.Metadata["agent"] != "answerer" {
+		t.Errorf("the task does not name the agent that completed it: %v", out.Task.Metadata)
 	}
 	// Reported, never dialled: an e2e can prove the operator's injected contract
 	// reached the container without a gateway existing.
-	if out.Gateway != "http://gw.assayd:8080" {
-		t.Errorf("ASSAYD_GATEWAY_URL was not reported back: %q", out.Gateway)
+	if out.Task.Metadata["gateway"] != "http://gw.assayd:8080" {
+		t.Errorf("ASSAYD_GATEWAY_URL was not reported back: %v", out.Task.Metadata)
 	}
-	if len(out.Artifacts) == 0 || out.Artifacts[0].Parts[0].Text != "echo: hello" {
-		t.Errorf("unexpected artifacts: %+v", out.Artifacts)
+}
+
+// What is not a SendMessageRequest is refused — including the body every e2e in
+// this repository sent before the method was real. A fixture that accepted it
+// would let a caller that is not speaking A2A pass every assertion made against
+// it.
+func TestItRefusesWhatIsNotASendMessageRequest(t *testing.T) {
+	srv := httptest.NewServer(handler())
+	defer srv.Close()
+	for _, tc := range []struct{ name, body string }{
+		{"the old echo body", `{"message":{"parts":[{"text":"hello"}]}}`},
+		{"no messageId", `{"message":{"role":"ROLE_USER","parts":[{"text":"hello"}]}}`},
+		{"no role", `{"message":{"messageId":"m","parts":[{"text":"hello"}]}}`},
+		{"the agent's role", `{"message":{"messageId":"m","role":"ROLE_AGENT","parts":[{"text":"hello"}]}}`},
+		{"no text part", `{"message":{"messageId":"m","role":"ROLE_USER","parts":[]}}`},
+		{"no message", `{}`},
+		{"not JSON", `hello`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := http.Post(srv.URL+"/message:send", "application/json", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatalf("post: %v", err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("%s was answered %d, want 400", tc.name, resp.StatusCode)
+			}
+		})
+	}
+
+	// And the endpoint it replaced is gone, rather than left beside it as a
+	// second, non-A2A way to get an answer.
+	resp, err := http.Post(srv.URL+"/assayd-test/echo", "application/json",
+		strings.NewReader(`{"message":{"parts":[{"text":"hello"}]}}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("the retired /assayd-test/echo answered %d, want 404", resp.StatusCode)
+	}
+	// SendMessage is a POST; anything else is not the method.
+	g, err := http.Get(srv.URL + "/message:send")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	g.Body.Close()
+	if g.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("GET /message:send answered %d, want 405", g.StatusCode)
 	}
 }
 

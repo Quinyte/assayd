@@ -5,7 +5,6 @@ package e2e
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -132,25 +131,15 @@ func TestAnAgentAnswersThroughTheGateway(t *testing.T) {
 	// carrying the traffic, this cannot pass.
 	host := emittedHostname(t, name, "assayd-e2e")
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
-	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/assayd-test/echo", gwSvc, gwNS)
-	body := httpInClusterHost(t, ctx, "gwask", url, host,
-		`{"message":{"parts":[{"text":"through the gateway"}]}}`)
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gwSvc, gwNS) + a2aSendMessage
+	body := httpInClusterHost(t, ctx, "gwask", url, host, sendMessage("through the gateway"))
 
-	var out struct {
-		Status    struct{ State string }
-		Agent     string
-		Artifacts []struct {
-			Parts []struct{ Text string }
-		}
+	// An A2A task, completed, through the gateway: ADR-0030's clause, literally.
+	agent, text := completedTask(t, body)
+	if agent != name {
+		t.Errorf("the task was completed by %q, not the agent behind the route; body %s", agent, body)
 	}
-	if err := json.Unmarshal([]byte(body), &out); err != nil {
-		t.Fatalf("the gateway did not return the agent's answer: %v\n%s", err, body)
-	}
-	if out.Agent != name {
-		t.Errorf("the answer came from %q, not the agent behind the route; body %s", out.Agent, body)
-	}
-	if out.Status.State != "ok" || len(out.Artifacts) == 0 ||
-		!strings.Contains(out.Artifacts[0].Parts[0].Text, "through the gateway") {
+	if !strings.Contains(text, "through the gateway") {
 		t.Errorf("the agent did not answer through the gateway: %s", body)
 	}
 }
@@ -386,10 +375,10 @@ func TestTheOperatorRecreatesARouteThatWasDeleted(t *testing.T) {
 	// rather than a shell with the right name.
 	gwNS, gwName := requireGateway(t)
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
-	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/assayd-test/echo", gwSvc, gwNS)
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gwSvc, gwNS) + a2aSendMessage
 	body := httpInClusterHost(t, ctx, "recreated", url, emittedHostname(t, name, "assayd-e2e"),
-		`{"message":{"parts":[{"text":"after the delete"}]}}`)
-	if !strings.Contains(body, "after the delete") {
+		sendMessage("after the delete"))
+	if _, text := completedTask(t, body); !strings.Contains(text, "after the delete") {
 		t.Errorf("the recreated route did not carry the request: %s", body)
 	}
 }
