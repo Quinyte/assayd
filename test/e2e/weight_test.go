@@ -60,7 +60,7 @@ func TestWeightZeroActuallyContains(t *testing.T) {
 	assertRouteAccepted(t, ctx, route, "")
 
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
-	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/assayd-test/echo", gwSvc, gwNS)
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gwSvc, gwNS) + a2aSendMessage
 
 	// 40 requests, not one. A single request landing on the 100-weight backend
 	// proves nothing about a 0-weight one — that is what a coin flip looks like
@@ -266,7 +266,7 @@ func countBackends(t *testing.T, ctx context.Context, tag, url, host string, n i
 	cmd := fmt.Sprintf(
 		"for i in $(seq 1 %d); do "+
 			"curl -sS --max-time 10 -X POST -H 'Host: %s' -H 'Content-Type: application/json' "+
-			"-d '{\"message\":{\"parts\":[{\"text\":\"w\"}]}}' %s "+
+			"-d '{\"message\":{\"messageId\":\"w-'$i'\",\"role\":\"ROLE_USER\",\"parts\":[{\"text\":\"w\"}]}}' %s "+
 			"| tr ',' '\\n' | grep '\"agent\"' ; done > /dev/termination-log 2>/dev/null; exit 0",
 		n, host, url)
 	body := runProbe(t, ctx, tag, cmd)

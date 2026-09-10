@@ -83,28 +83,16 @@ func TestAnAgentAnswersARequestThroughItsRevisionService(t *testing.T) {
 		t.Fatalf("the revision has no Service, so nothing can reach it: %v", err)
 	}
 
-	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/assayd-test/echo", wl, runNS)
-	body := httpInCluster(t, ctx, "ask", url, `{"message":{"parts":[{"text":"ping"}]}}`)
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", wl, runNS) + a2aSendMessage
+	body := httpInCluster(t, ctx, "ask", url, sendMessage("ping"))
 
-	var out struct {
-		Status    struct{ State string }
-		Agent     string
-		Artifacts []struct {
-			Parts []struct{ Text string }
-		}
-	}
-	if err := json.Unmarshal([]byte(body), &out); err != nil {
-		t.Fatalf("the agent's answer is not JSON: %v\n%s", err, body)
-	}
-	if out.Status.State != "ok" {
-		t.Errorf("task state %q; body %s", out.Status.State, body)
-	}
+	agent, text := completedTask(t, body)
 	// Naming the responder is what proves WHICH revision answered — the property
 	// per-revision Services exist for.
-	if out.Agent != name {
-		t.Errorf("the answer came from %q, not the agent under test; body %s", out.Agent, body)
+	if agent != name {
+		t.Errorf("the task was completed by %q, not the agent under test; body %s", agent, body)
 	}
-	if len(out.Artifacts) == 0 || !strings.Contains(out.Artifacts[0].Parts[0].Text, "ping") {
+	if !strings.Contains(text, "ping") {
 		t.Errorf("the agent did not echo the request: %s", body)
 	}
 }
@@ -194,6 +182,55 @@ func waitAvailable(t *testing.T, ctx context.Context, workload string, d time.Du
 	}
 	t.Fatalf("workload %s never became available: %d/%d, conditions %+v",
 		workload, dep.Status.AvailableReplicas, dep.Status.Replicas, dep.Status.Conditions)
+}
+
+// a2aSendMessage is SendMessage on A2A v1.0's HTTP+JSON binding, appended to the
+// interface URL the card declares. It is the one A2A method `test/responder`
+// implements, and every request this suite sends to an agent uses it — the
+// bespoke `/assayd-test/echo` it replaced was on no A2A binding at all, so the
+// suite's "the agent answered through the gateway" was never an A2A task.
+const a2aSendMessage = "/message:send"
+
+// sendMessage is a SendMessageRequest with one text part and the fields the
+// proto marks REQUIRED — the responder refuses a body without them. The text
+// must not contain a single quote: every probe hands the body to curl inside
+// one.
+func sendMessage(text string) string {
+	return fmt.Sprintf(`{"message":{"messageId":"e2e-%d","role":"ROLE_USER","parts":[{"text":%q}]}}`,
+		time.Now().UnixNano(), text)
+}
+
+// completedTask decodes a SendMessageResponse and requires that it carries a
+// task in TASK_STATE_COMPLETED. It returns the agent that completed it, read off
+// the task's metadata, and the text of its first artifact.
+//
+// The state is asserted, not just the echo: a 200 carrying some other JSON — a
+// gateway's error page, a different agent's shape — would otherwise pass any
+// test that only looked for its own words in the body.
+func completedTask(t *testing.T, body string) (agent, text string) {
+	t.Helper()
+	var out struct {
+		Task *struct {
+			Status    struct{ State string }
+			Artifacts []struct {
+				Parts []struct{ Text string }
+			}
+			Metadata map[string]string
+		}
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatalf("the answer is not a SendMessageResponse: %v\n%s", err, body)
+	}
+	if out.Task == nil {
+		t.Fatalf("the SendMessageResponse carries no task: %s", body)
+	}
+	if out.Task.Status.State != "TASK_STATE_COMPLETED" {
+		t.Fatalf("the task is %q, not TASK_STATE_COMPLETED: %s", out.Task.Status.State, body)
+	}
+	if len(out.Task.Artifacts) > 0 && len(out.Task.Artifacts[0].Parts) > 0 {
+		text = out.Task.Artifacts[0].Parts[0].Text
+	}
+	return out.Task.Metadata["agent"], text
 }
 
 // httpInCluster issues one request from inside the cluster and returns the body.
