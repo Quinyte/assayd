@@ -430,6 +430,15 @@ func TestTheOperatorCorrectsDriftOnEachFieldOfTheRouteItEmitted(t *testing.T) {
 			}},
 		{"parentRefs", "the route attaches to a different Gateway, or to none, and 404s",
 			func(rt *gatewayv1.HTTPRoute) { rt.Spec.ParentRefs[0].Name = "some-other-gateway" }},
+		{"parentRefs[].port", "the port must match the listener as well as the section name, so " +
+			"the route attaches to no listener and the agent is off the air while reporting Ready",
+			func(rt *gatewayv1.HTTPRoute) {
+				rt.Spec.ParentRefs[0].Port = ptrTo(gatewayv1.PortNumber(9999))
+			}},
+		{"metadata.labels[agent-uid]", "the sweep and the finalizer find this Agent's route by " +
+			"that label, so a route whose label was edited is skipped by both: it outlives the " +
+			"Agent and keeps publishing a hostname to nothing",
+			func(rt *gatewayv1.HTTPRoute) { rt.Labels[controller.LabelAgentUID] = "forged-uid" }},
 		{"hostnames", "the agent answers on a host nobody calls, and its own host 404s",
 			func(rt *gatewayv1.HTTPRoute) {
 				rt.Spec.Hostnames = []gatewayv1.Hostname{"someone-else.example"}
@@ -451,6 +460,17 @@ func TestTheOperatorCorrectsDriftOnEachFieldOfTheRouteItEmitted(t *testing.T) {
 				t.Fatal("no route to drift")
 			}
 			want := rt.Spec.DeepCopy()
+			// The four provenance labels are owned too; the spec comparison
+			// below would not see a label edit.
+			owned := func(r *gatewayv1.HTTPRoute) map[string]string {
+				return map[string]string{
+					controller.LabelAgent:          r.Labels[controller.LabelAgent],
+					controller.LabelRevision:       r.Labels[controller.LabelRevision],
+					controller.LabelAgentUID:       r.Labels[controller.LabelAgentUID],
+					controller.LabelAgentNamespace: r.Labels[controller.LabelAgentNamespace],
+				}
+			}
+			wantLabels := owned(rt)
 			tc.plant(rt)
 			if err := k8s.Update(context.Background(), rt); err != nil {
 				t.Fatalf("plant the drift: %v", err)
@@ -459,7 +479,8 @@ func TestTheOperatorCorrectsDriftOnEachFieldOfTheRouteItEmitted(t *testing.T) {
 			// field the CRD strips or defaults back would make a passing
 			// assertion below say nothing about equalRoute.
 			if planted := servingRoute(t, ns, agentName); planted == nil ||
-				equality.Semantic.DeepEqual(planted.Spec, *want) {
+				(equality.Semantic.DeepEqual(planted.Spec, *want) &&
+					equality.Semantic.DeepEqual(owned(planted), wantLabels)) {
 				t.Fatalf("the drift on %s did not survive the API server, so this case cannot "+
 					"observe whether the operator corrects it", tc.field)
 			}
@@ -470,11 +491,12 @@ func TestTheOperatorCorrectsDriftOnEachFieldOfTheRouteItEmitted(t *testing.T) {
 			if back == nil {
 				t.Fatal("the route disappeared")
 			}
-			if !equality.Semantic.DeepEqual(back.Spec, *want) {
+			if !equality.Semantic.DeepEqual(back.Spec, *want) ||
+				!equality.Semantic.DeepEqual(owned(back), wantLabels) {
 				t.Errorf("drift on %s survived a reconcile — %s, and nothing in the Agent's status "+
 					"says so. equalRoute does not compare the field, so the operator writes it on "+
-					"every pass and never notices it changed.\nwant %+v\ngot  %+v",
-					tc.field, tc.harm, *want, back.Spec)
+					"every pass and never notices it changed.\nwant %+v %v\ngot  %+v %v",
+					tc.field, tc.harm, *want, wantLabels, back.Spec, owned(back))
 			}
 		})
 	}

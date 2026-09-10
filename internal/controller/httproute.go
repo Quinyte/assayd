@@ -454,9 +454,15 @@ func equalMatches(a, b []gatewayv1.HTTPRouteMatch) bool {
 	return true
 }
 
+// equalParentRef compares every field of a ParentReference, Port included. A
+// first version compared five of the six: a `port` planted on the parentRef
+// must match the listener as well as `sectionName`, so the route attaches to no
+// listener, the agent is off the air, and it keeps reporting Ready because
+// route status is not read. The third review found it.
 func equalParentRef(a, b gatewayv1.ParentReference) bool {
 	return a.Name == b.Name && eqPtr(a.Namespace, b.Namespace) &&
-		eqPtr(a.SectionName, b.SectionName) && eqPtr(a.Kind, b.Kind) && eqPtr(a.Group, b.Group)
+		eqPtr(a.SectionName, b.SectionName) && eqPtr(a.Kind, b.Kind) && eqPtr(a.Group, b.Group) &&
+		eqPtr(a.Port, b.Port)
 }
 
 func eqPtr[T comparable](a, b *T) bool {
@@ -538,8 +544,8 @@ func (e *routeCollisionError) Error() string {
 // and namespace are this Agent's is a PREDECESSOR's: an Agent deleted while the
 // gateway was declared off sweeps nothing (reconcileServingRoute), and one
 // recreated under the same name must adopt that route rather than be wedged by
-// it forever. A route with no identity labels at all is adopted for the same
-// reason. None of this is evidence against an attacker — a label needs only
+// it forever. A route with no `agent-uid` label is adopted for the same reason,
+// whatever its other labels say. None of this is evidence against an attacker — a label needs only
 // `update` to forge — and it does not claim to be: forging the labels buys a
 // refusal of an Agent whose run namespace the forger can already write, and
 // forging them to match buys an adoption that rewrites the forger's spec.
