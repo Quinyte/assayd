@@ -349,6 +349,7 @@
       </g>
     </svg>
     <p class="doc-kicker">Architecture · v1.0 · superseded in part — designs 02 and 03 are not approved; delivery is narrowed to one slice (ADR-0030). Most sections describe the designed system, not the shipped one; each such section opens with a “Designed, not shipped” note, copied from architecture.md</p>
+    <p class="not-shipped"><b>assayd</b> is the project's permanent name, not a codename. ADR-0001 Amendment 1 records the rename from the “plume” working title (and “graphene” before that) as <b>done</b>, with <code>assayd.dev</code> authoritative and the API group. This page kept the old name throughout until 2026-09-11, including a CRD example whose <code>apiVersion</code> named an API group that does not exist; it was renamed then to match architecture.md and the code.</p>
     <h1 class="title">assayd<span class="hex"> ⬡</span></h1>
     <p class="subtitle">A radically lightweight, Kubernetes-native agent platform. The domain is a pluggable knowledge graph; everything else is an open standard with a thin binding.</p>
     <p class="subtitle" style="font-size:16px;margin-top:-14px;">Every component below is designed, adversarially critiqued, and approved — including the places the design phase <em>corrected</em> the original strategy. Those corrections are listed first.</p>
@@ -429,13 +430,13 @@
 <section id="doctrine">
   <div class="sec-head"><span class="n">01</span><h2>The lightweight doctrine</h2></div>
   <div class="prose">
-    <p>Every design decision in this document passes six rules. They are the product: competitors ship platforms; graphene ships a control plane. The recipe is <strong>bind, don't build</strong> — the platform never implements what an open standard already provides, and its own code is confined to thin operators, a data-plane policy compiler, and a CLI.</p>
+    <p>Every design decision in this document passes six rules. They are the product: competitors ship platforms; assayd ships a control plane. The recipe is <strong>bind, don't build</strong> — the platform never implements what an open standard already provides, and its own code is confined to thin operators, a data-plane policy compiler, and a CLI.</p>
   </div>
   <div class="rules">
     <div class="rule"><span class="rn">RULE 1</span><h3>Bind, don't build</h3><p>CRDs + operators + a CLI. Zero proprietary protocols, zero bundled agent framework, zero bundled UI.</p></div>
     <div class="rule"><span class="rn">RULE 2</span><h3>Two stateful deps, ever</h3><p>Postgres + NATS. Durability, eval results, audit, KV, object store, queues — all in those two. No Kafka, no Redis, no Temporal cluster.</p></div>
     <div class="rule"><span class="rn">RULE 3</span><h3>Library over server</h3><p>If a capability can run as a library inside an existing pod (DBOS, DeepEval, OTel SDK), it never becomes a service.</p></div>
-    <div class="rule"><span class="rn">RULE 4</span><h3>The reconcile loop is the product</h3><p>Versioning = CR generations + GitOps. Self-healing = conditions + controllers. graphene adds <em>semantic</em> health to machinery Kubernetes already has.</p></div>
+    <div class="rule"><span class="rn">RULE 4</span><h3>The reconcile loop is the product</h3><p>Versioning = CR generations + GitOps. Self-healing = conditions + controllers. assayd adds <em>semantic</em> health to machinery Kubernetes already has.</p></div>
     <div class="rule"><span class="rn">RULE 5</span><h3>Weight budget is a spec</h3><p>Core control plane ≤ 8 pods. One <code>helm install</code> on any conformant cluster — <strong>minikube, k3d, kind, k3s</strong> included. Local distros are a CI target, not a courtesy. Every added pod needs a written justification.</p></div>
     <div class="rule"><span class="rn">RULE 6</span><h3>Tiered install</h3><p><code>core</code> (agents + KG + security + traces) → <code>plus</code> (evals, drift, modelhub). Each tier independently removable.</p></div>
   </div>
@@ -447,11 +448,11 @@
   <p class="not-shipped"><b>Designed, not shipped — and three sentences below are false today.</b> One operator exists, <code>agent-operator</code>; there is no workflow-, model- or tenant-operator. No policy is compiled from the Agent CR: the policy compiler does not exist. Registration today reads the card only — directory publish and identity issuance are not implemented — and when <code>gateway.enabled</code> is set the operator emits the Agent's serving <code>HTTPRoute</code> — a route only, with no policy attached to it — and nothing else. The chart deploys neither NATS nor Postgres.</p>
   <div class="prose">
     <p>Three planes. The <strong>control plane</strong> is GitOps-driven: custom resources reconciled by three small core operators, plus the enterprise tenant-operator. The <strong>data plane</strong> is a single gateway every agent hop crosses — which is where security, budgets, and receipts are enforced, so guarantees hold for black-box agents regardless of SDK. The <strong>substrate</strong> is the two stateful dependencies.</p>
-    <p class="soft">In every diagram in this document, <strong style="color: var(--accent)">ultramarine marks what graphene builds</strong>; grey marks adopted open components. Notice how little is ultramarine — that is the thesis.</p>
+    <p class="soft">In every diagram in this document, <strong style="color: var(--accent)">ultramarine marks what assayd builds</strong>; grey marks adopted open components. Notice how little is ultramarine — that is the thesis.</p>
   </div>
 
   <figure class="diagram">
-    <svg viewBox="0 0 940 620" role="img" aria-label="graphene system overview: a GitOps control plane of CRDs reconciled by graphene operators; a data plane where sandboxed agents from any SDK talk through agentgateway to MCP tools, knowledge graphs, LLM providers, and each other; and a substrate of NATS JetStream and Postgres. SPIRE and the platform IdP (Zitadel by default) provide identity. Only the operators, policy compilation, and CLI are graphene-built.">
+    <svg viewBox="0 0 940 620" role="img" aria-label="assayd system overview: a GitOps control plane of CRDs reconciled by assayd operators; a data plane where sandboxed agents from any SDK talk through agentgateway to MCP tools, knowledge graphs, LLM providers, and each other; and a substrate of NATS JetStream and Postgres. SPIRE and the platform IdP (Zitadel by default) provide identity. Only the operators, policy compilation, and CLI are assayd-built.">
       <defs>
         <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
@@ -485,7 +486,7 @@
       <text x="566" y="105" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)" font-family="ui-monospace, Menlo, monospace">reconcile CRs → bindings</text>
 
       <rect x="742" y="52" width="174" height="66" rx="8" fill="none" stroke="var(--accent)" stroke-dasharray="4 3"/>
-      <text x="829" y="79" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--accent)" font-family="system-ui, sans-serif">graphene CLI</text>
+      <text x="829" y="79" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--accent)" font-family="system-ui, sans-serif">assayd CLI</text>
       <text x="829" y="97" text-anchor="middle" font-size="11" fill="currentColor" font-family="system-ui, sans-serif">sugar over kubectl</text>
 
       <line x1="174" y1="85" x2="232" y2="85" stroke="currentColor" marker-end="url(#arr)"/>
@@ -592,12 +593,12 @@
       <tr><td><code>EvalSuite</code></td><td>Semantic admission gates: runner, datasets, metrics, thresholds (§08)</td><td>agent-operator</td></tr>
       <tr><td><code>Workflow</code></td><td>Durable orchestration binding — DBOS function or Argo DAG, triggered by JetStream events</td><td>workflow-operator</td></tr>
       <tr><td><code>Model</code></td><td>ModelHub envelope: train → package → eval-gate → serve (§10)</td><td>model-operator</td></tr>
-      <tr><td><code>App</code></td><td>kro ResourceGraphDefinition composing all of the above — zero graphene code</td><td>kro</td></tr>
+      <tr><td><code>App</code></td><td>kro ResourceGraphDefinition composing all of the above — zero assayd code</td><td>kro</td></tr>
     </tbody>
   </table></div>
 
   <h3>The Agent CR — the platform's whole opinion in one object</h3>
-<pre class="code"><span class="k">apiVersion</span>: graphene.dev/v1alpha1
+<pre class="code"><span class="k">apiVersion</span>: assayd.dev/v1alpha1
 <span class="k">kind</span>: Agent
 <span class="k">metadata</span>: {<span class="k">name</span>: <span class="s">prior-auth-reviewer</span>}
 <span class="k">spec</span>:
@@ -624,7 +625,7 @@
       <li><strong>The backend mostly disappears.</strong> Workflows and agents exposed over HTTP <em>are</em> the API: a workflow becomes <code>POST /api/&lt;name&gt;</code>, an agent's A2A task stream becomes the chat endpoint over SSE. A custom backend-for-frontend shrinks to nothing unless the product genuinely needs one.</li>
       <li><strong>Human auth with zero custom code.</strong> Users log in via the platform IdP (OIDC); the gateway exchanges the user's token into on-behalf-of agent credentials — so every agent action carries the human's identity in its receipt, and budgets can be per-user. Login, roles, audit chain: configuration, not code.</li>
       <li><strong>Released as a unit.</strong> The App pins member versions — agent v1.4.2, graph v12, frontend v2.1.0. Rolling the app forward is one change; the agents inside still pass their eval gates individually (§08). Rollback restores the whole coherent set.</li>
-      <li><strong>Scaffolded.</strong> <code>graphene init app</code> generates a frontend template plus a <em>typed client</em> derived from the exposed workflow/agent schemas (Agent Cards, MCP tool schemas → TypeScript), with auth wired.</li>
+      <li><strong>Scaffolded.</strong> <code>assayd init app</code> generates a frontend template plus a <em>typed client</em> derived from the exposed workflow/agent schemas (Agent Cards, MCP tool schemas → TypeScript), with auth wired.</li>
     </ul>
   </div>
 <pre class="code"><span class="k">kind</span>: App
@@ -639,7 +640,7 @@
     <span class="k">graphs</span>:  [{<span class="k">name</span>: <span class="s">payer-policies</span>, <span class="k">version</span>: <span class="s">"v12"</span>}]
   <span class="k">auth</span>: {<span class="k">oidc</span>: <span class="s">platform-idp</span>, <span class="k">roles</span>: [<span class="s">reviewer</span>, <span class="s">admin</span>]}</pre>
   <div class="prose">
-    <p class="soft">kro composes the resources; graphene's own additions are only the HTTP projection of workflows/agents, typed-client generation, and release pinning — the App layer adds product capability without adding platform machinery.</p>
+    <p class="soft">kro composes the resources; assayd's own additions are only the HTTP projection of workflows/agents, typed-client generation, and release pinning — the App layer adds product capability without adding platform machinery.</p>
   </div>
 </section>
 
@@ -648,8 +649,8 @@
   <div class="sec-head"><span class="n">04</span><h2>The KnowledgeGraph contract — the differentiator</h2></div>
   <p class="not-shipped"><b>Designed, not shipped.</b> No <code>KnowledgeGraph</code> CRD exists; <code>Agent</code> is the only CRD (§03).</p>
   <div class="prose">
-    <p>The claim that separates graphene from kagent, Rossoctl, and Dapr Agents: <strong>the domain is data, not code.</strong> Standing the platform up in a new vertical means dropping in a new <code>KnowledgeGraph</code> CR and reusing every other part of the platform.</p>
-    <p>Every serious graph engine already exposes MCP, so graphene doesn't pick a winner — it defines the socket. A provider is anything behind an MCP query surface; the contract adds what providers don't have: a versioned ontology, semantic readiness, and derivation of the correctness machinery.</p>
+    <p>The claim that separates assayd from kagent, Rossoctl, and Dapr Agents: <strong>the domain is data, not code.</strong> Standing the platform up in a new vertical means dropping in a new <code>KnowledgeGraph</code> CR and reusing every other part of the platform.</p>
+    <p>Every serious graph engine already exposes MCP, so assayd doesn't pick a winner — it defines the socket. A provider is anything behind an MCP query surface; the contract adds what providers don't have: a versioned ontology, semantic readiness, and derivation of the correctness machinery.</p>
   </div>
 
   <figure class="diagram">
@@ -755,7 +756,7 @@
   <div class="sec-head"><span class="n">05</span><h2>Communication &amp; durability</h2></div>
   <p class="not-shipped"><b>Designed, not shipped.</b> The chart deploys none of NATS, DBOS or Argo, and the <code>plus</code> tier refuses to render by design (<code>charts/assayd/templates/_helpers.tpl</code>). In the exposure table only A2A through the gateway is proven today; read the other rows as roadmap.</p>
   <div class="prose">
-    <p>"Workflow engine" is three different jobs, and conflating them is how platforms get heavy. graphene splits them:</p>
+    <p>"Workflow engine" is three different jobs, and conflating them is how platforms get heavy. assayd splits them:</p>
   </div>
   <div class="tablewrap"><table>
     <thead><tr><th>Job</th><th>Binding</th><th>Why · weight</th></tr></thead>
@@ -768,7 +769,7 @@
 
   <h3 id="exposure">Exposure — everything that runs here is also a server</h3>
   <div class="prose">
-    <p>The symmetry rule: graphene consumes open standards <em>and publishes over the same ones</em>. Any Agent, Workflow, or KnowledgeGraph can be exposed beyond the cluster with a declarative <code>expose</code> block — no code, no separate API layer. The policy compiler turns the block into gateway listeners, so external consumers get the identical treatment internal traffic gets: OAuth clients minted in the IdP, per-consumer rate/token budgets, receipts on every call.</p>
+    <p>The symmetry rule: assayd consumes open standards <em>and publishes over the same ones</em>. Any Agent, Workflow, or KnowledgeGraph can be exposed beyond the cluster with a declarative <code>expose</code> block — no code, no separate API layer. The policy compiler turns the block into gateway listeners, so external consumers get the identical treatment internal traffic gets: OAuth clients minted in the IdP, per-consumer rate/token budgets, receipts on every call.</p>
   </div>
   <div class="tablewrap"><table>
     <thead><tr><th>Resource</th><th>Exposed as</th><th>What a consumer sees</th></tr></thead>
@@ -793,7 +794,7 @@
       <span class="k">budget</span>: {<span class="k">callsPerDay</span>: <span class="s">500</span>}
     <span class="k">a2a</span>: {}                          <span class="c"># long-running task interface, card published</span></pre>
   <div class="prose">
-    <p class="soft"><code>graphene expose &lt;resource&gt;</code> is CLI sugar that writes the block. Strategically this is the distribution story: every graphene installation is a node that <em>offers</em> agents and tools to the wider ecosystem over the same protocols it consumes — interoperability in both directions, versus the walled platforms' one-way doors.</p>
+    <p class="soft"><code>assayd expose &lt;resource&gt;</code> is CLI sugar that writes the block. Strategically this is the distribution story: every assayd installation is a node that <em>offers</em> agents and tools to the wider ecosystem over the same protocols it consumes — interoperability in both directions, versus the walled platforms' one-way doors.</p>
   </div>
 </section>
 
@@ -880,7 +881,7 @@
   <div class="sec-head"><span class="n">08</span><h2>Evals — semantic admission</h2></div>
   <p class="not-shipped"><b>Designed, not shipped.</b> No <code>EvalSuite</code> CRD and no gate controller exist. Today a revision with declared gates holds at zero traffic indefinitely — <code>GatesPassed=False</code>, reason <code>GateControllerUnimplemented</code> — never promoted ungated, and never promoted at all.</p>
   <div class="prose">
-    <p>Kubernetes gates rollouts on health checks; graphene gates them on <strong>semantic</strong> checks. Agents and models earn traffic. This is the headline feature — nobody in the kagent / Rossoctl / Dapr set does eval-as-admission.</p>
+    <p>Kubernetes gates rollouts on health checks; assayd gates them on <strong>semantic</strong> checks. Agents and models earn traffic. This is the headline feature — nobody in the kagent / Rossoctl / Dapr set does eval-as-admission.</p>
   </div>
 
   <figure class="diagram">
@@ -1090,14 +1091,14 @@
     <p>The platform contract is deliberately tiny — a container that serves A2A plus an Agent Card — which is why creating an agent can be this easy: <strong>your SDK, your code; the CLI generates the thin wrapper and drives all the machinery.</strong> Target: empty directory to an agent answering from a knowledge graph on a local cluster in <strong>under 15 minutes</strong>.</p>
     <p>Three ways in, ordered by effort:</p>
     <ul class="tight">
-      <li><strong>Scaffolded.</strong> <code>graphene init</code> runs an interview — what the agent does, which graph, which tools (listed from the directory), which SDK (recommended with reasoning, never silently chosen) — and generates a complete working agent (~100 lines) <em>that the user owns</em>. No bundled runtime; doctrine holds.</li>
+      <li><strong>Scaffolded.</strong> <code>assayd init</code> runs an interview — what the agent does, which graph, which tools (listed from the directory), which SDK (recommended with reasoning, never silently chosen) — and generates a complete working agent (~100 lines) <em>that the user owns</em>. No bundled runtime; doctrine holds.</li>
       <li><strong>BYO.</strong> An existing LangGraph / CrewAI / ADK / Pydantic AI / Claude-SDK agent gets an A2A wrapper, card, Dockerfile, and <code>agent.yaml</code> from a per-SDK template — typically a few dozen generated lines.</li>
-      <li><strong>External.</strong> An agent already running elsewhere: <code>graphene agent register --endpoint</code> — the operator reads its card and wires identity, routes, and directory entry.</li>
+      <li><strong>External.</strong> An agent already running elsewhere: <code>assayd agent register --endpoint</code> — the operator reads its card and wires identity, routes, and directory entry.</li>
     </ul>
   </div>
 
   <figure class="diagram">
-    <svg viewBox="0 0 940 380" role="img" aria-label="The golden path: on the laptop, graphene init scaffolds agent code in the developer's own SDK; graphene dev hot-reloads it onto a local k3d or minikube cluster running the 8-pod core, streaming live receipts back to the terminal. graphene build produces a signed image with SBOM into a registry; graphene deploy commits CRs to an environment repo, Argo CD syncs, and the rollout streams the eval gate: held, eval, canary, full traffic.">
+    <svg viewBox="0 0 940 380" role="img" aria-label="The golden path: on the laptop, assayd init scaffolds agent code in the developer's own SDK; assayd dev hot-reloads it onto a local k3d or minikube cluster running the 8-pod core, streaming live receipts back to the terminal. assayd build produces a signed image with SBOM into a registry; assayd deploy commits CRs to an environment repo, Argo CD syncs, and the rollout streams the eval gate: held, eval, canary, full traffic.">
       <defs>
         <marker id="arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
@@ -1116,7 +1117,7 @@
       <text x="224" y="124" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">~100 lines, user-owned</text>
 
       <rect x="48" y="160" width="352" height="46" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
-      <text x="224" y="188" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--accent)" font-family="system-ui, sans-serif">graphene CLI</text>
+      <text x="224" y="188" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--accent)" font-family="system-ui, sans-serif">assayd CLI</text>
 
       <rect x="48" y="232" width="352" height="84" rx="8" fill="none" stroke="currentColor"/>
       <text x="224" y="258" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)" font-family="system-ui, sans-serif">k3d / minikube / kind</text>
@@ -1159,22 +1160,22 @@
     <figcaption><b>Fig 5 — The golden path.</b> The whole lifecycle is five commands: <code>init → dev → invoke → build → deploy</code>. Deploy is a GitOps commit, not a kubectl apply — the CRs are the deploy artifact, so environments diff and roll back like code.</figcaption>
   </figure>
 
-<pre class="code"><span class="c">$ graphene init</span>
+<pre class="code"><span class="c">$ assayd init</span>
 ? What should this agent do?   <span class="s">Review prior-auth requests against payer policy</span>
 ? Knowledge graph:             <span class="s">payer-policies (v12)</span>   <span class="c">— 3 others available</span>
 ? Tools (from directory):      <span class="s">claims-system, fax-gateway</span>
 ? SDK:                         <span class="s">pydantic-ai</span>   <span class="c">— recommended: cleanest A2A + MCP fit for Python</span>
 <span class="k">✓</span> scaffolded pa-reviewer/ — agent.py (74 lines), agent.yaml, Dockerfile, card.json
 
-<span class="c">$ graphene dev</span>
-<span class="k">✓</span> k3d cluster <span class="s">"graphene-local"</span> ready — core: 8 pods
+<span class="c">$ assayd dev</span>
+<span class="k">✓</span> k3d cluster <span class="s">"assayd-local"</span> ready — core: 8 pods
 <span class="k">✓</span> pa-reviewer running — hot reload on save
 ⠿ receipt  task 01H…  kg.query ×2 → claims.lookup ×1 · 6.2k tok · $0.011 · 3.4s
 
-<span class="c">$ graphene eval run --quick</span>          <span class="c"># 20 golden cases from the ontology</span>
+<span class="c">$ assayd eval run --quick</span>          <span class="c"># 20 golden cases from the ontology</span>
 score <span class="k">0.91 ✓</span>  (gate: 0.85)
 
-<span class="c">$ graphene build &amp;&amp; graphene deploy --env staging</span>
+<span class="c">$ assayd build &amp;&amp; assayd deploy --env staging</span>
 <span class="k">✓</span> image signed (cosign) · SBOM attached
 <span class="k">✓</span> CRs committed to env repo — Argo CD syncing
 ⠿ rollout  HELD → eval <span class="k">0.89 ✓</span> → canary 10% → 100%   (4m12s)</pre>
@@ -1183,8 +1184,8 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
     <h3>Workflows — two authoring levels, one runtime</h3>
     <ul class="tight">
       <li><strong>Declarative</strong> for compositions: a <code>Workflow</code> CR lists triggers (JetStream event, cron, A2A task) and steps (call agent A, then agent B, human-approval step, notify). The operator compiles it to a DBOS program — no code written.</li>
-      <li><strong>Code-first</strong> for real logic: <code>graphene init workflow --code</code> scaffolds a DBOS project — plain decorated functions with crash-resume and retries, no orchestrator to learn. Local run with fake event injection: <code>graphene workflow test --event fixtures/claim.json</code>.</li>
-      <li><strong>Apps:</strong> <code>graphene init app</code> scaffolds a frontend with a typed TS client generated from the exposed workflow/agent schemas, IdP login wired — the product layer with no hand-written backend (§03).</li>
+      <li><strong>Code-first</strong> for real logic: <code>assayd init workflow --code</code> scaffolds a DBOS project — plain decorated functions with crash-resume and retries, no orchestrator to learn. Local run with fake event injection: <code>assayd workflow test --event fixtures/claim.json</code>.</li>
+      <li><strong>Apps:</strong> <code>assayd init app</code> scaffolds a frontend with a typed TS client generated from the exposed workflow/agent schemas, IdP login wired — the product layer with no hand-written backend (§03).</li>
     </ul>
     <p class="soft">The wizard's rule everywhere: <em>the platform asks, you choose</em> — every generated choice shows its reasoning and is editable; a blank field the user can't understand is treated as a product failure.</p>
   </div>
@@ -1194,12 +1195,12 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
 <section id="components">
   <div class="sec-head"><span class="n">12</span><h2>Component plan</h2></div>
   <div class="prose">
-    <p>Every component graphene ships, what it owns, what it binds, and its build size (S &lt; 1 wk · M 1–3 wk · L 3–6 wk, solo). Phases map to the build order in §18.</p>
+    <p>Every component assayd ships, what it owns, what it binds, and its build size (S &lt; 1 wk · M 1–3 wk · L 3–6 wk, solo). Phases map to the build order in §18.</p>
   </div>
   <div class="tablewrap"><table>
     <thead><tr><th>Component</th><th>Owns</th><th>Binds</th><th>Size</th><th>Phase</th></tr></thead>
     <tbody>
-      <tr><td>graphene CLI</td><td>Wizard, dev loop, build/deploy, <code>kg</code>/<code>eval</code>/<code>session</code>/<code>drift</code> verbs</td><td>cobra, buildpacks/ko, cosign</td><td class="num">L</td><td class="num">P1+</td></tr>
+      <tr><td>assayd CLI</td><td>Wizard, dev loop, build/deploy, <code>kg</code>/<code>eval</code>/<code>session</code>/<code>drift</code> verbs</td><td>cobra, buildpacks/ko, cosign</td><td class="num">L</td><td class="num">P1+</td></tr>
       <tr><td>SDK templates</td><td>A2A wrapper + card + Dockerfile per SDK (pydantic-ai, LangGraph, CrewAI, ADK, Claude SDK, raw)</td><td>a2a-sdk</td><td class="num">M</td><td class="num">P1</td></tr>
       <tr><td>agent-operator</td><td>Agent controller: sandbox/deploy, SPIRE entries, routes, directory registration, rollout gating</td><td>kubebuilder, agent-sandbox</td><td class="num">L</td><td class="num">P1</td></tr>
       <tr><td>Policy compiler</td><td>Agent CR budgets/tools/guardrails <b>+ expose blocks</b> → gateway config (library inside operator)</td><td>agentgateway CRDs</td><td class="num">M</td><td class="num">P1</td></tr>
@@ -1218,10 +1219,10 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
       <tr><td>Drift controllers</td><td>Canary-prompt CronJobs, SLO burn watcher, embedding distance; remediation actions (§09)</td><td>OpenObserve queries</td><td class="num">L</td><td class="num">P4</td></tr>
       <tr><td>workflow-operator</td><td>Workflow CR → DBOS program / Argo DAG; JetStream event triggers</td><td>DBOS</td><td class="num">M</td><td class="num">P4</td></tr>
       <tr><td>Loop governance</td><td>Hop limits, A2A cycle detection, kill switch, approval interrupts (§14)</td><td>gateway + operator</td><td class="num">M</td><td class="num">P4</td></tr>
-      <tr><td>Pack format + installer</td><td>The fast-plane delivery vehicle: signed OCI bundles of filters/skills/templates/drivers/CRs; <code>graphene pack</code> verbs; socket-contract compatibility checks (§15)</td><td>OCI, cosign</td><td class="num">M</td><td class="num">P3</td></tr>
+      <tr><td>Pack format + installer</td><td>The fast-plane delivery vehicle: signed OCI bundles of filters/skills/templates/drivers/CRs; <code>assayd pack</code> verbs; socket-contract compatibility checks (§15)</td><td>OCI, cosign</td><td class="num">M</td><td class="num">P3</td></tr>
       <tr><td>Knowledge pattern packs</td><td><code>sop-decision-tree</code>, <code>policy-rules</code>, <code>episodic-memory</code>, <code>entity-catalog</code>, <code>qa-corpus</code>: ontology templates + extractors + auto-probes + bundle recipes (§13)</td><td>packs</td><td class="num">M</td><td class="num">P2–P3</td></tr>
       <tr><td>App layer</td><td>HTTP projection of workflows/agents (REST/SSE), typed client generation, app templates, release pinning (§03)</td><td>kro, IdP</td><td class="num">M</td><td class="num">P4</td></tr>
-      <tr><td>AuthzProvider (OpenFGA)</td><td>ReBAC model (user/agent/tool/subgraph relations, delegation chains), gateway check integration, <code>graphene authz</code> verbs (§06)</td><td>OpenFGA</td><td class="num">M</td><td class="num">P4</td></tr>
+      <tr><td>AuthzProvider (OpenFGA)</td><td>ReBAC model (user/agent/tool/subgraph relations, delegation chains), gateway check integration, <code>assayd authz</code> verbs (§06)</td><td>OpenFGA</td><td class="num">M</td><td class="num">P4</td></tr>
       <tr><td>Tenant CR (enterprise)</td><td>One-object tenancy fan-out: namespace/vCluster, NATS account, RLS role, IdP org, gateway partition, quotas (§06)</td><td>vCluster, Capsule</td><td class="num">L</td><td class="num">ent</td></tr>
       <tr><td>Compliance profile packs (enterprise)</td><td>hipaa/soc2/gdpr: receipt hash-chaining + retention, egress allowlists, mandatory redaction, break-glass, reports (§06)</td><td>packs</td><td class="num">M</td><td class="num">ent</td></tr>
       <tr><td>model-operator</td><td>Model CR envelope: TrainJob / ModelKit / InferenceService (§10)</td><td>KServe, Trainer, KitOps</td><td class="num">L</td><td class="num">P5</td></tr>
@@ -1397,7 +1398,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
     <h3>Creating a graph — three starting points, zero infrastructure</h3>
     <p>The promise: <strong>you bring documents and review an ontology; Kubernetes runs everything else.</strong> The user never provisions a graph database, an embedder, or a pipeline worker — <code>kg init</code> makes the operator materialize the provider, the Connector ingestion facet, and the pipeline workflow from the chart, and <code>kubectl get knowledgegraphs</code> shows build progress as conditions: <code>Ingesting → Validating → ProbesPassing → Ready</code>.</p>
     <ul class="tight">
-      <li><strong>From a knowledge pattern</strong> — <code>graphene kg init --pattern sop-decision-tree --from connector/sharepoint-sops</code>. The pattern pack supplies the ontology template, extractors, probe generators, and bundle recipes; the wizard customizes names and thresholds.</li>
+      <li><strong>From a knowledge pattern</strong> — <code>assayd kg init --pattern sop-decision-tree --from connector/sharepoint-sops</code>. The pattern pack supplies the ontology template, extractors, probe generators, and bundle recipes; the wizard customizes names and thresholds.</li>
       <li><strong>From scratch, with a proposed ontology</strong> — point at 20–50 sample documents; the platform <em>proposes</em> an ontology (entities, relations, invariants, inferred with stated reasoning), the human edits and locks v1, the pipeline runs. An ontology is never silently generated — proposal → review → lock, always.</li>
       <li><strong>Bring your own graph</strong> — an existing Neo4j/Graphiti/anything wraps in a provider adapter and gains probes and versioning; the platform manages only the query surface and lifecycle.</li>
     </ul>
@@ -1502,7 +1503,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
     <p>Every provider (Graphiti, cognee, Neo4j, BYO) must expose six MCP tools — this is the whole pluggability contract: <code>search</code> · <code>neighbors</code> (typed traversal) · <code>get_context_bundle</code> (a pre-composed retrieval recipe, so agents don't hand-roll traversals) · <code>cite</code> (provenance for any fact) · <code>schema</code> (the ontology, machine-readable) · <code>probe</code> (execute the readiness set). Anything beyond the six is provider-specific bonus, invisible to portable agents.</p>
     <h3>Operations</h3>
     <ul class="tight">
-      <li><strong>Versioning mechanics:</strong> a snapshot per ontology or corpus change (namespace-per-version on the provider); <code>graphene kg diff v11 v12</code> renders entity/edge/probe deltas for PR review.</li>
+      <li><strong>Versioning mechanics:</strong> a snapshot per ontology or corpus change (namespace-per-version on the provider); <code>assayd kg diff v11 v12</code> renders entity/edge/probe deltas for PR review.</li>
       <li><strong>Re-embedding</strong> on embedding-model change is a version bump, never an in-place mutation — agents on the old pin are untouched.</li>
       <li><strong>PII</strong> is redacted at the normalize stage, before anything persists; provenance keeps a pointer to the source system rather than a copy of sensitive payloads.</li>
       <li><strong>Scoping:</strong> per-agent subgraph access is enforced at the gateway (tool-call filters on the KG's MCP surface), not trusted to the provider.</li>
@@ -1604,13 +1605,13 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
   <div class="sec-head"><span class="n">15</span><h2>Extension model — absorbing tomorrow's patterns</h2></div>
   <p class="not-shipped"><b>Designed, not shipped.</b> None of the provider slots below exists as an interface in code, and no <code>Pack</code> CRD or CLI exists.</p>
   <div class="prose">
-    <p>A new agent-engineering pattern arrives every few weeks; the platform must outlive all of them. Graph engineering and loop engineering are merely today's examples — tomorrow it will be something with no name yet. The systems that absorb this churn share a structure: Kubernetes did it with CRDs, CSI drivers, and admission hooks; <strong>Claude Code does it most visibly</strong> — skills, hooks, subagents, plugins, output styles arrive every few weeks because the engine is a tiny frozen loop and every "feature" is really <em>data plus convention</em>. graphene adopts that structure deliberately, as seven named design patterns and one governing split.</p>
+    <p>A new agent-engineering pattern arrives every few weeks; the platform must outlive all of them. Graph engineering and loop engineering are merely today's examples — tomorrow it will be something with no name yet. The systems that absorb this churn share a structure: Kubernetes did it with CRDs, CSI drivers, and admission hooks; <strong>Claude Code does it most visibly</strong> — skills, hooks, subagents, plugins, output styles arrive every few weeks because the engine is a tiny frozen loop and every "feature" is really <em>data plus convention</em>. assayd adopts that structure deliberately, as seven named design patterns and one governing split.</p>
     <h3>The governing split: two planes, hard boundary</h3>
     <p>The <strong>slow plane</strong> is the engine — three operators, the gateway binding, Postgres + NATS. It ships rarely and gets more boring over time. The <strong>fast plane</strong> is the <em>technique plane</em> — ontologies, skills, policies, eval suites, gateway filters, driver implementations, scaffold templates. Everything in it is a versioned data artifact, so a new technique ships as an artifact publish, never a platform release. <em>The platform's velocity lives entirely in the fast plane; its stability lives entirely in the slow one.</em></p>
     <h3>The seven meta-patterns</h3>
   </div>
   <div class="tablewrap"><table>
-    <thead><tr><th>Pattern</th><th>In Claude Code</th><th>In graphene</th></tr></thead>
+    <thead><tr><th>Pattern</th><th>In Claude Code</th><th>In assayd</th></tr></thead>
     <tbody>
       <tr><td>1 · Microkernel</td><td>One tiny agentic tool-loop; nothing new lands in it</td><td>Operators + bound gateway + substrate, frozen; everything else is a plugin against a contract</td></tr>
       <tr><td>2 · Behavior is data</td><td>Skills, commands, agents are markdown/config files</td><td>Ontologies, skills, policies, eval suites, templates are CRs and OCI artifacts — reviewed, versioned, reverted like code</td></tr>
@@ -1618,7 +1619,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
       <tr><td>4 · Lifecycle hooks</td><td>PreToolUse, PostToolUse, SessionStart…</td><td>Named interception points on both planes: data plane <code>pre-hop / post-hop</code> (gateway filter chain); control plane <code>pre-reconcile / post-rollout / on-condition</code> (webhooks). The platform exposes <em>where</em> to attach without predicting <em>what</em></td></tr>
       <tr><td>5 · Convention discovery</td><td>Drop a file in <code>.claude/</code>, it exists</td><td>A labeled CR or a well-known OCI path is auto-discovered and registered — no registration ceremony, no central catalog code</td></tr>
       <tr><td>6 · Versioned contracts</td><td>MCP protocol versioning</td><td>Every socket contract versioned N/N−1 with a conformance suite, so third parties ship providers without coordination</td></tr>
-      <tr><td>7 · Packs</td><td>Plugins bundle skills + agents + hooks</td><td>A <b>pack</b> bundles drivers, filters, skills, templates, and CRs into one signed OCI artifact: <code>graphene pack install &lt;name&gt;</code></td></tr>
+      <tr><td>7 · Packs</td><td>Plugins bundle skills + agents + hooks</td><td>A <b>pack</b> bundles drivers, filters, skills, templates, and CRs into one signed OCI artifact: <code>assayd pack install &lt;name&gt;</code></td></tr>
     </tbody>
   </table></div>
   <div class="prose">
@@ -1725,11 +1726,11 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
       <tr><td>MCP and A2A themselves arriving</td><td>edge</td><td>The one genuine core event per ~2 years: a protocol at the gateway — which is why the gateway is a bound component, not our code</td></tr>
     </tbody>
   </table></div>
-  <div class="callout"><p><strong>The governing claim:</strong> graphene's core is small enough to freeze because everything opinionated lives in a socket. The day a "graph engineering"-sized pattern emerges, the response is a driver contract, a filter, a CRD, or a template — shipped in weeks, breaking nothing, and every existing installation adopts it with a pack install.</p></div>
+  <div class="callout"><p><strong>The governing claim:</strong> assayd's core is small enough to freeze because everything opinionated lives in a socket. The day a "graph engineering"-sized pattern emerges, the response is a driver contract, a filter, a CRD, or a template — shipped in weeks, breaking nothing, and every existing installation adopts it with a pack install.</p></div>
 
   <div class="prose">
     <h3>Packs — how a new technique actually ships</h3>
-    <p>The pack is the delivery vehicle for the fast plane — the equivalent of a Claude Code plugin: one signed OCI artifact bundling any mix of driver implementations, gateway filters, skills, scaffold templates, eval metrics, and CRs, with a manifest declaring which socket contracts (and versions) it targets. Installation is discovery-by-convention: push to the registry, <code>graphene pack install</code>, the operators pick it up.</p>
+    <p>The pack is the delivery vehicle for the fast plane — the equivalent of a Claude Code plugin: one signed OCI artifact bundling any mix of driver implementations, gateway filters, skills, scaffold templates, eval metrics, and CRs, with a manifest declaring which socket contracts (and versions) it targets. Installation is discovery-by-convention: push to the registry, <code>assayd pack install</code>, the operators pick it up.</p>
   </div>
 <pre class="code"><span class="c"># pack.yaml — a hypothetical technique that doesn't exist yet</span>
 <span class="k">name</span>: <span class="s">context-compaction</span>
@@ -1738,10 +1739,10 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
 <span class="k">provides</span>:
   <span class="k">filters</span>:   [<span class="s">compact-context.wasm</span>]       <span class="c"># socket 2 — every agent covered on install</span>
   <span class="k">skills</span>:    [<span class="s">when-to-summarize.md</span>]        <span class="c"># socket 4 — loaded by loop routers</span>
-  <span class="k">templates</span>: [<span class="s">loop-with-compaction/</span>]       <span class="c"># socket 4 — graphene init picks it up</span>
+  <span class="k">templates</span>: [<span class="s">loop-with-compaction/</span>]       <span class="c"># socket 4 — assayd init picks it up</span>
   <span class="k">metrics</span>:   [<span class="s">context_efficiency</span>]          <span class="c"># EvalSuites can gate on it immediately</span>
 
-<span class="c">$ graphene pack install context-compaction</span>
+<span class="c">$ assayd pack install context-compaction</span>
 <span class="k">✓</span> signature verified · contracts compatible (gateway-filter/v1)
 <span class="k">✓</span> filter live on 12 agents · 1 new template · 1 skill indexed
   <span class="c">no platform release · no agent redeploys · rollback: pack uninstall</span></pre>
@@ -1755,7 +1756,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
   <div class="sec-head"><span class="n">16</span><h2>Competitive positioning</h2></div>
   <p class="not-shipped"><b>The assayd column states the target, not what ships.</b> Only the gateway-path row is true today; eval-as-admission, session replay, drift controllers and the Postgres+NATS substrate are designed, not built.</p>
   <div class="tablewrap"><table>
-    <thead><tr><th></th><th>kagent <span class="mono">(CNCF · Solo.io)</span></th><th>Rossoctl <span class="mono">(ex-Kagenti · IBM)</span></th><th>Dapr Agents <span class="mono">(v1.0 GA)</span></th><th style="color: var(--accent)">graphene</th></tr></thead>
+    <thead><tr><th></th><th>kagent <span class="mono">(CNCF · Solo.io)</span></th><th>Rossoctl <span class="mono">(ex-Kagenti · IBM)</span></th><th>Dapr Agents <span class="mono">(v1.0 GA)</span></th><th style="color: var(--accent)">assayd</th></tr></thead>
     <tbody>
       <tr><td>Agent model</td><td>Own ADK-based engine</td><td>Framework-neutral intercept</td><td>Python framework on actors</td><td>Any container speaking A2A</td></tr>
       <tr><td>Domain concept</td><td>None — DevOps tools</td><td>"Knowledge base" service</td><td>None</td><td><b>Versioned KG contract, ontology-first</b></td></tr>
@@ -1766,7 +1767,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
     </tbody>
   </table></div>
   <div class="prose">
-    <p class="soft">Strategic read: the secure-runtime layer is commoditizing fast (Rossoctl + agentgateway + agent-sandbox converge within ~12 months) — compose it, don't compete with it. The un-owned layers are the domain contract and semantic admission. That is where graphene lives.</p>
+    <p class="soft">Strategic read: the secure-runtime layer is commoditizing fast (Rossoctl + agentgateway + agent-sandbox converge within ~12 months) — compose it, don't compete with it. The un-owned layers are the domain contract and semantic admission. That is where assayd lives.</p>
     <h3>Open source and enterprise — the split</h3>
     <p><strong>License: Apache 2.0 for the core.</strong> It keeps the CNCF path open, avoids the AGPL-fear tax at adoption time, and sidesteps the community damage of the 2024–26 relicensing wave (HashiCorp BSL, Redis). The realistic protection against cloud strip-mining at this stage is velocity plus the enterprise layer, not a restrictive license. Enterprise features ship as separate proprietary modules — open-core split by component, never by crippling the core.</p>
     <p>The split line is the classic one that works: <strong>a single team gets everything, free; organizational scale is paid.</strong></p>
@@ -1789,7 +1790,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
   <div class="sec-head"><span class="n">17</span><h2>Weight budget — core tier</h2></div>
   <p class="not-shipped"><b>Designed, not shipped.</b> The chart deploys one workload today — <code>assayd-agent-operator</code>. The budget below is the target.</p>
   <div class="podrow">
-    <div class="pod own"><b>agent-operator</b>1 pod · graphene</div>
+    <div class="pod own"><b>agent-operator</b>1 pod · assayd</div>
     <div class="pod"><b>agentgateway</b>1–2 pods</div>
     <div class="pod"><b>SPIRE</b>2 pods (server + DS)</div>
     <div class="pod"><b>Zitadel</b>1 pod · on our Postgres</div>
@@ -1797,7 +1798,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
     <div class="pod"><b>Postgres</b>1 pod</div>
     <div class="pod"><b>OpenObserve</b>1 pod</div>
   </div>
-  <p class="pod-total">Total: <b>≈ 8 pods</b> — one <code>helm install</code>. Rossoctl's dev setup asks for 16 GB / 4 cores <em>with flags</em>; graphene should demo on half that. Exactly one pod in the core tier is graphene's own code.</p>
+  <p class="pod-total">Total: <b>≈ 8 pods</b> — one <code>helm install</code>. Rossoctl's dev setup asks for 16 GB / 4 cores <em>with flags</em>; assayd should demo on half that. Exactly one pod in the core tier is assayd's own code.</p>
   <h3>Beyond core</h3>
   <div class="prose"><p><code>plus</code> adds workflow-operator + workflow-runtime (+2, scaling 0→N with trigger registrations), OpenFGA with its co-located ext-authz adapter (+1), model-operator (+1), optionally Argo and Phoenix. Enterprise adds tenant-operator (+1). Each managed knowledge graph costs 2 workload pods (adapter + backend); generative serving adds KServe's <code>llmisvc</code> controller at plus tier and <b>+1 endpoint-picker per inference pool</b> alongside the vLLM pods (design 25 A1). A hard-isolated tenant is ~4–5 pods core-only — NATS, Postgres, Zitadel, OpenObserve and the gateway stay shared — and +2–3 at plus. <b>The budget is CI-enforced</b>: one job counts rendered pods against a ledger, another checks stateful workloads against a reasoned allowlist; a PR that adds either fails unless it edits the ledger in the same commit.</p></div>
   <h3>Runs anywhere — local distros are a CI target</h3>
@@ -1942,7 +1943,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
 </section>
 
 <footer class="colophon">
-  <span>graphene · architecture v0.1 · 2026-08-20</span>
+  <span>assayd · architecture v0.1 · 2026-08-20</span>
   <span>standards: A2A · MCP · OASF · SPIFFE · OTel GenAI · Gateway API · OCI/ModelPack</span>
   <span>codename is a placeholder</span>
 </footer>
