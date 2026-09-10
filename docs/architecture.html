@@ -107,6 +107,15 @@
   }
   .mast-inner { max-width: 960px; margin: 0 auto; padding: 64px 28px 44px; position: relative; }
   .mast svg.lattice { position: absolute; right: -40px; top: -30px; opacity: 0.55; pointer-events: none; }
+  /* Generated from architecture.md's per-section "Designed, not shipped" banners —
+     the two files are hand-maintained, so the banner text is copied, not paraphrased. */
+  .not-shipped {
+    border-left: 3px solid var(--accent);
+    background: rgba(127, 127, 127, 0.08);
+    padding: 10px 14px;
+    margin: 0 0 20px;
+    font-size: 0.95em;
+  }
   .doc-kicker {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     font-size: 12px;
@@ -339,7 +348,7 @@
         <circle cx="300" cy="130" r="2.5"/>
       </g>
     </svg>
-    <p class="doc-kicker">Architecture · v1.0 · superseded in part — designs 02 and 03 are not approved; delivery is narrowed to one slice (ADR-0030). Most sections describe the designed system, not the shipped one; architecture.md marks each with a “Designed, not shipped” banner</p>
+    <p class="doc-kicker">Architecture · v1.0 · superseded in part — designs 02 and 03 are not approved; delivery is narrowed to one slice (ADR-0030). Most sections describe the designed system, not the shipped one; each such section opens with a “Designed, not shipped” note, copied from architecture.md</p>
     <h1 class="title">assayd<span class="hex"> ⬡</span></h1>
     <p class="subtitle">A radically lightweight, Kubernetes-native agent platform. The domain is a pluggable knowledge graph; everything else is an open standard with a thin binding.</p>
     <p class="subtitle" style="font-size:16px;margin-top:-14px;">Every component below is designed, adversarially critiqued, and approved — including the places the design phase <em>corrected</em> the original strategy. Those corrections are listed first.</p>
@@ -435,6 +444,7 @@
 <!-- ══════════════════════ 02 OVERVIEW ══════════════════════ -->
 <section id="overview">
   <div class="sec-head"><span class="n">02</span><h2>System overview</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped — and three sentences below are false today.</b> One operator exists, <code>agent-operator</code>; there is no workflow-, model- or tenant-operator. No policy is compiled from the Agent CR: the policy compiler does not exist. Registration today reads the card only — directory publish and identity issuance are not implemented — and when <code>gateway.enabled</code> is set the operator emits the Agent's serving <code>HTTPRoute</code> — a route only, with no policy attached to it — and nothing else. The chart deploys neither NATS nor Postgres.</p>
   <div class="prose">
     <p>Three planes. The <strong>control plane</strong> is GitOps-driven: custom resources reconciled by three small core operators, plus the enterprise tenant-operator. The <strong>data plane</strong> is a single gateway every agent hop crosses — which is where security, budgets, and receipts are enforced, so guarantees hold for black-box agents regardless of SDK. The <strong>substrate</strong> is the two stateful dependencies.</p>
     <p class="soft">In every diagram in this document, <strong style="color: var(--accent)">ultramarine marks what graphene builds</strong>; grey marks adopted open components. Notice how little is ultramarine — that is the thesis.</p>
@@ -570,6 +580,7 @@
 <!-- ══════════════════════ 03 API ══════════════════════ -->
 <section id="api">
   <div class="sec-head"><span class="n">03</span><h2>The API surface — six CRDs designed, one shipped</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> One CRD exists today: <code>Agent</code> (<code>config/crd/assayd.dev_agents.yaml</code>). The rest of this section is the target surface.</p>
   <div class="prose">
     <p>The core API is six custom resources reconciled by three operators — plus <code>Connector</code>, <code>Pack</code>, <code>Grant</code> and <code>Tenant</code>, which the design phase made concrete (§20). Nothing else is exposed; the CLI is sugar over these objects, which is why everything is also plain <code>kubectl</code> and GitOps.</p>
   </div>
@@ -635,6 +646,7 @@
 <!-- ══════════════════════ 04 KG ══════════════════════ -->
 <section id="kg">
   <div class="sec-head"><span class="n">04</span><h2>The KnowledgeGraph contract — the differentiator</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> No <code>KnowledgeGraph</code> CRD exists; <code>Agent</code> is the only CRD (§03).</p>
   <div class="prose">
     <p>The claim that separates graphene from kagent, Rossoctl, and Dapr Agents: <strong>the domain is data, not code.</strong> Standing the platform up in a new vertical means dropping in a new <code>KnowledgeGraph</code> CR and reusing every other part of the platform.</p>
     <p>Every serious graph engine already exposes MCP, so graphene doesn't pick a winner — it defines the socket. A provider is anything behind an MCP query surface; the contract adds what providers don't have: a versioned ontology, semantic readiness, and derivation of the correctness machinery.</p>
@@ -741,6 +753,7 @@
 <!-- ══════════════════════ 05 COMMS ══════════════════════ -->
 <section id="comms">
   <div class="sec-head"><span class="n">05</span><h2>Communication &amp; durability</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> The chart deploys none of NATS, DBOS or Argo, and the <code>plus</code> tier refuses to render by design (<code>charts/assayd/templates/_helpers.tpl</code>). In the exposure table only A2A through the gateway is proven today; read the other rows as roadmap.</p>
   <div class="prose">
     <p>"Workflow engine" is three different jobs, and conflating them is how platforms get heavy. graphene splits them:</p>
   </div>
@@ -787,6 +800,7 @@
 <!-- ══════════════════════ 06 SECURITY ══════════════════════ -->
 <section id="security">
   <div class="sec-head"><span class="n">06</span><h2>Security plane — zero-trust, no mesh</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> None of these bindings runs today: no SPIRE, Zitadel or OpenFGA is deployed; no policy is compiled; the sandbox CRD is not bound, so every sandboxed agent downgrades (<code>SandboxDowngraded</code>); no NetworkPolicy is materialized; and no image or card signature is verified — the chart's two admission policies reserve namespace labels and gateway routes, nothing else.</p>
   <div class="prose">
     <p>The posture in one sentence: <strong>guarantees live outside the agent.</strong> Identity, authorization, budgets, guardrails, and receipts are enforced at the data plane, so they hold for black-box agents no matter which SDK built them. Same thesis as Rossoctl's intercept — delivered in ~6 pods instead of a platform.</p>
   </div>
@@ -849,6 +863,7 @@
 <!-- ══════════════════════ 07 HARNESS ══════════════════════ -->
 <section id="harness">
   <div class="sec-head"><span class="n">07</span><h2>Harness &amp; observability</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> No receipt pipeline, OTel export, OpenObserve or alert rules exist in the repository. The clause below saying alert rules are "shipped in the chart, each fixture-tested in CI" is false today and stands only as the target.</p>
   <div class="prose">
     <p>The harness is a proven pattern promoted to platform level and made SDK-agnostic — because it lives in the <em>data plane</em>, not in the agent:</p>
     <ul class="tight">
@@ -863,6 +878,7 @@
 <!-- ══════════════════════ 08 EVALS ══════════════════════ -->
 <section id="evals">
   <div class="sec-head"><span class="n">08</span><h2>Evals — semantic admission</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> No <code>EvalSuite</code> CRD and no gate controller exist. Today a revision with declared gates holds at zero traffic indefinitely — <code>GatesPassed=False</code>, reason <code>GateControllerUnimplemented</code> — never promoted ungated, and never promoted at all.</p>
   <div class="prose">
     <p>Kubernetes gates rollouts on health checks; graphene gates them on <strong>semantic</strong> checks. Agents and models earn traffic. This is the headline feature — nobody in the kagent / Rossoctl / Dapr set does eval-as-admission.</p>
   </div>
@@ -955,6 +971,7 @@
 <!-- ══════════════════════ 09 DRIFT ══════════════════════ -->
 <section id="drift">
   <div class="sec-head"><span class="n">09</span><h2>Drift &amp; self-healing</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> No drift detector or remediation controller exists; <code>ModelDrifted</code> is a declared condition type that nothing sets.</p>
   <div class="prose">
     <p>Drift is a <strong>controller concern</strong>, mapped onto machinery Kubernetes already has: detectors write conditions, controllers act on conditions, and humans see one <code>kubectl get agents</code> with semantic health in the STATUS column.</p>
   </div>
@@ -1045,6 +1062,7 @@
 <!-- ══════════════════════ 10 MODELHUB ══════════════════════ -->
 <section id="modelhub">
   <div class="sec-head"><span class="n">10</span><h2>ModelHub <span class="pill" style="vertical-align: 4px; margin-left: 8px;">plus tier</span></h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> No <code>Model</code> CRD and no model-operator exist.</p>
   <div class="prose">
     <p>The <code>Model</code> CR is a thin envelope over four adopted components — train → package → eval-gate → serve — and <strong>models pass through the same EvalSuite admission gate as agents</strong>: one promotion mechanic for the whole platform.</p>
   </div>
@@ -1067,6 +1085,7 @@
 <!-- ══════════════════════ 11 DX ══════════════════════ -->
 <section id="dx">
   <div class="sec-head"><span class="n">11</span><h2>Developer experience — the golden path</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> No CLI exists in the repository; none of the commands below can be run.</p>
   <div class="prose">
     <p>The platform contract is deliberately tiny — a container that serves A2A plus an Agent Card — which is why creating an agent can be this easy: <strong>your SDK, your code; the CLI generates the thin wrapper and drives all the machinery.</strong> Target: empty directory to an agent answering from a knowledge graph on a local cluster in <strong>under 15 minutes</strong>.</p>
     <p>Three ways in, ordered by effort:</p>
@@ -1291,6 +1310,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
 <!-- ══════════════════════ 13 GRAPH ENGINEERING ══════════════════════ -->
 <section id="graph-eng">
   <div class="sec-head"><span class="n">13</span><h2>Graph engineering</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> No <code>KnowledgeGraph</code> CRD, no CLI and no provider adapter exist.</p>
   <div class="prose">
     <p>The KnowledgeGraph contract (§04) says <em>what</em> a graph promises; this section is <em>how one is built and kept true</em>. Graph engineering is a pipeline discipline with the same rigor as the agent pipeline — extraction is itself eval-gated, every edge carries provenance, and no snapshot goes Ready without passing its probes.</p>
     <h3>The ontology document</h3>
@@ -1493,6 +1513,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
 <!-- ══════════════════════ 14 LOOP ENGINEERING ══════════════════════ -->
 <section id="loop-eng">
   <div class="sec-head"><span class="n">14</span><h2>Loop engineering</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> No lineage, approval-voucher or kill-switch code exists in the operator.</p>
   <div class="prose">
     <p>Two loops get engineered, deliberately separated. The <strong>inner loop</strong> — how an agent thinks — is scaffolded, user-owned code (doctrine: no bundled framework). The <strong>governance ring</strong> — what an agent may never exceed — is platform-enforced at the data plane, so it holds even for black-box agents. The outer improvement loops are §08 (evals) and §09 (drift).</p>
     <h3>The reference inner loop (scaffolded, ~100 lines, yours)</h3>
@@ -1581,6 +1602,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
 <!-- ══════════════════════ 15 EXTENSION MODEL ══════════════════════ -->
 <section id="extension">
   <div class="sec-head"><span class="n">15</span><h2>Extension model — absorbing tomorrow's patterns</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> None of the provider slots below exists as an interface in code, and no <code>Pack</code> CRD or CLI exists.</p>
   <div class="prose">
     <p>A new agent-engineering pattern arrives every few weeks; the platform must outlive all of them. Graph engineering and loop engineering are merely today's examples — tomorrow it will be something with no name yet. The systems that absorb this churn share a structure: Kubernetes did it with CRDs, CSI drivers, and admission hooks; <strong>Claude Code does it most visibly</strong> — skills, hooks, subagents, plugins, output styles arrive every few weeks because the engine is a tiny frozen loop and every "feature" is really <em>data plus convention</em>. graphene adopts that structure deliberately, as seven named design patterns and one governing split.</p>
     <h3>The governing split: two planes, hard boundary</h3>
@@ -1764,6 +1786,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
 <!-- ══════════════════════ 16 BUDGET ══════════════════════ -->
 <section id="budget">
   <div class="sec-head"><span class="n">17</span><h2>Weight budget — core tier</h2></div>
+  <p class="not-shipped"><b>Designed, not shipped.</b> The chart deploys one workload today — <code>assayd-agent-operator</code>. The budget below is the target.</p>
   <div class="podrow">
     <div class="pod own"><b>agent-operator</b>1 pod · graphene</div>
     <div class="pod"><b>agentgateway</b>1–2 pods</div>
