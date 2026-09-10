@@ -281,7 +281,7 @@ func probeCode(t *testing.T, ctx context.Context, tag, url, host, apiKey, postBo
 		auth = "-H 'Authorization: Bearer " + apiKey + "' "
 	}
 	cmd := fmt.Sprintf(
-		"curl -sS --max-time 15 -X POST -H 'Host: %s' -H 'Content-Type: application/json' %s"+
+		"curl -sS --max-time 15 -X POST -H 'Host: %s' -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' %s"+
 			"-d '%s' -o /dev/null -w '%%{http_code}' %s > /dev/termination-log 2>/dev/null; exit 0",
 		host, auth, postBody, url)
 	return runProbe(t, ctx, "code-"+tag, cmd)
@@ -293,7 +293,7 @@ func httpInClusterHostKey(t *testing.T, ctx context.Context, tag, url, host, api
 	t.Helper()
 	cmd := fmt.Sprintf(
 		"curl -sS --max-time 20 --retry 3 --retry-delay 2 --retry-all-errors "+
-			"-X POST -H 'Host: %s' -H 'Authorization: Bearer %s' -H 'Content-Type: application/json' "+
+			"-X POST -H 'Host: %s' -H 'Authorization: Bearer %s' -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' "+
 			"-d '%s' -o /dev/termination-log %s; exit 0",
 		host, apiKey, postBody, url)
 	return runProbe(t, ctx, "body-"+tag, cmd)

@@ -6,6 +6,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -263,30 +264,49 @@ func operatorClient(t *testing.T) client.Client {
 // every answer — which is exactly why it does.
 func countBackends(t *testing.T, ctx context.Context, tag, url, host string, n int) map[string]int {
 	t.Helper()
+	// One line per request carrying the answering agent AND the task's state.
+	// The first version grepped only `"agent"`, so a responder that never
+	// completed a task still identified its backend on every request and this
+	// test passed — the independent review of A6.12 measured exactly that. A
+	// backend is counted only for a COMPLETED task now. The whole body is not
+	// kept because the termination message is capped at 4 KiB and 40 bodies
+	// are not.
 	cmd := fmt.Sprintf(
 		"for i in $(seq 1 %d); do "+
-			"curl -sS --max-time 10 -X POST -H 'Host: %s' -H 'Content-Type: application/json' "+
-			"-d '{\"message\":{\"messageId\":\"w-'$i'\",\"role\":\"ROLE_USER\",\"parts\":[{\"text\":\"w\"}]}}' %s "+
-			"| tr ',' '\\n' | grep '\"agent\"' ; done > /dev/termination-log 2>/dev/null; exit 0",
+			"r=$(curl -sS --max-time 10 -X POST -H 'Host: %s' -H 'Content-Type: application/json' "+
+			"-H 'A2A-Version: 1.0' "+
+			"-d '{\"message\":{\"messageId\":\"w-'$i'\",\"role\":\"ROLE_USER\",\"parts\":[{\"text\":\"w\"}]}}' %s); "+
+			"echo \"$(echo \"$r\" | grep -o '\"agent\":\"[^\"]*\"') $(echo \"$r\" | grep -o '\"state\":\"[A-Z_]*\"')\"; "+
+			"done > /dev/termination-log 2>/dev/null; exit 0",
 		n, host, url)
 	body := runProbe(t, ctx, tag, cmd)
+	agentRe := regexp.MustCompile(`"agent":"([^"]*)"`)
+	stateRe := regexp.MustCompile(`"state":"([A-Z_]*)"`)
 	counts := map[string]int{}
+	var incomplete []string
 	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(line)
-		if _, after, ok := strings.Cut(line, `"agent":`); ok {
-			name := strings.Trim(after, `"`)
-			if name != "" {
-				counts[name]++
-			}
+		a := agentRe.FindStringSubmatch(line)
+		if a == nil || a[1] == "" {
+			continue
 		}
+		st := stateRe.FindStringSubmatch(line)
+		if st == nil || st[1] != "TASK_STATE_COMPLETED" {
+			incomplete = append(incomplete, strings.TrimSpace(line))
+			continue
+		}
+		counts[a[1]]++
+	}
+	if len(incomplete) > 0 {
+		t.Fatalf("%d of %d answers identified a backend without completing an A2A task, so they "+
+			"say nothing about where a task was served: %v", len(incomplete), n, incomplete)
 	}
 	total := 0
 	for _, c := range counts {
 		total += c
 	}
 	if total == 0 {
-		t.Fatalf("no request identified a backend; the probe returned %q", body)
+		t.Fatalf("no request completed a task on an identifiable backend; the probe returned %q", body)
 	}
-	t.Logf("%s: %d/%d requests identified a backend: %v", tag, total, n, counts)
+	t.Logf("%s: %d/%d requests completed a task on an identified backend: %v", tag, total, n, counts)
 	return counts
 }
