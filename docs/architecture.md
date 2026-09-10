@@ -46,7 +46,7 @@ Every design decision passes six rules. This is the product: competitors ship pl
 
 ## 02 · System overview
 
-> **Designed, not shipped — and three sentences below are false today.** One operator exists, `agent-operator`; there is no workflow-, model- or tenant-operator. No policy is compiled from the Agent CR: the policy compiler does not exist. Registration today reads the card only — directory publish and identity issuance are not implemented — and when `gateway.enabled` is set the operator emits the Agent's serving `HTTPRoute` (the first compiler slice) and nothing else. The chart deploys neither NATS nor Postgres.
+> **Designed, not shipped — and three sentences below are false today.** One operator exists, `agent-operator`; there is no workflow-, model- or tenant-operator. No policy is compiled from the Agent CR: the policy compiler does not exist. Registration today reads the card only — directory publish and identity issuance are not implemented — and when `gateway.enabled` is set the operator emits the Agent's serving `HTTPRoute` — a route only, with no policy attached to it — and nothing else. The chart deploys neither NATS nor Postgres.
 
 Three planes:
 
@@ -245,7 +245,7 @@ Most HIPAA technical safeguards are emergent: per-action attribution (on-behalf-
 
 Agents and models **earn traffic**. Rollout: new version → HELD (no traffic) → Eval Job (DeepEval/Inspect) fed by the ontology-derived golden set + replayed production sessions → gate (score ≥ threshold) → pass: gateway-weighted canary → 100%; fail: rollback with the report in CR status + PR. Production traffic continuously becomes regression data.
 
-**As designed (ADR-0024, design 16)**: the gate runs **once, pre-canary** — canary progression is SLO-judged, not re-evaluated. Datasets and reports are **content-addressed artifacts** binding (dataset, judge, revision) digests, which makes rerun-shopping structurally impossible. Everything **fails closed**: empty dataset, judge unavailable, or budget exhausted means the candidate does not pass. `EvalRunner` is a shipped provider slot (DeepEval first, Inspect second) with cross-runner parity required on mechanical metrics. Models reuse the same flow with **their own metric family** (quality on a golden set, latency/throughput, refusal-safety, cost per 1k tokens — never per-task, since models have no tasks).
+**As designed (ADR-0024, design 16)**: the gate runs **once, pre-canary** — canary progression is SLO-judged, not re-evaluated. Datasets and reports are **content-addressed artifacts** binding (dataset, judge, revision) digests, which makes rerun-shopping structurally impossible. Everything **fails closed**: empty dataset, judge unavailable, or budget exhausted means the candidate does not pass. `EvalRunner` is a designed provider slot (DeepEval first, Inspect second; no such interface exists in code yet) with cross-runner parity required on mechanical metrics. Models reuse the same flow with **their own metric family** (quality on a golden set, latency/throughput, refusal-safety, cost per 1k tokens — never per-task, since models have no tasks).
 
 ```yaml
 kind: EvalSuite
@@ -397,7 +397,7 @@ Snapshot per change (namespace-per-version); `assayd kg diff v11 v12`; re-embedd
 Two loops, separated: the **inner loop** (user-owned scaffold) and the **governance ring** (platform-enforced at the data plane — holds for black-box agents).
 
 - **Inner loop** (~100 lines, yours): assemble (card + KG bundle + skills) → act (via gateway) → observe → stop-check. Skills = versioned, governed instruction assets loaded per task by a router. Named termination reasons: `goal_met · budget · max_depth · timeout · interrupted`. Receipt per iteration.
-- **Governance ring**: budgets (tokens/$/wall-clock) → terminate with reason `budget`; hop limit + A2A cycle detection; approval interrupts; kill switch; loop metrics with shipped alert rules.
+- **Governance ring**: budgets (tokens/$/wall-clock) → terminate with reason `budget`; hop limit + A2A cycle detection; approval interrupts; kill switch; loop metrics with alert rules (designed; none exist yet).
 
 **As designed (ADR-0025, design 22)**: lineage enforcement is **stateless in-proxy CEL** over a gateway-owned header — no cycle-detection service, no shared state; the lineage *is* the state, and client-supplied values are stripped. Default is **any-revisit-denied**, with opt-in occurrence-counted reentry (`allowReentry`/`maxVisits`) for legitimate callback patterns. Approvals are **durable typed pendings**: the interceptor records the request and returns a retryable `APPROVAL_PENDING`; on approval it issues a **single-use voucher the gateway consumes** — the operator binary never sits in the tool-call data path. Kill is a **sticky guard state**, exited only by explicit revive.
 
@@ -448,7 +448,7 @@ agent-operator 1 (the only assayd-code pod) · agentgateway 1–2 · SPIRE 2 · 
 
 **Beyond core, as designed**: `plus` adds workflow-operator (a standing controller) + workflow-runtime (which scales 0→N with trigger registrations) — +2, OpenFGA with its co-located ext-authz adapter (+1), model-operator (+1), and optionally Argo and Phoenix. Enterprise adds tenant-operator (+1). Per managed knowledge graph: adapter + backend (2 workload pods). Generative serving adds KServe's `llmisvc` controller at plus tier and **+1 endpoint-picker (EPP) per inference pool** alongside the vLLM serving pods — the same workload category (design 25 A1). A hard-isolated tenant costs ~4–5 pods core-only (NATS, Postgres, Zitadel, OpenObserve and the gateway stay shared), +2–3 at plus.
 
-**The budget is CI-enforced, not aspirational**: a job counts rendered pods in `TestCorePodBudget` (and stateful workloads in `TestStatefulDependencyAllowlist`, both in `test/chart/chart_test.go`) and a second job checks stateful workloads against a reasoned allowlist — a PR that adds either fails unless it edits the ledger in the same commit.
+**The budget is CI-enforced, not aspirational**: one CI step, `make chart`, runs `TestCorePodBudget`, which counts rendered pods, and `TestStatefulDependencyAllowlist`, which checks stateful workloads against a reasoned allowlist, both in `test/chart/chart_test.go` — a PR that adds either fails unless it edits the ledger in the same commit.
 
 Runs anywhere: no LoadBalancer requirement, `local-path` storage, no managed-identity deps; sandbox degrades gracefully (`SandboxDowngraded` condition, never silent); named `--profile local` collapses replicas explicitly. CI runs e2e on k3d + kind every merge.
 

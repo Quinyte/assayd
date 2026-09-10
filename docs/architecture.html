@@ -339,7 +339,7 @@
         <circle cx="300" cy="130" r="2.5"/>
       </g>
     </svg>
-    <p class="doc-kicker">Architecture · v1.0 · superseded in part — designs 02 and 03 are not approved; delivery is narrowed to one slice (ADR-0030)</p>
+    <p class="doc-kicker">Architecture · v1.0 · superseded in part — designs 02 and 03 are not approved; delivery is narrowed to one slice (ADR-0030). Most sections describe the designed system, not the shipped one; architecture.md marks each with a “Designed, not shipped” banner</p>
     <h1 class="title">assayd<span class="hex"> ⬡</span></h1>
     <p class="subtitle">A radically lightweight, Kubernetes-native agent platform. The domain is a pluggable knowledge graph; everything else is an open standard with a thin binding.</p>
     <p class="subtitle" style="font-size:16px;margin-top:-14px;">Every component below is designed, adversarially critiqued, and approved — including the places the design phase <em>corrected</em> the original strategy. Those corrections are listed first.</p>
@@ -561,7 +561,7 @@
       <line x1="510" y1="436" x2="640" y2="526" stroke="currentColor" stroke-dasharray="3 3" marker-end="url(#arr)"/>
       <text x="614" y="481" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)" font-family="ui-monospace, Menlo, monospace">workflow state</text>
     </svg>
-    <figcaption><b>Fig 1 — System overview.</b> Ultramarine = assayd-built (three operators, gateway policy compilation, CLI, the KnowledgeGraph contract). Everything grey is an adopted open component: agentgateway, SPIRE, Zitadel, NATS, Postgres, and any A2A-speaking agent container. Guarantees are enforced at the gateway, outside the agent — which is why any SDK works.</figcaption>
+    <figcaption><b>Fig 1 — System overview.</b> Ultramarine = what assayd designs (three operators, gateway policy compilation, CLI, the KnowledgeGraph contract). Today one operator exists, and when the gateway is enabled it emits one HTTPRoute per Agent and no policy; the rest is designed, not shipped. Everything grey is an adopted open component: agentgateway, SPIRE, Zitadel, NATS, Postgres, and any A2A-speaking agent container. Guarantees are enforced at the gateway, outside the agent — which is why any SDK works.</figcaption>
   </figure>
 
   <div class="callout"><p><strong>BYO-SDK, precisely:</strong> an agent is any container that serves A2A and exposes an Agent Card. LangGraph, CrewAI, Google ADK, Pydantic AI, the Claude Agent SDK, or a bash script — the platform doesn't know or care. Registration = the operator reads the card, publishes it to the OASF directory (JetStream KV — not another database), issues identity, wires gateway routes.</p></div>
@@ -569,7 +569,7 @@
 
 <!-- ══════════════════════ 03 API ══════════════════════ -->
 <section id="api">
-  <div class="sec-head"><span class="n">03</span><h2>The API surface — six CRDs</h2></div>
+  <div class="sec-head"><span class="n">03</span><h2>The API surface — six CRDs designed, one shipped</h2></div>
   <div class="prose">
     <p>The core API is six custom resources reconciled by three operators — plus <code>Connector</code>, <code>Pack</code>, <code>Grant</code> and <code>Tenant</code>, which the design phase made concrete (§20). Nothing else is exposed; the CLI is sugar over these objects, which is why everything is also plain <code>kubectl</code> and GitOps.</p>
   </div>
@@ -855,7 +855,7 @@
       <li><strong>Sessions &amp; receipts.</strong> Every A2A task through the gateway is recorded to a JetStream stream: full request/response, tool calls, model calls, cost, identity chain. Every agent action is <strong>replayable</strong>. One stream is simultaneously the audit log, the debugging substrate, and the eval-data collector (§08).</li>
       <li><strong>Traces.</strong> OpenTelemetry <strong>GenAI semantic conventions</strong> — adopted now, <em>pinned to a commit SHA</em> — the conventions moved to an unreleased repo, so there is no version number to pin — since they remain pre-stable in mid-2026 (shape settled, names may churn). The gateway emits spans for every agent/tool/LLM hop, so even uninstrumented agents get traces; instrumented agents (OpenLLMetry SDKs) add interior reasoning spans.</li>
       <li><strong>Backend.</strong> <strong>OpenObserve</strong> — metrics, logs, and traces in a single binary on object storage. The Prometheus + Grafana + Tempo + Loki equivalent is 6+ pods; this is one. <strong>Arize Phoenix</strong> is an optional <code>plus</code> pod for LLM-native trace views and embedding-drift visuals.</li>
-      <li><strong>Golden signals for agents</strong>, exported as real metrics with alert rules shipped in the Helm chart: task success rate, tool-error rate, tokens/task, cost/task, latency per hop, loop depth, handoff count.</li>
+      <li><strong>Golden signals for agents</strong>, designed to export as real metrics with alert rules in the Helm chart (none exist yet): task success rate, tool-error rate, tokens/task, cost/task, latency per hop, loop depth, handoff count.</li>
     </ul>
   </div>
 </section>
@@ -947,7 +947,7 @@
   <span class="k">gate</span>: {<span class="k">minScore</span>: <span class="s">0.85</span>, <span class="k">blocking</span>: <span class="s">true</span>}</pre>
 
   <div class="prose">
-    <p><b>As designed (ADR-0024):</b> the gate runs <b>once, pre-canary</b> — canary progression is SLO-judged, not re-evaluated. Datasets and reports are <b>content-addressed artifacts</b> binding (dataset, judge, revision) digests, which makes rerun-shopping structurally impossible. Everything <b>fails closed</b>: empty dataset, judge down, or budget exhausted means no pass. <code>EvalRunner</code> is a shipped provider slot; models reuse the flow with their own metric family (never per-task — models have no tasks).</p>
+    <p><b>As designed (ADR-0024):</b> the gate runs <b>once, pre-canary</b> — canary progression is SLO-judged, not re-evaluated. Datasets and reports are <b>content-addressed artifacts</b> binding (dataset, judge, revision) digests, which makes rerun-shopping structurally impossible. Everything <b>fails closed</b>: empty dataset, judge down, or budget exhausted means no pass. <code>EvalRunner</code> is a designed provider slot, not yet an interface in code; models reuse the flow with their own metric family (never per-task — models have no tasks).</p>
     <p class="soft">Nightly full-suite runs are CronJobs; results land as CR status and metrics, so "eval score over time" is just another OpenObserve panel. Models pass through the same gate (§10) — one promotion mechanic for the whole platform.</p>
   </div>
 </section>
@@ -1573,7 +1573,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
       <li><strong>Budgets</strong> (tokens, $, wall-clock) compile from the Agent CR to gateway policy; exceeding one terminates the task with reason <code>budget</code> — never a silent truncation.</li>
       <li><strong>Hop limit &amp; cycle detection:</strong> the gateway stamps each A2A handoff with a task-lineage header; depth &gt; N or a repeated agent-pair in the lineage kills the chain. Multi-agent runaway is a data-plane problem, solved once.</li>
       <li><strong>Approval interrupts:</strong> tools marked <code>requiresApproval</code> in the Agent CR pause the task as a durable Workflow step; a human resumes or rejects from the CLI. The agent just sees a slow tool.</li>
-      <li><strong>Loop observability:</strong> loop-depth, retries-per-tool, and termination-reason are first-class metrics; "termination reason ≠ goal_met rising" is a shipped alert rule and a drift signal (§09).</li>
+      <li><strong>Loop observability:</strong> loop-depth, retries-per-tool, and termination-reason are first-class metrics; "termination reason ≠ goal_met rising" is a designed alert rule and drift signal (§09), not yet shipped.</li>
     </ul>
   </div>
 </section>
