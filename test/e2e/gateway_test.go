@@ -43,11 +43,7 @@ func TestAnAgentAnswersThroughTheGateway(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
 	img := responderImage(t)
-	gwNS, gwName := os.Getenv("ASSAYD_E2E_GATEWAY_NS"), os.Getenv("ASSAYD_E2E_GATEWAY_NAME")
-	if gwNS == "" || gwName == "" {
-		t.Fatal("ASSAYD_E2E_GATEWAY_NS/NAME unset. `make e2e` installs agentgateway and " +
-			"creates the Gateway; set ASSAYD_E2E_GATEWAY=0 only to skip that deliberately.")
-	}
+	gwNS, gwName := requireGateway(t)
 	ctx := context.Background()
 	ensureNamespace(t, ctx, "assayd-e2e")
 
@@ -218,4 +214,28 @@ func gatewayService(t *testing.T, ctx context.Context, ns, name string) string {
 	}
 	t.Fatalf("no Service for Gateway %s/%s; agentgateway provisions one per Gateway", ns, name)
 	return ""
+}
+
+// requireGateway returns the Gateway the harness installed, or SKIPS.
+//
+// It skips rather than fails because a gateway-dependent test on a lane with no
+// gateway is reporting on the harness, not on the platform — the same reason
+// `requireCluster` and the responder tests skip. The kind lane caught this: these
+// tests were written against k3d, where the harness installs Gateway API and
+// agentgateway, and on kind they failed for want of a dependency that was never
+// meant to be there. A red check for an unverified axis trains people to ignore
+// red checks.
+func requireGateway(t *testing.T) (ns, name string) {
+	t.Helper()
+	ns, name = os.Getenv("ASSAYD_E2E_GATEWAY_NS"), os.Getenv("ASSAYD_E2E_GATEWAY_NAME")
+	if ns != "" && name != "" {
+		return ns, name
+	}
+	if reason := os.Getenv("ASSAYD_E2E_GATEWAY_SKIP"); reason != "" {
+		t.Skip("gateway path UNVERIFIED, not passed: " + reason)
+	}
+	t.Fatal("ASSAYD_E2E_GATEWAY_NS/NAME unset and no ASSAYD_E2E_GATEWAY_SKIP reason given. " +
+		"`make e2e` installs agentgateway and creates the Gateway on k3d; set " +
+		"ASSAYD_E2E_GATEWAY=0 to skip that deliberately.")
+	return "", ""
 }

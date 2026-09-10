@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -44,10 +43,7 @@ func TestTheGatewayRefusesADisallowedPrincipal(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
 	img := responderImage(t)
-	gwNS, gwName := os.Getenv("ASSAYD_E2E_GATEWAY_NS"), os.Getenv("ASSAYD_E2E_GATEWAY_NAME")
-	if gwNS == "" || gwName == "" {
-		t.Fatal("ASSAYD_E2E_GATEWAY_NS/NAME unset; there is no gateway to enforce identity at")
-	}
+	gwNS, gwName := requireGateway(t)
 	ctx := context.Background()
 	ensureNamespace(t, ctx, "assayd-e2e")
 
