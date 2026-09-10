@@ -107,9 +107,9 @@ func TestTheGatewayIsTheOnlyWayIn(t *testing.T) {
 	host := emittedHostname(t, name, "assayd-e2e")
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
 	body := httpInClusterHost(t, ctx, "npgw",
-		fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/assayd-test/echo", gwSvc, gwNS),
-		host, `{"message":{"parts":[{"text":"through the only way in"}]}}`)
-	if !strings.Contains(body, `"agent":"`+name+`"`) {
+		fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gwSvc, gwNS)+a2aSendMessage,
+		host, sendMessage("through the only way in"))
+	if agent, _ := completedTask(t, body); agent != name {
 		t.Fatalf("the gateway did not answer while the policy was on, so the policy blocks the "+
 			"path it is supposed to permit: %s", body)
 	}
