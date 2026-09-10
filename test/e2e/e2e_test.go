@@ -259,18 +259,40 @@ func TestOperatorDoesNotChurnAgainstRealAdmission(t *testing.T) {
 // workload test time out and blame the operator's logic for its absence.
 func requireOperator(t *testing.T) {
 	t.Helper()
+	// POLLS, because the previous version did not and its own message said "if
+	// this persists" — a check that reads once cannot tell a persistent failure
+	// from a slow one. On the kind lane every test in the suite failed at 0.00s
+	// with "no available replicas" while the Deployment's own conditions said
+	// Available=True three seconds earlier: `helm --wait` had returned and
+	// status.availableReplicas had not yet propagated to this client's read.
+	//
+	// The Available condition is accepted as well as the replica count, because
+	// it is what the API server itself concluded and it is set first.
+	deadline := time.Now().Add(2 * time.Minute)
 	var d appsv1.Deployment
-	err := k8s.Get(context.Background(),
-		types.NamespacedName{Namespace: "assayd-system", Name: "assayd-agent-operator"}, &d)
-	if err != nil {
-		t.Fatalf("the agent-operator is not installed: %v. Run `make e2e`, which helm-installs "+
-			"the chart. Without it these tests would time out and read as operator bugs.", err)
-	}
-	if d.Status.AvailableReplicas == 0 {
-		t.Fatalf("the agent-operator is installed but has no available replicas. If this "+
-			"persists, check its readiness probe: readiness means leader election completed, "+
-			"so a missing coordination.k8s.io/leases grant shows up here. Conditions: %+v",
-			d.Status.Conditions)
+	for {
+		err := k8s.Get(context.Background(),
+			types.NamespacedName{Namespace: "assayd-system", Name: "assayd-agent-operator"}, &d)
+		if err == nil {
+			if d.Status.AvailableReplicas > 0 {
+				return
+			}
+			for _, c := range d.Status.Conditions {
+				if c.Type == appsv1.DeploymentAvailable && c.Status == corev1.ConditionTrue {
+					return
+				}
+			}
+		} else if time.Now().After(deadline) {
+			t.Fatalf("the agent-operator is not installed: %v. Run `make e2e`, which helm-installs "+
+				"the chart. Without it these tests would time out and read as operator bugs.", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the agent-operator is installed and never became available within 2m. "+
+				"Check its readiness probe: readiness means leader election completed, so a "+
+				"missing coordination.k8s.io/leases grant shows up here. Conditions: %+v",
+				d.Status.Conditions)
+		}
+		time.Sleep(2 * time.Second)
 	}
 }
 

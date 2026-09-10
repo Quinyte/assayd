@@ -307,6 +307,13 @@ GWEOF
   export ASSAYD_E2E_GATEWAY_NAME="assayd"
   export ASSAYD_E2E_TOOLS_NS="${TOOLS_NS}"
   echo "    gateway: ${GATEWAY_NS}/assayd, listener admits assayd.dev/run-namespace=true"
+else
+  # Every gateway-dependent test SKIPS on this reason and reports its axis
+  # unverified, rather than failing. A test that fails because the harness did
+  # not install a dependency is reporting on the harness, not on the platform --
+  # and the kind lane found exactly that when these tests were k3d-only.
+  export ASSAYD_E2E_GATEWAY_SKIP="no gateway on this lane: hack/e2e.sh installs Gateway API and agentgateway only on k3d (DISTRO=${DISTRO}), so the gateway path is UNVERIFIED here rather than broken"
+  echo "==> gateway tests: NOT RUN on ${DISTRO} — ${ASSAYD_E2E_GATEWAY_SKIP}"
 fi
 
 # The suite asserts it is talking to THIS build, so a stale pod can never again
