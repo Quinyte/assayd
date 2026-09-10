@@ -1,6 +1,6 @@
 # assayd — Architecture v1.0
 
-> **assayd** is a neutral internal codename (previously "graphene" in early drafts — same project; rename before any public release is a tracked task, ADR-0001). A rendered version with figures lives at `docs/architecture.html`; the generated plates live in `docs/diagrams/`.
+> **assayd** is the project's permanent name, not a codename — ADR-0001 Amendment 1 records the rename from the "plume" working title (and "graphene" before that) as **done**, with `assayd.dev` authoritative and the API group. An earlier version of this line still called it "a neutral internal codename … rename before any public release is a tracked task", which was true when written and is now the first thing a reader of this document would get wrong. A rendered version with figures lives at `docs/architecture.html`; the plates live in `docs/diagrams/`.
 
 - **Status**: **design phase complete** · 2026-08-20 — 27/27 component designs approved, each through independent adversarial critique; 26 ADRs recorded. Implementation may begin.
 - **Thesis**: A radically lightweight, Kubernetes-native agent platform. The domain is a pluggable knowledge graph; everything else is an open standard with a thin binding.
@@ -431,7 +431,11 @@ Runs anywhere: no LoadBalancer requirement, `local-path` storage, no managed-ide
 
 Discipline: the differentiation only exists once P2/P3 ship — never polish the runtime layer at their expense.
 
-**Status**: all five phases are **designed and approved** (27/27, each critique-passed). Implementation has begun with the test harness: the Agent types, the generated CRD, and an envtest control plane that pins design 02's contract — including the ergonomics rules of ADR-0027 — against a real API server. Per ADR-0022, the P1 slice can begin with designs **02 (agent-operator) + 03 (policy compiler) + 07 (chart/CI) concurrently**; the first milestone is the mechanized demo the CI matrix is specified around — two agents from different SDKs collaborating through the gateway on k3d, fully receipted.
+**Status — read this before the build order above.** An earlier version of this line said all five phases were "designed and approved (27/27, each critique-passed)". **That was false and is withdrawn.** It is the same sentence `CLAUDE.md` records as "the first thing every contributor read", and it survived here after being corrected everywhere else. Design 02's own header says it is not approved; design 03's says critique pending, not approved, do not implement. `docs/designs/README.md` arbitrates, and a design's own Status line beats any summary — including this one.
+
+**The build order above is superseded by ADR-0030 and is kept for context, not as a plan.** The delivery commitment is now **one end-to-end slice**, not five phases: a single-team managed-container Agent, one pinned gateway release, one identity mechanism, carried until one agent completes one A2A task and one MCP tool call through the gateway with a disallowed principal failing against a permitted control. Designs **21, 23, 25, 26, 27** and the unimplemented parts of **11–14** and **18–19** are **hypotheses** — research retained, not prerequisites and not supported promises.
+
+**What actually runs today** is narrower than any section above implies: the agent-operator, its CRD, the chart, an agent that answers through a real gateway, an MCP tool call through it, and a principal refused by identity at it. **The policy compiler does not exist**, so no budget, rate limit, gateway authentication or tool filter is enforced for any agent, and the chart ships no gateway. `CLAUDE.md` and `AGENTS.md` carry the current position in a paragraph maintained for exactly this purpose; `docs/designs/02-agent-crd-operator.md` §5 is the authoritative list of what is stated and not enforced.
 
 ## 19 · Risks held honestly
 
@@ -447,6 +451,8 @@ Discipline: the differentiation only exists once P2/P3 ship — never polish the
 | Research has a shelf life | Notes are dated 2026-08 with re-verify dates; pinned versions (agentgateway minimum, semconv SHA, Unsloth BuiltinTrainer status) will move — open item R1 tracks the gateway version wording |
 | Design ≠ validated | These plans survived adversarial review, not execution. First implementation will test what no review can: agentgateway policy-overlap behavior (research item R1, reproducing test), DBOS-in-Job resume, interpreter determinism |
 | Zitadel AGPL | used unmodified/self-hosted (fine); Keycloak profile exists for allergic enterprises |
+| **agentgateway's steward was never named here** | It is Apache-2.0 and **Linux Foundation-governed, under the Agentic AI Foundation** — co-founded by Anthropic, Block and OpenAI — rather than CNCF. Recorded as a risk **reduced**, not merely a difference: the most load-bearing external dependency in this stack sits in a neutral foundation alongside **MCP**, so the two contracts assayd is least able to replace are governed together. It is also the one dependency not on the CNCF track, and ADR-0015 Amendment 1 makes AAIF assayd's own target for that reason (`research/licensing-open-core-2026-09.md`) |
+| Diagrams carry a name the project no longer uses | Plates `01-architecture` and `07-what-runs` were rendered before the rename and still read "plume". Prompts and captions are corrected; **the images are not**, and they are embedded in `architecture.html`. Tracked in `docs/diagrams/README.md` |
 
 ## 20 · The decision record
 

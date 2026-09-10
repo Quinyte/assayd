@@ -1790,7 +1790,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
 <!-- ══════════════════════ 17 BUILD ══════════════════════ -->
 <section id="build">
   <div class="sec-head"><span class="n">18</span><h2>Build order</h2></div>
-  <div class="prose"><p><b>Status:</b> all five phases are designed and approved (27/27, each critique-passed). Implementation has not started. Per ADR-0022 the P1 slice can begin with designs <b>02 + 03 + 07 concurrently</b>.</p></div>
+  <div class="prose"><p><b>Status:</b> this line is superseded. An earlier version claimed all five phases were "designed and approved (27/27, each critique-passed)" and that implementation had not started. Both were false: no design 02 or 03 critique has returned PASS, and the operator, its CRD, the chart and a proven gateway path all run and are tested. ADR-0030 narrowed the delivery commitment to one end-to-end slice; the policy compiler does not exist, so no budget, rate limit, gateway authentication or tool filter is enforced. See architecture.md §18 and docs/designs/README.md, which arbitrates design status. Per ADR-0022 the P1 slice can begin with designs <b>02 + 03 + 07 concurrently</b>.</p></div>
   <div class="phases">
     <div class="phase">
       <div class="when">weeks 1–3</div>
