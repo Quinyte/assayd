@@ -1,5 +1,7 @@
 # Handoff — assayd, 2026-09-03 (end of the A42 session)
 
+> **Dated record — superseded, not rewritten.** This handoff describes the repository as it stood on 2026-09-03 and is kept as written. Several of its statements are no longer true: design 03 was consolidated on 2026-09-10 (its Status is now "critique pending — not approved"), ADR-0030 step 3's hand-authored gateway path and the first compiler slice have landed, and the repository is public. **For the current position read `CLAUDE.md` / `AGENTS.md`'s "What is actually true of the system today"; for design status read `docs/designs/README.md`.**
+
 Written at the end of the session that implemented design 02 A42. Everything
 here was verified by running it, not recalled. Read this, then `AGENTS.md`,
 then the two design headers.
