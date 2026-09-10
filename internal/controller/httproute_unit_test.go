@@ -112,7 +112,7 @@ func TestTheServingRouteIsTheResourceTheE2EAuthoredByHand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("name: %v", err)
 	}
-	route := r.servingRouteFor(agent, RunNamespaceName("team-a"), "abc1234567", name)
+	route := r.servingRouteFor(agent, RunNamespaceName("team-a"), "abc1234567", name, 8080)
 
 	if route.Namespace != "assayd-run-team-a" {
 		t.Errorf("the route is not in the run namespace (%q). A backendRef across namespaces needs "+
@@ -174,9 +174,18 @@ func TestTheServingRouteIsTheResourceTheE2EAuthoredByHand(t *testing.T) {
 	}
 }
 
-// A route's port follows the Agent's declared container port. A hard-coded 8080
-// would send traffic to a port nothing listens on the moment an Agent sets one.
-func TestTheServingRouteFollowsTheAgentsPort(t *testing.T) {
+// The route's port is the one its SERVICE publishes, never the Agent's spec.
+//
+// This test used to assert the opposite — that the backendRef port equals
+// `spec.runtime.port` — while rendering against an unrelated revision, on the
+// ground that "the Service publishes the declared port". That is true only of
+// the DESIRED revision, and the route names the SERVING one: a port edit whose
+// revision never came up rewrote the healthy revision's route to a port its
+// Service does not publish. The envtest
+// TestAPortChangeThatNeverComesUpDoesNotMoveTheServingRoute measures that
+// transition against a real API server; this pins only that the renderer
+// cannot reach for the spec.
+func TestTheServingRoutesPortIsTheServicesNotTheSpecs(t *testing.T) {
 	r := &AgentReconciler{Gateway: GatewayConfig{
 		Enabled: true, Name: "assayd", Namespace: "assayd-gateway",
 		HostnameSuffix: DefaultGatewayHostnameSuffix,
@@ -187,10 +196,10 @@ func TestTheServingRouteFollowsTheAgentsPort(t *testing.T) {
 			Image: "ghcr.io/acme/a@sha256:" + strings.Repeat("0", 64), Port: 9090,
 		}},
 	}
-	route := r.servingRouteFor(agent, RunNamespaceName("team-a"), "abc1234567", "pricer-serving")
-	if p := route.Spec.Rules[0].BackendRefs[0].Port; p == nil || int32(*p) != 9090 {
-		t.Errorf("the route's backendRef port is %v, not the Agent's declared 9090. The Service "+
-			"publishes the declared port, so a fixed 8080 routes to nothing.", p)
+	route := r.servingRouteFor(agent, RunNamespaceName("team-a"), "abc1234567", "pricer-serving", 8080)
+	if p := route.Spec.Rules[0].BackendRefs[0].Port; p == nil || int32(*p) != 8080 {
+		t.Errorf("the route's backendRef port is %v, not the 8080 the serving revision's Service "+
+			"publishes. The spec's 9090 belongs to a revision that is not serving.", p)
 	}
 }
 
