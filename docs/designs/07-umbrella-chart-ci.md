@@ -1,6 +1,6 @@
 # Design 07: Umbrella chart, profiles, e2e CI
 
-- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A6 below; A5 (2026-09-03), A6 (2026-09-09), A6.10 (2026-09-10), A6.11 and A6.12 (2026-09-11) not yet critiqued
+- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A6 below; A5 (2026-09-03), A6 (2026-09-09), A6.10 (2026-09-10), A6.11, A6.12 and A6.13 (2026-09-11) not yet critiqued
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0002 (rules 5/6), 0012 (ambient profile), NFR-1/3/7/8 · interfaces: every P1 design (it packages them)
 
@@ -485,4 +485,39 @@ A6.8 recorded what the MCP leg did not complete. ADR-0030's clause is "one agent
 
 Re-run on k3d after the fixes: `make e2e` 18 PASS, `ASSAYD_E2E_GATEWAY=0 make e2e` 13 PASS, both exit 0.
 
+### A6.13 (2026-09-11) — an agent completes a task by calling a tool through the gateway
+
+A6.12 made the A2A half of ADR-0030's clause literal for a **client**, and said so: the clause's subject is "one **agent**", and the MCP call in `TestAnAgentCallsAnMCPToolThroughTheGateway` was made by the harness's probe Pod, not by an agent. This amendment closes that gap, with test fixtures.
+
+**The agent now makes the tool call itself.** `TestAnAgentCompletesATaskByCallingAToolThroughTheGateway` runs this sequence:
+
+1. A caller sends one `SendMessage` to an agent through the operator's route.
+2. The agent's `call_tool` skill makes an MCP `initialize`, `notifications/initialized` and `tools/call` exchange with `test/mcpserver`.
+3. That exchange goes through the Gateway's `tools` listener, at the `ASSAYD_GATEWAY_URL` the operator injected.
+4. The agent completes the task, and the tool's answer is the task's artifact.
+
+So one agent completes one A2A task *and* one MCP tool call, both through the gateway.
+
+**Two facts show the call went through the gateway and not around it.**
+
+- The agent has no other address for tools. With `ASSAYD_GATEWAY_URL` unset, the skill fails the task instead of falling back; `TestWithNoGatewayTheToolCallFailsRatherThanGoingElsewhere` covers this.
+- Once the gateway's allowlist excludes `delete_everything`, the agent's task fails with `TASK_STATE_FAILED`, carrying the gateway's `Unknown tool: delete_everything`. The fixture MCP server answers that tool normally, so the refusal can only be the gateway's. The allowed tool keeps completing.
+
+**`gateway.url` is new in the chart, because `ASSAYD_GATEWAY_URL` was never injected.** The operator has had `--gateway-url` since design 02 §11, but no chart value reached it, so no agent on any install received the variable. Every agent's egress contract was empty. `gateway.url` now renders `--gateway-url` when set and renders nothing when unset. `TestTheGatewayURLReachesTheOperatorOnlyWhenSet` pins both. `hack/e2e.sh` sets it to the Gateway's `tools` listener, and the e2e asserts that the URL the agent reports back is the one the chart was given.
+
+**Still not governed, and still hand-authored.** The MCP backend, its route and the allowlist remain hand-authored, and nothing in assayd emits them. The tool call is unauthenticated at the gateway: no identity is attached to the agent's egress, because design 06 has no implementation. Nothing enforces that an agent's egress goes *only* to the gateway either. No egress NetworkPolicy is materialized, so an agent that knew another address could use it. The fixture simply has no other address.
+
+**Measured by mutation.** Every mutation below compiles.
+
+| Mutation | Killed by |
+|---|---|
+| The chart stops passing `--gateway-url`, so no gateway is injected (e2e, `E2E_RUN=TestAnAgentCompletesATaskByCallingAToolThroughTheGateway$`) | `TestAnAgentCompletesATaskByCallingAToolThroughTheGateway`: the operator renders no `ASSAYD_GATEWAY_URL` into the workload. **Two first runs of this mutation survived**, and the reason was the mutation harness, not the test. The paragraph below explains |
+| `callTool` drops the Host header, so the call reaches no tool route | `TestItCompletesATaskByCallingATool` |
+| `callTool` sends `ping` instead of `initialize` | `TestItCompletesATaskByCallingATool` and `TestARefusedToolFailsTheTaskAndSaysWhy`. A first version of this mutation, which skipped the call entirely, did not compile and is INVALID |
+| A gateway's JSON-RPC refusal is treated as success | `TestARefusedToolFailsTheTaskAndSaysWhy` |
+| With no gateway injected, the call goes ahead anyway | `TestWithNoGatewayTheToolCallFailsRatherThanGoingElsewhere` |
+
+**A mutation survived twice, and the first explanation for it was wrong.** The harness that removed the `--gateway-url` line kept its backup as `charts/assayd/templates/operator.yaml.b`. Helm renders every file under `templates/`, so the unmutated copy was rendered and installed beside the mutated one, and the operator kept the flag. That was confirmed on the cluster: the operator running under the "mutated" image still carried `--gateway-url`. Rendering the mutated chart with no backup present produced no flag. The first explanation recorded was a leftover Pod from the previous run, and that was not the cause. The test was hardened on the strength of that wrong explanation, and the hardening stays because it is defensive, not because it fixed anything. It waits until the previous Agent and all of its workloads are gone before creating a new one, because the same spec mints the same revision name. It also asserts `ASSAYD_GATEWAY_URL` on the Deployment *this* run's operator rendered, before any request is sent. With the backup kept outside the chart, the mutation is killed at that assertion. Mutation harnesses in this repository back up to a sibling file. That is harmless next to Go sources, which ignore the extension, and it is fatal inside `charts/*/templates/`.
+
+**Run on k3d.** `make e2e`: 19 PASS. `ASSAYD_E2E_GATEWAY=0 make e2e`: 13 PASS, with the new test skipping, like every gateway test there. Both exit 0.
 
