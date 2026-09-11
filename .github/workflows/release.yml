@@ -96,6 +96,15 @@ jobs:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}
           format: spdx-json
           output-file: sbom.spdx.json
+          # Off, and not cosmetic. With a GitHub Release present for the tag,
+          # the action tries to upload the SBOM to it, which needs
+          # `contents: write`; this job has `contents: read` and fails with
+          # "Resource not accessible by integration". v0.2.0's re-run did exactly
+          # that, after its image had already been pushed and signed, so the tag
+          # was left on an image with a signature and no SBOM attestation. The
+          # SBOM that matters is the signed attestation attached below; a copy
+          # as a release asset is unverifiable documentation.
+          upload-release-assets: false
 
       # Attached as a signed attestation rather than a build artifact: an SBOM
       # nobody can verify is documentation, not supply-chain evidence.
