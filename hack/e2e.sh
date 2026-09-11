@@ -54,7 +54,12 @@ k3d)
   # listed it, this check passed, the cluster was wired to a mirror pointing at
   # a name docker would not resolve, and every responder test failed with
   # "no such host" while the harness reported the registry was fine.
-  if ! k3d registry list -o json 2>/dev/null | grep -q "\"k3d-${REG_NAME}\""; then
+  # `grep >/dev/null`, never `grep -q`, on a pipe under pipefail: -q exits at
+  # the first match, the producer takes SIGPIPE, and the pipeline reports
+  # FAILURE for a registry that exists — the script then tries to create it
+  # and dies on "already exists". Plain grep reads all its input. The same
+  # rule applies to every `cmd | grep` below.
+  if ! k3d registry list -o json 2>/dev/null | grep "\"k3d-${REG_NAME}\"" >/dev/null; then
     echo "==> creating registry k3d-${REG_NAME}"
     k3d registry create "${REG_NAME}" --port "${REG_PORT}" >/dev/null
   fi
@@ -74,13 +79,13 @@ k3d)
     echo "         k3d registry delete k3d-${REG_NAME} && re-run" >&2
     exit 1
   fi
-  if ! k3d cluster list -o json | grep -q "\"${CLUSTER}\""; then
+  if ! k3d cluster list -o json | grep "\"${CLUSTER}\"" >/dev/null; then
     echo "==> creating k3d cluster ${CLUSTER}"
     k3d cluster create "${CLUSTER}" --agents 0 --wait \
       --registry-use "k3d-${REG_NAME}:${REG_PORT}"
   elif ! docker exec "k3d-${CLUSTER}-server-0" \
         cat /etc/rancher/k3s/registries.yaml 2>/dev/null \
-      | grep -q "k3d-${REG_NAME}:${REG_PORT}"; then
+      | grep "k3d-${REG_NAME}:${REG_PORT}" >/dev/null; then
     # Direct evidence, not an inference. k3d writes the mirror into the node's
     # registries.yaml at cluster-create time, so its presence is exactly the
     # thing that decides whether a pull by digest will resolve. A first version
