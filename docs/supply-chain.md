@@ -11,7 +11,7 @@ assayd's admission rejects agent images that are not cosign-signed (ADR-0019), a
 
 Both are published only by `.github/workflows/release.yml`, on a `v*` tag, and the workflow verifies its own signatures from outside before it finishes.
 
-**GHCR creates a new package private, whatever the repository's visibility,** and GitHub offers no API to change it. Each package is made public by hand in its package settings. Until it is, a pull needs `docker login ghcr.io`, and so does `gh attestation verify`. At v0.2.0 both packages were created private.
+**GHCR creates a new package private, whatever the repository's visibility,** and GitHub offers no API to change it. Each package is made public by hand in its package settings. **Both existing packages were made public on 2026-09-11.** Without any credentials, `ghcr.io/quinyte/assayd-operator:0.2.1` and `ghcr.io/quinyte/charts/assayd:0.2.1` pull (HTTP 200), `helm show chart oci://ghcr.io/quinyte/charts/assayd --version 0.2.1` answers, and `cosign verify` of the image signature succeeds. Any **new** package a future release creates will still start private, and needs the same manual change before anyone outside the organization can pull it.
 
 **Use v0.2.1, not v0.2.0.** On 2026-09-11 a history scrub re-pointed the `v0.2.0` tag, and that re-ran its release. The re-run moved the image tag `ghcr.io/quinyte/assayd-operator:0.2.0` to a newly built image. It signed that image, then failed before attaching an SBOM or provenance: the SBOM action tried to upload to the already-existing GitHub Release without write permission, and `release.yml` no longer does that. So:
 
@@ -78,7 +78,7 @@ Stated plainly, because a supply-chain page that overclaims is worse than none:
 
 - **The chart in a checkout is not pinned.** Only the published chart carries the digest; see above.
 - **No `.sig` verification at install time.** Nothing forces a cluster to reject an unsigned assayd chart; that is the Sigstore policy-controller's job (design 07 A2 chose it; A3 defines its enforcement contract) and assayd does not ship one for itself yet — while it *does* enforce exactly this for agent images.
-- **The packages are private until someone with admin rights on the organization makes them public by hand.** See above.
+- **A new package starts private.** GHCR sets visibility at creation, and GitHub has no API to change it. If a release ever publishes under a new package name, someone with admin rights on the organization has to make it public by hand. Until then, anyone outside the organization is refused with `403`. See above.
 
 ## For reviewers
 
