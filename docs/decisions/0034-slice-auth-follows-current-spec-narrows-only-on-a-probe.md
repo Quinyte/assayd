@@ -1,6 +1,6 @@
 # ADR-0034: The slice's gateway auth is one API-key policy per Agent that follows the current spec, and it narrows in place only on a probe
 
-- **Status**: accepted · 2026-09-11 · **supersedes ADR-0033** (including its Amendment 1). Decided by the human in three rounds: on `reviews/03-a52-recritique.md` (target, input, `Adopt`), on `reviews/03-a53-critique.md` (A1, B2, C2), and on `reviews/03-a54-critique.md` (D2, E2, F2). Design 03 A55 writes the last three in.
+- **Status**: accepted · 2026-09-11 · **supersedes ADR-0033** (including its Amendment 1). Decided by the human in three rounds: on `reviews/03-a52-recritique.md` (target, input, `Adopt`), on `reviews/03-a53-critique.md` (A1, B2, C2), and on `reviews/03-a54-critique.md` (D2, E2, F2). Design 03 A55 writes the last three in. · **Amended 2026-09-11 (Amendment 1)**: two clauses of D2 are re-attributed to design 03's author, and the human's G, H2 and I1 are recorded.
 - **Context**: ADR-0033 was titled "the compiler refuses to tighten a live route". Its Amendment 1 made the policy tighten in place, so the title stated a reversed decision. AGENTS.md says a reversed decision gets a superseding ADR, so this one records the whole current set in one place. The fourth critique of design 03 found three more defects that were decisions and not corrections:
   - a key-source change cut every old-source key fleet-wide at once;
   - a disjoint group change passed through a window in which every caller was refused, and the design called that window bounded;
@@ -22,3 +22,20 @@
   - **ADR-0031 Amendment 1 is applied, not edited.** Its "never recompute the target from current spec" governs a revision's retained material. `-auth` belongs to no revision, and F2 is that amendment's "recheck current security constraints" for groups.
   - **Revisit at the next agentgateway upgrade.** The Service-target refusal is a CEL rule in the vendored CRD. If an upgrade lifts it, per-revision auth becomes possible and this ADR is revisited.
   - **Nothing here is implemented.** No policy is emitted, and neither chart value nor probe exists.
+
+## Amendment 1 (2026-09-11, from `reviews/03-a55-critique.md` MAJOR 5, and the human's decisions on that critique)
+
+**(a) Two clauses in D2 were the author's calls, not the human's.** The Status line says this ADR was "decided by the human in three rounds". D2's last two sentences were not decided by the human:
+
+- "Only then does each Agent move, under the probe."
+- "An Agent that has never been served takes the new source at once."
+
+Design 03 A55 listed both as calls it made without the human. They are **author's calls, not decided by the human**, and they stay open until D2 becomes reachable. The same holds for one Consequences clause: "design 03 orders the auth transactions around the edit's weight shift". That ordering is A55's call 3, and its stated reason does not hold (design 03 §3.2; the critique's M4, open). The decision text above is not edited.
+
+**(b) The human decided three more things on 2026-09-11, on the fifth critique. Design 03 A56 writes them in.**
+
+- **G — only the first slice can be approved for implementation.** The slice is one per-Agent `<agent>-auth`, emitted by `Create`, with a compiled-in key source and an admitted set that cannot change (design 03 §1.1). So D2, E2, A1's group narrowing and F2's group semantics are specified, not approved. Nothing is approved until the human approves it after a passing critique.
+- **H2 — a probe that passes on the replica it reached means `Ready=True`**, with the informational reason `AuthVerifiedOnOneReplica` on `GovernanceSkipped=False`. A probe that fails means `Ready=False` and a page. A probed Agent is never worse off than an unprobed one.
+- **I1 — a served Agent whose `-auth` input becomes uncompilable keeps its last good `-auth`.** The sweep never deletes it on a compile failure. The Agent reports `PolicyCompileFailed`, and its route keeps serving. Today's CRD defaults `auth` to `oauth`, so adding `expose.a2a` to a served Agent must not open it.
+
+Nothing in this amendment is implemented.
