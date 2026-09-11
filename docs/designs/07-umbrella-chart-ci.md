@@ -521,3 +521,28 @@ So one agent completes one A2A task *and* one MCP tool call, both through the ga
 
 **Run on k3d.** `make e2e`: 19 PASS. `ASSAYD_E2E_GATEWAY=0 make e2e`: 13 PASS, with the new test skipping, like every gateway test there. Both exit 0.
 
+**The independent review of this amendment returned APPROVE, and its five minors were fixed rather than left.**
+
+- **The bypass.** The reviewer pointed `gateway.url` straight at the MCP server, bypassing the gateway. The injection check, the `echo_text` completion and the reported URL all still passed. The test failed only at the refusal assertion. So that assertion carries the "through the gateway" claim, and it is specific to agentgateway: the fixture's own reply to an unknown tool is `no such tool`, never `Unknown tool:`.
+- **The fake MCP server pinned none of the client's protocol behaviour.** It recorded only path, Host and method, so four mutations of the client survived: dropping `MCP-Protocol-Version`, narrowing `Accept`, dropping the session id, and ignoring `isError`. The fake is now strict:
+  - It issues a session id and refuses any request that does not echo it.
+  - It refuses a request without `MCP-Protocol-Version` or a two-type `Accept`.
+  - It answers `tools/call` as SSE that leads with an empty priming event and a notification before the response, as the spec allows.
+  - It covers `isError`, a refused notification, and an un-offered protocol version.
+- **The client read the first `data:` line as the answer.** A server that sent a notification first would have completed the task with an empty artifact, a silent wrong success. The client now takes the event whose `id` matches the request.
+- **Two other client gaps.** The client ignored a notification's HTTP status, and it adopted whatever `protocolVersion` the server answered. It now requires a 2xx, and it refuses a version it did not offer.
+- **The e2e never showed the refused tool working before the allowlist.** It now asks for `delete_everything` through the gateway with no policy in place and requires `TASK_STATE_COMPLETED`. So the later refusal is the allowlist's, not some other gateway behaviour.
+- **`values.yaml` overstated what it guarantees.** It said an Agent "cannot point its egress elsewhere". What holds is only that it cannot override the variable, and nothing restricts where egress goes.
+
+| Mutation of the MCP client | Killed by |
+|---|---|
+| No `MCP-Protocol-Version` header | `TestItCompletesATaskByCallingATool`, `TestARefusedToolFailsTheTaskAndSaysWhy` and the `isError` case |
+| `Accept: application/json` only | every tool test |
+| Session id not echoed | `TestItCompletesATaskByCallingATool`, `TestARefusedToolFailsTheTaskAndSaysWhy` and the `isError` case |
+| `isError` ignored | only the `isError` case |
+| The first `data:` line is taken as the answer | `TestItCompletesATaskByCallingATool` and the `isError` case |
+| A refused notification is ignored | only the refused-notification case |
+| Any server `protocolVersion` is accepted | only the un-offered-version case |
+
+The first four survived before the fake server was made strict, and all seven compile. The first two rows fail the tool tests because the strict fake refuses the request outright.
+

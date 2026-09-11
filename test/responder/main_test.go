@@ -313,13 +313,25 @@ func TestTheCardPathIsConfigurable(t *testing.T) {
 
 func TestMain(m *testing.M) { os.Exit(m.Run()) }
 
-// fakeMCP stands in for the gateway's tools listener: it records the order of
-// the JSON-RPC methods it receives and the Host each came with, and answers
-// tools/call either with a result (as SSE, the way agentgateway answers a
-// successful exchange) or with the JSON-RPC error agentgateway gives a tool its
-// allowlist refuses.
-func fakeMCP(t *testing.T, refuse bool) (*httptest.Server, *[]string) {
+// fakeMCP stands in for the gateway's tools listener, and it is STRICT about
+// the protocol, because a lenient fake pins nothing: an earlier one recorded
+// only path, Host and method, and four mutations of the client — dropping
+// MCP-Protocol-Version, narrowing Accept, dropping the session id, ignoring
+// isError — all passed against it. This one issues a session id and refuses
+// any later request that does not echo it, refuses a missing
+// MCP-Protocol-Version or an Accept that does not name both types, and
+// answers tools/call as SSE LEADING with an empty priming event and a
+// notification before the response, as the spec allows a server to.
+type fakeOpts struct {
+	refuse       bool   // tools/call gets the JSON-RPC error agentgateway gives a refused tool
+	toolError    bool   // tools/call answers a result with isError: true
+	refuseNotify bool   // notifications/initialized gets a 400
+	version      string // initialize answers this protocolVersion (default 2025-06-18)
+}
+
+func fakeMCP(t *testing.T, o fakeOpts) (*httptest.Server, *[]string) {
 	t.Helper()
+	const session = "sess-42"
 	var seen []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var msg struct {
@@ -332,22 +344,52 @@ func fakeMCP(t *testing.T, refuse bool) (*httptest.Server, *[]string) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&msg)
 		seen = append(seen, r.URL.Path+" "+r.Host+" "+msg.Method)
+		if a := r.Header.Get("Accept"); !strings.Contains(a, "application/json") ||
+			!strings.Contains(a, "text/event-stream") {
+			http.Error(w, "Accept must name application/json and text/event-stream", http.StatusNotAcceptable)
+			return
+		}
+		if msg.Method != "initialize" {
+			if r.Header.Get("MCP-Protocol-Version") == "" {
+				http.Error(w, "MCP-Protocol-Version required after initialize", http.StatusBadRequest)
+				return
+			}
+			if r.Header.Get("Mcp-Session-Id") != session {
+				http.Error(w, "unknown session", http.StatusNotFound)
+				return
+			}
+		}
 		switch msg.Method {
-		case "notifications/initialized":
-			w.WriteHeader(http.StatusAccepted)
 		case "initialize":
+			v := o.version
+			if v == "" {
+				v = "2025-06-18"
+			}
+			w.Header().Set("Mcp-Session-Id", session)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}`))
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"` + v + `"}}`))
+		case "notifications/initialized":
+			if o.refuseNotify {
+				http.Error(w, "no", http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
 		case "tools/call":
-			if refuse {
+			if o.refuse {
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Unknown tool: ` +
 					msg.Params.Name + `"}}`))
 				return
 			}
+			isErr := "false"
+			if o.toolError {
+				isErr = "true"
+			}
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte(`data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"echo: ` +
-				msg.Params.Arguments.Text + `"}],"isError":false}}` + "\n\n"))
+			_, _ = w.Write([]byte("id: 0\ndata:\n\n" +
+				`data: {"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"working"}}` + "\n\n" +
+				`data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"echo: ` +
+				msg.Params.Arguments.Text + `"}],"isError":` + isErr + `}}` + "\n\n"))
 		}
 	}))
 	return srv, &seen
@@ -380,7 +422,7 @@ func sendTool(t *testing.T, base, tool, text string) toolAnswer {
 // operator injected, at the tool route's hostname — and returns the tool's
 // answer as the task's artifact.
 func TestItCompletesATaskByCallingATool(t *testing.T) {
-	mcp, seen := fakeMCP(t, false)
+	mcp, seen := fakeMCP(t, fakeOpts{})
 	defer mcp.Close()
 	t.Setenv("ASSAYD_GATEWAY_URL", mcp.URL)
 	t.Setenv("MCP_TOOL_HOST", "mcp.assayd.test")
@@ -411,7 +453,7 @@ func TestItCompletesATaskByCallingATool(t *testing.T) {
 // A tool the gateway refuses fails the TASK — TASK_STATE_FAILED with the
 // gateway's answer in the status message — rather than the request.
 func TestARefusedToolFailsTheTaskAndSaysWhy(t *testing.T) {
-	mcp, _ := fakeMCP(t, true)
+	mcp, _ := fakeMCP(t, fakeOpts{refuse: true})
 	defer mcp.Close()
 	t.Setenv("ASSAYD_GATEWAY_URL", mcp.URL)
 	srv := httptest.NewServer(handler())
@@ -440,5 +482,32 @@ func TestWithNoGatewayTheToolCallFailsRatherThanGoingElsewhere(t *testing.T) {
 	if out.Task.Status.State != "TASK_STATE_FAILED" || out.Task.Status.Message == nil ||
 		!strings.Contains(out.Task.Status.Message.Parts[0].Text, "ASSAYD_GATEWAY_URL") {
 		t.Errorf("with no gateway the task is %+v; want FAILED naming ASSAYD_GATEWAY_URL", out.Task.Status)
+	}
+}
+
+// Each way the tool call can go wrong fails the TASK, with a message naming
+// what went wrong — never a COMPLETED task with an empty or wrong artifact.
+func TestEveryMCPFailureFailsTheTaskAndSaysWhy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts fakeOpts
+		want string
+	}{
+		{"the tool reports isError", fakeOpts{toolError: true}, "reported an error"},
+		{"the notification is refused", fakeOpts{refuseNotify: true}, "notifications/initialized"},
+		{"the server answers a version not offered", fakeOpts{version: "2099-01-01"}, "protocolVersion 2099-01-01"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mcp, _ := fakeMCP(t, tc.opts)
+			defer mcp.Close()
+			t.Setenv("ASSAYD_GATEWAY_URL", mcp.URL)
+			srv := httptest.NewServer(handler())
+			defer srv.Close()
+			out := sendTool(t, srv.URL, "echo_text", "x")
+			if out.Task.Status.State != "TASK_STATE_FAILED" || out.Task.Status.Message == nil ||
+				!strings.Contains(out.Task.Status.Message.Parts[0].Text, tc.want) {
+				t.Errorf("%s: task is %+v, want FAILED naming %q", tc.name, out.Task.Status, tc.want)
+			}
+		})
 	}
 }

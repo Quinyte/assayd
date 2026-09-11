@@ -361,7 +361,8 @@ func callTool(ctx context.Context, gatewayURL, host, tool, text string) (string,
 	}
 	endpoint := strings.TrimRight(gatewayURL, "/") + "/mcp"
 	client := &http.Client{Timeout: 15 * time.Second}
-	session, version := "", "2025-06-18"
+	const offered = "2025-06-18"
+	session, version := "", offered
 	post := func(msg map[string]any) (map[string]any, http.Header, error) {
 		body, _ := json.Marshal(msg)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
@@ -385,22 +386,38 @@ func callTool(ctx context.Context, gatewayURL, host, tool, text string) (string,
 		}
 		defer resp.Body.Close()
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		if _, ok := msg["id"]; !ok {
-			return nil, resp.Header, nil // a notification takes no response
+		id, isRequest := msg["id"]
+		if !isRequest {
+			// A notification takes no response, but it can still be refused,
+			// and a refusal ignored here would surface later as something else.
+			if resp.StatusCode/100 != 2 {
+				return nil, nil, fmt.Errorf("the gateway refused %v with %s", msg["method"], resp.Status)
+			}
+			return nil, resp.Header, nil
 		}
-		payload := raw
-		for _, line := range strings.Split(string(raw), "\n") {
-			if after, ok := strings.CutPrefix(strings.TrimSpace(line), "data:"); ok {
-				payload = []byte(strings.TrimSpace(after))
-				break
+		// The response is the message whose id matches the request. On an SSE
+		// stream a server may send requests, notifications or an empty priming
+		// event first; taking the first `data:` line would read one of those
+		// as the answer and complete the task with an empty artifact.
+		candidates := [][]byte{raw}
+		if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+			candidates = nil
+			for _, line := range strings.Split(string(raw), "\n") {
+				if after, ok := strings.CutPrefix(strings.TrimSpace(line), "data:"); ok {
+					if d := strings.TrimSpace(after); d != "" {
+						candidates = append(candidates, []byte(d))
+					}
+				}
 			}
 		}
-		var out map[string]any
-		if err := json.Unmarshal(payload, &out); err != nil {
-			return nil, nil, fmt.Errorf("the gateway answered %s %q, which is not a JSON-RPC "+
-				"message", resp.Status, strings.TrimSpace(string(raw)))
+		for _, c := range candidates {
+			var out map[string]any
+			if json.Unmarshal(c, &out) == nil && fmt.Sprint(out["id"]) == fmt.Sprint(id) {
+				return out, resp.Header, nil
+			}
 		}
-		return out, resp.Header, nil
+		return nil, nil, fmt.Errorf("the gateway answered %s %q, which carries no JSON-RPC response "+
+			"to request %v", resp.Status, strings.TrimSpace(string(raw)), id)
 	}
 	rpcErr := func(out map[string]any) error {
 		if e, ok := out["error"].(map[string]any); ok {
@@ -421,8 +438,10 @@ func callTool(ctx context.Context, gatewayURL, host, tool, text string) (string,
 		return "", err
 	}
 	if res, _ := init["result"].(map[string]any); res != nil {
-		if v, _ := res["protocolVersion"].(string); v != "" {
-			version = v
+		// A server answers with a version it supports; if that is not the one
+		// this client offered, the client does not speak it and must stop.
+		if v, _ := res["protocolVersion"].(string); v != "" && v != offered {
+			return "", fmt.Errorf("the MCP server answered protocolVersion %s; this agent speaks %s only", v, offered)
 		}
 	}
 	session = hdr.Get("Mcp-Session-Id")

@@ -281,8 +281,17 @@ func TestAnAgentCompletesATaskByCallingAToolThroughTheGateway(t *testing.T) {
 			"injection did not reach it", got.Gateway, gwURL)
 	}
 
-	// The gateway's allowlist, and the tool it excludes. The fixture server
-	// answers delete_everything normally, so a refusal can only be the gateway's.
+	// Before any allowlist, the SAME tool goes through the gateway and
+	// completes. Without this, the refusal below would rest on the fixture's
+	// unit test rather than on this path: a gateway that refused
+	// delete_everything for some other reason would pass it too.
+	if got = ask("tool-open", "delete_everything", "x"); got.State != "TASK_STATE_COMPLETED" ||
+		got.Artifact != "tool delete_everything: deleted nothing, as promised" {
+		t.Fatalf("with no allowlist the agent's delete_everything task is %+v; it must complete "+
+			"first, or the refusal below says nothing about the allowlist", got)
+	}
+
+	// The gateway's allowlist, and the tool it excludes.
 	applyToolAllowlist(t, ctx, toolsNS, backend, `mcp.tool.name == "echo_text"`)
 	deadline = time.Now().Add(2 * time.Minute)
 	for i := 0; time.Now().Before(deadline); i++ {
