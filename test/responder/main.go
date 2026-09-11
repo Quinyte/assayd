@@ -23,6 +23,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -125,6 +127,11 @@ func handler() http.Handler {
 			ID: "echo", Name: "echo",
 			Description: "returns the text it was sent",
 			Tags:        []string{"test"},
+		}, {
+			ID: "call_tool", Name: "call_tool",
+			Description: "calls the MCP tool named in message.metadata.tool, with the message " +
+				"text as its `text` argument, through the gateway at ASSAYD_GATEWAY_URL",
+			Tags: []string{"test", "mcp"},
 		}},
 	}
 
@@ -216,6 +223,35 @@ func handler() http.Handler {
 		if contextID == "" {
 			contextID = newID("ctx")
 		}
+
+		// The call_tool skill: the agent completes this task BY making an MCP
+		// tool call, through the gateway the operator told it about. That is
+		// ADR-0030's clause with its subject — "one agent completes one A2A task
+		// and one MCP tool call through the gateway" — where before the MCP call
+		// came from a test Pod and no agent made one.
+		if tool, _ := m.Metadata["tool"].(string); tool != "" {
+			t := &task{ID: newID("task"), ContextID: contextID,
+				Metadata: map[string]string{"agent": name, "gateway": gateway, "tool": tool}}
+			result, err := callTool(r.Context(), gateway, env("MCP_TOOL_HOST", ""), tool,
+				strings.Join(texts, " "))
+			if err != nil {
+				// FAILED, not a 400: the request was a valid SendMessageRequest and
+				// the task ran; what failed was the work, and the status message
+				// says what the gateway or the tool answered.
+				t.Status = taskStatus{State: "TASK_STATE_FAILED", Message: &message{
+					MessageID: newID("msg"), Role: "ROLE_AGENT", Parts: []part{{Text: err.Error()}},
+				}}
+			} else {
+				t.Status = taskStatus{State: "TASK_STATE_COMPLETED"}
+				t.Artifacts = []artifact{{ArtifactID: newID("artifact"), Name: "tool-result",
+					Parts: []part{{Text: "tool " + tool + ": " + result}}}}
+			}
+			w.Header().Set("Content-Type", a2aContentType)
+			if err := json.NewEncoder(w).Encode(sendMessageResponse{Task: t}); err != nil {
+				log.Printf("encode task: %v", err)
+			}
+			return
+		}
 		out := sendMessageResponse{Task: &task{
 			ID:        newID("task"),
 			ContextID: contextID,
@@ -259,10 +295,11 @@ type sendMessageRequest struct {
 }
 
 type message struct {
-	MessageID string `json:"messageId"`
-	ContextID string `json:"contextId,omitempty"`
-	Role      string `json:"role"`
-	Parts     []part `json:"parts"`
+	MessageID string         `json:"messageId"`
+	ContextID string         `json:"contextId,omitempty"`
+	Role      string         `json:"role"`
+	Parts     []part         `json:"parts"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
 // part is a oneof over text, raw, url and data; this agent reads and writes text.
@@ -287,7 +324,8 @@ type task struct {
 // taskStatus.state is SCREAMING_SNAKE on the wire. The echo endpoint this
 // replaced answered "ok", which no A2A version defines.
 type taskStatus struct {
-	State string `json:"state"`
+	State   string   `json:"state"`
+	Message *message `json:"message,omitempty"`
 }
 
 type artifact struct {
@@ -302,6 +340,134 @@ const (
 	a2aVersion     = "1.0"
 	a2aContentType = "application/a2a+json"
 )
+
+// callTool makes one MCP tool call through the gateway: `initialize`,
+// `notifications/initialized`, then `tools/call`, over Streamable HTTP at
+// `<ASSAYD_GATEWAY_URL>/mcp`, with the Host set to the tool route's hostname.
+//
+// It goes NOWHERE but the gateway. There is no direct tool URL in this agent's
+// configuration, so a call that succeeds went through the gateway, and a
+// refusal the fixture MCP server would never give — it answers every tool it
+// has — is the gateway's. An unset ASSAYD_GATEWAY_URL is an error, not a
+// fallback.
+//
+// The reply may be JSON or Server-Sent Events and the caller cannot choose:
+// agentgateway answers a successful MCP exchange as SSE even when the upstream
+// answered JSON, and answers its own errors as bare JSON.
+func callTool(ctx context.Context, gatewayURL, host, tool, text string) (string, error) {
+	if gatewayURL == "" {
+		return "", fmt.Errorf("ASSAYD_GATEWAY_URL is not set, and this agent sends tool calls " +
+			"nowhere but the gateway")
+	}
+	endpoint := strings.TrimRight(gatewayURL, "/") + "/mcp"
+	client := &http.Client{Timeout: 15 * time.Second}
+	const offered = "2025-06-18"
+	session, version := "", offered
+	post := func(msg map[string]any) (map[string]any, http.Header, error) {
+		body, _ := json.Marshal(msg)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return nil, nil, err
+		}
+		if host != "" {
+			req.Host = host
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if msg["method"] != "initialize" {
+			req.Header.Set("MCP-Protocol-Version", version)
+		}
+		if session != "" {
+			req.Header.Set("Mcp-Session-Id", session)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, nil, fmt.Errorf("the gateway at %s did not answer: %w", endpoint, err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		id, isRequest := msg["id"]
+		if !isRequest {
+			// A notification takes no response, but it can still be refused,
+			// and a refusal ignored here would surface later as something else.
+			if resp.StatusCode/100 != 2 {
+				return nil, nil, fmt.Errorf("the gateway refused %v with %s", msg["method"], resp.Status)
+			}
+			return nil, resp.Header, nil
+		}
+		// The response is the message whose id matches the request. On an SSE
+		// stream a server may send requests, notifications or an empty priming
+		// event first; taking the first `data:` line would read one of those
+		// as the answer and complete the task with an empty artifact.
+		candidates := [][]byte{raw}
+		if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+			candidates = nil
+			for _, line := range strings.Split(string(raw), "\n") {
+				if after, ok := strings.CutPrefix(strings.TrimSpace(line), "data:"); ok {
+					if d := strings.TrimSpace(after); d != "" {
+						candidates = append(candidates, []byte(d))
+					}
+				}
+			}
+		}
+		for _, c := range candidates {
+			var out map[string]any
+			if json.Unmarshal(c, &out) == nil && fmt.Sprint(out["id"]) == fmt.Sprint(id) {
+				return out, resp.Header, nil
+			}
+		}
+		return nil, nil, fmt.Errorf("the gateway answered %s %q, which carries no JSON-RPC response "+
+			"to request %v", resp.Status, strings.TrimSpace(string(raw)), id)
+	}
+	rpcErr := func(out map[string]any) error {
+		if e, ok := out["error"].(map[string]any); ok {
+			return fmt.Errorf("the MCP call was refused: %v (code %v)", e["message"], e["code"])
+		}
+		return nil
+	}
+
+	init, hdr, err := post(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+		"params": map[string]any{
+			"protocolVersion": version, "capabilities": map[string]any{},
+			"clientInfo": map[string]any{"name": "assayd-e2e-responder", "version": "0.1.0"},
+		}})
+	if err != nil {
+		return "", err
+	}
+	if err := rpcErr(init); err != nil {
+		return "", err
+	}
+	if res, _ := init["result"].(map[string]any); res != nil {
+		// A server answers with a version it supports; if that is not the one
+		// this client offered, the client does not speak it and must stop.
+		if v, _ := res["protocolVersion"].(string); v != "" && v != offered {
+			return "", fmt.Errorf("the MCP server answered protocolVersion %s; this agent speaks %s only", v, offered)
+		}
+	}
+	session = hdr.Get("Mcp-Session-Id")
+	if _, _, err := post(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}); err != nil {
+		return "", err
+	}
+	out, _, err := post(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+		"params": map[string]any{"name": tool, "arguments": map[string]any{"text": text}}})
+	if err != nil {
+		return "", err
+	}
+	if err := rpcErr(out); err != nil {
+		return "", err
+	}
+	res, _ := out["result"].(map[string]any)
+	content, _ := res["content"].([]any)
+	var got string
+	if len(content) > 0 {
+		first, _ := content[0].(map[string]any)
+		got, _ = first["text"].(string)
+	}
+	if isErr, _ := res["isError"].(bool); isErr {
+		return "", fmt.Errorf("the tool %s reported an error: %s", tool, got)
+	}
+	return got, nil
+}
 
 func refuse(w http.ResponseWriter, why string) {
 	w.Header().Set("Content-Type", a2aContentType)
