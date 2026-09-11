@@ -32,7 +32,7 @@ has(self.traffic) && has(self.targetRefs)
   : true
 ```
 
-A second copy covers `targetSelectors`. The CRD also forbids `backend.mcp` and `backend.ai` on a Service target, and it requires a Service `sectionName` to be a numeric port.
+A second copy covers `targetSelectors`. The rule is **not new in 1.5.0**. The same text is in the vendored v1.4.1 CRD, as design 03's third critique found by reading it (`reviews/03-a53-critique.md`). So it has held at both pinned versions. The CRD also forbids `backend.mcp` and `backend.ai` on a Service target, and it requires a Service `sectionName` to be a numeric port.
 
 ## The other per-revision shapes, and why each fails for the slice
 
