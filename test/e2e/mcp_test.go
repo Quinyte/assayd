@@ -14,11 +14,16 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/controller"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // ADR-0030's last unmet clause: **one MCP tool call through the gateway.**
@@ -157,6 +162,203 @@ func TestAnAgentCallsAnMCPToolThroughTheGateway(t *testing.T) {
 	if msg, _ := rpcErr["message"].(string); !strings.Contains(msg, "delete_everything") {
 		t.Errorf("the refusal does not name the tool: %v", rpcErr)
 	}
+}
+
+// ADR-0030's clause WITH its subject: "one **agent** completes one A2A task and
+// one MCP tool call through the gateway."
+//
+// The test above makes the MCP call from a probe Pod, which is a client, not an
+// agent. Here the caller asks an agent for a task over A2A, through the
+// operator's route, and the agent completes it BY calling a tool over MCP —
+// through the gateway at the ASSAYD_GATEWAY_URL the operator injected, which is
+// the only address it has for tools. Two things prove the call went through the
+// gateway and not around it: the agent has no other tool address, and a tool
+// the fixture server would answer normally is refused once the gateway's
+// allowlist excludes it.
+func TestAnAgentCompletesATaskByCallingAToolThroughTheGateway(t *testing.T) {
+	requireCluster(t)
+	requireOperator(t)
+	img := responderImage(t)
+	mcpImg := os.Getenv("ASSAYD_E2E_MCP_IMAGE")
+	if mcpImg == "" {
+		t.Fatal("ASSAYD_E2E_MCP_IMAGE is unset; `make e2e` builds the MCP server")
+	}
+	gwNS, gwName := requireGateway(t)
+	toolsNS, gwURL := os.Getenv("ASSAYD_E2E_TOOLS_NS"), os.Getenv("ASSAYD_E2E_GATEWAY_URL")
+	if toolsNS == "" || gwURL == "" {
+		t.Fatal("ASSAYD_E2E_TOOLS_NS or ASSAYD_E2E_GATEWAY_URL unset; the harness creates the " +
+			"tools listener and tells the chart where agents' egress goes")
+	}
+	ctx := context.Background()
+	ensureNamespace(t, ctx, "assayd-e2e")
+
+	deployMCPServer(t, ctx, toolsNS, mcpImg)
+	backend := applyMCPBackend(t, ctx, toolsNS)
+	assertRouteAccepted(t, ctx, attachMCPRoute(t, ctx, toolsNS, gwNS, gwName), "mcp-tools")
+
+	const name = "toolcaller"
+	a := &assaydv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "assayd-e2e"},
+		Spec: assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{
+			Image: img,
+			Env: []corev1.EnvVar{
+				{Name: "AGENT_NAME", Value: name},
+				// The tool route's hostname. The gateway address is NOT set here:
+				// it is the operator's to inject, and this test asserts it did.
+				{Name: "MCP_TOOL_HOST", Value: "mcp.assayd.test"},
+			},
+		}},
+	}
+	// Wait for any previous run's Agent AND its workload to be GONE before
+	// creating this one. The same spec mints the same revision, so a leftover
+	// Deployment keeps its name, stays "available" on its old Pods, and answers
+	// with whatever those Pods were given. The first version of this test did
+	// not wait, and a mutation that stopped the chart passing --gateway-url
+	// SURVIVED: the request reached a Pod the previous run's operator had
+	// injected.
+	_ = k8s.Delete(ctx, a)
+	waitAgentGone(t, ctx, "assayd-e2e", name)
+	if err := k8s.Create(ctx, a); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(context.Background(), a) })
+	wl := controller.WorkloadName(name, revision.MustHash(a.Spec))
+	waitAvailable(t, ctx, wl, 4*time.Minute)
+	assertRouteAccepted(t, ctx, waitForEmittedRoute(t, ctx, name, 2*time.Minute), wl)
+
+	// The operator's injection, read off the workload THIS run's operator
+	// rendered, before anything is asked of the agent.
+	var dep appsv1.Deployment
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: controller.RunNamespaceName("assayd-e2e"), Name: wl},
+		&dep); err != nil {
+		t.Fatalf("read the agent's workload: %v", err)
+	}
+	injected := ""
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		for _, e := range c.Env {
+			if e.Name == controller.EnvGatewayURL {
+				injected = e.Value
+			}
+		}
+	}
+	if injected != gwURL {
+		t.Fatalf("the operator rendered %s=%q into the agent's workload; the chart was given %q. "+
+			"Without it the agent has no address for tools at all", controller.EnvGatewayURL, injected, gwURL)
+	}
+
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gatewayService(t, ctx, gwNS, gwName), gwNS) +
+		a2aSendMessage
+	host := emittedHostname(t, name, "assayd-e2e")
+	ask := func(tag, tool, text string) toolTask {
+		body := fmt.Sprintf(`{"message":{"messageId":"e2e-%d","role":"ROLE_USER","parts":[{"text":%q}],`+
+			`"metadata":{"tool":%q}}}`, time.Now().UnixNano(), text, tool)
+		return parseToolTask(t, httpInClusterHost(t, ctx, tag, url, host, body))
+	}
+
+	// The MCP backend answers 503 until it resolves a target, and the agent
+	// reports that as a FAILED task — so the first completion is waited for.
+	var got toolTask
+	deadline := time.Now().Add(2 * time.Minute)
+	for i := 0; time.Now().Before(deadline); i++ {
+		if got = ask(fmt.Sprintf("tool-%d", i), "echo_text", "from the agent"); got.State == "TASK_STATE_COMPLETED" {
+			break
+		}
+		time.Sleep(5 * time.Second)
+	}
+	if got.State != "TASK_STATE_COMPLETED" {
+		t.Fatalf("the agent never completed a task by calling a tool through the gateway: %+v", got)
+	}
+	if got.Artifact != "tool echo_text: echo: from the agent" {
+		t.Errorf("the task's artifact is %q, not the tool's answer relayed by the agent", got.Artifact)
+	}
+	if got.Agent != name {
+		t.Errorf("the task was completed by %q, not %q", got.Agent, name)
+	}
+	// The operator's injection reached the agent, and it is the address the
+	// call went to.
+	if got.Gateway != gwURL {
+		t.Errorf("the agent reports ASSAYD_GATEWAY_URL=%q; the chart was given %q, so the operator's "+
+			"injection did not reach it", got.Gateway, gwURL)
+	}
+
+	// Before any allowlist, the SAME tool goes through the gateway and
+	// completes. Without this, the refusal below would rest on the fixture's
+	// unit test rather than on this path: a gateway that refused
+	// delete_everything for some other reason would pass it too.
+	if got = ask("tool-open", "delete_everything", "x"); got.State != "TASK_STATE_COMPLETED" ||
+		got.Artifact != "tool delete_everything: deleted nothing, as promised" {
+		t.Fatalf("with no allowlist the agent's delete_everything task is %+v; it must complete "+
+			"first, or the refusal below says nothing about the allowlist", got)
+	}
+
+	// The gateway's allowlist, and the tool it excludes.
+	applyToolAllowlist(t, ctx, toolsNS, backend, `mcp.tool.name == "echo_text"`)
+	deadline = time.Now().Add(2 * time.Minute)
+	for i := 0; time.Now().Before(deadline); i++ {
+		if got = ask(fmt.Sprintf("tool-refused-%d", i), "delete_everything", "x"); got.State == "TASK_STATE_FAILED" &&
+			strings.Contains(got.StatusText, "delete_everything") {
+			break
+		}
+		time.Sleep(5 * time.Second)
+	}
+	if got.State != "TASK_STATE_FAILED" || !strings.Contains(got.StatusText, "Unknown tool: delete_everything") {
+		t.Errorf("under an allowlist naming only echo_text the agent's delete_everything task is %+v; "+
+			"want TASK_STATE_FAILED carrying the gateway's `Unknown tool` refusal", got)
+	}
+	if got = ask("tool-allowed", "echo_text", "still allowed"); got.State != "TASK_STATE_COMPLETED" ||
+		got.Artifact != "tool echo_text: echo: still allowed" {
+		t.Errorf("the allowed tool stopped working under the allowlist: %+v", got)
+	}
+}
+
+// waitAgentGone waits until an Agent is deleted and no workload of it remains in
+// its run namespace, so a test that recreates it measures a fresh revision.
+func waitAgentGone(t *testing.T, ctx context.Context, ns, name string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		var a assaydv1alpha1.Agent
+		agentGone := apierrors.IsNotFound(k8s.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &a))
+		var deps appsv1.DeploymentList
+		_ = k8s.List(ctx, &deps, client.InNamespace(controller.RunNamespaceName(ns)),
+			client.MatchingLabels{controller.LabelAgent: name})
+		if agentGone && len(deps.Items) == 0 {
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("a previous Agent %s/%s or its workload never went away", ns, name)
+}
+
+// toolTask is what a SendMessageResponse says about a call_tool task.
+type toolTask struct {
+	State, Artifact, StatusText, Agent, Gateway string
+}
+
+func parseToolTask(t *testing.T, body string) toolTask {
+	t.Helper()
+	var out struct {
+		Task *struct {
+			Status struct {
+				State   string
+				Message *struct{ Parts []struct{ Text string } }
+			}
+			Artifacts []struct{ Parts []struct{ Text string } }
+			Metadata  map[string]string
+		}
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil || out.Task == nil {
+		t.Fatalf("the answer is not a SendMessageResponse carrying a task: %v\n%s", err, body)
+	}
+	tt := toolTask{State: out.Task.Status.State, Agent: out.Task.Metadata["agent"],
+		Gateway: out.Task.Metadata["gateway"]}
+	if len(out.Task.Artifacts) > 0 && len(out.Task.Artifacts[0].Parts) > 0 {
+		tt.Artifact = out.Task.Artifacts[0].Parts[0].Text
+	}
+	if m := out.Task.Status.Message; m != nil && len(m.Parts) > 0 {
+		tt.StatusText = m.Parts[0].Text
+	}
+	return tt
 }
 
 func deployMCPServer(t *testing.T, ctx context.Context, ns, img string) {
