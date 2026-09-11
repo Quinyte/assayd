@@ -1,6 +1,6 @@
 # ADR-0033: The slice's gateway auth is one API-key policy per Agent, and the compiler refuses to tighten a live route
 
-- **Status**: accepted · 2026-09-11 · decided by the human on `reviews/03-a52-recritique.md` (B1, B3, B4), with B1 settled by `research/agentgateway-service-target-spike-2026-09.md` · **amended 2026-09-11 (Amendment 1)**: a stricter `-auth` is applied in place under an enforcement probe, `spec.budget` is refused at admission, and `expose.a2a.auth` is required
+- **Status**: **superseded-by ADR-0034** · 2026-09-11 · originally accepted 2026-09-11, decided by the human on `reviews/03-a52-recritique.md` (B1, B3, B4), with B1 settled by `research/agentgateway-service-target-spike-2026-09.md`; amended the same day (Amendment 1). Superseded because Amendment 1 made the title's "refuses to tighten a live route" false, and the human's D2, E2 and F2 on `reviews/03-a54-critique.md` reverse more of it. Content below is unedited, per the ADR rule.
 - **Context**: Design 03's re-critique found three decisions the design had never made about the first policy the compiler would emit: the serving route's `-auth`.
   - **The target (B1).** Design 03 assumed per-revision policies. The operator ships one serving route per Agent (design 07 A6.10), so two revisions' policies would share one target, and agentgateway resolves that conflict randomly.
   - **The input (B3).** `-auth`'s input was design 06 identity, which has no implementation, so the design as written would withhold every Agent's route.
