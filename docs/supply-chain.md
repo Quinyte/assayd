@@ -43,7 +43,15 @@ cosign verify-attestation --type spdxjson "${IMAGE}@${DIGEST}" \
   | jq -r '.payload | @base64d | fromjson | .predicate.packages[].name'
 ```
 
-**SLSA build provenance is attached to the registry, from v0.2.0 on.** v0.1.x had none, because GitHub's attestation API refused the repository while it was private. `cosign verify` against the image lists the `https://slsa.dev/provenance/v1` attestation among the claims it checked. `gh attestation verify oci://ghcr.io/quinyte/assayd-operator:0.2.0 --owner Quinyte` reads it too, once it can pull the image.
+**SLSA build provenance is attached to the registry, from v0.2.0 on.** v0.1.x had none, because GitHub's attestation API refused the repository while it was private. Verify it against the release workflow's identity. `cosign verify` checks the signature only, so the attestation needs its own command:
+
+```bash
+cosign verify-attestation --type slsaprovenance1 "${IMAGE}@${DIGEST}" \
+  --certificate-identity-regexp '^https://github.com/Quinyte/assayd/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+`gh attestation verify oci://ghcr.io/quinyte/assayd-operator:0.2.0 --owner Quinyte` reads the same provenance, once it can pull the image.
 
 ## Digests, not tags
 
