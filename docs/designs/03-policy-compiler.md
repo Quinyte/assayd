@@ -19,6 +19,56 @@
 
 The single translation layer between assayd's declarative intent (Agent/Workflow/KG/App CR fields) and agentgateway v1.4.1 configuration. Everything the platform promises "at the gateway" — budgets, tool access, KG scoping, exposure, candidate isolation — becomes real here, so **apply-time behavior is part of this design, not a detail** (r1 finding 1). **Out of scope**: loop-governance semantics (design 22; mappings reserved), receipt pipeline and spend aggregation (design 04 owns; consumed here).
 
+### 1.1 The first slice — the approval boundary
+
+**Only this first slice can be approved for implementation. The rest of this document is specified, not approved.** The human decided this on 2026-09-11 (G, ADR-0034 Amendment 1). The later scope is critiqued again when design 02 makes it reachable. **Nothing is approved today, the slice included.** The slice is approved only when the human approves it after a passing critique, and no critique has read this section yet.
+
+**What the slice is.** The agent-operator emits one `AgentgatewayPolicy` per Agent, named `<agent>-auth`. It carries API-key authentication and one CEL authorization rule (§3.4.4). It targets the per-Agent `<agent>-serving` `HTTPRoute` the operator already emits (§3.2, design 07 A6.10), and it arrives through the `Create` transaction. The route is published only after an anonymous request through it gets `401` (§3.3.3).
+
+Two facts fix what the slice can reach:
+
+- **The key source is a constant.** The slice compiles `configMapSelector: {matchLabels: {assayd.dev/api-keys: "true"}}` into the operator. There is no chart value and no flag for it. So no key-source change can arise, and D2 (§3.4.4) is unreachable.
+- **The admitted set cannot change.** Today's CRD has no `allowedGroups`, and the slice does not add it. Every Agent admits exactly the group named for its namespace (§3.4.4), and a namespace is immutable. So group narrowing and widening, E2, F2's group semantics and D2's migration cannot arise.
+
+One change to a served Agent's `-auth` is still reachable: its mode. It can move between the API-key policy and `auth: none`, or to `oauth`, which the slice cannot compile. The slice applies none of these to a served Agent. It keeps the last good `-auth`, which is the human's rule I1 (§3.3.1), and names the change it did not apply.
+
+| In the slice | Where |
+|---|---|
+| `<agent>-auth`: its name, namespace, labels and target, the name-and-label deletion rule, and `ForeignTrafficPolicy` detection | §3.2 |
+| `Create` of `<agent>-auth`: `PreparingRoute` → `ApplyingPolicies` → `Converging` → `ProbingAfter` → `Publishing` → `Served`. Also the deadline, NACK handling, re-entry at the write, and `status.auth` without its group and key-source transaction fields | §3.3, §3.3.3 |
+| `-auth` is mandatory on the serving route. `auth: none` gets the marker label and no policy. The compile-failure rule, including I1 | §3.3.1 |
+| The convergence tuple for `AgentgatewayPolicy` and `HTTPRoute`, which needs the status reads §3.2 owes | §3.3.2 |
+| `Create`'s anonymous probe, H2's replica rule, and `Adopt` refused | §3.3.3 |
+| The API-key mechanism, the emitted policy, and the namespace-derived group | §3.4.4 |
+| The `GovernanceSkipped` clearing rule, and the rows for the conditions below | §3.1, §5 |
+| `PolicyCompileFailed`, reasons `AuthInputAbsent`, `ConcernNotBuilt` and `AuthTransitionNotBuilt`. `PolicyApplyIncomplete`, reasons `AuthEnforcementUnverified` and `ForeignTrafficPolicy`. `GovernanceSkipped`, reasons `Governed`, `AuthVerifiedOnOneReplica`, `CompilerUpgradeUnsupported`, `ForeignTrafficPolicy` and `AuthTransitionNotBuilt` | §3.1, §3.3.1, §3.3.3, §5 |
+
+| Out of the slice: specified, not approved | Why it cannot arise in the slice |
+|---|---|
+| `Narrow`, every row, and its keyed probe and probe `ConfigMap`s | no group can change and the key source is fixed. A mode change it would run is refused (above) |
+| `Loosen` on `-auth` | the same |
+| E2, F2's group rules, and the ordering of auth transactions around a weight shift | no group can change. F2's "a rollback changes no auth" holds trivially, because each Agent has one possible `-auth` |
+| D2, `gateway.apiKeys.selector`, `gateway.apiKeys.acceptedSelector` and their two flags | the selector is a constant |
+| `Withdraw`, the per-producer table, the seal, `-ratelimit`, `-toolfilter`, `-transform`, `-guard`, every Backend and egress route, and the candidate header route | none has a producer in the slice |
+| `gatewayReplicas` as a rate divisor, and `ReplicaSkew` | the slice emits no rate limit |
+
+**What the slice depends on. Every item is owed, and none is done.**
+
+- **Design 02**:
+  - the schema of `status.auth`, in the slice's subset;
+  - `expose.a2a.auth` required with no default, and `apikey` in its enum. In the slice, `apikey` means the namespace-derived group, because `allowedGroups` is absent;
+  - the `spec.budget` refusal at admission (§3.1);
+  - a promotion step that gives no weight to a revision whose projection carries an `-auth` input the slice cannot compile (I1, §3.3.1).
+- **Design 07**:
+  - A6.10–A6.13, which the slice's emitter rests on and which are not critiqued;
+  - `gateway.servingUrl` → `--gateway-serving-url`, required whenever the compiler runs (§3.3.3);
+  - an emitter that prepares a new Agent's route with no `backendRefs`, and that holds a revision as design 02's step does;
+  - `agentgatewaypolicies` RBAC (§3.2);
+  - the admission policy that reserves `agentgatewaypolicies` and the key label in run namespaces (§6, §3.4.4).
+- **This design**: the tests §8.1 lists under "The first slice".
+
+**Why only the slice.** The fifth critique judged the slice close to approvable and the rest not (`reviews/03-a55-critique.md`, "Is the first slice alone approvable?"). The later transactions carry findings that stay open until `allowedGroups` makes them testable: that critique's M4 and its MINORs 1, 2, 4 and 5 (§11 A56).
+
 ## 2. Doctrine & charter gates
 
 - **Plane**: slow (engine) — a **library** compiled into agent-operator (rule 3), no pod.
