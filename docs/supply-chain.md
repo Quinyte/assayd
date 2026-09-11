@@ -4,16 +4,16 @@ assayd's admission rejects agent images that are not cosign-signed (ADR-0019), a
 
 ## What is published, and where
 
-| Artifact | Location | State at v0.1.0 |
+| Artifact | Location | State at v0.2.0 |
 |---|---|---|
-| Operator image | `ghcr.io/quinyte/assayd-operator` (amd64, arm64) | published, signed, SBOM attested |
-| Helm chart | `oci://ghcr.io/quinyte/charts/assayd` | **not published** — see below |
+| Operator image | `ghcr.io/quinyte/assayd-operator` (amd64, arm64) | published, cosign-signed, SBOM attested, SLSA provenance attached |
+| Helm chart | `oci://ghcr.io/quinyte/charts/assayd` | published, cosign-signed, pinned to the image by digest |
 
-Both are published only by `.github/workflows/release.yml`, on a `v*` tag. The
-packages inherit the repository's visibility, so while the repo is private they
-are private and a pull requires `docker login ghcr.io`.
+Both are published only by `.github/workflows/release.yml`, on a `v*` tag, and the workflow verifies its own signatures from outside before it finishes.
 
-**v0.1.0 predates the move to the Quinyte organization** and was published under `ghcr.io/ejs-5/assayd-operator` at digest `sha256:749ef617444b176c6adeb7e58443bb3abdd65c1d6fd0a856454b912d818a2582`, signed by the workflow identity `https://github.com/ejs-5/assayd/`. That artifact is not moved or re-signed: a signature attests to who built what and when, and rewriting history to look tidier would defeat the point. Verify it against the identity it was actually signed with. Everything from v0.1.1 lives under `Quinyte`.
+**GHCR creates a new package private, whatever the repository's visibility,** and GitHub offers no API to change it. Each package is made public by hand in its package settings. Until it is, a pull needs `docker login ghcr.io`, and so does `gh attestation verify`. At v0.2.0 both packages were created private.
+
+**v0.1.x were published under the project's old name,** as `plume-operator` and `charts/plume`. v0.1.0 came from the repository's earlier home, and v0.1.1 from the Quinyte organization. Those packages were **deleted on 2026-09-11**, when the rename was finished, because nothing will be published under the old name again. Their tags remain, and so do their signatures' Rekor entries, which are immutable. The artifacts do not, so neither release can be installed or verified today. v0.2.0 is the first release under the assayd name.
 
 ## Signing is keyless, and that is the point
 
@@ -43,28 +43,35 @@ cosign verify-attestation --type spdxjson "${IMAGE}@${DIGEST}" \
   | jq -r '.payload | @base64d | fromjson | .predicate.packages[].name'
 ```
 
-SLSA build provenance is attached to the registry too, and is readable with `gh attestation verify`.
+**SLSA build provenance is attached to the registry, from v0.2.0 on.** v0.1.x had none, because GitHub's attestation API refused the repository while it was private. Verify it against the release workflow's identity. `cosign verify` checks the signature only, so the attestation needs its own command:
+
+```bash
+cosign verify-attestation --type slsaprovenance1 "${IMAGE}@${DIGEST}" \
+  --certificate-identity-regexp '^https://github.com/Quinyte/assayd/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+`gh attestation verify oci://ghcr.io/quinyte/assayd-operator:0.2.0 --owner Quinyte` reads the same provenance, once it can pull the image.
 
 ## Digests, not tags
 
 The chart takes `operator.image.digest`, and **the digest wins over the tag when both are set** — the tag is dropped from the rendered reference rather than carried alongside it, because `repo:tag@digest` resolves by digest and the tag then reads as though it mattered.
 
-A tag can be repointed at other content after it was signed. A digest names the content. The release workflow pins the chart to the digest it just published and verified, so `helm install` at defaults runs the artifact that was signed.
+A tag can be repointed at other content after it was signed. A digest names the content. The release workflow pins the published chart to the digest it just published and verified, so installing the published chart at defaults runs the artifact that was signed:
 
 ```bash
-helm install assayd oci://ghcr.io/quinyte/charts/assayd --version 0.1.0 \
-  --set operator.image.digest=sha256:...
+helm install assayd oci://ghcr.io/quinyte/charts/assayd --version 0.2.0
 ```
+
+The chart **in the repository** carries an empty `digest`, because only a release knows it. Installing from a checkout therefore resolves by tag, unless you pass `--set operator.image.digest=sha256:...`.
 
 ## What is NOT yet true
 
 Stated plainly, because a supply-chain page that overclaims is worse than none:
 
-- **The chart was not published at v0.1.0.** The release run failed at SLSA provenance *after* pushing and signing the image, and the chart job depends on the image job, so it never ran. The image is real and signed; the chart is not yet in the registry. Fixed for the next tag.
-- **There is no SLSA build provenance, and there cannot be one yet.** GitHub's attestation API refuses user-owned **private** repositories outright ("Feature not available for user-owned private repositories"). The step is now conditional on the repo being public, so provenance starts existing the day this repo goes public or moves to an organization — and until then the honest statement is that assayd ships a signed image with a verifiable SBOM and *no* build provenance.
-- **The chart's default `digest` is empty.** Until a release publishes a chart, `helm install` at defaults resolves by tag. Set the digest explicitly.
+- **The chart in a checkout is not pinned.** Only the published chart carries the digest; see above.
 - **No `.sig` verification at install time.** Nothing forces a cluster to reject an unsigned assayd chart; that is the Sigstore policy-controller's job (design 07 A2 chose it; A3 defines its enforcement contract) and assayd does not ship one for itself yet — while it *does* enforce exactly this for agent images.
-- **No release has been published.** Everything above describes a workflow that exists and has not run.
+- **The packages are private until someone with admin rights on the organization makes them public by hand.** See above.
 
 ## For reviewers
 
