@@ -312,3 +312,133 @@ func TestTheCardPathIsConfigurable(t *testing.T) {
 }
 
 func TestMain(m *testing.M) { os.Exit(m.Run()) }
+
+// fakeMCP stands in for the gateway's tools listener: it records the order of
+// the JSON-RPC methods it receives and the Host each came with, and answers
+// tools/call either with a result (as SSE, the way agentgateway answers a
+// successful exchange) or with the JSON-RPC error agentgateway gives a tool its
+// allowlist refuses.
+func fakeMCP(t *testing.T, refuse bool) (*httptest.Server, *[]string) {
+	t.Helper()
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var msg struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params struct {
+				Name      string `json:"name"`
+				Arguments struct{ Text string }
+			} `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&msg)
+		seen = append(seen, r.URL.Path+" "+r.Host+" "+msg.Method)
+		switch msg.Method {
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "initialize":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}`))
+		case "tools/call":
+			if refuse {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Unknown tool: ` +
+					msg.Params.Name + `"}}`))
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(`data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"echo: ` +
+				msg.Params.Arguments.Text + `"}],"isError":false}}` + "\n\n"))
+		}
+	}))
+	return srv, &seen
+}
+
+type toolAnswer struct {
+	Task *struct {
+		Status struct {
+			State   string
+			Message *struct{ Parts []struct{ Text string } }
+		}
+		Artifacts []struct{ Parts []struct{ Text string } }
+		Metadata  map[string]string
+	}
+}
+
+func sendTool(t *testing.T, base, tool, text string) toolAnswer {
+	t.Helper()
+	resp := sendV1(t, base, `{"message":{"messageId":"m","role":"ROLE_USER","parts":[{"text":"`+text+
+		`"}],"metadata":{"tool":"`+tool+`"}}}`)
+	defer resp.Body.Close()
+	var out toolAnswer
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Task == nil {
+		t.Fatalf("not a SendMessageResponse carrying a task: %v", err)
+	}
+	return out
+}
+
+// The agent completes the task BY calling the tool, through the gateway the
+// operator injected, at the tool route's hostname — and returns the tool's
+// answer as the task's artifact.
+func TestItCompletesATaskByCallingATool(t *testing.T) {
+	mcp, seen := fakeMCP(t, false)
+	defer mcp.Close()
+	t.Setenv("ASSAYD_GATEWAY_URL", mcp.URL)
+	t.Setenv("MCP_TOOL_HOST", "mcp.assayd.test")
+	srv := httptest.NewServer(handler())
+	defer srv.Close()
+
+	out := sendTool(t, srv.URL, "echo_text", "from the agent")
+	if out.Task.Status.State != "TASK_STATE_COMPLETED" {
+		t.Fatalf("task state %q, want TASK_STATE_COMPLETED: %+v", out.Task.Status.State, out.Task)
+	}
+	if len(out.Task.Artifacts) == 0 || out.Task.Artifacts[0].Parts[0].Text != "tool echo_text: echo: from the agent" {
+		t.Errorf("the artifact is not the tool's answer: %+v", out.Task.Artifacts)
+	}
+	if out.Task.Metadata["tool"] != "echo_text" {
+		t.Errorf("the task does not say which tool completed it: %v", out.Task.Metadata)
+	}
+	// The MCP lifecycle, in order, on /mcp, at the tool route's host.
+	want := []string{
+		"/mcp mcp.assayd.test initialize",
+		"/mcp mcp.assayd.test notifications/initialized",
+		"/mcp mcp.assayd.test tools/call",
+	}
+	if strings.Join(*seen, "|") != strings.Join(want, "|") {
+		t.Errorf("the MCP exchange was %v, want %v", *seen, want)
+	}
+}
+
+// A tool the gateway refuses fails the TASK — TASK_STATE_FAILED with the
+// gateway's answer in the status message — rather than the request.
+func TestARefusedToolFailsTheTaskAndSaysWhy(t *testing.T) {
+	mcp, _ := fakeMCP(t, true)
+	defer mcp.Close()
+	t.Setenv("ASSAYD_GATEWAY_URL", mcp.URL)
+	srv := httptest.NewServer(handler())
+	defer srv.Close()
+
+	out := sendTool(t, srv.URL, "delete_everything", "x")
+	if out.Task.Status.State != "TASK_STATE_FAILED" {
+		t.Fatalf("a refused tool left the task %q, want TASK_STATE_FAILED", out.Task.Status.State)
+	}
+	if m := out.Task.Status.Message; m == nil || len(m.Parts) == 0 ||
+		!strings.Contains(m.Parts[0].Text, "Unknown tool: delete_everything") {
+		t.Errorf("the failed task does not carry the gateway's refusal: %+v", out.Task.Status)
+	}
+	if len(out.Task.Artifacts) != 0 {
+		t.Errorf("a failed task carries an artifact: %+v", out.Task.Artifacts)
+	}
+}
+
+// With no gateway injected the agent calls nothing. There is no fallback
+// address, so a success could only ever mean the gateway carried the call.
+func TestWithNoGatewayTheToolCallFailsRatherThanGoingElsewhere(t *testing.T) {
+	t.Setenv("ASSAYD_GATEWAY_URL", "")
+	srv := httptest.NewServer(handler())
+	defer srv.Close()
+	out := sendTool(t, srv.URL, "echo_text", "x")
+	if out.Task.Status.State != "TASK_STATE_FAILED" || out.Task.Status.Message == nil ||
+		!strings.Contains(out.Task.Status.Message.Parts[0].Text, "ASSAYD_GATEWAY_URL") {
+		t.Errorf("with no gateway the task is %+v; want FAILED naming ASSAYD_GATEWAY_URL", out.Task.Status)
+	}
+}

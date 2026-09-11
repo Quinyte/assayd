@@ -300,8 +300,19 @@ GWEOF
   # route's identity from. The suffix is the chart's own default and is passed
   # explicitly, so a change to that default breaks this line rather than
   # silently moving every hostname the suite asserts on.
+  # gateway.url is where agents send their EGRESS — tool calls. The operator
+  # injects it into every agent as ASSAYD_GATEWAY_URL, and it names the `tools`
+  # listener, because that is the listener the MCP routes attach to.
+  GW_SVC=$(kubectl -n "${GATEWAY_NS}" get svc -l gateway.networking.k8s.io/gateway-name=assayd \
+    -o jsonpath='{.items[0].metadata.name}')
+  if [ -z "${GW_SVC}" ]; then
+    echo "no Service for Gateway ${GATEWAY_NS}/assayd; cannot tell agents where their egress goes" >&2
+    exit 1
+  fi
+  export ASSAYD_E2E_GATEWAY_URL="http://${GW_SVC}.${GATEWAY_NS}.svc.cluster.local:8081"
   GATEWAY_SETTINGS=(--set gateway.enabled=true --set gateway.name=assayd
-    --set gateway.hostnameSuffix=assayd.internal)
+    --set gateway.hostnameSuffix=assayd.internal
+    --set gateway.url="${ASSAYD_E2E_GATEWAY_URL}")
   export ASSAYD_E2E_GATEWAY_HOSTNAME_SUFFIX="assayd.internal"
   echo "    gateway: ${GATEWAY_NS}/assayd, listener admits assayd.dev/run-namespace=true"
 else

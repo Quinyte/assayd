@@ -109,6 +109,14 @@ gateway:
   # 404s, and the Agent still says Ready -- the operator does not read route
   # status. Said here because nothing else would say it.
   name: assayd
+  # The base URL an agent's EGRESS traverses -- where it sends MCP tool calls.
+  # The operator injects it into every agent as ASSAYD_GATEWAY_URL (design 02
+  # 11), after the user's own env, so an Agent cannot point its egress
+  # elsewhere by setting the variable itself. Empty -- the default -- injects
+  # nothing. It is a URL an agent dials, so it must name a listener that
+  # admits the tool routes (the e2e harness uses the Gateway's `tools`
+  # listener); nothing checks that it does.
+  url: ""
   # The namespace the Gateway object lives in, which is NOT the namespace the
   # operator runs in. Design 03 3.2 puts gateway-scoped resources in "the
   # gateway's own namespace", and agentgateway forces the separation anyway:

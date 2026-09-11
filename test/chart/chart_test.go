@@ -690,6 +690,29 @@ func TestTheGatewayValuesReachTheOperator(t *testing.T) {
 	}
 }
 
+// gateway.url reaches the operator as --gateway-url, which it injects into every
+// agent as ASSAYD_GATEWAY_URL — the egress base URL an agent's tool calls must
+// traverse. Unset renders no flag at all, so an install with no Gateway injects
+// nothing rather than an empty variable an agent might dial.
+func TestTheGatewayURLReachesTheOperatorOnlyWhenSet(t *testing.T) {
+	if args := operatorArgs(t); containsPrefix(args, "--gateway-url") {
+		t.Errorf("the default install passes %v; with no gateway.url nothing may be injected", args)
+	}
+	args := operatorArgs(t, "--set", "gateway.url=http://gw.example:8081")
+	if !contains(args, "--gateway-url=http://gw.example:8081") {
+		t.Errorf("gateway.url did not reach the operator: %v", args)
+	}
+}
+
+func containsPrefix(xs []string, prefix string) bool {
+	for _, x := range xs {
+		if strings.HasPrefix(x, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // And the fallback, which admission.yaml's `$gwNS` performs identically. A
 // single-namespace install must be unchanged, so an unset value means the
 // namespace the OPERATOR runs in — not the Helm release namespace, which
