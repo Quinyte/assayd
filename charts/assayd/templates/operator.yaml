@@ -81,6 +81,12 @@ spec:
             {{- with .Values.gateway.hostnameSuffix }}
             - --gateway-hostname-suffix={{ . }}
             {{- end }}
+            {{- with .Values.gateway.url }}
+            # Injected into every agent as ASSAYD_GATEWAY_URL (design 02 11), the
+            # base URL its egress -- tool calls -- must traverse. Unset injects
+            # nothing, which is what an install with no Gateway should do.
+            - --gateway-url={{ . }}
+            {{- end }}
             - --health-probe-bind-address=:8081
             {{- if .Values.operator.metrics.enabled }}
             - --metrics-bind-address=:{{ .Values.operator.metrics.port }}
