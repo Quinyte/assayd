@@ -5,6 +5,8 @@ package envtest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/url"
 	"strings"
@@ -44,15 +46,58 @@ const testServingURL = "http://gateway.test:8080"
 // could not express a gateway that has not read the policy yet, and a stub
 // that always answered 401 would let a case reach Served with no policy
 // written (reviews/03-a56-critique.md MINOR 1).
+//
+// On a route with backendRefs the card path answers `200` with the card of
+// the backend the route's one backendRef names, whose digest is
+// cardDigestOf(that backend). Two switches the test holds change that
+// answer, as §8.1 says: a backend override replaces the code (case 11's `503`
+// and a backend's own `401`), and servedBy makes another backend serve the
+// card, which is how a gateway looks just after a promotion.
 type stubProber struct {
-	mu     sync.Mutex
-	held   map[string]bool
-	probes map[string]int
-	last   map[string]int
+	mu       sync.Mutex
+	held     map[string]bool
+	probes   map[string]int
+	last     map[string]int
+	override map[string]int
+	servedBy map[string]string
+	// foreign makes a policy the operator did not emit answer 401 at any
+	// path, as a foreign traffic policy on the route would (§3.2).
+	foreign map[string]bool
 }
 
 func newStubProber() *stubProber {
-	return &stubProber{held: map[string]bool{}, probes: map[string]int{}, last: map[string]int{}}
+	return &stubProber{held: map[string]bool{}, probes: map[string]int{}, last: map[string]int{},
+		override: map[string]int{}, servedBy: map[string]string{}, foreign: map[string]bool{}}
+}
+
+// foreignAnswers makes a foreign policy answer every probe of agent with 401.
+func (s *stubProber) foreignAnswers(agent string, on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.foreign[agent] = on
+}
+
+// backendOverride makes the card path on a published route answer code, or,
+// with 0, the card again.
+func (s *stubProber) backendOverride(agent string, code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.override[agent] = code
+}
+
+// serveFrom makes the card path answer with backend's card whatever the route
+// names, or, with "", with the named backend's again.
+func (s *stubProber) serveFrom(agent, backend string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.servedBy[agent] = backend
+}
+
+// cardDigestOf is the digest of the card a backend serves in this stub, and
+// the one a test records in status.cards for the revision it names.
+func cardDigestOf(backend string) string {
+	sum := sha256.Sum256([]byte("the card " + backend + " serves"))
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *stubProber) hold(agent string, held bool) {
@@ -77,53 +122,63 @@ func (s *stubProber) Probe(ctx context.Context, req controller.AuthProbeRequest)
 	if err != nil {
 		return controller.AuthProbeAnswer{}, err
 	}
-	code, err := s.answer(ctx, name, ns, u.Path)
+	code, digest, err := s.answer(ctx, name, ns, u.Path)
 	s.mu.Lock()
 	s.probes[name]++
 	s.last[name] = code
 	s.mu.Unlock()
-	return controller.AuthProbeAnswer{Code: code}, err
+	return controller.AuthProbeAnswer{Code: code, CardDigest: digest}, err
 }
 
-func (s *stubProber) answer(ctx context.Context, name, ns, path string) (int, error) {
+func (s *stubProber) answer(ctx context.Context, name, ns, path string) (int, string, error) {
 	var a assaydv1alpha1.Agent
 	if err := k8s.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &a); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	golden, err := compiler.AuthPolicy(compiler.AuthInput{AgentName: a.Name, AgentNamespace: a.Namespace,
 		AgentUID: a.UID, RunNamespace: runNS(ns)})
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	want, err := compiler.Digest(golden)
 	if err != nil {
-		return 0, err
+		return 0, "", err
+	}
+	s.mu.Lock()
+	held, override, servedBy, foreign := s.held[name], s.override[name], s.servedBy[name], s.foreign[name]
+	s.mu.Unlock()
+	if foreign {
+		return 401, "", nil
 	}
 	stored := controller.NewAgentgatewayPolicy()
 	if err := k8s.Get(ctx, client.ObjectKeyFromObject(golden), stored); err == nil {
-		s.mu.Lock()
-		held := s.held[name]
-		s.mu.Unlock()
 		if d, err := compiler.Digest(stored); err == nil && d == want && !held {
-			return 401, nil
+			return 401, "", nil
 		}
 	}
 	routeName, _ := compiler.ServingRouteName(name)
 	var rt gatewayv1.HTTPRoute
 	if err := k8s.Get(ctx, types.NamespacedName{Namespace: runNS(ns), Name: routeName}, &rt); err != nil {
-		return 404, nil
+		return 404, "", nil
 	}
 	if len(rt.Spec.Rules) == 0 || len(rt.Spec.Rules[0].BackendRefs) == 0 {
-		return 500, nil
+		return 500, "", nil
 	}
 	cardPath := a.Spec.Card.Path
 	if cardPath == "" {
 		cardPath = "/.well-known/agent-card.json"
 	}
-	if path == cardPath {
-		return 200, nil
+	if path != cardPath {
+		return 404, "", nil
 	}
-	return 404, nil
+	if override != 0 {
+		return override, "", nil
+	}
+	backend := string(rt.Spec.Rules[0].BackendRefs[0].Name)
+	if servedBy != "" {
+		backend = servedBy
+	}
+	return 200, cardDigestOf(backend), nil
 }
 
 // createReconciler is a gateway-enabled reconciler whose probe is the oracle.
@@ -799,18 +854,13 @@ func TestARoutePublishedBeforeTheCompilerIsNotLocked(t *testing.T) {
 	}
 	condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "CompilerUpgradeUnsupported")
 
-	// refusedMode tracks the desired mode while it is not apikey, and a desired
-	// apikey never overwrites it: what K2 reads as consent (§3.3.3).
+	// refusedMode tracks the desired mode while it is not apikey (§3.3.3). The
+	// edit back to apikey is then K2's consent, which TestK2* pins.
 	mustEdit(t, a, func(x *assaydv1alpha1.Agent) {
 		x.Spec.Expose = &assaydv1alpha1.ExposeSpec{A2A: &assaydv1alpha1.ExposeProtocol{Auth: "none"}}
 	})
 	reconcileOnce(t, r, a)
-	if tx := txOf(t, a); tx == nil || tx.RefusedMode != "none" {
+	if tx := txOf(t, a); tx == nil || tx.Kind != "Adopt" || tx.RefusedMode != "none" {
 		t.Errorf("refusedMode did not track an edit to none: %+v", tx)
-	}
-	mustEdit(t, a, func(x *assaydv1alpha1.Agent) { x.Spec.Expose = nil })
-	reconcileOnce(t, r, a)
-	if tx := txOf(t, a); tx == nil || tx.RefusedMode != "none" {
-		t.Errorf("a desired apikey overwrote refusedMode: %+v", tx)
 	}
 }

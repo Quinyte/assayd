@@ -150,6 +150,12 @@ func TestMain(m *testing.M) {
 		},
 		ErrorIfCRDPathMissing: true,
 	}
+	// One control plane serves every test, and every reconcile creates revision
+	// Services that nothing deletes. controller-runtime's default range,
+	// 10.0.0.0/24, holds 254 ClusterIPs, and design 03 slice PR 5's cases took
+	// the suite past it: unrelated cases then failed with "range is full". A /16
+	// is a harness capacity, not a product setting.
+	env.ControlPlane.GetAPIServer().Configure().Set("service-cluster-ip-range", "10.0.0.0/16")
 
 	cfg, err = env.Start()
 	must(err, "start control plane")

@@ -14,8 +14,6 @@ import (
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 	"github.com/Quinyte/assayd/internal/compiler"
-	"github.com/Quinyte/assayd/internal/controller"
-	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // Design 03 §3.3.3's re-creations for a served API-key Agent, and the
@@ -222,29 +220,39 @@ func TestAPruneOfBothPolicyFirstDisplacesTheLock(t *testing.T) {
 	driveToServed(t, r, stub, a)
 }
 
-// Review MAJOR 1: during an unfinished Create, a revision minted by an edit
-// that does not compile gains no weight, as the message says. The Create
-// finishes on the revision it had.
-func TestAnUncompilableEditDuringACreateGainsNoWeight(t *testing.T) {
+// An uncompilable edit during an unfinished, never-served Create abandons it
+// (§3.3.3): the prepared route is deleted, because no prepared route exists
+// while the serving route does not compile, the policy the Create wrote goes
+// after it, and status.auth keeps nothing. PR 4's interim held the minted
+// revision and let the Create finish; abandonment replaced it (A72).
+func TestAnUncompilableEditDuringACreateAbandonsIt(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "midcreate", nil)
 	r, stub := createReconciler()
 	stub.hold("midcreate", true)
 	promote(t, r, a)
-	first := liveAgent(t, a).Status.ActiveRevision
+	if policyExists(t, runNS(ns), policyNameOf(a)) == nil {
+		t.Fatal("the Create wrote no policy to abandon")
+	}
 	mustEdit(t, a, func(x *assaydv1alpha1.Agent) {
 		x.Spec.Expose = &assaydv1alpha1.ExposeSpec{A2A: &assaydv1alpha1.ExposeProtocol{Auth: "oauth"}}
 	})
-	second := revision.MustHash(liveAgent(t, a).Spec)
 	reconcileOnce(t, r, a)
-	markAvailable(t, ns, controller.WorkloadName("midcreate", second), 1)
-	reconcileOnce(t, r, a)
-	reconcileOnce(t, r, a)
-	if got := liveAgent(t, a).Status.ActiveRevision; got != first {
-		t.Fatalf("an oauth revision minted during a Create was promoted (%s → %s); the "+
-			"PolicyCompileFailed message says it gains no weight", first, got)
+	if rt := servingRoute(t, ns, "midcreate"); rt != nil {
+		t.Errorf("the abandoned Create's prepared route survived an edit to oauth: %+v", rt.Spec)
+	}
+	if policyExists(t, runNS(ns), policyNameOf(a)) != nil {
+		t.Error("the policy the abandoned Create wrote was kept")
+	}
+	if auth := authOf(t, a); auth != nil {
+		t.Errorf("status.auth kept %+v after the abandonment", auth)
 	}
 	condIs(t, a, assaydv1alpha1.CondPolicyCompileFailed, metav1.ConditionTrue, "AuthInputAbsent")
+}
+
+func policyNameOf(a *assaydv1alpha1.Agent) string {
+	name, _ := compiler.AuthPolicyName(a.Name)
+	return name
 }
 
 func widen(t *testing.T, a *assaydv1alpha1.Agent) {

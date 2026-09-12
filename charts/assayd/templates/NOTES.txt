@@ -68,19 +68,33 @@ grants, and no registration deadline is counted. See `docs/designs/02-*.md` §5.
     `<agent>.<agent-namespace>.{{ .Values.gateway.hostnameSuffix | default "assayd.internal" }}` and forwarding to that
     revision's Service
 
-and, for a NEW Agent whose `spec.expose.a2a.auth` is `apikey` or absent, an
-`AgentgatewayPolicy` named `<agent>-auth` beside it: API-key authentication
-over the ConfigMaps labelled `assayd.dev/api-keys: "true"` in that run
-namespace, admitting the group named for the Agent's namespace. Its route is
-published only after an anonymous request through it gets 401, sent to
-`gateway.servingUrl`, which is therefore required. `auth: none` is published
-at once, unauthenticated, labelled `assayd.dev/auth: "none"`.
+and, for an Agent whose `spec.expose.a2a.auth` is `apikey` or absent, an
+`AgentgatewayPolicy` named `<agent>-auth` beside it. The operator writes none
+for an Agent never served that still carries a stored `spec.budget` (until it
+is removed), for one whose `<agent>-auth` name holds a policy without its UID
+(`ForeignTrafficPolicy`; an Agent already served under `apikey` keeps the
+policy it has, which is then not re-asserted), or for a route this operator
+published before it carried the compiler (`Adopt`, below). A `traffic` policy
+of another name on the same route does not stop the write: it keeps a new
+route unpublished, and an in-place lock unproved, under `ForeignTrafficPolicy`,
+and an Agent already served keeps its policy. The policy carries API-key
+authentication over the ConfigMaps labelled `assayd.dev/api-keys: "true"` in that run
+namespace, admitting the group named for the Agent's namespace. A new Agent's
+route is published only after an anonymous request through it gets 401, sent
+to `gateway.servingUrl`, which is therefore required. `auth: none` is
+published at once, unauthenticated, labelled `assayd.dev/auth: "none"`.
+Editing a served `auth: none` Agent to `apikey` locks its route in place: the
+policy is written onto the route that is serving, and the Agent records
+`apikey` only after an anonymous request through it gets 401. The lock is
+one-way: `apikey` -> `none` is refused, so only recreating the Agent undoes it.
 
 That is authentication on one route, not governance. No `AgentgatewayBackend`
 is emitted, and there are still no budgets, no rate limits and no tool
 filtering. A route this operator published before it carried the compiler is
 left unauthenticated, and its Agent says so with `GovernanceSkipped`, reason
-`CompilerUpgradeUnsupported`. Each Agent's status says what applies to it:
+`CompilerUpgradeUnsupported`, until its owner edits `spec.expose.a2a.auth` to
+`apikey`, which locks it in place the same way. Each Agent's status says what
+applies to it:
 
   kubectl get agent <name> -o jsonpath='{.status.auth}{"\n"}{.status.conditions}'
 

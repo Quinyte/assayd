@@ -299,6 +299,9 @@ func NackedPolicies(message string) (policies []types.NamespacedName, dropped in
 	var entries []struct {
 		Key string `json:"key"`
 	}
+	// client-go's recorder aggregates similar Events and prefixes the message
+	// it keeps with this, which is not JSON (tools/record/events_cache.go).
+	message = strings.TrimPrefix(message, "(combined from similar events): ")
 	if err := json.Unmarshal([]byte(message), &entries); err != nil {
 		return nil, 0
 	}

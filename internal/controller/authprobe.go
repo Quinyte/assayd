@@ -5,6 +5,8 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,10 +33,15 @@ type AuthProbeRequest struct {
 	Host string
 }
 
-// AuthProbeAnswer is what came back. Only the status code is read today:
-// `Create` publishes on a `401` and on nothing else.
+// AuthProbeAnswer is what came back: the status code, and for a `200` the
+// SHA-256 of the body, which `Lock`'s one before-request compares with the
+// card digest status.cards records for the revision the route names (§3.3.3).
+// The body itself is never kept or logged.
 type AuthProbeAnswer struct {
 	Code int
+	// CardDigest is the hex SHA-256 of a 200's body, computed as the card
+	// fetch computes it (fetchAndValidateCard), or "".
+	CardDigest string
 }
 
 // probeTransport is http.DefaultTransport with NO proxy. The probe must reach
@@ -74,9 +81,14 @@ func (p httpAuthProber) Probe(ctx context.Context, req AuthProbeRequest) (AuthPr
 	if err != nil {
 		return AuthProbeAnswer{}, err
 	}
-	// Drained, bounded, and never kept: the body of a 200 would be the card, and
-	// nothing here needs it yet.
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	// Bounded, as the card fetch is, and never kept: only its digest is, and
+	// only for a 200, which is the card while the route is open.
+	h := sha256.New()
+	_, cerr := io.Copy(h, io.LimitReader(resp.Body, 1<<20))
 	_ = resp.Body.Close()
-	return AuthProbeAnswer{Code: resp.StatusCode}, nil
+	answer := AuthProbeAnswer{Code: resp.StatusCode}
+	if resp.StatusCode == http.StatusOK && cerr == nil {
+		answer.CardDigest = hex.EncodeToString(h.Sum(nil))
+	}
+	return answer, nil
 }

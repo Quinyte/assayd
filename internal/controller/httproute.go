@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -309,6 +310,26 @@ func (r *AgentReconciler) currentServingRoute(
 	return &rt, nil
 }
 
+// liveServingRoute reads the serving route through the uncached reader, or
+// nil when there is none. A decision whose wrong answer publishes or
+// abandons a route cannot rest on the informer cache: Adopt's trigger and an
+// abandonment read the route here (slice PR 5's second review).
+func (r *AgentReconciler) liveServingRoute(
+	ctx context.Context, agent *assaydv1alpha1.Agent, runNS, name string,
+) (*gatewayv1.HTTPRoute, error) {
+	var rt gatewayv1.HTTPRoute
+	switch err := r.reader().Get(ctx, client.ObjectKey{Namespace: runNS, Name: name}, &rt); {
+	case apierrors.IsNotFound(err):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("read route %s in %s live: %w", name, runNS, err)
+	}
+	if err := routeCollision(agent, &rt); err != nil {
+		return nil, err
+	}
+	return &rt, nil
+}
+
 // routePublished reports whether a route carries traffic: any backendRef.
 func routePublished(rt *gatewayv1.HTTPRoute) bool {
 	for _, rule := range rt.Spec.Rules {
@@ -474,7 +495,8 @@ var errRouteGone = errors.New("the serving route is gone, and an API-key route i
 
 // errRouteRaceLost marks the read-after-write race ensureServingRoute returns
 // rather than recursing into, for the reason ensureWorkload records at length.
-var errRouteRaceLost = errors.New("a route appeared between the read and the create")
+var errRouteRaceLost = errors.New("the cached read found no route and the API server already holds " +
+	"one: the cache is behind, or another writer created it")
 
 // servingBackendPort is the port the SERVING revision's Service publishes,
 // read off that Service by port name. See servingRouteFor for why it may not be
@@ -669,7 +691,21 @@ func (r *AgentReconciler) assessGovernance(c *conditionSet, status *assaydv1alph
 				"namespace. Readiness is not withheld — this is a documented tier, not an incident")
 		return
 	}
-	if tx := authTransaction(status); tx != nil && tx.Kind == TxLock {
+	if tx := authTransaction(status); tx != nil && tx.Kind == TxLock && !isReCreation(status.Auth) {
+		// J2's or K2's Lock: the route serves as before the edit, so only
+		// GovernanceSkipped says the lock is pending, and PolicyApplyIncomplete
+		// only once the deadline has passed (§3.3.3's J2 row). The -auth step
+		// re-derives both, with the stage and the last answer.
+		m := "this Agent's serving route is being locked in place by a Lock, and serves " +
+			"unauthenticated until an anonymous request through it gets an attributed 401. Once it " +
+			"lands the lock is one-way: apikey → none is refused (design 03 §1.1, §3.3.3)"
+		c.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonAuthLockPending, m)
+		if tx.Deadline != nil && !time.Now().Before(tx.Deadline.Time) {
+			c.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, ReasonAuthLockUnverified,
+				m+". Its deadline has passed")
+		}
+		return
+	} else if tx != nil && tx.Kind == TxLock {
 		// Both conditions, so that a pass which returns before the -auth step
 		// does not clear PolicyApplyIncomplete in the middle of the Lock: it is
 		// raised until an attributed 401 (§3.3.3). The -auth step re-derives

@@ -168,8 +168,11 @@ func TestAnUnrenderableTargetWritesNothing(t *testing.T) {
 	}
 }
 
-// A policy at this Agent's -auth name that another Agent owns is refused and
-// left as it is, by the route's collision rule (§3.2).
+// A policy at this Agent's -auth name that another Agent owns is not this
+// Agent's by §3.2's name-and-label rule: it is reported as
+// ForeignTrafficPolicy, left as it is, and the Create holds before writing
+// (slice PR 5's second review made this one rule for every mode; before it,
+// the pass refused with an error).
 func TestAPolicyAnotherAgentOwnsIsNotTakenOver(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "claims", nil)
@@ -187,9 +190,14 @@ func TestAPolicyAnotherAgentOwnsIsNotTakenOver(t *testing.T) {
 		t.Fatal(err)
 	}
 	markAvailable(t, ns, controller.WorkloadName("claims", revision.MustHash(a.Spec)), 1)
-	err := reconcileErr(t, r, a)
-	if err == nil || !strings.Contains(err.Error(), "incumbent") || !strings.Contains(err.Error(), "claims") {
-		t.Fatalf("a policy another Agent owns was converged, or refused without naming both: %v", err)
+	reconcileOnce(t, r, a)
+	reconcileOnce(t, r, a)
+	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "ForeignTrafficPolicy")
+	if c != nil && !strings.Contains(c.Message, foreign.GetName()) {
+		t.Errorf("the foreign policy is not named: %s", c.Message)
+	}
+	if routePublished(t, ns, "claims") {
+		t.Error("a route was published beside another Agent's policy at its -auth name")
 	}
 	got := policyExists(t, runNS(ns), foreign.GetName())
 	if got.GetLabels()[compiler.LabelAgentUID] != "uid-of-another-agent" {
@@ -222,25 +230,32 @@ func TestAWriteThatDoesNotKeepCannotSpinThePass(t *testing.T) {
 	}
 }
 
-// Only `Create` is run here. Any other kind in status.auth.transaction is left
-// as found, loudly: nothing here knows how to finish one.
+// A kind this operator does not run, `Narrow`, is left as found, loudly:
+// nothing here knows how to finish one. So is a `Lock` with no target, which
+// no code here enters: it is neither abandoned, which would publish a K2
+// Lock's route, nor run, which would re-assert it (slice PR 5's review).
 func TestATransactionKindThisOperatorDoesNotRunIsLeftAlone(t *testing.T) {
-	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "foreignkind", nil)
-	r, _ := createReconciler()
-	reconcileOnce(t, r, a)
-	reconcileOnce(t, r, a)
-	live := liveAgent(t, a)
-	live.Status.Auth = &assaydv1alpha1.AuthStatus{Transaction: &assaydv1alpha1.AuthTransaction{
-		Kind: "Lock", Stage: "Converging"}}
-	if err := k8s.Status().Update(context.Background(), live); err != nil {
-		t.Fatal(err)
-	}
-	markAvailable(t, ns, controller.WorkloadName("foreignkind", revision.MustHash(a.Spec)), 1)
-	if err := reconcileErr(t, r, a); err == nil || !strings.Contains(err.Error(), "Lock") {
-		t.Fatalf("a Lock in status.auth was acted on, or refused without naming it: %v", err)
-	}
-	if servingRoute(t, ns, "foreignkind") != nil {
-		t.Error("a route was written beside a transaction this operator does not run")
+	for i, kind := range []string{"Narrow", "Lock"} {
+		t.Run(kind, func(t *testing.T) {
+			ns := newNamespace(t)
+			name := []string{"foreignkind", "targetless"}[i]
+			a := mustCreateAgent(t, ns, name, nil)
+			r, _ := createReconciler()
+			reconcileOnce(t, r, a)
+			reconcileOnce(t, r, a)
+			live := liveAgent(t, a)
+			live.Status.Auth = &assaydv1alpha1.AuthStatus{Transaction: &assaydv1alpha1.AuthTransaction{
+				Kind: kind, Stage: "Converging"}}
+			if err := k8s.Status().Update(context.Background(), live); err != nil {
+				t.Fatal(err)
+			}
+			markAvailable(t, ns, controller.WorkloadName(name, revision.MustHash(a.Spec)), 1)
+			if err := reconcileErr(t, r, a); err == nil || !strings.Contains(err.Error(), kind) {
+				t.Fatalf("a %s in status.auth was acted on, or refused without naming it: %v", kind, err)
+			}
+			if servingRoute(t, ns, name) != nil {
+				t.Errorf("a route was written beside a %s this operator does not run", kind)
+			}
+		})
 	}
 }
