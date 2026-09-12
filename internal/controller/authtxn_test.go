@@ -199,20 +199,16 @@ func TestCompileFailuresNameTheCauseAndTheFix(t *testing.T) {
 	if f := compileFailures(none, "", ""); len(f) != 0 {
 		t.Errorf("a never-served none Agent compiles: %+v", f)
 	}
-	// An edit made while a Create is in flight is judged as it will be at
-	// Served, and says the recorded target still applies: an unfinished Create
-	// finishes to its target, because abandoning it is not built.
-	if f := compileFailures(oauth, "", "apikey"); len(f) != 1 || f[0].reason != "AuthInputAbsent" ||
-		strings.Contains(f[0].message, "No route is published") || !strings.Contains(f[0].message, "A Create to apikey") {
-		t.Errorf("an oauth edit during a Create to apikey must not say no route is published: %+v", f)
-	}
-	if f := compileFailures(none, "", "apikey"); len(f) != 1 || f[0].reason != "AuthTransitionNotBuilt" ||
-		!strings.Contains(f[0].message, "A Create to apikey") {
-		t.Errorf("a none edit during a Create to apikey ends locked and must say so now: %+v", f)
-	}
+	// none → apikey on a served Agent is J2's Lock, not a refusal (§3.3.1).
 	apikey := desiredAuth(authTestAgent("apikey"), "assayd-run-payments")
-	if f := compileFailures(apikey, "", "none"); len(f) != 1 || f[0].reason != "AuthTransitionNotBuilt" {
-		t.Errorf("an apikey edit during a Create to none ends open and must say so now: %+v", f)
+	if f := compileFailures(apikey, "none", ""); len(f) != 0 {
+		t.Errorf("none → apikey is locked in place by J2, and compiles: %+v", f)
+	}
+	// A route re-create beside an uncompilable spec says the route is
+	// unpublished until its probe passes (§3.3.3).
+	if f := compileFailures(oauth, "apikey", "apikey"); len(f) != 1 || f[0].reason != "AuthInputAbsent" ||
+		!strings.Contains(f[0].message, "UNPUBLISHED") {
+		t.Errorf("an I1 Agent whose route is re-created must be told it is unpublished: %+v", f)
 	}
 	budgeted := authTestAgent("apikey")
 	budgeted.Spec.Budget = &assaydv1alpha1.BudgetSpec{}

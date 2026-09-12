@@ -826,7 +826,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, reason, msg)
 				status.Phase = assaydv1alpha1.PhaseDegraded
 			}
-		} else if tx := authTransaction(status); tx != nil && (tx.Kind == TxLock || tx.Kind == TxCreate) {
+		} else if tx := authTransaction(status); tx != nil && (tx.Kind == TxCreate ||
+			(tx.Kind == TxLock && (isReCreation(status.Auth) ||
+				(tx.Deadline != nil && !time.Now().Before(tx.Deadline.Time))))) {
+			// A J2 or K2 Lock withholds Ready only once its deadline has passed:
+			// before that its route serves as it did before the edit (design 03
+			// §3.3.3's deadline table).
 			// A lost race changes no condition of its own, but it must not let
 			// Ready claim what the transaction knows is false: a Lock's route
 			// serves with no policy, and a Create short of Served has not got a
@@ -839,6 +844,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			reason := ReasonAuthEnforcementPending
 			if tx.Kind == TxLock {
 				reason = ReasonAuthPolicyMissing
+				if !isReCreation(status.Auth) {
+					reason = ReasonAuthLockUnverified
+				}
 			}
 			withholdReady(status, conds, gatewayOutcome{served: status.Auth.Mode != "",
 				withhold: &failure{reason, fmt.Sprintf("the -auth %s is in stage %s, and this pass lost "+
@@ -886,11 +894,11 @@ func (r *AgentReconciler) authHoldsPromotion(status *assaydv1alpha1.AgentStatus,
 	if !r.Gateway.Enabled || pin != nil || status.Auth == nil || d.compiles() {
 		return ""
 	}
-	// A served Agent, and one whose Create is in flight: that Create finishes
-	// to its recorded target and publishes the revision the route names, so a
-	// revision an uncompilable edit minted must not become that revision.
-	inFlight := status.Auth.Transaction != nil && status.Auth.Transaction.Kind == TxCreate
-	if status.Auth.Mode == "" && !inFlight {
+	// A served Agent only, a route re-create's included. A never-served
+	// Agent's Create whose target no longer matches is abandoned instead
+	// (design 03 §3.3.3), so it has no route for the revision to reach, and a
+	// refused Adopt's route keeps following promotion.
+	if status.Auth.Mode == "" {
 		return ""
 	}
 	return "its -auth input does not compile, and this Agent's route keeps the -auth it has or is " +

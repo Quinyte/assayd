@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -669,7 +670,21 @@ func (r *AgentReconciler) assessGovernance(c *conditionSet, status *assaydv1alph
 				"namespace. Readiness is not withheld — this is a documented tier, not an incident")
 		return
 	}
-	if tx := authTransaction(status); tx != nil && tx.Kind == TxLock {
+	if tx := authTransaction(status); tx != nil && tx.Kind == TxLock && !isReCreation(status.Auth) {
+		// J2's or K2's Lock: the route serves as before the edit, so only
+		// GovernanceSkipped says the lock is pending, and PolicyApplyIncomplete
+		// only once the deadline has passed (§3.3.3's J2 row). The -auth step
+		// re-derives both, with the stage and the last answer.
+		m := "this Agent's serving route is being locked in place by a Lock, and serves " +
+			"unauthenticated until an anonymous request through it gets an attributed 401. Once it " +
+			"lands the lock is one-way: apikey → none is refused (design 03 §1.1, §3.3.3)"
+		c.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonAuthLockPending, m)
+		if tx.Deadline != nil && !time.Now().Before(tx.Deadline.Time) {
+			c.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, ReasonAuthLockUnverified,
+				m+". Its deadline has passed")
+		}
+		return
+	} else if tx != nil && tx.Kind == TxLock {
 		// Both conditions, so that a pass which returns before the -auth step
 		// does not clear PolicyApplyIncomplete in the middle of the Lock: it is
 		// raised until an attributed 401 (§3.3.3). The -auth step re-derives
