@@ -4,6 +4,7 @@
 package controller
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ const measuredNack = `[{"key":"policy/traffic/default/p:rl-local:default/llm-rou
 	`"error":"error: invalid rate limit: max tokens cannot be less than the refill amount"}]`
 
 func TestANackNamesThePolicyItRejected(t *testing.T) {
-	got := NackedPolicies(measuredNack)
+	got, _ := NackedPolicies(measuredNack)
 	want := []types.NamespacedName{{Namespace: "default", Name: "p"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("NackedPolicies(measured) = %v, want %v. The key is "+
@@ -46,10 +47,45 @@ func TestANackNamesOnlyPolicies(t *testing.T) {
 		{"an empty array", `[]`, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := NackedPolicies(tc.msg); !reflect.DeepEqual(got, tc.want) {
+			if got, _ := NackedPolicies(tc.msg); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("NackedPolicies(%s) = %v, want %v", tc.msg, got, tc.want)
 			}
 		})
+	}
+}
+
+func nackMessage(keys ...string) string {
+	entries := make([]string, len(keys))
+	for i, k := range keys {
+		entries[i] = fmt.Sprintf(`{"key":%q,"error":"rejected"}`, k)
+	}
+	return "[" + strings.Join(entries, ",") + "]"
+}
+
+// Each policy a NACK names is one live read in the watch's handler, so a
+// policy named twice is read once.
+func TestANackReadsEachPolicyOnce(t *testing.T) {
+	k := "policy/traffic/run-a/x-auth:auth:run-a/x-serving"
+	got, dropped := NackedPolicies(nackMessage(k, k, k))
+	if want := []types.NamespacedName{{Namespace: "run-a", Name: "x-auth"}}; !reflect.DeepEqual(got, want) || dropped != 0 {
+		t.Errorf("a policy named three times gave %v (dropped %d), want it once", got, dropped)
+	}
+}
+
+// And a NACK names at most maxNackedPolicies of them: anyone who can write an
+// Event in the Gateway's namespace chooses how many keys it holds.
+func TestANackReadsABoundedNumberOfPolicies(t *testing.T) {
+	keys := make([]string, 0, 100)
+	for i := 0; i < 100; i++ {
+		keys = append(keys, fmt.Sprintf("policy/traffic/run-a/p%d:auth:run-a/r", i))
+	}
+	got, dropped := NackedPolicies(nackMessage(keys...))
+	if len(got) != maxNackedPolicies || dropped != 100-maxNackedPolicies {
+		t.Fatalf("100 policies gave %d read and %d dropped, want %d and %d",
+			len(got), dropped, maxNackedPolicies, 100-maxNackedPolicies)
+	}
+	if got[0].Name != "p0" || got[maxNackedPolicies-1].Name != fmt.Sprintf("p%d", maxNackedPolicies-1) {
+		t.Errorf("the bound kept %v and %v, want the first %d in order", got[0], got[len(got)-1], maxNackedPolicies)
 	}
 }
 

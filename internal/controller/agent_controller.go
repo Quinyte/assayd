@@ -1730,14 +1730,17 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				compiler.PolicyAPIVersion, err)
 		}
 		// Policies map to their Agent by the labels routes do (§3.2), and a
-		// NACK Event by the labels of the policy it names (§3.3).
-		nacks, err := r.nackSource(mgr)
+		// NACK Event by the labels of the policy it names (§3.3). Both read
+		// through a cache scoped to what they can map (gatewaySources), not
+		// the manager's, which would hold every policy and Event cluster-wide.
+		sources, err := r.gatewaySources(mgr, byAgentLabels)
 		if err != nil {
 			return err
 		}
-		agents = agents.Watches(&gatewayv1.HTTPRoute{}, byAgentLabels).
-			Watches(NewAgentgatewayPolicy(), byAgentLabels).
-			WatchesRawSource(nacks)
+		agents = agents.Watches(&gatewayv1.HTTPRoute{}, byAgentLabels)
+		for _, src := range sources {
+			agents = agents.WatchesRawSource(src)
+		}
 	}
 	if err := agents.Complete(r); err != nil {
 		return err

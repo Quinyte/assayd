@@ -165,8 +165,18 @@ spec:
     # a foreground or orphan delete by removing its finalizer with an UPDATE,
     # and refusing it left the policy Terminating forever, and with it the
     # teardown of the Agent it belongs to.
+    # Metadata that decides when the object GOES is reserved too, but only its
+    # additions. A finalizer added by a non-operator stalls the operator's
+    # teardown for as long as its author likes; an ownerReference added to an
+    # object that does not exist lets the garbage collector delete it. Removals
+    # are admitted, which is all the garbage collector and the namespace
+    # controller ever do.
+    - name: addedFinalizer
+      expression: "has(object.metadata.finalizers) && object.metadata.finalizers.exists(f, oldObject == null || !has(oldObject.metadata.finalizers) || !(f in oldObject.metadata.finalizers))"
+    - name: addedOwner
+      expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, oldObject == null || !has(oldObject.metadata.ownerReferences) || !oldObject.metadata.ownerReferences.exists(p, p.uid == o.uid))"
     - name: touched
-      expression: "oldObject == null || object.spec != oldObject.spec || (has(object.metadata.labels) ? object.metadata.labels : {}) != (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {})"
+      expression: "oldObject == null || object.spec != oldObject.spec || (has(object.metadata.labels) ? object.metadata.labels : {}) != (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}) || variables.addedFinalizer || variables.addedOwner"
   validations:
     - expression: "!variables.touched || variables.operator"
       message: "AgentgatewayPolicies in assayd run namespaces are authored by the assayd operator only (design 03 §6)"
@@ -231,8 +241,20 @@ spec:
     # its labels, which decide whether it is one. An UPDATE that changes none of
     # them is admitted, for the reason assayd-gateway-policies gives: the
     # garbage collector removes a foreground or orphan finalizer by UPDATE.
+    # Metadata that decides when the object GOES is reserved too, but only its
+    # additions. A finalizer added by a non-operator stalls the operator's
+    # teardown for as long as its author likes; an ownerReference added to an
+    # object that does not exist lets the garbage collector delete it. Removals
+    # are admitted, which is all the garbage collector and the namespace
+    # controller ever do.
+    - name: addedFinalizer
+      expression: "has(object.metadata.finalizers) && object.metadata.finalizers.exists(f, oldObject == null || !has(oldObject.metadata.finalizers) || !(f in oldObject.metadata.finalizers))"
+    - name: addedOwner
+      expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, oldObject == null || !has(oldObject.metadata.ownerReferences) || !oldObject.metadata.ownerReferences.exists(p, p.uid == o.uid))"
+    # And `immutable`, either way: set, it freezes a key set against revocation;
+    # the API server refuses to unset it, so that direction is its guard, not ours.
     - name: touched
-      expression: "oldObject == null || (has(object.data) ? object.data : {}) != (has(oldObject.data) ? oldObject.data : {}) || (has(object.binaryData) ? object.binaryData : {}) != (has(oldObject.binaryData) ? oldObject.binaryData : {}) || (has(object.metadata.labels) ? object.metadata.labels : {}) != (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {})"
+      expression: "oldObject == null || (has(object.data) ? object.data : {}) != (has(oldObject.data) ? oldObject.data : {}) || (has(object.binaryData) ? object.binaryData : {}) != (has(oldObject.binaryData) ? oldObject.binaryData : {}) || (has(object.metadata.labels) ? object.metadata.labels : {}) != (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}) || (has(object.immutable) ? object.immutable : false) != (has(oldObject.immutable) ? oldObject.immutable : false) || variables.addedFinalizer || variables.addedOwner"
   validations:
     - expression: "!variables.labelled || !variables.touched || variables.writer"
       message: "ConfigMaps labelled assayd.dev/api-keys in assayd run namespaces mint gateway principals; only the assayd operator and the identities in admission.apiKeyWriters may write them (design 03 §3.4.4)"

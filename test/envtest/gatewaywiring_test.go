@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
@@ -479,6 +480,80 @@ func TestTheOperatorRefusesToStartWithoutAgentgatewayPolicy(t *testing.T) {
 			t.Errorf("the refusal does not name %q: %v", want, err)
 		}
 	}
+
+	// The same cluster, declared OFF: nothing there reads the kind, so nothing
+	// may refuse for want of it. The declared-ungoverned tier (§3.1) is what P1
+	// ships, and it has no reason to carry agentgateway's CRDs.
+	off, err := ctrl.NewManager(restCfg, ctrl.Options{
+		Scheme: scheme, Metrics: metricsserver.Options{BindAddress: "0"}, HealthProbeBindAddress: "0",
+		Controller: ctrlconfig.Controller{SkipNameValidation: ptrTo(true)},
+	})
+	if err != nil {
+		t.Fatalf("build manager: %v", err)
+	}
+	disabled, err := controller.NewAgentReconciler(off.GetClient(), off.GetAPIReader(), off.GetScheme(),
+		operatorNamespace, func() bool { return false }, labelAuthorityPresent, controller.InjectedEnvConfig{},
+		controller.GatewayConfig{})
+	if err != nil {
+		t.Fatalf("build reconciler: %v", err)
+	}
+	if err := disabled.SetupWithManager(off); err != nil {
+		t.Errorf("with gateway.enabled false the operator refused to set up on a cluster without "+
+			"agentgateway: %v. The refusal belongs to the declared-on tier only", err)
+	}
+}
+
+// The policy watch reads through a cache that holds only policies carrying
+// assayd.dev/agent, the label it maps by. The manager's cache would hold every
+// AgentgatewayPolicy in the cluster.
+func TestTheGatewayWatchCacheHoldsOnlyPoliciesItCanMap(t *testing.T) {
+	ctx := context.Background()
+	ns := newNamespace(t)
+	build := func(agent string, labelled bool) *unstructured.Unstructured {
+		p, err := compiler.AuthPolicy(compiler.AuthInput{AgentName: agent, AgentNamespace: "payments",
+			AgentUID: "0f0e0d0c-0000-0000-0000-00000000cafe", RunNamespace: ns})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !labelled {
+			p.SetLabels(map[string]string{compiler.LabelAgentNamespace: "payments"})
+		}
+		if err := k8s.Create(ctx, p); err != nil {
+			t.Fatalf("create %s: %v", p.GetName(), err)
+		}
+		return p
+	}
+	mapped, foreign := build("mapped", true), build("foreign", false)
+
+	opts, err := controller.GatewayWatchCacheOptions(cache.Options{Scheme: scheme}, ns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := cache.New(cfg, opts)
+	if err != nil {
+		t.Fatalf("build cache: %v", err)
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = c.Start(cctx) }()
+
+	var names []string
+	eventually(t, "the cache to hold the policy that carries assayd.dev/agent", func() bool {
+		list := &unstructured.UnstructuredList{}
+		list.SetGroupVersionKind(controller.AgentgatewayPolicyGVK.GroupVersion().WithKind(compiler.PolicyKind + "List"))
+		if err := c.List(ctx, list, client.InNamespace(ns)); err != nil {
+			return false
+		}
+		names = names[:0]
+		for _, it := range list.Items {
+			names = append(names, it.GetName())
+		}
+		return contains(names, mapped.GetName())
+	})
+	if contains(names, foreign.GetName()) {
+		t.Errorf("the gateway watch cache holds %s, which carries no assayd.dev/agent and maps to no "+
+			"Agent: %v", foreign.GetName(), names)
+	}
 }
 
 // --- the watches -----------------------------------------------------------
@@ -606,6 +681,18 @@ func TestThePolicyWatchRequeuesItsAgent(t *testing.T) {
 	provisionRunNamespace(t, ns)
 	key := client.ObjectKeyFromObject(a)
 	before := waitQuiet(t, reads, key)
+
+	// CONTROL: a policy that names this Agent's namespace but carries no
+	// assayd.dev/agent maps to nothing. It cannot, whether or not the cache
+	// holds it; TestTheGatewayWatchCacheHoldsOnlyPoliciesItCanMap pins that
+	// it does not.
+	unmapped := authPolicyFor(t, liveAgent(t, a))
+	unmapped.SetName("unmapped-auth")
+	unmapped.SetLabels(map[string]string{compiler.LabelAgentNamespace: a.Namespace})
+	if err := k8s.Create(context.Background(), unmapped); err != nil {
+		t.Fatalf("create the unlabelled policy: %v", err)
+	}
+	assertNoReconcile(t, reads, key, before, "a policy without assayd.dev/agent")
 
 	policy := authPolicyFor(t, liveAgent(t, a))
 	if err := k8s.Create(context.Background(), policy); err != nil {

@@ -18,7 +18,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -181,38 +183,61 @@ func (r *AgentReconciler) reportTeardownWaiting(ctx context.Context, agent *assa
 	return r.writeStatus(ctx, agent, status)
 }
 
-// nackSource watches the NACK Events in the Gateway's namespace (design 03
-// §3.3: "a NACK is the sixth input, and it is not optional").
+// GatewayWatchCacheOptions scopes the cache the two gateway watches read
+// through, which is theirs alone and not the manager's.
 //
-// It reads through a cache of its own, and not the manager's, for the same
-// reason the chart grants the verbs in a Role and not the ClusterRole: the
-// manager's cache would list and watch Events in every namespace, which needs
-// a cluster-wide read of every Event and holds all of them in memory. This one
-// holds only Warning Events with the NACK reason, in the one namespace, and
-// the field selector is applied by the API server.
-func (r *AgentReconciler) nackSource(mgr ctrl.Manager) (source.Source, error) {
-	events, err := cache.New(mgr.GetConfig(), cache.Options{
+// Events: only Warning Events with the NACK reason, in the Gateway's namespace
+// (design 03 §3.3), filtered by the API server. The manager's cache would list
+// and watch Events in every namespace, which needs a cluster-wide read of every
+// Event and holds all of them in memory. The chart grants the read as a Role in
+// that one namespace.
+//
+// Policies: only those carrying `assayd.dev/agent`, the label the watch maps by
+// (§3.2). A policy without it maps to no Agent, so holding it would buy nothing
+// and cost a copy of every AgentgatewayPolicy in the cluster. Nothing reads
+// policies from this cache but the watch: teardown and the NACK mapping read
+// live, and §3.2's ForeignTrafficPolicy detection, when it is built, must list
+// live too, because a foreign policy is exactly one this cache may not hold.
+func GatewayWatchCacheOptions(base cache.Options, gatewayNamespace string) (cache.Options, error) {
+	agentLabelled, err := labels.NewRequirement(compiler.LabelAgent, selection.Exists, nil)
+	if err != nil {
+		return base, fmt.Errorf("select policies by %s: %w", compiler.LabelAgent, err)
+	}
+	base.ByObject = map[client.Object]cache.ByObject{
+		&corev1.Event{}: {
+			Namespaces: map[string]cache.Config{gatewayNamespace: {}},
+			Field: fields.SelectorFromSet(fields.Set{
+				"type":   corev1.EventTypeWarning,
+				"reason": NackEventReason,
+			}),
+		},
+		NewAgentgatewayPolicy(): {Label: labels.NewSelector().Add(*agentLabelled)},
+	}
+	return base, nil
+}
+
+// gatewaySources are the policy watch (design 03 §3.2) and the NACK watch
+// (§3.3), both read through one cache scoped by GatewayWatchCacheOptions.
+func (r *AgentReconciler) gatewaySources(mgr ctrl.Manager, byAgentLabels handler.EventHandler) ([]source.Source, error) {
+	opts, err := GatewayWatchCacheOptions(cache.Options{
 		HTTPClient: mgr.GetHTTPClient(),
 		Scheme:     mgr.GetScheme(),
 		Mapper:     mgr.GetRESTMapper(),
-		ByObject: map[client.Object]cache.ByObject{
-			&corev1.Event{}: {
-				Namespaces: map[string]cache.Config{r.Gateway.Namespace: {}},
-				Field: fields.SelectorFromSet(fields.Set{
-					"type":   corev1.EventTypeWarning,
-					"reason": NackEventReason,
-				}),
-			},
-		},
-	})
+	}, r.Gateway.Namespace)
 	if err != nil {
-		return nil, fmt.Errorf("build the NACK event cache for %s: %w", r.Gateway.Namespace, err)
+		return nil, err
 	}
-	if err := mgr.Add(events); err != nil {
-		return nil, fmt.Errorf("add the NACK event cache: %w", err)
+	c, err := cache.New(mgr.GetConfig(), opts)
+	if err != nil {
+		return nil, fmt.Errorf("build the gateway watch cache: %w", err)
 	}
-	return source.Kind(events, &corev1.Event{},
-		handler.TypedEnqueueRequestsFromMapFunc(r.nackToAgents)), nil
+	if err := mgr.Add(c); err != nil {
+		return nil, fmt.Errorf("add the gateway watch cache: %w", err)
+	}
+	return []source.Source{
+		source.Kind[client.Object](c, NewAgentgatewayPolicy(), byAgentLabels),
+		source.Kind(c, &corev1.Event{}, handler.TypedEnqueueRequestsFromMapFunc(r.nackToAgents)),
+	}, nil
 }
 
 // nackToAgents maps a NACK Event to the Agents whose policies it names.
@@ -228,7 +253,13 @@ func (r *AgentReconciler) nackSource(mgr ctrl.Manager) (source.Source, error) {
 func (r *AgentReconciler) nackToAgents(ctx context.Context, ev *corev1.Event) []reconcile.Request {
 	var out []reconcile.Request
 	seen := map[types.NamespacedName]bool{}
-	for _, key := range NackedPolicies(ev.Message) {
+	keys, dropped := NackedPolicies(ev.Message)
+	if dropped > 0 {
+		log.FromContext(ctx).Info("a NACK named more policies than are read for one Event; the rest "+
+			"are not mapped to their Agents", "event", ev.Namespace+"/"+ev.Name,
+			"read", len(keys), "dropped", dropped)
+	}
+	for _, key := range keys {
 		p := NewAgentgatewayPolicy()
 		if err := r.Get(ctx, key, p); err != nil {
 			if !apierrors.IsNotFound(err) {
@@ -247,7 +278,15 @@ func (r *AgentReconciler) nackToAgents(ctx context.Context, ev *corev1.Event) []
 	return out
 }
 
-// NackedPolicies reads the policies named in a NACK Event's message.
+// maxNackedPolicies bounds the policies one NACK Event makes the operator
+// read. Each is a live GET, made synchronously in the watch's handler, so an
+// unbounded list would let whoever can write an Event in the Gateway's
+// namespace make the operator issue as many reads as the message holds.
+const maxNackedPolicies = 64
+
+// NackedPolicies reads the policies named in a NACK Event's message, each once,
+// and at most maxNackedPolicies of them. It reports how many distinct
+// policies past that bound it dropped.
 //
 // The message is what agentgateway writes, measured at v1.4.1: a JSON array of
 // `{"key": …, "error": …}`, where a policy's key is
@@ -256,14 +295,14 @@ func (r *AgentReconciler) nackToAgents(ctx context.Context, ev *corev1.Event) []
 // policy, or one not in that shape, names nothing here. It carries no
 // generation and no UID, so it can say which policy was rejected and never
 // which version of it.
-func NackedPolicies(message string) []types.NamespacedName {
+func NackedPolicies(message string) (policies []types.NamespacedName, dropped int) {
 	var entries []struct {
 		Key string `json:"key"`
 	}
 	if err := json.Unmarshal([]byte(message), &entries); err != nil {
-		return nil
+		return nil, 0
 	}
-	var out []types.NamespacedName
+	seen := map[types.NamespacedName]bool{}
 	for _, e := range entries {
 		rest, ok := strings.CutPrefix(e.Key, "policy/")
 		if !ok {
@@ -274,9 +313,18 @@ func NackedPolicies(message string) []types.NamespacedName {
 		if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 			continue
 		}
-		out = append(out, types.NamespacedName{Namespace: parts[1], Name: parts[2]})
+		key := types.NamespacedName{Namespace: parts[1], Name: parts[2]}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if len(policies) == maxNackedPolicies {
+			dropped++
+			continue
+		}
+		policies = append(policies, key)
 	}
-	return out
+	return policies, dropped
 }
 
 // ValidateGatewayServingURL checks the form of --gateway-serving-url.

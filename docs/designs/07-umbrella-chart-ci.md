@@ -559,8 +559,8 @@ Design 03 A70 implements the operator wiring its first slice needs (03 §1.1). F
 
 **Admission (extends A5.9).** Two more policies and bindings are rendered on every install. Each has `failurePolicy: Fail` and its identities inline, and each matches only namespaces labelled `assayd.dev/run-namespace: "true"`, a label A5.9's first policy reserves:
 
-- `assayd-gateway-policies`. A `CREATE` of an `AgentgatewayPolicy`, or an `UPDATE` that changes its `spec` or labels, is admitted only from the identities A5.9's route policy admits: the operator and `admission.extraOperators`. It matches nothing until agentgateway's CRDs are installed.
-- `assayd-api-keys`. The same rule applies to a `ConfigMap` carrying `assayd.dev/api-keys`, with any value, on the old object or the new one. The reserved content is `data`, `binaryData` and labels, and `admission.apiKeyWriters` is admitted as well as the operators.
+- `assayd-gateway-policies`. A `CREATE` of an `AgentgatewayPolicy`, or an `UPDATE` that changes its `spec` or labels or adds a finalizer or an ownerReference, is admitted only from the identities A5.9's route policy admits: the operator and `admission.extraOperators`. It matches nothing until agentgateway's CRDs are installed.
+- `assayd-api-keys`. The same rule applies to a `ConfigMap` carrying `assayd.dev/api-keys`, with any value, on the old object or the new one. The reserved content is `data`, `binaryData`, labels and `immutable`, with any added finalizer or ownerReference, and `admission.apiKeyWriters` is admitted as well as the operators.
 
 An `UPDATE` that changes none of the reserved content is admitted. The garbage collector removes the `foregroundDeletion` and `orphan` finalizers by `UPDATE`, and a first version that refused it left the object Terminating forever. `DELETE` is not matched, as A6.10 records for routes.
 

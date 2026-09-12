@@ -149,6 +149,10 @@ gateway:
   # release namespace: hack/e2e.sh installs the release into `default` while the
   # operator runs in `assayd-system`, so this default must not be read as
   # "wherever you helm-installed to".
+  #
+  # With gateway.enabled, the chart also renders a Role and RoleBinding IN this
+  # namespace (the operator's read of the gateway's NACK Events, design 03
+  # 3.3), so it must exist before `helm install`, or the install fails.
   namespace: ""
 
   # The suffix appended to `<agent>.<agent-namespace>` to form the hostname the

@@ -270,6 +270,26 @@ func TestOnlyTheOperatorAndAnAdministratorWriteAKeySet(t *testing.T) {
 		t.Errorf("a non-writer added binary data to an issued key set: %v", err)
 	}
 
+	// What decides when a key set goes is reserved too, as additions: a
+	// finalizer that stalls its revocation, an ownerReference that lets the
+	// garbage collector delete it, and `immutable`, which freezes it.
+	stalled := got.DeepCopy()
+	stalled.Finalizers = append(stalled.Finalizers, "example.com/stall")
+	if err := asIntruder.Update(ctx, stalled); !refusedBy(err, policy) {
+		t.Errorf("a non-writer added a finalizer to an issued key set: %v", err)
+	}
+	owned := got.DeepCopy()
+	owned.OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap",
+		Name: "gone", UID: "0f0e0d0c-0000-0000-0000-00000000dead"}}
+	if err := asIntruder.Update(ctx, owned); !refusedBy(err, policy) {
+		t.Errorf("a non-writer added an ownerReference to an issued key set: %v", err)
+	}
+	frozen := got.DeepCopy()
+	frozen.Immutable = ptrTo(true)
+	if err := asIntruder.Update(ctx, frozen); !refusedBy(err, policy) {
+		t.Errorf("a non-writer made an issued key set immutable: %v", err)
+	}
+
 	// The garbage collector finishes a foreground delete by removing the
 	// `foregroundDeletion` finalizer: an UPDATE that changes nothing the
 	// reservation protects. Refused, the key set would stay Terminating
@@ -380,6 +400,37 @@ func TestOnlyTheOperatorAuthorsAPolicyInARunNamespace(t *testing.T) {
 	relabelled.SetLabels(nil)
 	if err := asIntruder.Update(ctx, relabelled); !refusedBy(err, policy) {
 		t.Errorf("a non-operator stripped the operator's labels from its policy: %v", err)
+	}
+
+	// A finalizer added by a non-operator stalls the operator's teardown for as
+	// long as its author likes, and an ownerReference to an object that does
+	// not exist lets the garbage collector delete the policy. Both are refused.
+	stalled := fresh()
+	stalled.SetFinalizers(append(stalled.GetFinalizers(), "example.com/stall"))
+	if err := asIntruder.Update(ctx, stalled); !refusedBy(err, policy) {
+		t.Errorf("a non-operator added a finalizer to the operator's policy: %v", err)
+	}
+	dangling := fresh()
+	dangling.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap",
+		Name: "gone", UID: "0f0e0d0c-0000-0000-0000-00000000dead"}})
+	if err := asIntruder.Update(ctx, dangling); !refusedBy(err, policy) {
+		t.Errorf("a non-operator added an ownerReference to the operator's policy: %v", err)
+	}
+	// Removing an ownerReference is what the garbage collector does when it
+	// orphans a dependent, and it stays admitted.
+	orphan := authPolicy(run, "orphaned")
+	orphan.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap",
+		Name: "gone", UID: "0f0e0d0c-0000-0000-0000-00000000dead"}})
+	if err := asOperator.Create(ctx, orphan); err != nil {
+		t.Fatalf("the operator could not write a policy with an ownerReference: %v", err)
+	}
+	orphaned := authPolicy(run, "orphaned")
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(orphan), orphaned); err != nil {
+		t.Fatal(err)
+	}
+	orphaned.SetOwnerReferences(nil)
+	if err := asGC.Update(ctx, orphaned); err != nil {
+		t.Errorf("the garbage collector could not remove an ownerReference from a policy: %v", err)
 	}
 
 	// The garbage collector finishes a foreground delete with an UPDATE that
