@@ -73,6 +73,13 @@ var ownedTypes = map[assaydv1alpha1.ConditionType]bool{
 	assaydv1alpha1.CondRevisionMaterialUnavailable: true,
 	// Design 03 §3.1's tier condition. Owned AND sticky: see stickyTypes.
 	assaydv1alpha1.CondGovernanceSkipped: true,
+	// Design 03's compile failure. Owned, abnormal-true and NOT sticky (§1.1,
+	// §8.1 case 9): it must clear when its cause goes, as when an owner reverts
+	// the edit that raised it. Left out of this set, merge()'s default arm would
+	// carry it forward as another controller's, forever, which is the
+	// RevisionHashCollision bug above. Nothing asserts it yet: the compiler
+	// that raises it does not exist.
+	assaydv1alpha1.CondPolicyCompileFailed: true,
 	// Abnormal-true and owned, NOT sticky: it reports a route this operator
 	// could not write, and its absence means the route was written. The
 	// compiler design 03 describes will write the other apply failures onto

@@ -108,7 +108,7 @@ func TestBehaviourSurfaceMintsARevision(t *testing.T) {
 		}, why: "A25: a budget is what stops a runaway loop"},
 
 		{field: "expose", mutate: func(s *assaydv1alpha1.AgentSpec) {
-			s.Expose = &assaydv1alpha1.ExposeSpec{A2A: &assaydv1alpha1.ExposeProtocol{Visibility: "org"}}
+			s.Expose = &assaydv1alpha1.ExposeSpec{A2A: &assaydv1alpha1.ExposeProtocol{Visibility: "org", Auth: "apikey"}}
 		}, why: "A25: who may reach the agent at all"},
 
 		{field: "runtime.env",
