@@ -266,6 +266,28 @@ func vacuousGovernance(why string) (metav1.ConditionStatus, string, string) {
 func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1alpha1.Agent,
 	runNS string, status *assaydv1alpha1.AgentStatus, conds *conditionSet, desire authDesire,
 ) (gatewayOutcome, error) {
+	// assessGovernance raised PolicyApplyIncomplete for a Lock in flight, for
+	// the paths that never reach this step, and this step re-derives it. But a
+	// pass this step leaves with an error re-derives nothing, and dropping the
+	// condition there would clear it mid-Lock, one pass before a 401 anybody
+	// attributed. So it is withdrawn on the way in and put back on the way out
+	// of an error that did not re-derive it.
+	pre, had := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete)
+	had = had && pre.Reason == ReasonAuthPolicyMissing
+	if had {
+		conds.unset(assaydv1alpha1.CondPolicyApplyIncomplete)
+	}
+	out, err := r.gatewayStep(ctx, agent, runNS, status, conds, desire)
+	if _, set := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); err != nil && had && !set {
+		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, pre.Status, pre.Reason, pre.Message)
+	}
+	return out, err
+}
+
+// gatewayStep is reconcileGateway's body.
+func (r *AgentReconciler) gatewayStep(ctx context.Context, agent *assaydv1alpha1.Agent,
+	runNS string, status *assaydv1alpha1.AgentStatus, conds *conditionSet, desire authDesire,
+) (gatewayOutcome, error) {
 	var out gatewayOutcome
 	if !r.Gateway.Enabled {
 		// Nothing is emitted, and nothing is SWEPT either. Design 03 §3.1 says a
@@ -278,11 +300,6 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 	name, err := compiler.ServingRouteName(agent.Name)
 	if err != nil {
 		return out, err
-	}
-	// assessGovernance raised PolicyApplyIncomplete for a Lock in flight, for
-	// the paths that never reach this step. This step re-derives it.
-	if pc, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); ok && pc.Reason == ReasonAuthPolicyMissing {
-		conds.unset(assaydv1alpha1.CondPolicyApplyIncomplete)
 	}
 	auth := status.Auth
 	recorded := ""
@@ -779,8 +796,11 @@ func (r *AgentReconciler) recordServed(ctx context.Context, agent *assaydv1alpha
 // present and intact in the same pass. One window remains, and it is named
 // rather than claimed away: a policy deleted after that read and before the
 // route update leaves the route published without it until the next pass,
-// which the policy watch starts, and which finds it missing and enters the
-// Lock below. So both objects are checked BEFORE the route is touched:
+// which the policy watch starts. What that pass does depends on where the
+// window fell: here, on a served route, it finds the policy missing and enters
+// the Lock below, and the route stays open meanwhile; at a Create's
+// Publishing, it finds the policy changed and re-enters at PreparingRoute,
+// which strips the route before the policy is written again. So both objects are checked BEFORE the route is touched:
 //
 //   - a route that is absent, or has lost its backendRefs, is re-created
 //     PREPARED, by a `Create` whose target is status.auth's and never the
