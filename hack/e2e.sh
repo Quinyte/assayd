@@ -316,8 +316,10 @@ GWEOF
   fi
   export ASSAYD_E2E_GATEWAY_URL="http://${GW_SVC}.${GATEWAY_NS}.svc.cluster.local:8081"
   # gateway.servingUrl names the `http` listener each <agent>-serving route
-  # attaches to, where design 03's probe will go. Nothing reads it yet; setting
-  # it here runs the operator's startup check of its form on every k3d run.
+  # attaches to. The operator requires it with the gateway on: it publishes a
+  # new Agent's route only after an anonymous request sent there gets 401 from
+  # the Agent's <agent>-auth (design 03 §3.3.3), so a wrong value here holds
+  # every gateway test's Agent unpublished.
   GATEWAY_SETTINGS=(--set gateway.enabled=true --set gateway.name=assayd
     --set gateway.hostnameSuffix=assayd.internal
     --set gateway.url="${ASSAYD_E2E_GATEWAY_URL}"
@@ -343,8 +345,17 @@ else
   GATEWAY_SETTINGS=()
 fi
 
+echo "==> applying this build's CRDs"
+# `helm upgrade` never updates a chart's crds/, so a reused cluster keeps the
+# Agent CRD it was first installed with, and the suite would test this build's
+# operator against an older schema. Measured on 2026-09-12: the CRD predated
+# `status.auth`, the API server pruned every write of it, and the operator's
+# `-auth` transaction could not keep its own record. Applied server-side, so the
+# field manager can take over fields an earlier `helm install` set.
+kubectl apply --server-side --force-conflicts -f charts/assayd/crds/ >/dev/null
+
 echo "==> installing the chart"
-# CRDs ship in the chart's crds/ directory, so this installs them too.
+# CRDs ship in the chart's crds/ directory, so a FIRST install creates them.
 # gateway.namespace is set here and NOT only with the gateway block above,
 # because it is what assayd-gateway-routes compares a route's parentRef against.
 # Render it wrong and the reservation matches nothing and admits any author,

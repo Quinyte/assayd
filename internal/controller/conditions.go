@@ -38,6 +38,18 @@ func (c *conditionSet) set(condType assaydv1alpha1.ConditionType, status metav1.
 	}
 }
 
+// get returns what this pass has asserted for a type so far.
+func (c *conditionSet) get(condType assaydv1alpha1.ConditionType) (metav1.Condition, bool) {
+	cond, ok := c.asserted[string(condType)]
+	return cond, ok
+}
+
+// unset withdraws what this pass asserted for a type, so that a later step
+// that re-derives it is not overruled by an earlier default.
+func (c *conditionSet) unset(condType assaydv1alpha1.ConditionType) {
+	delete(c.asserted, string(condType))
+}
+
 // ownedTypes are the conditions this reconciler is the sole author of. A type
 // here that the pass did not assert is cleared rather than carried forward,
 // because a stale SandboxDowngraded on an agent that no longer requests a
@@ -77,13 +89,13 @@ var ownedTypes = map[assaydv1alpha1.ConditionType]bool{
 	// §8.1 case 9): it must clear when its cause goes, as when an owner reverts
 	// the edit that raised it. Left out of this set, merge()'s default arm would
 	// carry it forward as another controller's, forever, which is the
-	// RevisionHashCollision bug above. Nothing asserts it yet: the compiler
-	// that raises it does not exist.
+	// RevisionHashCollision bug above. The -auth step asserts it
+	// (authtxn.go), and TestPolicyCompileFailedClearsWhenItsCauseGoes pins the
+	// clearing.
 	assaydv1alpha1.CondPolicyCompileFailed: true,
-	// Abnormal-true and owned, NOT sticky: it reports a route this operator
-	// could not write, and its absence means the route was written. The
-	// compiler design 03 describes will write the other apply failures onto
-	// this same type; nothing else does today.
+	// Abnormal-true and owned, NOT sticky: a route or policy this operator
+	// could not write, or an -auth transaction past its deadline. Its absence
+	// means neither.
 	assaydv1alpha1.CondPolicyApplyIncomplete: true,
 }
 

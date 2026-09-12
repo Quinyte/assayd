@@ -38,8 +38,11 @@ import (
 // waits; nothing here writes an HTTPRoute. What is emitted is one object, the
 // serving route, and that is the whole of what was encoded: no
 // AgentgatewayPolicy, no AgentgatewayBackend, no budget, no rate limit, no
-// authentication, no tool allowlist. The request below is unauthenticated and
-// the Agent says so, under GovernanceSkipped=PolicyCompilerAbsent.
+// tool allowlist, and one `<agent>-auth` policy: the Agent has no expose
+// block, so it compiles to API keys in its namespace's group, and its route is
+// published only after an anonymous request through it gets 401 (design 03
+// §3.3.3). The request below carries a key, an anonymous one is refused, and
+// the Agent's status says what the probe proved.
 //
 // The negative control is KEPT, and is not decorative: it is what caught
 // A6.2's fail-open reservation. It asserts the refusal NAMES
@@ -114,7 +117,7 @@ func TestAnAgentAnswersThroughTheGateway(t *testing.T) {
 	// The route the OPERATOR emitted. Nothing in this test authors it: the
 	// resource is waited for, not written, and if the operator emits none this
 	// fails here rather than forty seconds later on a 404.
-	route := waitForEmittedRoute(t, ctx, name, 2*time.Minute)
+	route := waitForPublishedRoute(t, ctx, name, 3*time.Minute)
 	if got := route.GetLabels()[controller.LabelAgentUID]; got != string(agentUID(t, ctx, "assayd-e2e", name)) {
 		t.Errorf("the emitted route carries agent-uid %q, which is not this Agent's", got)
 	}
@@ -133,7 +136,15 @@ func TestAnAgentAnswersThroughTheGateway(t *testing.T) {
 	host := emittedHostname(t, name, "assayd-e2e")
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
 	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gwSvc, gwNS) + a2aSendMessage
-	body := httpInClusterHost(t, ctx, "gwask", url, host, sendMessage("through the gateway"))
+	assertServedUnderAPIKey(t, ctx, name)
+	// The route is published under the operator's policy, so a caller with no
+	// key is refused by the gateway, on the route that carries the answer.
+	if code := probeCode(t, ctx, "gwanon", url, host, "", sendMessage("anonymous")); code != "401" {
+		t.Errorf("an anonymous request through the published route got %s, want 401 from the "+
+			"operator's <agent>-auth", code)
+	}
+	ensureAPIKeys(t, ctx)
+	body := askThroughGateway(t, ctx, "gwask", url, host, sendMessage("through the gateway"))
 
 	// An A2A task, completed, through the gateway: ADR-0030's clause, literally.
 	agent, text := completedTask(t, body)
@@ -347,7 +358,7 @@ func TestTheOperatorRecreatesARouteThatWasDeleted(t *testing.T) {
 	wl := deployResponder(t, ctx, name, img)
 	_ = wl
 
-	before := waitForEmittedRoute(t, ctx, name, 2*time.Minute)
+	before := waitForPublishedRoute(t, ctx, name, 3*time.Minute)
 	// Deleted as the suite's own identity, which is cluster-admin.
 	//
 	// An earlier version impersonated the operator here and said A5.9 refuses an
@@ -366,7 +377,10 @@ func TestTheOperatorRecreatesARouteThatWasDeleted(t *testing.T) {
 			"this test cannot distinguish a recreate from a delete that did nothing")
 	}
 
-	after := waitForEmittedRoute(t, ctx, name, 2*time.Minute)
+	// Re-created PREPARED and published only after an anonymous request through
+	// it got 401 (design 03 §3.3.3): its target is status.auth's, and its
+	// <agent>-auth, which survived the delete, targets the route by name.
+	after := waitForPublishedRoute(t, ctx, name, 3*time.Minute)
 	assertEmittedHostname(t, after, name, "assayd-e2e")
 	if after.GetUID() == before.GetUID() {
 		t.Fatalf("the route came back with the same UID (%s), so it was never actually gone",
@@ -379,7 +393,14 @@ func TestTheOperatorRecreatesARouteThatWasDeleted(t *testing.T) {
 	gwNS, gwName := requireGateway(t)
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
 	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gwSvc, gwNS) + a2aSendMessage
-	body := httpInClusterHost(t, ctx, "recreated", url, emittedHostname(t, name, "assayd-e2e"),
+	// The re-created route is authenticated: a caller with no key is refused.
+	if code := probeCode(t, ctx, "recreated-anon", url, emittedHostname(t, name, "assayd-e2e"), "",
+		sendMessage("anonymous")); code != "401" {
+		t.Errorf("an anonymous request through the re-created route got %s, want 401 from the "+
+			"operator's <agent>-auth", code)
+	}
+	ensureAPIKeys(t, ctx)
+	body := askThroughGateway(t, ctx, "recreated", url, emittedHostname(t, name, "assayd-e2e"),
 		sendMessage("after the delete"))
 	if _, text := completedTask(t, body); !strings.Contains(text, "after the delete") {
 		t.Errorf("the recreated route did not carry the request: %s", body)

@@ -77,6 +77,7 @@ func newGatewayReconciler(gwNS, gwName string) *controller.AgentReconciler {
 	r.Gateway = controller.GatewayConfig{
 		Enabled: true, Name: gwName, Namespace: gwNS,
 		HostnameSuffix: controller.DefaultGatewayHostnameSuffix,
+		ServingURL:     testServingURL,
 	}
 	return r
 }

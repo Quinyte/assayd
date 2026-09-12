@@ -115,6 +115,12 @@ type AgentReconciler struct {
 	// what P1 ships, and NewAgentReconciler refuses an enabled one that names no
 	// Gateway.
 	Gateway GatewayConfig
+	// AuthProbe sends `Create`'s anonymous probe (design 03 §3.3.3). Nil means
+	// the HTTP probe to Gateway.ServingURL; envtest injects §8.1's oracle.
+	AuthProbe AuthProber
+	// AuthDeadline is the `-auth` transaction's deadline. Zero means
+	// AuthTransactionDeadline, the design's constant; only tests set it.
+	AuthDeadline time.Duration
 
 	installMu  sync.Mutex
 	installUID string
@@ -162,10 +168,17 @@ func NewAgentReconciler(c client.Client, reader client.Reader, scheme *runtime.S
 			"is empty; a route with no hostname matches every request on the listener, so every Agent " +
 			"would answer for every other")
 	}
-	// Form only, and only when set. Design 03 §3.3.3 makes the flag required
-	// "whenever the compiler runs", and no compiler runs, so an unset value is
-	// not refused. A set one that cannot address a listener is refused now,
-	// rather than first noticed by the probe it is for.
+	// Required whenever the compiler runs (design 03 §3.3.3), and it runs
+	// whenever the gateway is enabled: every new Agent's route is published only
+	// after a probe sent here gets 401, so an unset flag would hold every new
+	// Agent unpublished. The form is checked whenever it is set.
+	if gateway.Enabled && gateway.ServingURL == "" {
+		return nil, fmt.Errorf("agent reconciler: --gateway-enabled is set and --gateway-serving-url " +
+			"is empty. The policy compiler runs whenever the gateway is enabled, and it publishes a " +
+			"new Agent's route only after an anonymous request to the Gateway's serving listener " +
+			"gets 401 (design 03 §3.3.3), so without the listener's address no new Agent could " +
+			"ever be published")
+	}
 	if gateway.ServingURL != "" {
 		if err := ValidateGatewayServingURL(gateway.ServingURL); err != nil {
 			return nil, fmt.Errorf("agent reconciler: --gateway-serving-url: %w", err)
@@ -212,19 +225,19 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 // removed `patch` and `httproutes/status: get` here (design 07 A6.11), which
 // were granted with A6 and never called: route status is not read.
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;delete
-// The per-Agent `<agent>-auth` AgentgatewayPolicy (design 03 §1.1's operator
-// wiring), by the same rule: listed and watched through the cache, read live by
+// The per-Agent `<agent>-auth` AgentgatewayPolicy (design 03 §1.1), by the same
+// rule: listed and watched through the cache, read live by the transaction,
 // the finalizer and the NACK mapping (`get`: the client does not cache
-// unstructured objects), and deleted by the finalizer after the route. NOT
-// `create` or `update`: nothing writes a policy yet, and those land with the
-// transaction that does. Never `patch`: the compiler writes by create/update
-// over owned fields, not server-side apply (design 03 §3.2). No
-// AgentgatewayBackend grant at all: nothing reads or writes one.
+// unstructured objects), written by the `Create` transaction (`create`,
+// `update`), and deleted by the finalizer after the route. Never `patch`: the
+// compiler writes by create/update over owned fields, not server-side apply
+// (design 03 §3.2). No AgentgatewayBackend grant at all: nothing reads or
+// writes one.
 //
 // The NACK Events' `list` and `watch` are NOT a marker. A marker grants them in
 // every namespace, and the watch is in the Gateway's alone, so the chart
 // renders them as a Role there (charts/assayd/templates/rbac.yaml).
-// +kubebuilder:rbac:groups=agentgateway.dev,resources=agentgatewaypolicies,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups=agentgateway.dev,resources=agentgatewaypolicies,verbs=get;list;watch;create;update;delete
 
 // Services are per revision and share the workload's name shape; the operator
 // creates one with each revision and collects it when that revision leaves the
@@ -351,7 +364,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	r.assessGates(&agent, conds)
 	r.assessSandbox(&agent, conds)
 	r.assessTaskState(&agent, status, conds)
-	r.assessGovernance(conds)
+	r.assessGovernance(conds, status)
 
 	// A42/A60: everything below goes into the operator-owned run namespace, and
 	// the operator must be able to prove it created that namespace before it
@@ -572,6 +585,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
+	// What the current spec's -auth compiles to (design 03 §3.3.1). It decides
+	// the promotion hold below and the -auth step after the switch.
+	desire := desiredAuth(&agent, runNS)
+	authHold := r.authHoldsPromotion(status, desire, pin)
+
 	// §3.4: the card is fetched AFTER the revision is available, because the
 	// container is the source of truth (ADR-0019) and there is nothing to read
 	// until it is running. A failure here is a REGISTRATION failure, never a
@@ -705,6 +723,19 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "WorkloadNotAvailable",
 			fmt.Sprintf("revision %s has no available replicas yet", desired))
 
+	case authHold != "" && status.ActiveRevision != "" && status.ActiveRevisionDigest != desiredDigest:
+		// Design 03 §3.3.1, I1: "a revision whose projection carries an -auth
+		// input this build cannot compile gains no weight while that is so".
+		// The served route keeps its last good -auth and keeps naming the
+		// revision it names; promoting would move the route onto a revision
+		// minted by the very edit that does not compile.
+		status.Phase = assaydv1alpha1.PhaseHeld
+		status.CandidateRevision, status.CandidateRevisionDigest = desired, desiredDigest
+		conds.set(assaydv1alpha1.CondProgressing, metav1.ConditionTrue, "AuthInputUncompilable",
+			fmt.Sprintf("revision %s is available and held at zero traffic: %s", desired, authHold))
+		conds.set(assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available",
+			fmt.Sprintf("revision %s is serving", status.ActiveRevision))
+
 	case !r.gatesSatisfied(&agent) && status.ActiveRevisionDigest != desiredDigest:
 		// Gates are required and have not passed: hold the candidate at zero
 		// traffic (§3.3).
@@ -756,20 +787,17 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			fmt.Sprintf("revision %s is serving", desired))
 	}
 
-	// The route is emitted AFTER the switch above, from status.activeRevision —
-	// the revision that is SERVING, never the desired one. A candidate coming up
-	// must not take the hostname from the revision still answering on it, which
-	// is the whole reason design 02 gives a Service to every revision. With the
-	// gateway declared off this does nothing at all (design 03 §3.1's table).
-	if rerr := r.reconcileServingRoute(ctx, &agent, runNS,
-		status.ActiveRevision, status.ActiveRevisionDigest); rerr != nil {
-		// A route that could not be written means this agent is not reachable
-		// through the Gateway, and on a gateway-enabled install that is not
-		// Ready. What is NOT checked is whether the route was ACCEPTED: design
-		// 03 §3.1 says Ready "requires accepted routes" and the operator does
-		// not read route status, so a route the listener rejects — a hostname
-		// clash, a namespace the selector does not admit — still leaves this
-		// Agent reporting Ready. Stated rather than implied.
+	// The route and its -auth are converged AFTER the switch above, from
+	// status.activeRevision — the revision that is SERVING, never the desired
+	// one. A candidate coming up must not take the hostname from the revision
+	// still answering on it, which is the whole reason design 02 gives a
+	// Service to every revision. With the gateway declared off this does
+	// nothing at all (design 03 §3.1's table).
+	gw, rerr := r.reconcileGateway(ctx, &agent, runNS, status, conds, desire)
+	if rerr != nil {
+		// A route or a policy that could not be written means this agent is not
+		// reachable through the Gateway as it should be, and on a
+		// gateway-enabled install that is not Ready.
 		//
 		// A LOST RACE IS NOT A DEGRADATION. An AlreadyExists from a stale
 		// informer cache, or a Conflict from a concurrent write, resolves on the
@@ -779,8 +807,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// races.
 		if !transientRouteWrite(rerr) {
 			msg := rerr.Error()
-			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "RouteApplyFailed", msg)
-			conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "RouteApplyFailed", msg)
+			reason := gatewayErrorReason(rerr)
+			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, reason, msg)
+			conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, reason, msg)
 			// Assert Degraded, do not merely set the phase. CondDegraded is owned
 			// and non-sticky, so a path that sets the phase without the condition
 			// actively CLEARS it — and design 10 alerts on the condition, so this
@@ -788,8 +817,32 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			// defect is recorded two hundred lines above, on the
 			// WorkloadUnavailable branch; it was reintroduced here and caught by
 			// the independent review of A6.10.
-			conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "RouteApplyFailed", msg)
-			status.Phase = assaydv1alpha1.PhaseDegraded
+			// An Agent a Create is still bringing up was never serving, so the
+			// aggregation says Pending, not Degraded (design 03 §3.3.1).
+			if status.Auth != nil && status.Auth.Mode == "" && status.Auth.Transaction != nil &&
+				status.Auth.Transaction.Kind == TxCreate {
+				status.Phase = assaydv1alpha1.PhasePending
+			} else {
+				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, reason, msg)
+				status.Phase = assaydv1alpha1.PhaseDegraded
+			}
+		} else if tx := authTransaction(status); tx != nil && (tx.Kind == TxLock || tx.Kind == TxCreate) {
+			// A lost race changes no condition of its own, but it must not let
+			// Ready claim what the transaction knows is false: a Lock's route
+			// serves with no policy, and a Create short of Served has not got a
+			// route it has proved and converged (design 03 §3.3.3). The rollout
+			// switch above sets Ready=True on every pass, so leaving Ready alone
+			// here would claim exactly that. What does not happen is a page on
+			// cache lag: a never-served Agent is Pending, and only an Agent
+			// that was serving is Degraded, as on every other pass of its
+			// transaction.
+			reason := ReasonAuthEnforcementPending
+			if tx.Kind == TxLock {
+				reason = ReasonAuthPolicyMissing
+			}
+			withholdReady(status, conds, gatewayOutcome{served: status.Auth.Mode != "",
+				withhold: &failure{reason, fmt.Sprintf("the -auth %s is in stage %s, and this pass lost "+
+					"a race and is retried: %v", tx.Kind, tx.Stage, rerr)}})
 		}
 		status.Conditions = conds.merge(agent.Status.Conditions)
 		status.ObservedGeneration = agent.Generation
@@ -798,6 +851,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 		return ctrl.Result{}, rerr
 	}
+	withholdReady(status, conds, gw)
 
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation
@@ -811,7 +865,58 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	// A card that could not be fetched is retried here rather than in a sleep
 	// inside the fetch, so one unreachable agent cannot delay another's reconcile.
-	return ctrl.Result{RequeueAfter: cardRequeue}, nil
+	return ctrl.Result{RequeueAfter: earliest(cardRequeue, gw.requeue)}, nil
+}
+
+// earliest is the sooner of two requeues, where zero means none.
+func earliest(a, b time.Duration) time.Duration {
+	if a == 0 || (b != 0 && b < a) {
+		return b
+	}
+	return a
+}
+
+// authHoldsPromotion says why a new revision may not be promoted, or "": a
+// served Agent whose current -auth input does not compile keeps its route on
+// the revision it names (design 03 §3.3.1, I1). A pinned rollback is not held:
+// it selects a revision that already served, and -auth follows the current
+// spec, never a revision (ADR-0034, F2).
+func (r *AgentReconciler) authHoldsPromotion(status *assaydv1alpha1.AgentStatus, d authDesire,
+	pin *releasePin) string {
+	if !r.Gateway.Enabled || pin != nil || status.Auth == nil || d.compiles() {
+		return ""
+	}
+	// A served Agent, and one whose Create is in flight: that Create finishes
+	// to its recorded target and publishes the revision the route names, so a
+	// revision an uncompilable edit minted must not become that revision.
+	inFlight := status.Auth.Transaction != nil && status.Auth.Transaction.Kind == TxCreate
+	if status.Auth.Mode == "" && !inFlight {
+		return ""
+	}
+	return "its -auth input does not compile, and this Agent's route keeps the -auth it has or is " +
+		"being given (design 03 §3.3.1, I1). PolicyCompileFailed says what to change"
+}
+
+// withholdReady applies design 03 §3.3.1's aggregation for the -auth step: a
+// failing serving route makes Ready False, reason by cause, and the phase
+// Degraded for an Agent that was serving or Pending for one being created. It
+// never overrides a Ready that is already False: that cause is as real, and
+// the -auth conditions are set either way.
+func withholdReady(status *assaydv1alpha1.AgentStatus, conds *conditionSet, gw gatewayOutcome) {
+	w := gw.withhold
+	if w == nil {
+		return
+	}
+	if ready, ok := conds.get(assaydv1alpha1.CondReady); ok && ready.Status != metav1.ConditionTrue {
+		return
+	}
+	conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, w.reason, w.message)
+	if gw.served {
+		conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, w.reason, w.message)
+		status.Phase = assaydv1alpha1.PhaseDegraded
+		return
+	}
+	status.Phase = assaydv1alpha1.PhasePending
 }
 
 // reportUnreconcilable records why an Agent cannot be acted on, rather than
@@ -824,7 +929,7 @@ func (r *AgentReconciler) reportUnreconcilable(ctx context.Context, agent *assay
 	// cannot be reconciled is still one. Owned and asserted nowhere else on this
 	// path, it would otherwise be CLEARED here — so an Agent that went degraded
 	// would silently lose the record of which tier it runs in.
-	r.assessGovernance(conds)
+	r.assessGovernance(conds, status)
 	conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "NoWorkloadSpecified",
 		"neither spec.runtime nor spec.external is set, so there is nothing to reconcile; "+
 			"set exactly one of them")
@@ -846,7 +951,7 @@ func (r *AgentReconciler) reconcileExternal(ctx context.Context, agent *assaydv1
 	// Design 03 §3.1 puts GovernanceSkipped on EVERY Agent, not on the ones that
 	// happen to run here. An external agent is the case where an ungoverned tier
 	// matters most: nothing about it is in this cluster except the record.
-	r.assessGovernance(conds)
+	r.assessGovernance(conds, status)
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation
 	return ctrl.Result{}, r.writeStatus(ctx, agent, status)
@@ -1004,7 +1109,7 @@ func (r *AgentReconciler) reportUnresolvedSources(ctx context.Context, agent *as
 	r.assessGates(agent, conds)
 	r.assessSandbox(agent, conds)
 	r.assessTaskState(agent, status, conds)
-	r.assessGovernance(conds)
+	r.assessGovernance(conds, status)
 
 	names := make([]string, 0, len(unresolved))
 	for _, u := range unresolved {

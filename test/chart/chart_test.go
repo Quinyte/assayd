@@ -663,7 +663,7 @@ func TestTheGatewayValuesReachTheOperator(t *testing.T) {
 			"absence — the operator has to be TOLD, or it decides by its own default.", off)
 	}
 
-	on := operatorArgs(t, "--set", "gateway.enabled=true",
+	on := operatorArgs(t, "--set", "gateway.enabled=true", "--set", "gateway.servingUrl=http://gw.example:8080",
 		"--set", "gateway.namespace=somewhere-else",
 		"--set", "gateway.name=gw", "--set", "gateway.hostnameSuffix=example.test")
 	for _, want := range []string{
@@ -718,7 +718,8 @@ func containsPrefix(xs []string, prefix string) bool {
 // namespace the OPERATOR runs in — not the Helm release namespace, which
 // hack/e2e.sh proves is a different thing by installing into `default`.
 func TestAnUnsetGatewayNamespaceFallsBackToTheOperators(t *testing.T) {
-	args := operatorArgs(t, "--set", "gateway.enabled=true", "--set", "namespace=assayd-elsewhere")
+	args := operatorArgs(t, "--set", "gateway.enabled=true", "--set", "gateway.servingUrl=http://gw.example:8080",
+		"--set", "namespace=assayd-elsewhere")
 	if !contains(args, "--gateway-namespace=assayd-elsewhere") {
 		t.Errorf("an unset gateway.namespace did not fall back to .Values.namespace: %v. "+
 			"admission.yaml renders `$gwNS` with the same `| default .Values.namespace`, and if "+

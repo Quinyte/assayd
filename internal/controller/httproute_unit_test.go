@@ -47,7 +47,7 @@ func TestTheServingRouteIsTheResourceTheE2EAuthoredByHand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("name: %v", err)
 	}
-	route := r.servingRouteFor(agent, RunNamespaceName("team-a"), "abc1234567", name, 8080)
+	route := r.servingRouteFor(agent, RunNamespaceName("team-a"), "abc1234567", name, 8080, routePublication{})
 
 	if route.Namespace != "assayd-run-team-a" {
 		t.Errorf("the route is not in the run namespace (%q). A backendRef across namespaces needs "+
@@ -131,20 +131,23 @@ func TestTheServingRoutesPortIsTheServicesNotTheSpecs(t *testing.T) {
 			Image: "ghcr.io/acme/a@sha256:" + strings.Repeat("0", 64), Port: 9090,
 		}},
 	}
-	route := r.servingRouteFor(agent, RunNamespaceName("team-a"), "abc1234567", "pricer-serving", 8080)
+	route := r.servingRouteFor(agent, RunNamespaceName("team-a"), "abc1234567", "pricer-serving", 8080,
+		routePublication{})
 	if p := route.Spec.Rules[0].BackendRefs[0].Port; p == nil || int32(*p) != 8080 {
 		t.Errorf("the route's backendRef port is %v, not the 8080 the serving revision's Service "+
 			"publishes. The spec's 9090 belongs to a revision that is not serving.", p)
 	}
 }
 
-// Design 03 §3.1's table, at the condition level. `false` — what P1 ships —
-// carries the reason the design writes down; `true` carries a DIFFERENT reason,
-// because the compiler still does not exist and a False here would claim a
-// governance nothing performs.
+// Design 03 §3.1's table, at the condition level, on the paths that can see
+// only status.auth. `false` — what P1 ships — carries the reason the design
+// writes down. `true` runs the compiler, so the value comes from status.auth:
+// what a served -auth earned, and "vacuously False" where the compiler has
+// published nothing. A refused `Adopt`'s value, which only a pass that read
+// the route can know, is kept rather than overwritten.
 func TestGovernanceSkippedNamesWhichUngovernedTierThisIs(t *testing.T) {
 	off := newConditionSet(1)
-	(&AgentReconciler{}).assessGovernance(off)
+	(&AgentReconciler{}).assessGovernance(off, &assaydv1alpha1.AgentStatus{})
 	got := off.asserted[string(assaydv1alpha1.CondGovernanceSkipped)]
 	// The LITERAL, not the constant. A reason is a user-facing string: design 03
 	// §3.1's table writes `GovernanceSkipped=GatewayDisabled` and design 10 keys
@@ -155,19 +158,73 @@ func TestGovernanceSkippedNamesWhichUngovernedTierThisIs(t *testing.T) {
 			"says True/GatewayDisabled", got.Status, got.Reason)
 	}
 
-	on := newConditionSet(1)
-	(&AgentReconciler{Gateway: GatewayConfig{Enabled: true, Name: "assayd", Namespace: "gw"}}).
-		assessGovernance(on)
-	got = on.asserted[string(assaydv1alpha1.CondGovernanceSkipped)]
-	if got.Status != metav1.ConditionTrue || got.Reason != "PolicyCompilerAbsent" {
-		t.Errorf("with the gateway declared on, GovernanceSkipped is %s/%s; the compiler does not "+
-			"exist, so this install is still ungoverned and must say so under its own reason",
-			got.Status, got.Reason)
-	}
-	if !strings.Contains(got.Message, "unauthenticated") {
-		t.Errorf("the enabled message does not say the published path is unauthenticated: %q", got.Message)
+	on := &AgentReconciler{Gateway: GatewayConfig{Enabled: true, Name: "assayd", Namespace: "gw"}}
+	for _, tc := range []struct {
+		name   string
+		status assaydv1alpha1.AgentStatus
+		want   metav1.ConditionStatus
+		reason string
+	}{
+		{"nothing published", assaydv1alpha1.AgentStatus{}, metav1.ConditionFalse, "Governed"},
+		{"served apikey, replica count unknown", assaydv1alpha1.AgentStatus{Auth: &assaydv1alpha1.AuthStatus{
+			Mode: "apikey", Verified: &assaydv1alpha1.AuthVerification{ReplicasProbed: 1}}},
+			metav1.ConditionFalse, "AuthVerifiedOnOneReplica"},
+		{"served none", assaydv1alpha1.AgentStatus{Auth: &assaydv1alpha1.AuthStatus{Mode: "none"}},
+			metav1.ConditionTrue, "AuthOptedOut"},
+	} {
+		c := newConditionSet(1)
+		st := tc.status
+		on.assessGovernance(c, &st)
+		got = c.asserted[string(assaydv1alpha1.CondGovernanceSkipped)]
+		if got.Status != tc.want || got.Reason != tc.reason {
+			t.Errorf("%s: GovernanceSkipped is %s/%s, want %s/%s", tc.name, got.Status, got.Reason,
+				tc.want, tc.reason)
+		}
+		if tc.reason == "Governed" && !strings.Contains(got.Message, "vacuously") {
+			t.Errorf("%s: a False with nothing published must say it is vacuous: %q", tc.name, got.Message)
+		}
 	}
 
+	adopted := newConditionSet(1)
+	on.assessGovernance(adopted, &assaydv1alpha1.AgentStatus{
+		Auth: &assaydv1alpha1.AuthStatus{Transaction: &assaydv1alpha1.AuthTransaction{
+			Kind: "Adopt", Stage: "Refused", RefusedMode: "apikey"}},
+		Conditions: []metav1.Condition{{
+			Type: string(assaydv1alpha1.CondGovernanceSkipped), Status: metav1.ConditionTrue,
+			Reason: "CompilerUpgradeUnsupported"}}})
+	if c, ok := adopted.asserted[string(assaydv1alpha1.CondGovernanceSkipped)]; ok {
+		t.Errorf("a refused Adopt's CompilerUpgradeUnsupported was overwritten with %s/%s by a pass "+
+			"that never read the route, which would call an unauthenticated route governed", c.Status, c.Reason)
+	}
+}
+
+// The paths that return before the -auth step see only status.auth, and a
+// transaction in flight there changes what they may claim: a Lock of a
+// missing policy is AuthPolicyMissing on BOTH conditions, raised until an
+// attributed 401; a re-create of a served Agent's route is vacuously False,
+// because the route is unpublished. Neither is the value the served -auth
+// earned.
+func TestGovernanceOnAnAuthTransactionInFlight(t *testing.T) {
+	on := &AgentReconciler{Gateway: GatewayConfig{Enabled: true, Name: "assayd", Namespace: "gw"}}
+	served := func(kind string) *assaydv1alpha1.AgentStatus {
+		return &assaydv1alpha1.AgentStatus{Auth: &assaydv1alpha1.AuthStatus{Mode: "apikey",
+			Verified:    &assaydv1alpha1.AuthVerification{ReplicasProbed: 1},
+			Transaction: &assaydv1alpha1.AuthTransaction{Kind: kind, TargetMode: "apikey"}}}
+	}
+	lock := newConditionSet(1)
+	on.assessGovernance(lock, served("Lock"))
+	for _, typ := range []assaydv1alpha1.ConditionType{assaydv1alpha1.CondGovernanceSkipped,
+		assaydv1alpha1.CondPolicyApplyIncomplete} {
+		if c, ok := lock.get(typ); !ok || c.Status != metav1.ConditionTrue || c.Reason != "AuthPolicyMissing" {
+			t.Errorf("a Lock of a missing policy: %s is %+v, want True/AuthPolicyMissing", typ, c)
+		}
+	}
+	recreate := newConditionSet(1)
+	on.assessGovernance(recreate, served("Create"))
+	if c, ok := recreate.get(assaydv1alpha1.CondGovernanceSkipped); !ok || c.Status != metav1.ConditionFalse ||
+		c.Reason != "Governed" || !strings.Contains(c.Message, "re-created") {
+		t.Errorf("a route re-create: GovernanceSkipped is %+v, want vacuously False, naming the re-create", c)
+	}
 }
 
 // The classification, asserted through merge() rather than by reading the maps.

@@ -106,7 +106,9 @@ func (d *deleteLog) index(entry string) int {
 func servedGatewayAgent(t *testing.T, name string) (*assaydv1alpha1.Agent, *controller.AgentReconciler, *deleteLog, string) {
 	t.Helper()
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, name, nil)
+	// `auth: none`, whose route is published at once and which writes no
+	// policy of its own, so the tests below can plant the policy they need.
+	a := noneAgent(t, ns, name)
 	r := newGatewayReconciler("assayd-gateway", "assayd")
 	log := &deleteLog{Client: k8s}
 	r.Client = log
@@ -465,7 +467,7 @@ func TestTheOperatorRefusesToStartWithoutAgentgatewayPolicy(t *testing.T) {
 	r, err := controller.NewAgentReconciler(mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme(),
 		operatorNamespace, func() bool { return false }, labelAuthorityPresent, controller.InjectedEnvConfig{},
 		controller.GatewayConfig{Enabled: true, Name: "assayd", Namespace: "assayd-gateway",
-			HostnameSuffix: controller.DefaultGatewayHostnameSuffix})
+			HostnameSuffix: controller.DefaultGatewayHostnameSuffix, ServingURL: testServingURL})
 	if err != nil {
 		t.Fatalf("build reconciler: %v", err)
 	}
@@ -585,11 +587,24 @@ func (c *agentReads) count(key types.NamespacedName) int {
 // main control plane, which serves both kinds. Setting it up there is the
 // other half of the startup refusal: the refusal is for a cluster missing the
 // kind, not for every cluster.
+//
+// Its cache is scoped to this test's Agent namespace, its run namespace and
+// the operator's. The control plane is shared, and every earlier test leaves
+// Agents behind: a manager watching all of them reconciles each one with the
+// gateway on, which since slice PR 4 means running its `Create`, writes and
+// probes included, on the one worker. This test's Agent then waited behind
+// them past its window, and the watch under test was never what failed.
+// Scoping takes nothing from the claim, which is about the watches, and the
+// gateway watch cache is built from its own options and is not narrowed.
 func startGatewayManager(t *testing.T, gwNS string) *agentReads {
 	t.Helper()
+	agentNS := nsName(t.Name())
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme: scheme, Metrics: metricsserver.Options{BindAddress: "0"}, HealthProbeBindAddress: "0",
 		Controller: ctrlconfig.Controller{SkipNameValidation: ptrTo(true)},
+		Cache: cache.Options{DefaultNamespaces: map[string]cache.Config{
+			agentNS: {}, runNS(agentNS): {}, operatorNamespace: {},
+		}},
 	})
 	if err != nil {
 		t.Fatalf("build manager: %v", err)
@@ -598,7 +613,7 @@ func startGatewayManager(t *testing.T, gwNS string) *agentReads {
 	r, err := controller.NewAgentReconciler(reads, mgr.GetAPIReader(), mgr.GetScheme(),
 		operatorNamespace, func() bool { return false }, labelAuthorityPresent, controller.InjectedEnvConfig{},
 		controller.GatewayConfig{Enabled: true, Name: "assayd", Namespace: gwNS,
-			HostnameSuffix: controller.DefaultGatewayHostnameSuffix})
+			HostnameSuffix: controller.DefaultGatewayHostnameSuffix, ServingURL: testServingURL})
 	if err != nil {
 		t.Fatalf("build reconciler: %v", err)
 	}
@@ -764,8 +779,10 @@ func TestANackInTheGatewaysNamespaceRequeuesTheAgentWhosePolicyItNames(t *testin
 // --- the serving listener's address ------------------------------------------
 
 // Design 03 §3.3.3 makes --gateway-serving-url required "whenever the compiler
-// runs". None runs, so unset is not refused; set, it must address a listener.
-func TestAServingURLIsCheckedWhenSetAndNotRequired(t *testing.T) {
+// runs", and the compiler runs whenever the gateway is enabled: every new
+// Agent's route is published only after a probe sent there gets 401. Set, it
+// must address a listener. With the gateway off it is not required.
+func TestAServingURLIsRequiredWithTheGatewayAndChecked(t *testing.T) {
 	gw := controller.GatewayConfig{Enabled: true, Name: "assayd", Namespace: "gw",
 		HostnameSuffix: controller.DefaultGatewayHostnameSuffix}
 	build := func(g controller.GatewayConfig) error {
@@ -773,9 +790,12 @@ func TestAServingURLIsCheckedWhenSetAndNotRequired(t *testing.T) {
 			func() bool { return false }, labelAuthorityPresent, controller.InjectedEnvConfig{}, g)
 		return err
 	}
-	if err := build(gw); err != nil {
-		t.Errorf("an unset --gateway-serving-url was refused: %v. No compiler runs, so nothing "+
-			"probes, and the design requires it only once one does", err)
+	if err := build(gw); err == nil || !strings.Contains(err.Error(), "--gateway-serving-url") {
+		t.Errorf("the gateway was enabled with no --gateway-serving-url and the reconciler was built, "+
+			"or refused without naming the flag (%v). No new Agent could ever be published", err)
+	}
+	if err := build(controller.GatewayConfig{}); err != nil {
+		t.Errorf("with the gateway off, an unset --gateway-serving-url was refused: %v", err)
 	}
 	gw.ServingURL = "http://gw.example:8080"
 	if err := build(gw); err != nil {
