@@ -310,7 +310,7 @@ func reportForeign(agent *assaydv1alpha1.Agent, runNS string, status *assaydv1al
 		"is taken. A route not yet published is not published, a published route is not "+
 		"withdrawn, and the operator never deletes it, because it is not this Agent's <agent>-auth "+
 		"by name and label. Remove it (design 03 §3.2)", strings.Join(out.foreign, ", "))
-	if foreignAtOwnName(out.foreign, agent, runNS) {
+	if foreignAtOwnName(out.foreign, agent, runNS) && writesOwnPolicy(status) {
 		own, _ := compiler.AuthPolicyName(agent.Name)
 		msg += fmt.Sprintf(". %s/%s sits at this Agent's own -auth name and does not carry its UID, so it "+
 			"is not re-asserted. If it was this Agent's policy with its UID label removed, delete it: "+
@@ -334,6 +334,24 @@ func reportForeign(agent *assaydv1alpha1.Agent, runNS string, status *assaydv1al
 		(auth.Transaction != nil && (auth.Transaction.Kind == TxAdopt || auth.Transaction.Kind == TxLock))) {
 		out.served = true
 	}
+}
+
+// writesOwnPolicy reports whether the operator writes this Agent's own
+// `<agent>-auth` once a foreign policy at that name goes: an Agent served
+// under apikey, whose missing policy the Lock re-creates, or a Create or Lock
+// to apikey in flight. A served auth: none Agent has no policy to write, so
+// the recovery is not offered to it (the fourth review of slice PR 5).
+func writesOwnPolicy(status *assaydv1alpha1.AgentStatus) bool {
+	auth := status.Auth
+	if auth == nil {
+		return false
+	}
+	if auth.Mode == string(compiler.AuthModeAPIKey) {
+		return true
+	}
+	tx := auth.Transaction
+	return tx != nil && (tx.Kind == TxCreate || tx.Kind == TxLock) &&
+		tx.TargetMode == string(compiler.AuthModeAPIKey)
 }
 
 // gatewayStep is reconcileGateway's body: what every pass reads before the

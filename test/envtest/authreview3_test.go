@@ -71,6 +71,18 @@ func TestAnAbandonmentWhoseCacheMissesTheRouteStillStripsAndWaits(t *testing.T) 
 			t.Fatalf("pass %d: %v", i, err)
 		}
 		check(i)
+		if i == 0 {
+			// The read that confirms the route is gone is live too: the stripped
+			// route is still in the API, so nothing past it happens yet (the
+			// fourth review of slice PR 5).
+			if tx := txOf(t, a); tx == nil || tx.Kind != "Create" {
+				t.Fatalf("pass 0 let go of the Create while the route is still in the API: %+v", authOf(t, a))
+			}
+			condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthAbandonWaiting")
+			if policyExists(t, runNS(ns), policyNameOf(a)) == nil {
+				t.Fatal("pass 0 deleted the policy while the route is still in the API")
+			}
+		}
 	}
 	if routePublished(t, ns, "cachemiss") {
 		t.Error("the route whose delete is held was not stripped")
