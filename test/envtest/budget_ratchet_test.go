@@ -72,7 +72,13 @@ func TestAnAgentStoredWithABudgetCanStillBeFinalized(t *testing.T) {
 				}
 			}
 			err := k8s.Create(ctx, budgetedAgent(ns, "probe"), client.DryRunAll)
-			return established && (err == nil) == budgetAdmitted
+			if budgetAdmitted {
+				return established && err == nil
+			}
+			// Refused FOR THE BUDGET, not merely refused: any other error
+			// (a half-served schema, a transient failure) would otherwise read
+			// as the rule being back.
+			return established && err != nil && strings.Contains(err.Error(), budgetRefusedMessage)
 		})
 	}
 	t.Cleanup(func() { installCRD(current, false) })
