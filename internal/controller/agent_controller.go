@@ -162,6 +162,15 @@ func NewAgentReconciler(c client.Client, reader client.Reader, scheme *runtime.S
 			"is empty; a route with no hostname matches every request on the listener, so every Agent " +
 			"would answer for every other")
 	}
+	// Form only, and only when set. Design 03 §3.3.3 makes the flag required
+	// "whenever the compiler runs", and no compiler runs, so an unset value is
+	// not refused. A set one that cannot address a listener is refused now,
+	// rather than first noticed by the probe it is for.
+	if gateway.ServingURL != "" {
+		if err := ValidateGatewayServingURL(gateway.ServingURL); err != nil {
+			return nil, fmt.Errorf("agent reconciler: --gateway-serving-url: %w", err)
+		}
+	}
 	return &AgentReconciler{Client: c, Reader: reader, Scheme: scheme, OperatorNamespace: operatorNamespace,
 		EvalSuiteInstalled: evalSuiteInstalled, LabelAuthorityPresent: labelAuthority,
 		InjectedEnv: injected, Gateway: gateway}, nil
@@ -198,12 +207,24 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 // been implemented, so neither half was wrong and the path did not work.
 //
 // Only `httproutes`, and only the verbs the emitter calls: get, list and watch
-// through the cache, create, update, delete. The AgentgatewayBackend and
-// AgentgatewayPolicy grants land with the compiler that emits them; granting
-// them now would be standing privilege with no consumer — and the same rule
+// through the cache, create, update, delete. A verb granted ahead of the code
+// that calls it is standing privilege with no consumer, and the same rule
 // removed `patch` and `httproutes/status: get` here (design 07 A6.11), which
 // were granted with A6 and never called: route status is not read.
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;delete
+// The per-Agent `<agent>-auth` AgentgatewayPolicy (design 03 §1.1's operator
+// wiring), by the same rule: listed and watched through the cache, read live by
+// the finalizer and the NACK mapping (`get`: the client does not cache
+// unstructured objects), and deleted by the finalizer after the route. NOT
+// `create` or `update`: nothing writes a policy yet, and those land with the
+// transaction that does. Never `patch`: the compiler writes by create/update
+// over owned fields, not server-side apply (design 03 §3.2). No
+// AgentgatewayBackend grant at all: nothing reads or writes one.
+//
+// The NACK Events' `list` and `watch` are NOT a marker. A marker grants them in
+// every namespace, and the watch is in the Gateway's alone, so the chart
+// renders them as a Role there (charts/assayd/templates/rbac.yaml).
+// +kubebuilder:rbac:groups=agentgateway.dev,resources=agentgatewaypolicies,verbs=get;list;watch;delete
 
 // Services are per revision and share the workload's name shape; the operator
 // creates one with each revision and collects it when that revision leaves the
@@ -1538,7 +1559,8 @@ func isRevisionWorkload(agent *assaydv1alpha1.Agent, d *appsv1.Deployment) bool 
 // stated sequence rather than a rediscovery of it.
 func (r *AgentReconciler) finalize(ctx context.Context, agent *assaydv1alpha1.Agent) (ctrl.Result, error) {
 	// TODO(design 03/06/05): drain traffic to weight 0 respecting taskTimeout,
-	// revoke gateway routes in reverse apply order, deactivate (never delete) the
+	// revoke the gateway resources nothing emits yet (Backends, the other policy
+	// concerns) in reverse apply order, deactivate (never delete) the
 	// agent-actor OAuth client, GC directory entries.
 	if !containsString(agent.Finalizers, Finalizer) {
 		return ctrl.Result{}, nil
@@ -1567,9 +1589,22 @@ func (r *AgentReconciler) finalize(ctx context.Context, agent *assaydv1alpha1.Ag
 		// fail with a no-matching-kind error, and a finalizer that returns an
 		// error never releases — every Agent in the cluster would become
 		// undeletable the moment someone tried.
+		//
+		// The route's `-auth` policy goes after it, and only once the route is
+		// gone (design 03 §3.3, step 5). Nothing else is torn down while either
+		// delete is pending, so, while the run namespace is live, the route
+		// never outlives its policy and the workload never outlives its route.
+		// A run namespace that is itself being deleted does not reach this
+		// branch, and the namespace controller removes both in no order this
+		// sets.
 		if r.Gateway.Enabled {
-			if err := r.collectRoutes(ctx, agent, runNS, ""); err != nil {
+			waiting, err := r.revokeGateway(ctx, agent, runNS)
+			if err != nil {
 				return ctrl.Result{}, err
+			}
+			if waiting != "" {
+				return ctrl.Result{RequeueAfter: teardownPendingRequeue},
+					r.reportTeardownWaiting(ctx, agent, waiting)
 			}
 		}
 		owned, err := r.ownedWorkloads(ctx, agent, runNS)
@@ -1679,7 +1714,33 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				"Starting without them would emit no route while every Agent reported nothing "+
 				"wrong, which is the fail-open this refuses", err)
 		}
+		// And the kind of the slice's `<agent>-auth`: design 03 §3.1 says that
+		// "before any AgentgatewayPolicy is emitted it must also read
+		// AgentgatewayPolicy". Refused for the same reason, and before the
+		// emitter needs it, because the finalizer already reads the kind:
+		// against a cluster that serves none, every Agent's teardown would fail
+		// its read of `<agent>-auth`, so no Agent could be deleted.
+		if _, err := mgr.GetRESTMapper().RESTMapping(
+			AgentgatewayPolicyGVK.GroupKind(), AgentgatewayPolicyGVK.Version); err != nil {
+			return fmt.Errorf("--gateway-enabled is set and this cluster serves no "+
+				"%s AgentgatewayPolicy: %w. Install the agentgateway CRDs, or unset "+
+				"gateway.enabled to run the declared-ungoverned tier (design 03 §3.1). "+
+				"Starting without them would leave no Agent deletable, because teardown "+
+				"reads each Agent's -auth policy, which is the failure this refuses",
+				compiler.PolicyAPIVersion, err)
+		}
+		// Policies map to their Agent by the labels routes do (§3.2), and a
+		// NACK Event by the labels of the policy it names (§3.3). Both read
+		// through a cache scoped to what they can map (gatewaySources), not
+		// the manager's, which would hold every policy and Event cluster-wide.
+		sources, err := r.gatewaySources(mgr, byAgentLabels)
+		if err != nil {
+			return err
+		}
 		agents = agents.Watches(&gatewayv1.HTTPRoute{}, byAgentLabels)
+		for _, src := range sources {
+			agents = agents.WatchesRawSource(src)
+		}
 	}
 	if err := agents.Complete(r); err != nil {
 		return err

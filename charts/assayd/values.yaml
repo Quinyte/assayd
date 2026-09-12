@@ -118,6 +118,18 @@ gateway:
   # admits the tool routes (the e2e harness uses the Gateway's `tools`
   # listener); nothing checks that it does.
   url: ""
+  # The base URL of the Gateway's SERVING listener -- the one each Agent's
+  # `<agent>-serving` route attaches to (listener `http`), and NOT `url` above,
+  # which names the listener agents send egress to. Design 03 3.3.3 sends the
+  # compiler's anonymous `401` probe here, with the Agent's Host header.
+  #
+  # Rendered as --gateway-serving-url only when set. The operator refuses to
+  # start if it is set and is not an absolute http(s) URL naming only a host and
+  # port. It is NOT required yet, and nothing reads it: design 03 makes it
+  # required "whenever the compiler runs", and no compiler runs in this release,
+  # so there is no probe to address. Setting it today changes nothing but that
+  # startup check.
+  servingUrl: ""
   # The namespace the Gateway object lives in, which is NOT the namespace the
   # operator runs in. Design 03 3.2 puts gateway-scoped resources in "the
   # gateway's own namespace", and agentgateway forces the separation anyway:
@@ -137,6 +149,10 @@ gateway:
   # release namespace: hack/e2e.sh installs the release into `default` while the
   # operator runs in `assayd-system`, so this default must not be read as
   # "wherever you helm-installed to".
+  #
+  # With gateway.enabled, the chart also renders a Role and RoleBinding IN this
+  # namespace (the operator's read of the gateway's NACK Events, design 03
+  # 3.3), so it must exist before `helm install`, or the install fails.
   namespace: ""
 
   # The suffix appended to `<agent>.<agent-namespace>` to form the hostname the
@@ -164,3 +180,19 @@ gateway:
 # namespace — keep it to assayd's own controllers.
 admission:
   extraOperators: []
+  # Design 03 3.4.4: who may write a ConfigMap labelled `assayd.dev/api-keys` in
+  # a run namespace. Such a ConfigMap holds API-key hashes, and agentgateway
+  # reads them live, so writing one mints a principal. The design says the key
+  # set "is written by an administrator"; this names the administrators. The
+  # operator's own ServiceAccount (and extraOperators) are always permitted.
+  #
+  # `system:masters` is the default because it is the one group this
+  # reservation could not exclude anyway: its members bypass RBAC and can delete
+  # the policy's binding. Every other administrator must be listed here, by
+  # username or by group -- a `cluster-admin` binding alone is NOT enough, and
+  # kubeadm (and so kind) puts its admin kubeconfig in `kubeadm:cluster-admins`,
+  # not `system:masters`. Each identity added can mint a principal for any
+  # Agent's group.
+  apiKeyWriters:
+    users: []
+    groups: ["system:masters"]

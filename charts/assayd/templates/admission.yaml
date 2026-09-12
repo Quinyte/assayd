@@ -116,3 +116,156 @@ metadata:
 spec:
   policyName: assayd-gateway-routes
   validationActions: ["Deny"]
+---
+{{- /*
+Design 03 §6 and §1.1: the third reservation, and the key-source label's beside
+it. Both are scoped to run namespaces by the label assayd-namespace-labels
+reserves to the operator, so a tenant cannot bring a namespace into or out of
+their reach. A run namespace is the only place an AgentgatewayPolicy can reach
+an Agent's route (a policy's targetRefs select same-namespace objects only,
+design 03 §3.2), and the only placement of a key ConfigMap that has been
+measured (§3.4.4).
+*/ -}}
+# An AgentgatewayPolicy in a run namespace is authored by the assayd operator
+# only (design 03 §6). A `traffic` policy on an Agent's serving route decides
+# who may call that Agent, and two same-level policies on one target resolve at
+# random per replica and per restart (§3.2), so anyone who could write one
+# beside the operator's `<agent>-auth` would control what the route admits.
+#
+# CREATE and UPDATE, the operations §6 names. DELETE is not reserved: who may
+# delete a policy is an RBAC question, as it is for routes (design 07 A6.10), and
+# reserving it would also refuse the namespace controller's own deletes when a
+# run namespace is torn down. A policy deleted out of band is §3.3.3's
+# `AuthPolicyMissing`, which the compiler re-creates; no compiler exists yet.
+# The `status` subresource is not matched: the gateway's controller writes it,
+# and a custom resource's /status ignores every change outside `status`.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: assayd-gateway-policies
+  labels:
+    {{- include "assayd.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        assayd.dev/run-namespace: "true"
+    resourceRules:
+      - apiGroups: ["agentgateway.dev"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["agentgatewaypolicies"]
+  variables:
+    - name: operator
+      expression: {{ printf "request.userInfo.username in %s" (toJson $operators) | quote }}
+    # What is reserved is what the policy SAYS, its spec, and the labels that
+    # make it the operator's (design 03 §3.2's name-and-label rule). An UPDATE
+    # that changes neither is admitted, because the garbage collector finishes
+    # a foreground or orphan delete by removing its finalizer with an UPDATE,
+    # and refusing it left the policy Terminating forever, and with it the
+    # teardown of the Agent it belongs to.
+    # Metadata that decides when the object GOES is reserved too, but only its
+    # additions. A finalizer added by a non-operator stalls the operator's
+    # teardown for as long as its author likes; an ownerReference added to an
+    # object that does not exist lets the garbage collector delete it. Removals
+    # are admitted, which is all the garbage collector and the namespace
+    # controller ever do.
+    - name: addedFinalizer
+      expression: "has(object.metadata.finalizers) && object.metadata.finalizers.exists(f, oldObject == null || !has(oldObject.metadata.finalizers) || !(f in oldObject.metadata.finalizers))"
+    - name: addedOwner
+      expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, oldObject == null || !has(oldObject.metadata.ownerReferences) || !oldObject.metadata.ownerReferences.exists(p, p.uid == o.uid && p.apiVersion == o.apiVersion && p.kind == o.kind && p.name == o.name))"
+    - name: touched
+      expression: "oldObject == null || object.spec != oldObject.spec || (has(object.metadata.labels) ? object.metadata.labels : {}) != (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}) || variables.addedFinalizer || variables.addedOwner"
+  validations:
+    - expression: "!variables.touched || variables.operator"
+      message: "AgentgatewayPolicies in assayd run namespaces are authored by the assayd operator only (design 03 §6)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: assayd-gateway-policies
+  labels:
+    {{- include "assayd.labels" . | nindent 4 }}
+spec:
+  policyName: assayd-gateway-policies
+  validationActions: ["Deny"]
+---
+{{- /*
+The writers of a key set are the operator (design 03 §8.1 names it "a permitted
+writer", for Narrow's probe keys, which are out of the slice) AND an
+administrator, because §3.4.4 says the key set "is written by an administrator
+and never emitted". So this cannot be the operator alone the way the policy
+reservation is: that would leave no one able to issue a key. Who the
+administrator is, the design does not say; admission.apiKeyWriters names them.
+*/ -}}
+{{- $writers := .Values.admission.apiKeyWriters | default dict -}}
+{{- $keyUsers := concat $operators ($writers.users | default list) -}}
+{{- $keyGroups := $writers.groups | default list -}}
+# A ConfigMap carrying `assayd.dev/api-keys` in a run namespace holds API-key
+# hashes, and agentgateway reads them live: adding an entry mints a principal
+# with no compile, no revision and no comparator (design 03 §3.4.4). So writing
+# one is reserved to the operator and to the administrators named in
+# admission.apiKeyWriters. The label is reserved whatever its VALUE, because a
+# later key source may select another value (§3.4.4's `gateway.apiKeys.selector`).
+# The old object is checked as well as the new one, so removing the label from a
+# key set, or adding it to an ordinary ConfigMap, is a write to a key set.
+#
+# Run namespaces only. Whether a `configMapSelector` reaches a ConfigMap in
+# another namespace is UNMEASURED (§3.4.4), so outside them this label is not
+# reserved, and a cross-namespace selector would be a bypass this does not close.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: assayd-api-keys
+  labels:
+    {{- include "assayd.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        assayd.dev/run-namespace: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["configmaps"]
+  variables:
+    - name: labelled
+      expression: "(has(object.metadata.labels) && 'assayd.dev/api-keys' in object.metadata.labels) || (oldObject != null && has(oldObject.metadata.labels) && 'assayd.dev/api-keys' in oldObject.metadata.labels)"
+    - name: writer
+      expression: {{ printf "request.userInfo.username in %s || (has(request.userInfo.groups) && request.userInfo.groups.exists(g, g in %s))" (toJson $keyUsers) (toJson $keyGroups) | quote }}
+    # What is reserved is what a key set holds, its data and binary data, and
+    # its labels, which decide whether it is one. An UPDATE that changes none of
+    # them is admitted, for the reason assayd-gateway-policies gives: the
+    # garbage collector removes a foreground or orphan finalizer by UPDATE.
+    # Metadata that decides when the object GOES is reserved too, but only its
+    # additions. A finalizer added by a non-operator stalls the operator's
+    # teardown for as long as its author likes; an ownerReference added to an
+    # object that does not exist lets the garbage collector delete it. Removals
+    # are admitted, which is all the garbage collector and the namespace
+    # controller ever do.
+    - name: addedFinalizer
+      expression: "has(object.metadata.finalizers) && object.metadata.finalizers.exists(f, oldObject == null || !has(oldObject.metadata.finalizers) || !(f in oldObject.metadata.finalizers))"
+    - name: addedOwner
+      expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, oldObject == null || !has(oldObject.metadata.ownerReferences) || !oldObject.metadata.ownerReferences.exists(p, p.uid == o.uid && p.apiVersion == o.apiVersion && p.kind == o.kind && p.name == o.name))"
+    # And `immutable`, either way: set, it freezes a key set against revocation;
+    # the API server refuses to unset it, so that direction is its guard, not ours.
+    - name: touched
+      expression: "oldObject == null || (has(object.data) ? object.data : {}) != (has(oldObject.data) ? oldObject.data : {}) || (has(object.binaryData) ? object.binaryData : {}) != (has(oldObject.binaryData) ? oldObject.binaryData : {}) || (has(object.metadata.labels) ? object.metadata.labels : {}) != (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}) || (has(object.immutable) ? object.immutable : false) != (has(oldObject.immutable) ? oldObject.immutable : false) || variables.addedFinalizer || variables.addedOwner"
+  validations:
+    - expression: "!variables.labelled || !variables.touched || variables.writer"
+      message: "ConfigMaps labelled assayd.dev/api-keys in assayd run namespaces mint gateway principals; only the assayd operator and the identities in admission.apiKeyWriters may write them (design 03 §3.4.4)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: assayd-api-keys
+  labels:
+    {{- include "assayd.labels" . | nindent 4 }}
+spec:
+  policyName: assayd-api-keys
+  validationActions: ["Deny"]

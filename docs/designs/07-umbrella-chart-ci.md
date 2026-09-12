@@ -1,6 +1,6 @@
 # Design 07: Umbrella chart, profiles, e2e CI
 
-- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A6 below; A5 (2026-09-03), A6 (2026-09-09), A6.10 (2026-09-10), A6.11, A6.12 and A6.13 (2026-09-11) not yet critiqued
+- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A6 below; A5 (2026-09-03), A6 (2026-09-09), A6.10 (2026-09-10), A6.11, A6.12 and A6.13 (2026-09-11), and A6.14 (2026-09-12) not yet critiqued
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0002 (rules 5/6), 0012 (ambient profile), NFR-1/3/7/8 · interfaces: every P1 design (it packages them)
 
@@ -306,7 +306,7 @@ One observation for design 02 and design 10 rather than for here: with the opera
 
 The mechanism is agentgateway's own, hand-authored: `AgentgatewayPolicy` with `traffic.apiKeyAuthentication` reading a ConfigMap of `sha256:` key hashes with arbitrary `metadata`, and `traffic.authorization` carrying one CEL rule, `apiKey.group == "trusted"`. The policy lives in the run namespace because `targetRefs` "must be in the same namespace as the policy" — which is where design 03 §3.2 already puts it, **for the same reason and not a different one**: its table gives "a policy attaches to a route; they cannot be split across namespaces" (`03:161`). The `ReferenceGrant` argument belongs to the `HTTPRoute` row above it, not to this one; an earlier version of this paragraph attached it here and called design 03's reason unrelated when it is the same constraint measured from the other side.
 
-**Nothing in assayd emits any of this, before or after.** No compiler exists, design 03 stays RE-OPENED, and no `agentgatewaypolicies` RBAC is granted. What has changed is that the mapping a compiler will have to produce is now known to be one the gateway honours.
+**Nothing in assayd emits any of this, before or after.** No compiler exists, design 03 stays RE-OPENED, and no `agentgatewaypolicies` RBAC is granted. *(Superseded by A6.14 for the RBAC: the operator now holds `get`, `list`, `watch` and `delete` on them, and still emits none.)* What has changed is that the mapping a compiler will have to produce is now known to be one the gateway honours.
 
 Measured, and each distinction is load-bearing:
 
@@ -358,7 +358,7 @@ ADR-0030 step 3 says: *first author and execute the exact resources; then encode
 - **The hostname is a FLAG, `--gateway-hostname-suffix`, default `assayd.internal`.** No design settles it: §3.2 fixes where the route lives and what names the object and is silent on the host it matches. It is a routing key matched against the `Host` header, not an address — nothing in the chart creates DNS for it, and `values.yaml` says so.
 - **`gateway.enabled: true` with the Gateway API CRDs absent makes the operator REFUSE TO START.** §3.1's table asks for `GatewayIncompatible=CRDsAbsent` on each Agent, withholding `Ready`. That is not implemented; what is implemented is the same fail-closed answer one layer earlier and considerably louder. `NOTES.txt` was claiming the condition — a bound no code enforced, rule 7 — and now says what the code does. Registering a cluster-wide HTTPRoute watch against an absent CRD is what would otherwise fail, deep inside the cache and after the process reported healthy. `hack/e2e.sh` consequently installs Gateway API **before** the chart.
 
-**What is NOT emitted, and the sentence A6.5 wrote still stands for all of it.** No `AgentgatewayPolicy`. No `AgentgatewayBackend`. No budget, no rate limit, no gateway authentication, no tool allowlist. `agentgatewaypolicies` and `agentgatewaybackends` remain ungranted in RBAC, correctly, because a verb granted ahead of its code is rule 7 in RBAC form. The weighted two-backend route (`TestWeightZeroActuallyContains`), the MCP tools route and the authorization policy are still hand-authored, because nothing emits those.
+**What is NOT emitted, and the sentence A6.5 wrote still stands for all of it.** No `AgentgatewayPolicy`. No `AgentgatewayBackend`. No budget, no rate limit, no gateway authentication, no tool allowlist. `agentgatewaypolicies` and `agentgatewaybackends` remain ungranted in RBAC, correctly, because a verb granted ahead of its code is rule 7 in RBAC form. *(Superseded for `agentgatewaypolicies` by A6.14, which grants the verbs the operator now calls, and no others.)* The weighted two-backend route (`TestWeightZeroActuallyContains`), the MCP tools route and the authorization policy are still hand-authored, because nothing emits those.
 
 **So turning the gateway on publishes a path and enforces nothing, and the Agent says so.** `GovernanceSkipped` stays `True` with the gateway enabled, under reason `PolicyCompilerAbsent`; `GatewayDisabled` is §3.1's own word for the off row. Design 03 §3.1's table pairs the condition only with `gateway.enabled: false` and is silent on the enabled row, which reads as though the flag makes governance real. It does not, and `GovernanceSkipped=False` would be the loud-and-wrong of rule 8 on the exact claim the platform is built on. The condition is classified **normal-true** — owned and sticky — exactly as §3.1 requires, so it flips to `False` rather than vanishing when a compiler finally exists.
 
@@ -546,3 +546,29 @@ So one agent completes one A2A task *and* one MCP tool call, both through the ga
 
 The first four survived before the fake server was made strict, and all seven compile. The first two rows fail the tool tests because the strict fake refuses the request outright.
 
+### A6.14 (2026-09-12) — the chart's half of design 03's first-slice operator wiring
+
+Design 03 A70 implements the operator wiring its first slice needs (03 §1.1). Four parts of it are this design's: two grants, two admission policies, and two values. They are recorded here in this design's terms, because A5.7's RBAC table and A5.9's list of policies no longer describe what the chart renders.
+
+**RBAC (extends A5.7).**
+
+| Grant | Why | Scope |
+|---|---|---|
+| `agentgatewaypolicies` (`agentgateway.dev`): `get`, `list`, `watch`, `delete` | the operator watches each Agent's `<agent>-auth`, reads it live on teardown and on a NACK, and deletes it after the route | the generated ClusterRole, because run namespaces are created at run time. **No `create`, `update` or `patch`**: nothing writes a policy yet |
+| `events` (core): `list`, `watch` | the watch on the gateway's `AgentGatewayNackError` Warning Events (design 03 §3.3) | a Role and RoleBinding in `gateway.namespace`, rendered only with `gateway.enabled`. The ClusterRole keeps `create`, `patch` and nothing more |
+
+**Admission (extends A5.9).** Two more policies and bindings are rendered on every install. Each has `failurePolicy: Fail` and its identities inline, and each matches only namespaces labelled `assayd.dev/run-namespace: "true"`, a label A5.9's first policy reserves:
+
+- `assayd-gateway-policies`. A `CREATE` of an `AgentgatewayPolicy`, or an `UPDATE` that changes its `spec` or labels or adds a finalizer or an ownerReference, is admitted only from the identities A5.9's route policy admits: the operator and `admission.extraOperators`. It matches nothing until agentgateway's CRDs are installed.
+- `assayd-api-keys`. The same rule applies to a `ConfigMap` carrying `assayd.dev/api-keys`, with any value, on the old object or the new one. The reserved content is `data`, `binaryData`, labels and `immutable`, with any added finalizer or ownerReference, and `admission.apiKeyWriters` is admitted as well as the operators.
+
+An `UPDATE` that changes none of the reserved content is admitted. The garbage collector removes the `foregroundDeletion` and `orphan` finalizers by `UPDATE`, and a first version that refused it left the object Terminating forever. `DELETE` is not matched, as A6.10 records for routes.
+
+**Values.**
+
+- `admission.apiKeyWriters`, with `users` and `groups`, and by default `groups: [system:masters]`. It names who besides the operator may write a key set, which design 03 §3.4.4 says an administrator writes. kubeadm's admin kubeconfig, which kind uses, is in `kubeadm:cluster-admins`, not `system:masters`, and has to be listed.
+- `gateway.servingUrl`, rendered as `--gateway-serving-url`: the Gateway's serving listener. The operator validates it when it is set, and nothing reads it until design 03's compiler probes there.
+
+**Measured.** In envtest, against the chart's own rendered policies (`test/envtest/admission_reservation_test.go`). And on k3d (`test/e2e/reservation_test.go`), which also checks both grants by SubjectAccessReview: that `events` cannot be read outside the Gateway's namespace, and that `agentgatewaypolicies` cannot be written.
+
+**Not done.** The chart still ships no Gateway (A1), so `gateway.namespace` names one the harness creates.

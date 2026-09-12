@@ -85,6 +85,28 @@ and every request 404s with no other signal:
   allowedRoutes: {namespaces: {from: Selector,
     selector: {matchLabels: {assayd.dev/run-namespace: "true"}}}}
 
+The Gateway's namespace must exist before this chart is installed: the
+operator's read of the gateway's NACK Events is a Role rendered into it, and
+`helm install` fails if the namespace is missing.
+
+Upgrading an install that already runs with `gateway.enabled: true` on a
+cluster that does not serve the agentgateway CRDs: the operator now REFUSES TO
+START there, because it requires `AgentgatewayPolicy` to be served as well as
+`HTTPRoute` (design 03 §3.1). Install agentgateway's CRDs, or set
+`gateway.enabled: false`.
+
 The host above is a routing key matched against the `Host` header. Nothing here
 creates DNS for it.
+{{- if .Values.gateway.servingUrl }}
+
+`gateway.servingUrl` is set to {{ .Values.gateway.servingUrl }}. The operator
+checks its form at startup and uses it for nothing else: no policy compiler
+runs, so nothing is probed there.
 {{- end }}
+{{- end }}
+
+In every run namespace, admission reserves two more writes (design 03 §6):
+an AgentgatewayPolicy may be written only by the operator, and a ConfigMap
+labelled `assayd.dev/api-keys` only by the operator and the identities in
+`admission.apiKeyWriters` (by default, the `system:masters` group). The
+operator writes neither yet, because no policy is emitted.

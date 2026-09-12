@@ -158,8 +158,10 @@ func applyAPIKeys(t *testing.T, ctx context.Context, runNS string, keys map[stri
 		},
 		Data: data,
 	}
+	// Written as the administrator design 03 §3.4.4 says writes key sets:
+	// assayd-api-keys refuses anyone else in a run namespace.
 	_ = k8s.Delete(ctx, cm)
-	if err := k8s.Create(ctx, cm); err != nil {
+	if err := keyAdminClient(t).Create(ctx, cm); err != nil {
 		t.Fatalf("write the API key set: %v", err)
 	}
 	t.Cleanup(func() { _ = k8s.Delete(context.Background(), cm) })
@@ -200,9 +202,13 @@ func applyAuthzPolicy(t *testing.T, ctx context.Context, runNS, wl, expr string)
 			},
 		}}
 	}
+	// Written under the operator's username, because assayd-gateway-policies
+	// admits nobody else in a run namespace (design 03 §6). The harness stands
+	// in for the writer that does not exist yet; see policyAuthorClient.
+	// Deletes need no such identity: the reservation matches CREATE and UPDATE.
 	p := build()
 	_ = k8s.Delete(ctx, build())
-	if err := k8s.Create(ctx, p); err != nil {
+	if err := policyAuthorClient(t).Create(ctx, p); err != nil {
 		t.Fatalf("apply the authorization policy: %v", err)
 	}
 	t.Cleanup(func() { _ = k8s.Delete(context.Background(), build()) })

@@ -27,3 +27,45 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "assayd.operator.name" . }}
     namespace: {{ .Values.namespace }}
+{{- if .Values.gateway.enabled }}
+{{- $gwNS := .Values.gateway.namespace | default .Values.namespace }}
+---
+# Design 03 §3.3: a dataplane NACK is a Warning Event on the Gateway, reason
+# AgentGatewayNackError, and it is the ONLY observable of a rejected config
+# (research/agentgateway-v1.4.1-spike.md §2.8). The operator watches for it in
+# the Gateway's namespace, so the grant is a Role there, not a cluster-wide read
+# of every Event in the cluster, which is what adding the verbs to the
+# generated ClusterRole would have granted.
+#
+# `list` and `watch` only: the watch is served from a cache, and nothing reads
+# one Event by name. Rendered only with gateway.enabled, because the watch is
+# registered only then, and a verb granted ahead of its consumer is standing
+# privilege (design 03 §3.2).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "assayd.operator.name" . }}-gateway-events
+  namespace: {{ $gwNS }}
+  labels:
+    {{- include "assayd.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "assayd.operator.name" . }}-gateway-events
+  namespace: {{ $gwNS }}
+  labels:
+    {{- include "assayd.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "assayd.operator.name" . }}-gateway-events
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "assayd.operator.name" . }}
+    namespace: {{ .Values.namespace }}
+{{- end }}

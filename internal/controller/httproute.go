@@ -67,6 +67,12 @@ type GatewayConfig struct {
 	// on the hostname the route matches, so this is assayd's choice and is
 	// stated as one rather than presented as the design's.
 	HostnameSuffix string
+	// ServingURL is --gateway-serving-url: the base URL of the Gateway's
+	// serving listener, where design 03 §3.3.3's anonymous probe goes. NOTHING
+	// READS IT YET: no compiler runs, so nothing probes. NewAgentReconciler
+	// checks its form when it is set and does not require it, because §3.3.3
+	// requires it only "whenever the compiler runs".
+	ServingURL string
 }
 
 // DefaultGatewayHostnameSuffix is what an install gets when it says nothing.
@@ -516,12 +522,20 @@ func routeCollision(agent *assaydv1alpha1.Agent, existing *gatewayv1.HTTPRoute) 
 func (r *AgentReconciler) ownedRoutes(
 	ctx context.Context, agent *assaydv1alpha1.Agent, runNS string,
 ) ([]gatewayv1.HTTPRoute, error) {
+	return r.listOwnedRoutes(ctx, r.Client, agent, runNS)
+}
+
+// listOwnedRoutes is ownedRoutes through a reader of the caller's choosing.
+// Teardown reads through the uncached one (revokeGateway).
+func (r *AgentReconciler) listOwnedRoutes(
+	ctx context.Context, from client.Reader, agent *assaydv1alpha1.Agent, runNS string,
+) ([]gatewayv1.HTTPRoute, error) {
 	name, err := compiler.ServingRouteName(agent.Name)
 	if err != nil {
 		return nil, err
 	}
 	var list gatewayv1.HTTPRouteList
-	if err := r.List(ctx, &list,
+	if err := from.List(ctx, &list,
 		client.InNamespace(runNS),
 		client.MatchingLabels{LabelAgent: agent.Name},
 	); err != nil {
