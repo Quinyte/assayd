@@ -11,12 +11,17 @@
 package envtest
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -54,7 +59,58 @@ func gatewayAPICRDDir() (string, error) {
 	return dir, nil
 }
 
+// agentgatewayCRDDir extracts the AgentgatewayPolicy CRD from the agentgateway
+// chart test/conformance vendors and pins by digest, into a directory envtest
+// installs from. The same artifact rather than a second copy here, which could
+// drift from the one whose contract the conformance suite reads.
+//
+// Only that CRD: it is the one agentgateway kind the operator touches (the
+// slice's `<agent>-auth`), and with the gateway enabled the finalizer reads
+// it, so a control plane without it could delete no Agent.
+func agentgatewayCRDDir() (string, error) {
+	raw, err := os.ReadFile(filepath.Join("..", "conformance", "testdata", "agentgateway-crds-1.4.1.tgz"))
+	if err != nil {
+		return "", fmt.Errorf("read the pinned agentgateway chart: %w", err)
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return "", fmt.Errorf("open the pinned agentgateway chart: %w", err)
+	}
+	const want = "agentgateway.dev_agentgatewaypolicies.yaml"
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return "", fmt.Errorf("the pinned agentgateway chart carries no %s", want)
+		}
+		if err != nil {
+			return "", fmt.Errorf("read the pinned agentgateway chart: %w", err)
+		}
+		if path.Base(h.Name) != want {
+			continue
+		}
+		b, err := io.ReadAll(tr)
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", want, err)
+		}
+		dir, err := os.MkdirTemp("", "assayd-envtest-agentgateway-")
+		if err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(filepath.Join(dir, want), b, 0o600); err != nil {
+			return "", err
+		}
+		return dir, nil
+	}
+}
+
 var (
+	// gatewayCRDs and agentgatewayCRDs are the directories the control plane
+	// installed from, kept so that a test can start a second control plane
+	// with one set and not the other.
+	gatewayCRDs      string
+	agentgatewayCRDs string
+
 	cfg    *rest.Config
 	k8s    client.Client
 	scheme = runtime.NewScheme()
@@ -82,11 +138,15 @@ func TestMain(m *testing.M) {
 	// failure rather than a silently gateway-less control plane.
 	gwCRDs, err := gatewayAPICRDDir()
 	must(err, "locate the Gateway API CRDs")
+	gatewayCRDs = gwCRDs
+	agentgatewayCRDs, err = agentgatewayCRDDir()
+	must(err, "extract the AgentgatewayPolicy CRD")
 
 	env := &envtest.Environment{
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "config", "crd"),
 			gwCRDs,
+			agentgatewayCRDs,
 		},
 		ErrorIfCRDPathMissing: true,
 	}
@@ -104,6 +164,7 @@ func TestMain(m *testing.M) {
 		"create the operator namespace")
 
 	code := m.Run()
+	_ = os.RemoveAll(agentgatewayCRDs)
 
 	if err := env.Stop(); err != nil {
 		fmt.Fprintf(os.Stderr, "envtest: stop control plane: %v\n", err)

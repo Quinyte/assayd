@@ -315,9 +315,13 @@ GWEOF
     exit 1
   fi
   export ASSAYD_E2E_GATEWAY_URL="http://${GW_SVC}.${GATEWAY_NS}.svc.cluster.local:8081"
+  # gateway.servingUrl names the `http` listener each <agent>-serving route
+  # attaches to, where design 03's probe will go. Nothing reads it yet; setting
+  # it here runs the operator's startup check of its form on every k3d run.
   GATEWAY_SETTINGS=(--set gateway.enabled=true --set gateway.name=assayd
     --set gateway.hostnameSuffix=assayd.internal
-    --set gateway.url="${ASSAYD_E2E_GATEWAY_URL}")
+    --set gateway.url="${ASSAYD_E2E_GATEWAY_URL}"
+    --set gateway.servingUrl="http://${GW_SVC}.${GATEWAY_NS}.svc.cluster.local:8080")
   export ASSAYD_E2E_GATEWAY_HOSTNAME_SUFFIX="assayd.internal"
   echo "    gateway: ${GATEWAY_NS}/assayd, listener admits assayd.dev/run-namespace=true"
 else

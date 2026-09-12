@@ -99,6 +99,13 @@ func run() error {
 		"appended to <agent>.<agent-namespace> to form the hostname an emitted route matches. No "+
 			"design settles this, so it is assayd's choice and configurable. It is a ROUTING KEY "+
 			"matched against the Host header, not an address: nothing here creates DNS for it")
+	flag.StringVar(&gateway.ServingURL, "gateway-serving-url", "",
+		"base URL of the Gateway's SERVING listener, the one each Agent's <agent>-serving route "+
+			"attaches to -- not --gateway-url, which names the egress listener. Design 03 §3.3.3 "+
+			"sends the policy compiler's anonymous 401 probe here. NOT USED and NOT REQUIRED yet: no "+
+			"compiler runs in this build, so nothing probes, and the design requires the flag only "+
+			"once one does. When set it must be an absolute http(s) URL naming a host and port and "+
+			"nothing else, or the operator refuses to start")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metric endpoint binds to")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "address the probe endpoint binds to")
 	flag.BoolVar(&leaderElect, "leader-elect", true,
