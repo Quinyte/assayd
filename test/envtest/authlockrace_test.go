@@ -48,6 +48,45 @@ func TestALostRaceInAJ2LockPastItsDeadlineWithholdsReady(t *testing.T) {
 	}
 }
 
+// ProbingAfter takes no answer while a foreign traffic policy stands, and that
+// is not redundant with Publishing's wait: a 401 the foreign policy produced
+// would move the Create to Publishing, and once the foreign policy went,
+// Publishing would publish on no 401 of the operator's own policy. So the
+// Create stays in ProbingAfter, and after the foreign policy goes it probes
+// again (§3.2, §3.3.3).
+func TestAForeignPoliciesAnswerIsNeverTakenForTheCreates(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "foreignanswer", nil)
+	r, stub := createReconciler()
+	stub.hold("foreignanswer", true) // the operator's policy is not taken
+	promote(t, r, a)
+	acceptRoute(t, ns, "foreignanswer")
+	acceptPolicy(t, ns, "foreignanswer")
+	reconcileOnce(t, r, a)
+	if tx := txOf(t, a); tx.Stage != "ProbingAfter" {
+		t.Fatalf("want ProbingAfter: %+v", tx)
+	}
+	p := authPolicyFor(t, liveAgent(t, a))
+	p.SetName("intruder")
+	p.SetLabels(nil)
+	if err := k8s.Create(context.Background(), p); err != nil {
+		t.Fatalf("plant the foreign policy: %v", err)
+	}
+	stub.foreignAnswers("foreignanswer", true)
+	reconcileOnce(t, r, a)
+	if tx := txOf(t, a); tx.Stage != "ProbingAfter" {
+		t.Fatalf("a 401 a foreign policy may have produced moved the Create to %s", tx.Stage)
+	}
+	if err := k8s.Delete(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	stub.foreignAnswers("foreignanswer", false)
+	reconcileOnce(t, r, a)
+	if routePublished(t, ns, "foreignanswer") {
+		t.Fatal("the route was published on no 401 of the operator's own policy")
+	}
+}
+
 // Review MINOR 2: a route not yet published is not published while a foreign
 // traffic policy stands (§3.2), whichever stage saw it. Publishing waits too:
 // a 401 taken before the foreign policy landed, and a none route, which runs

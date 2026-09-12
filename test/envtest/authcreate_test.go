@@ -60,11 +60,21 @@ type stubProber struct {
 	last     map[string]int
 	override map[string]int
 	servedBy map[string]string
+	// foreign makes a policy the operator did not emit answer 401 at any
+	// path, as a foreign traffic policy on the route would (§3.2).
+	foreign map[string]bool
 }
 
 func newStubProber() *stubProber {
 	return &stubProber{held: map[string]bool{}, probes: map[string]int{}, last: map[string]int{},
-		override: map[string]int{}, servedBy: map[string]string{}}
+		override: map[string]int{}, servedBy: map[string]string{}, foreign: map[string]bool{}}
+}
+
+// foreignAnswers makes a foreign policy answer every probe of agent with 401.
+func (s *stubProber) foreignAnswers(agent string, on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.foreign[agent] = on
 }
 
 // backendOverride makes the card path on a published route answer code, or,
@@ -135,8 +145,11 @@ func (s *stubProber) answer(ctx context.Context, name, ns, path string) (int, st
 		return 0, "", err
 	}
 	s.mu.Lock()
-	held, override, servedBy := s.held[name], s.override[name], s.servedBy[name]
+	held, override, servedBy, foreign := s.held[name], s.override[name], s.servedBy[name], s.foreign[name]
 	s.mu.Unlock()
+	if foreign {
+		return 401, "", nil
+	}
 	stored := controller.NewAgentgatewayPolicy()
 	if err := k8s.Get(ctx, client.ObjectKeyFromObject(golden), stored); err == nil {
 		if d, err := compiler.Digest(stored); err == nil && d == want && !held {
