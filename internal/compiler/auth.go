@@ -334,7 +334,9 @@ func admitGroupExpression(group string) (string, error) {
 // whole of `spec`. Everything else is excluded, so a server-populated field, a
 // label or annotation someone else added, or `status` does not move it. The
 // Agent's UID is one of the labels, so a recreated Agent — a new UID — has a
-// new digest for the same spec; it also has no `status.auth` to compare with.
+// new digest for the same spec. A recreated Agent normally has no `status.auth`
+// to compare with; a restore that brings status back under a new UID does, and
+// design 03 A69 leaves that comparison to the code that writes it.
 //
 // The serialization is Go's encoding/json of that projection. It writes object
 // keys in sorted order and no insignificant whitespace, so it does not depend

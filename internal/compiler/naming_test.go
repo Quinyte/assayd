@@ -160,3 +160,26 @@ func TestThePolicyTargetsTheRouteTheEmitterNames(t *testing.T) {
 		}
 	}
 }
+
+// TestTheTruncatedNameIsPinnedByteForByte pins the bytes a long name truncates
+// to, so no refactor renames a resource the operator already emitted. The
+// expected values were computed outside this package, from §3.2's rule: keep
+// what fits of the name, trim a trailing '-', then append the tail and 16 hex
+// of SHA-256 over the WHOLE untruncated name, tail included. Each value fails
+// if the hash is shortened, taken over the name alone, or the trim is dropped.
+func TestTheTruncatedNameIsPinnedByteForByte(t *testing.T) {
+	for _, c := range []struct{ name, concern, want string }{
+		{strings.Repeat("a", 60), ConcernServing, strings.Repeat("a", 38) + "-serving-463ff832ba9d2a0d"},
+		{strings.Repeat("a", 60), ConcernAuth, strings.Repeat("a", 41) + "-auth-72772c4bc9151db2"},
+		// The kept prefix ends in '-', which the rule trims before the tail.
+		{strings.Repeat("x", 37) + "-" + strings.Repeat("y", 30), ConcernServing, strings.Repeat("x", 37) + "-serving-a76b2da5be413331"},
+	} {
+		got, err := EmittedName(c.name, c.concern, "")
+		if err != nil {
+			t.Fatalf("EmittedName(%q, %q): %v", c.name, c.concern, err)
+		}
+		if got != c.want {
+			t.Errorf("EmittedName(%q, %q) = %q, want %q: an emitted name changed, which renames a resource the operator already wrote", c.name, c.concern, got, c.want)
+		}
+	}
+}

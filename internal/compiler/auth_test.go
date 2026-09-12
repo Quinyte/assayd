@@ -42,7 +42,7 @@ const goldenHeader = "# SPDX-FileCopyrightText: 2026 Quinyte\n" +
 	"#\n" +
 	"# GOLDEN FILE, rendered by the code under test. Regenerate with\n" +
 	"#   go test ./internal/compiler -run Golden -update\n" +
-	"# and read the diff: this is the exact object the gateway is handed.\n"
+	"# and read the diff: this is the exact object the gateway would be handed once the compiler is wired.\n"
 
 // assertGolden compares a rendered object with its committed golden file. The
 // comparison is of the whole file, byte for byte, so a field added, removed or
@@ -98,10 +98,6 @@ const goldenPaymentsDigest = "sha256:9427a5ab34ea9849ba2acd708ab3d1cbe83003b7955
 // (a) §8.1's first unit golden: `auth: apikey`, with no `allowedGroups` (the
 // field does not exist in the slice), in namespace `payments`, compiles to the
 // namespace group's policy — §3.4.4's example, verbatim in shape.
-//
-// `apikey` is not yet a CRD value (design 02 owes the enum, §3.4.4), so this
-// Agent cannot be stored today. The compiler is pure, and takes the value the
-// slice will admit.
 func TestGoldenAnAPIKeyAgentCompilesToItsNamespaceGroup(t *testing.T) {
 	target, err := CompileAuth(paymentsAgent(apikey()), paymentsRunNS)
 	if err != nil {
