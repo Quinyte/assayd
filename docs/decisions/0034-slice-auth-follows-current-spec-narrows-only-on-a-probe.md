@@ -1,6 +1,6 @@
 # ADR-0034: The slice's gateway auth is one API-key policy per Agent that follows the current spec, and it narrows in place only on a probe
 
-- **Status**: accepted · 2026-09-11 · **supersedes ADR-0033** (including its Amendment 1). Decided by the human in three rounds: on `reviews/03-a52-recritique.md` (target, input, `Adopt`), on `reviews/03-a53-critique.md` (A1, B2, C2), and on `reviews/03-a54-critique.md` (D2, E2, F2). Design 03 A55 writes the last three in. · **Amended 2026-09-11 (Amendment 1)**: two clauses of D2 are re-attributed to design 03's author, and the human's G, H2 and I1 are recorded. · **Amended 2026-09-12 (Amendment 2)**: the human's J2 is recorded. · **Amended 2026-09-12 (Amendment 3)**: the human's decision that `Adopt` stays refused is recorded, with its reason, consent.
+- **Status**: accepted · 2026-09-11 · **supersedes ADR-0033** (including its Amendment 1). Decided by the human in three rounds: on `reviews/03-a52-recritique.md` (target, input, `Adopt`), on `reviews/03-a53-critique.md` (A1, B2, C2), and on `reviews/03-a54-critique.md` (D2, E2, F2). Design 03 A55 writes the last three in. · **Amended 2026-09-11 (Amendment 1)**: two clauses of D2 are re-attributed to design 03's author, and the human's G, H2 and I1 are recorded. · **Amended 2026-09-12 (Amendment 2)**: the human's J2 is recorded. · **Amended 2026-09-12 (Amendment 3)**: the human's decision that `Adopt` stays refused is recorded, with its reason, consent. · **Amended 2026-09-12 (Amendment 4)**: the human approved design 03's first slice and decided K2.
 - **Context**: ADR-0033 was titled "the compiler refuses to tighten a live route". Its Amendment 1 made the policy tighten in place, so the title stated a reversed decision. AGENTS.md says a reversed decision gets a superseding ADR, so this one records the whole current set in one place. The fourth critique of design 03 found three more defects that were decisions and not corrections:
   - a key-source change cut every old-source key fleet-wide at once;
   - a disjoint group change passed through a window in which every caller was refused, and the design called that window bounded;
@@ -64,5 +64,15 @@ Nothing in this amendment is implemented.
 
 - **Deleting an `Adopt`ed Agent's route does not lock it.** The route is re-created as before, unauthenticated, and the refusal holds (design 03 §3.3.3). This follows from the decision above, but the human did not take it.
 - **Abandonment, beside I1.** Design 03 A58 abandons a `Create` or J2 `Lock` that has not reached `Served` when the desired mode changes. It deletes the policy that transaction wrote, which `status.auth` never recorded as served. I1 says a served Agent keeps its last good `-auth`, and that the sweep never deletes it on a compile failure. The two do not meet. The deletion is keyed on the unfinished transaction's own record of its write. It never touches a policy `status.auth` records as served, or a policy `status.auth` does not mention. So a `Lock` abandoned by an edit to `oauth` returns to the recorded `mode: none`, which is that Agent's last good `-auth`.
+
+Nothing in this amendment is implemented.
+
+## Amendment 4 (2026-09-12, the human's approval of design 03's first slice, and K2)
+
+**The human approved design 03's first slice for implementation on 2026-09-12.** Approval came after the thirteenth critique returned PASS on it (`reviews/03-a63-critique.md`: 0 BLOCKER, 0 MAJOR, 3 MINOR), and after A64 folded in those minors. Only §1.1's slice is approved. The rest of design 03 is not.
+
+**K2: an owner's edit to `apikey` is consent, and ends `Adopt`'s refusal.** The owner of an `Adopt`ed Agent who edits `auth: none` → `apikey` asked for the route to be closed. Amendment 3's reason for refusing `Adopt`, that nobody asked, does not cover them. So the edit takes the Agent through J2's `Lock`, and it is trusted only after an anonymous `200` → `401`. `Adopt` otherwise stays refused, as Amendment 3 decided.
+
+**Not the human's.** Design 03 A65 reads K2 as covering an edit observed after the refusal, from whatever mode the refusal recorded. An Agent whose spec already said `apikey` when it was first refused stays refused. That reading is the author's, recorded here so that this ADR is not read as deciding it.
 
 Nothing in this amendment is implemented.
