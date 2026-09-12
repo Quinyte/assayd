@@ -102,11 +102,12 @@ func TestTheGatewayIsTheOnlyWayIn(t *testing.T) {
 	// own, which was correct while nothing emitted routes; keeping it now would
 	// leave two routes to one agent, and the one this test measured would not be
 	// the one a real install serves.
-	route := waitForEmittedRoute(t, ctx, name, 2*time.Minute)
+	route := waitForPublishedRoute(t, ctx, name, 3*time.Minute)
 	assertRouteAccepted(t, ctx, route, wl)
 	host := emittedHostname(t, name, "assayd-e2e")
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
-	body := httpInClusterHost(t, ctx, "npgw",
+	ensureAPIKeys(t, ctx)
+	body := askThroughGateway(t, ctx, "npgw",
 		fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gwSvc, gwNS)+a2aSendMessage,
 		host, sendMessage("through the only way in"))
 	if agent, _ := completedTask(t, body); agent != name {

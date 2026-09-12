@@ -12,12 +12,12 @@
 //     and its digest (§3.3's `targetDigest` and `appliedDigest`);
 //   - the `auth: none` route marker of §3.3.1.
 //
-// **Nothing calls the policy renderer outside tests, and nothing in assayd
-// emits an AgentgatewayPolicy.** The reconciler wiring, the `Create` and `Lock`
-// transactions, their probes, `status.auth`, the watches, and the
-// `agentgatewaypolicies` RBAC are all still owed (§1.1). Until they land, a
-// gateway-enabled install serves every Agent unauthenticated, exactly as
-// before this package existed.
+// **The agent-operator emits what this renders**, through the `Create`
+// transaction in internal/controller/authtxn.go: a new Agent's route is
+// published only after its `<agent>-auth` enforces (§3.3.3). `Lock`, the
+// abandonment of an unfinished transaction, the prepared re-create of a
+// deleted route, and `Adopt`'s record are still owed (§1.1), so a route this
+// operator did not publish through a `Create` is not governed by it.
 //
 // **One dependency is load-bearing here: cel.dev/cel-go** (Apache-2.0; the
 // module was github.com/google/cel-go until v0.32.0 moved it). §3.4.2 requires

@@ -224,7 +224,8 @@ func TestAnAgentCompletesATaskByCallingAToolThroughTheGateway(t *testing.T) {
 	t.Cleanup(func() { _ = k8s.Delete(context.Background(), a) })
 	wl := controller.WorkloadName(name, revision.MustHash(a.Spec))
 	waitAvailable(t, ctx, wl, 4*time.Minute)
-	assertRouteAccepted(t, ctx, waitForEmittedRoute(t, ctx, name, 2*time.Minute), wl)
+	assertRouteAccepted(t, ctx, waitForPublishedRoute(t, ctx, name, 3*time.Minute), wl)
+	ensureAPIKeys(t, ctx)
 
 	// The operator's injection, read off the workload THIS run's operator
 	// rendered, before anything is asked of the agent.
@@ -249,10 +250,13 @@ func TestAnAgentCompletesATaskByCallingAToolThroughTheGateway(t *testing.T) {
 	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gatewayService(t, ctx, gwNS, gwName), gwNS) +
 		a2aSendMessage
 	host := emittedHostname(t, name, "assayd-e2e")
+	// The route is under the operator's API-key policy: wait until the gateway
+	// has read the key set, then send every task with the key.
+	askThroughGateway(t, ctx, "toolkey", url, host, sendMessage("key check"))
 	ask := func(tag, tool, text string) toolTask {
 		body := fmt.Sprintf(`{"message":{"messageId":"e2e-%d","role":"ROLE_USER","parts":[{"text":%q}],`+
 			`"metadata":{"tool":%q}}}`, time.Now().UnixNano(), text, tool)
-		return parseToolTask(t, httpInClusterHost(t, ctx, tag, url, host, body))
+		return parseToolTask(t, httpInClusterHostKey(t, ctx, tag, url, host, permittedKey, body))
 	}
 
 	// The MCP backend answers 503 until it resolves a target, and the agent

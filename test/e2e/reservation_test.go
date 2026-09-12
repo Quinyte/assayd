@@ -45,24 +45,6 @@ func keyAdminClient(t *testing.T) client.Client {
 	return c
 }
 
-// policyAuthorClient writes an AgentgatewayPolicy the way the operator will:
-// under the operator's USERNAME, which is what assayd-gateway-policies admits.
-// It also carries `system:masters`, for RBAC only, because the operator's
-// ClusterRole grants no `create` on agentgatewaypolicies until the transaction
-// that writes one lands (TestTheOperatorCannotWriteAPolicyYet). So this client
-// is the harness standing in for that writer, and nothing it does is evidence
-// the operator can write a policy.
-func policyAuthorClient(t *testing.T) client.Client {
-	t.Helper()
-	cfg := rest.CopyConfig(restCfg)
-	cfg.Impersonate = rest.ImpersonationConfig{UserName: operatorUser, Groups: []string{"system:masters"}}
-	c, err := client.New(cfg, client.Options{Scheme: k8s.Scheme()})
-	if err != nil {
-		t.Fatalf("impersonating the operator's username: %v", err)
-	}
-	return c
-}
-
 // intruderClient is a principal with every right RBAC can give it on
 // ConfigMaps and AgentgatewayPolicies in ns, so that a refusal is admission's.
 func intruderClient(t *testing.T, ctx context.Context, ns string) client.Client {
@@ -209,9 +191,11 @@ func TestPoliciesInRunNamespacesAreReservedToTheOperator(t *testing.T) {
 			t.Errorf("%s was refused, but not by assayd-gateway-policies: %v", who, err)
 		}
 	}
-	// The operator's username is admitted.
+	// The operator is admitted: its real ServiceAccount, with its real
+	// ClusterRole, which now grants `create` because the `Create` transaction
+	// writes each API-key Agent's policy.
 	p := policy()
-	if err := policyAuthorClient(t).Create(ctx, p); err != nil {
+	if err := operatorClient(t).Create(ctx, p); err != nil {
 		t.Fatalf("the operator's identity could not write a policy in its run namespace: %v", err)
 	}
 	t.Cleanup(func() { _ = k8s.Delete(context.Background(), policy()) })
@@ -229,24 +213,23 @@ func operatorMay(t *testing.T, ctx context.Context, group, resource, verb, ns st
 	return sar.Status.Allowed, sar.Status.Reason
 }
 
-// The finalizer reads and deletes an Agent's -auth policy and the watch lists
-// them, so those verbs are granted — and nothing writes one yet, so the verbs
-// that would are not (design 03 §3.2: none land ahead of the code that uses
-// them). envtest runs as admin and cannot see either half.
-func TestTheOperatorCannotWriteAPolicyYet(t *testing.T) {
+// The `Create` transaction writes each API-key Agent's -auth policy, the
+// finalizer reads and deletes it, and the watch lists them, so exactly those
+// verbs are granted. Never `patch`: the compiler writes over owned fields, not
+// by server-side apply (design 03 §3.2). envtest runs as admin and cannot see
+// either half.
+func TestTheOperatorMayWriteAPolicyAndNotPatchOne(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
 	ctx := context.Background()
-	for _, verb := range []string{"get", "list", "watch", "delete"} {
+	for _, verb := range []string{"get", "list", "watch", "create", "update", "delete"} {
 		if ok, why := operatorMay(t, ctx, "agentgateway.dev", "agentgatewaypolicies", verb, runNS); !ok {
-			t.Errorf("the operator may not %s agentgatewaypolicies in %s: %s. Teardown or the watch "+
-				"would be Forbidden on this cluster", verb, runNS, why)
+			t.Errorf("the operator may not %s agentgatewaypolicies in %s: %s. The Create "+
+				"transaction, teardown or the watch would be Forbidden on this cluster", verb, runNS, why)
 		}
 	}
-	for _, verb := range []string{"create", "update", "patch"} {
-		if ok, _ := operatorMay(t, ctx, "agentgateway.dev", "agentgatewaypolicies", verb, runNS); ok {
-			t.Errorf("the operator may %s agentgatewaypolicies, and nothing in it writes one", verb)
-		}
+	if ok, _ := operatorMay(t, ctx, "agentgateway.dev", "agentgatewaypolicies", "patch", runNS); ok {
+		t.Error("the operator may patch agentgatewaypolicies, and nothing in it patches one")
 	}
 }
 

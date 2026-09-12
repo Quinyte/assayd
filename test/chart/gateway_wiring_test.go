@@ -165,10 +165,12 @@ func TestTheKeyWritersReachTheReservation(t *testing.T) {
 	}
 }
 
-// Nothing writes a policy yet, so nothing may: the grant is the finalizer's and
-// the watch's verbs, and `create`, `update` and `patch` land with the code that
-// calls them (design 03 §3.2). No AgentgatewayBackend grant at all.
-func TestTheOperatorMayReadAndDeleteAPolicyAndNotWriteOne(t *testing.T) {
+// The grant is exactly the verbs the code calls (design 03 §3.2): the watch's
+// `list` and `watch`, the transaction's and the finalizer's `get`, the
+// `Create` transaction's `create` and `update`, and the finalizer's `delete`.
+// Never `patch`, because the compiler writes over owned fields and never by
+// server-side apply. No AgentgatewayBackend grant at all.
+func TestTheOperatorMayWriteItsPolicyAndNotPatchOne(t *testing.T) {
 	verbs := map[string][]string{}
 	for _, role := range kindsOf(render(t), "ClusterRole") {
 		for _, r := range toList(role["rules"]) {
@@ -182,7 +184,7 @@ func TestTheOperatorMayReadAndDeleteAPolicyAndNotWriteOne(t *testing.T) {
 	}
 	got := verbs["agentgateway.dev/agentgatewaypolicies"]
 	sort.Strings(got)
-	if want := []string{"delete", "get", "list", "watch"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"create", "delete", "get", "list", "update", "watch"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("the ClusterRole grants %v on agentgatewaypolicies, want exactly %v", got, want)
 	}
 	if v, ok := verbs["agentgateway.dev/agentgatewaybackends"]; ok {

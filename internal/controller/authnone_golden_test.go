@@ -47,21 +47,10 @@ func authTestAgent(auth string) *assaydv1alpha1.Agent {
 	}
 }
 
-// renderRoute renders the serving route with the shipped builder,
-// servingRouteFor, adds `extra` labels (a planted marker, for instance), and
-// sets the auth marker for `published`, which THIS TEST SUPPLIES. Which mode a
-// write publishes under is the unbuilt transaction's decision (see
-// compiler.RouteAuthLabels), so nothing here can show that an emitter passes
-// the published mode rather than the desired one. That is §8.1 case 10(a)'s to
-// prove, against the emitter, when it exists.
-//
-// The marker step is the one design 07's emitter owes: servingRouteFor does not
-// call RouteAuthLabels. Today's emitter renders no marker; `equalRoute` checks
-// only that the desired labels are present, so a planted marker survives a
-// reconcile in which nothing else drifted, and when something else does drift
-// `ensureServingRoute` replaces the labels wholesale with servingRouteFor's.
-func renderRoute(t *testing.T, agent *assaydv1alpha1.Agent, published compiler.AuthMode,
-	extra map[string]string) *gatewayv1.HTTPRoute {
+// emittedRoute renders the serving route exactly as the emitter does: the
+// publication is chosen by routePublicationFor from status.auth, and nothing
+// here supplies a mode.
+func emittedRoute(t *testing.T, agent *assaydv1alpha1.Agent, auth *assaydv1alpha1.AuthStatus) *gatewayv1.HTTPRoute {
 	t.Helper()
 	r := &AgentReconciler{Gateway: GatewayConfig{
 		Enabled: true, Name: "assayd", Namespace: "assayd-gateway",
@@ -71,24 +60,17 @@ func renderRoute(t *testing.T, agent *assaydv1alpha1.Agent, published compiler.A
 	if err != nil {
 		t.Fatalf("name: %v", err)
 	}
-	route := r.servingRouteFor(agent, RunNamespaceName(agent.Namespace), "abc1234567", name, 8080)
-	for k, v := range extra {
-		route.Labels[k] = v
-	}
-	route.Labels = compiler.RouteAuthLabels(published, route.Labels)
-	return route
+	return r.servingRouteFor(agent, RunNamespaceName(agent.Namespace), "abc1234567", name, 8080,
+		routePublicationFor(auth))
 }
 
-// An `auth: none` Agent compiles to no policy, and its serving route, published
-// under `none`, carries the marker (§3.3.1).
-//
-// **This does not satisfy §8.1's golden of the emitted route.** The emitter
-// does not apply the marker; renderRoute does, in this test, with a mode the
-// test supplies. So this pins the marker's key, value and placement on the
-// shipped route shape — not that any route in a cluster carries the label, and
-// not which mode an emitter would pass. §8.1's golden is owed when the emitter
-// renders the marker itself.
-func TestGoldenTheAuthNoneMarkerOnTheRenderedServingRoute(t *testing.T) {
+// §8.1's unit golden of the EMITTED `auth: none` route (design 03 §3.3.1): it
+// carries `assayd.dev/auth: "none"` and names its backend, and no policy
+// exists for it. The mode comes from status.auth, where the `Create` recorded
+// it, so this proves the emitter chooses the marker: at `Publishing`, before
+// status.auth records the mode, and at `Served`, once it does. PR 2's golden
+// of the same route had the test pass the mode in.
+func TestGoldenTheEmittedAuthNoneRoute(t *testing.T) {
 	agent := authTestAgent("none")
 	target, err := compiler.CompileAuth(agent, RunNamespaceName(agent.Namespace))
 	if err != nil {
@@ -99,32 +81,59 @@ func TestGoldenTheAuthNoneMarkerOnTheRenderedServingRoute(t *testing.T) {
 			"opt-out is a label on the route, never an empty policy, so it cannot fail an "+
 			"acceptance gate (§3.3.1)", target)
 	}
-
-	route := renderRoute(t, agent, compiler.AuthModeNone, nil)
-	if got := route.Labels["assayd.dev/auth"]; got != "none" {
-		t.Errorf("the route's assayd.dev/auth label is %q; §3.3.1's marker is exactly \"none\"", got)
+	for _, tc := range []struct {
+		stage string
+		auth  *assaydv1alpha1.AuthStatus
+	}{
+		{"Publishing", &assaydv1alpha1.AuthStatus{Transaction: &assaydv1alpha1.AuthTransaction{
+			Kind: TxCreate, TargetMode: "none", Stage: StagePublishing}}},
+		{"Served", &assaydv1alpha1.AuthStatus{Mode: "none"}},
+	} {
+		t.Run(tc.stage, func(t *testing.T) {
+			route := emittedRoute(t, agent, tc.auth)
+			if got := route.Labels["assayd.dev/auth"]; got != "none" {
+				t.Errorf("the emitted route's assayd.dev/auth label is %q; §3.3.1's marker is exactly "+
+					"\"none\" while the route is published unauthenticated at the owner's request", got)
+			}
+			assertRouteGolden(t, "pricer-serving-auth-none.golden.yaml", route)
+		})
 	}
-	for k, v := range map[string]string{LabelAgent: "pricer", LabelRevision: "abc1234567"} {
-		if route.Labels[k] != v {
-			t.Errorf("marking the route lost its label %s (%q, want %q)", k, route.Labels[k], v)
-		}
-	}
-	assertRouteGolden(t, "pricer-serving-auth-none.golden.yaml", route)
 }
 
-// A marker planted on the rendered route is removed when the route is
-// published under `apikey`. A route saying "deliberately unauthenticated" while
-// it is authenticated is the reverse of the lie the marker exists to prevent.
-// Like the golden above, the published mode is supplied by the test.
-func TestRouteAuthLabelsRemovesAPlantedMarkerUnderAPIKey(t *testing.T) {
-	route := renderRoute(t, authTestAgent("apikey"), compiler.AuthModeAPIKey,
-		map[string]string{"assayd.dev/auth": "none"})
-	if v, ok := route.Labels["assayd.dev/auth"]; ok {
-		t.Errorf("a route published under apikey carries assayd.dev/auth=%q; the marker is "+
-			"present only while the route is unauthenticated at the owner's request", v)
+// The route a `Create` prepares: parentRefs, no backendRefs, and no marker,
+// because nothing is published yet (§3.3). Golden, so the shape the probe's
+// `500` was measured on cannot drift silently.
+func TestGoldenThePreparedRoute(t *testing.T) {
+	route := emittedRoute(t, authTestAgent("apikey"), &assaydv1alpha1.AuthStatus{
+		Transaction: &assaydv1alpha1.AuthTransaction{Kind: TxCreate, TargetMode: "apikey", Stage: StageProbingAfter}})
+	if routePublished(route) {
+		t.Errorf("a Create short of Publishing rendered a route with backendRefs: %+v", route.Spec.Rules)
 	}
-	if route.Labels[LabelAgent] != "pricer" {
-		t.Errorf("clearing the marker lost the route's labels: %v", route.Labels)
+	if v, ok := route.Labels["assayd.dev/auth"]; ok {
+		t.Errorf("the prepared route carries assayd.dev/auth=%q; nothing is published yet", v)
+	}
+	assertRouteGolden(t, "pricer-serving-prepared.golden.yaml", route)
+}
+
+// A marker planted on a route published under apikey is drift: equalRoute
+// reports it, so the next reconcile writes the route and the marker goes.
+// equalRoute used to check only that the desired labels were present, and a
+// planted marker survived every reconcile in which nothing else drifted
+// (design 03 A69).
+func TestAPlantedMarkerIsDriftOnAnAPIKeyRoute(t *testing.T) {
+	desired := emittedRoute(t, authTestAgent("apikey"), &assaydv1alpha1.AuthStatus{Mode: "apikey"})
+	if v, ok := desired.Labels["assayd.dev/auth"]; ok {
+		t.Fatalf("an apikey route was rendered with assayd.dev/auth=%q", v)
+	}
+	planted := desired.DeepCopy()
+	planted.Labels["assayd.dev/auth"] = "none"
+	if equalRoute(planted, desired) {
+		t.Error("a route that should carry no marker, carrying `assayd.dev/auth: \"none\"`, compares " +
+			"equal to what the emitter renders, so it is never rewritten: the route says it is " +
+			"deliberately unauthenticated while it is authenticated")
+	}
+	if !equalRoute(desired.DeepCopy(), desired) {
+		t.Error("the rendered route does not compare equal to itself, so every reconcile would write it")
 	}
 }
 

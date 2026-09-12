@@ -88,12 +88,15 @@ gateway:
   # false -- what P1 ships -- means the operator emits NOTHING at the gateway and
   # puts GovernanceSkipped=GatewayDisabled on every Agent (design 03 3.1).
   #
-  # true makes the operator emit ONE resource per Agent: the serving HTTPRoute,
-  # into the run namespace, attached to the Gateway named below. It emits no
-  # AgentgatewayPolicy and no AgentgatewayBackend, because the policy compiler
-  # does not exist -- so turning this on publishes a PATH to each agent and
-  # enforces no budget, no rate limit, no authentication and no tool allowlist.
-  # The Agent still carries GovernanceSkipped, with reason PolicyCompilerAbsent.
+  # true runs design 03's first slice. The operator emits each Agent's serving
+  # HTTPRoute, into the run namespace, attached to the Gateway named below, and
+  # for a NEW Agent whose spec.expose.a2a.auth is apikey or absent, its
+  # `<agent>-auth` AgentgatewayPolicy: API keys from the ConfigMaps labelled
+  # assayd.dev/api-keys: "true" in the run namespace, admitting the group named
+  # for the Agent's namespace. That route is published only after an anonymous
+  # request through it gets 401, so `servingUrl` below is required. auth: none
+  # is published at once, unauthenticated, and says so. No AgentgatewayBackend
+  # is emitted and no budget, rate limit or tool allowlist is enforced.
   #
   # The Gateway API CRDs must be installed: with this true and them absent the
   # operator refuses to start rather than reporting everything is fine. The
@@ -123,12 +126,14 @@ gateway:
   # which names the listener agents send egress to. Design 03 3.3.3 sends the
   # compiler's anonymous `401` probe here, with the Agent's Host header.
   #
-  # Rendered as --gateway-serving-url only when set. The operator refuses to
-  # start if it is set and is not an absolute http(s) URL naming only a host and
-  # port. It is NOT required yet, and nothing reads it: design 03 makes it
-  # required "whenever the compiler runs", and no compiler runs in this release,
-  # so there is no probe to address. Setting it today changes nothing but that
-  # startup check.
+  # Rendered as --gateway-serving-url only when set. REQUIRED whenever
+  # `enabled` is true: the policy compiler runs then, and it publishes a new
+  # Agent's route only after an anonymous request sent HERE, with the Agent's
+  # Host header, gets 401 from the Agent's `<agent>-auth` policy. The operator
+  # refuses to start with the gateway enabled and this unset, and refuses a
+  # value that is not an absolute http(s) URL naming only a host and port.
+  # Whether the URL reaches the right listener is not checked: a wrong one
+  # holds every new Agent unpublished, and its Agents say so.
   servingUrl: ""
   # The namespace the Gateway object lives in, which is NOT the namespace the
   # operator runs in. Design 03 3.2 puts gateway-scoped resources in "the

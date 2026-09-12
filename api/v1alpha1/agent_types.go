@@ -409,13 +409,14 @@ type ExposeProtocol struct {
 	//   - none: an unauthenticated route.
 	//   - oauth: admitted, and not compilable until design 06 ships.
 	//
-	// NOTHING ENFORCES ANY OF THESE YET. No controller reads this value except
-	// to hash it into the revision, and the policy compiler that would turn
-	// apikey into a gateway policy does not exist. With the gateway enabled,
-	// every Agent's route is unauthenticated whatever this says, and
-	// GovernanceSkipped reports it. An Agent stored while this field defaulted
-	// carries auth: oauth whether or not a person chose it: removing a default
-	// migrates nothing.
+	// With the gateway enabled, apikey and none are enforced for a NEW Agent:
+	// apikey's route is published only after the operator's API-key policy
+	// refuses an anonymous request, and none's is published at once, labelled
+	// assayd.dev/auth: none. oauth is PolicyCompileFailed. A served Agent's
+	// mode does not change in place yet: moving between apikey and none is
+	// refused, so recreate the Agent instead (design 03 §3.3.1). An Agent stored
+	// while this field defaulted carries auth: oauth whether or not a person
+	// chose it: removing a default migrates nothing.
 	// +kubebuilder:validation:Enum=none;oauth;apikey
 	// +optional
 	Auth string `json:"auth,omitempty"`
@@ -570,10 +571,11 @@ type AgentStatus struct {
 	// separate from any per-revision record because -auth belongs to no
 	// revision: it follows the Agent's current spec.
 	//
-	// NOTHING WRITES THIS FIELD YET, so it is absent on every Agent. The schema
-	// ships first because the chart installs this CRD under crds/, which helm
-	// upgrade never updates: a status field an operator writes before its CRD
-	// carries it is pruned without an error.
+	// The operator writes it when the gateway is enabled: a Create transaction
+	// while a new Agent's -auth is being applied, and the served mode once it
+	// is. The chart installs this CRD under crds/, which helm upgrade never
+	// updates, and a status field an operator writes before its CRD carries it
+	// is pruned without an error.
 	// +optional
 	Auth *AuthStatus `json:"auth,omitempty"`
 	// Eval carries the last gate result. It is a printer column because it answers
@@ -664,8 +666,8 @@ type BudgetStatus struct {
 
 // AuthStatus is design 03 §3.3's status.auth in the first slice's subset
 // (§1.1): the served -auth mode, what the last Served transaction verified, and
-// the transaction in flight. The operator alone writes it, and nothing writes
-// it yet.
+// the transaction in flight. The operator alone writes it. The Create
+// transaction is built; Lock and Adopt are not yet.
 //
 // Three of §3.3's transaction fields are deliberately absent. targetGroups
 // and targetKeySource are filled only by a group or key-source change, and in

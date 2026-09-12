@@ -49,9 +49,13 @@ func servingRoute(t *testing.T, ns, agentName string) *gatewayv1.HTTPRoute {
 	return &rt
 }
 
+// The route-shape tests in this file use `auth: none` Agents, whose route is
+// published at once (design 03 §3.3.1): what they pin is the route, its drift
+// correction and its sweep. An API-key Agent's route is prepared and published
+// only through `Create`'s probe, and authcreate_test.go pins that.
 func TestTheOperatorEmitsTheServingRouteWhenTheGatewayIsDeclared(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "routed", nil)
+	a := noneAgent(t, ns, "routed")
 	r := newGatewayReconciler("assayd-gateway", "assayd")
 	rev := revision.MustHash(a.Spec)
 
@@ -78,6 +82,14 @@ func TestTheOperatorEmitsTheServingRouteWhenTheGatewayIsDeclared(t *testing.T) {
 			"second half is exactly this object; without it the e2e's hand-authored route is still " +
 			"the only one that has ever existed.")
 	}
+	// Converged at the Gateway, so the `Create` of `none` reaches Served and
+	// the counting below measures the steady state.
+	acceptRoute(t, ns, "routed")
+	settle(t, r, a)
+	if got := liveAgent(t, a).Status.Auth; got == nil || got.Mode != "none" || got.Transaction != nil {
+		t.Fatalf("an auth: none Agent's Create did not reach Served: status.auth=%+v", got)
+	}
+	rt = servingRoute(t, ns, "routed")
 	if got := rt.Labels[controller.LabelRevision]; got != rev {
 		t.Errorf("the route's revision label is %q, want the active %q", got, rev)
 	}
@@ -116,7 +128,7 @@ func TestTheOperatorEmitsTheServingRouteWhenTheGatewayIsDeclared(t *testing.T) {
 // a share of production traffic without a weight ever having been shifted.
 func TestTheServingRouteFollowsThePromotedRevisionAndDoesNotMultiply(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "moves", nil)
+	a := noneAgent(t, ns, "moves")
 	r := newGatewayReconciler("assayd-gateway", "assayd")
 
 	first := revision.MustHash(a.Spec)
@@ -224,7 +236,7 @@ func TestTheGatewayDeclaredOffEmitsNothingAndSaysSo(t *testing.T) {
 // delete a route it does not own.
 func TestTheSweepDeletesOnTheNameAndNotOnTheLabel(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "sweeper", nil)
+	a := noneAgent(t, ns, "sweeper")
 	r := newGatewayReconciler("assayd-gateway", "assayd")
 	rev := revision.MustHash(a.Spec)
 	reconcileOnce(t, r, a)
@@ -267,7 +279,7 @@ func TestTheSweepDeletesOnTheNameAndNotOnTheLabel(t *testing.T) {
 // outliving its Service publishes a hostname that resolves to nothing.
 func TestDeletingAnAgentRevokesItsRoute(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "revoked", nil)
+	a := noneAgent(t, ns, "revoked")
 	r := newGatewayReconciler("assayd-gateway", "assayd")
 	rev := revision.MustHash(a.Spec)
 	reconcileOnce(t, r, a)
@@ -448,7 +460,7 @@ func TestTheOperatorCorrectsDriftOnEachFieldOfTheRouteItEmitted(t *testing.T) {
 		t.Run(tc.field, func(t *testing.T) {
 			ns := newNamespace(t)
 			agentName := fmt.Sprintf("drift%d", i)
-			a := mustCreateAgent(t, ns, agentName, nil)
+			a := noneAgent(t, ns, agentName)
 			r := newGatewayReconciler("assayd-gateway", "assayd")
 			rev := revision.MustHash(a.Spec)
 			reconcileOnce(t, r, a)
@@ -534,43 +546,87 @@ func (c *refusingRouteClient) Update(ctx context.Context, o client.Object, opts 
 // unreachable through the Gateway while nothing paged. The identical defect is
 // recorded in the reconciler on the WorkloadUnavailable branch; this path
 // reintroduced it and the independent review of A6.10 caught it.
+//
+// Two halves since design 03 §3.3.1's aggregation reached this path (A71): an
+// Agent that was SERVING goes Degraded, and one whose `Create` never served
+// goes Pending. PolicyApplyIncomplete and Ready=False are the same for both,
+// and PolicyApplyIncomplete is what design 10 pages on.
 func TestARouteThatCannotBeWrittenIsALoudDegradation(t *testing.T) {
-	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "routefail", nil)
-	r := newGatewayReconciler("assayd-gateway", "assayd")
-	rev := revision.MustHash(a.Spec)
-	reconcileOnce(t, r, a)
-	reconcileOnce(t, r, a)
-	markAvailable(t, ns, controller.WorkloadName("routefail", rev), 1)
+	refuse := func(r *controller.AgentReconciler, name string) {
+		r.Client = &refusingRouteClient{
+			Client: k8s,
+			err: apierrors.NewForbidden(
+				schema.GroupResource{Group: "gateway.networking.k8s.io", Resource: "httproutes"},
+				name+"-serving", fmt.Errorf("the ClusterRole grants no httproutes")),
+		}
+	}
+	t.Run("served", func(t *testing.T) {
+		ns := newNamespace(t)
+		a := noneAgent(t, ns, "routefail")
+		r := newGatewayReconciler("assayd-gateway", "assayd")
+		rev := revision.MustHash(a.Spec)
+		reconcileOnce(t, r, a)
+		reconcileOnce(t, r, a)
+		markAvailable(t, ns, controller.WorkloadName("routefail", rev), 1)
+		settle(t, r, a)
+		acceptRoute(t, ns, "routefail")
+		settle(t, r, a)
+		if auth := liveAgent(t, a).Status.Auth; auth == nil || auth.Mode != "none" {
+			t.Fatalf("the Agent was not served before its route write was refused: %+v", auth)
+		}
+		// Drift, so the next pass must write the route.
+		rt := servingRoute(t, ns, "routefail")
+		rt.Spec.Hostnames = []gatewayv1.Hostname{"someone-else.example"}
+		if err := k8s.Update(context.Background(), rt); err != nil {
+			t.Fatal(err)
+		}
+		refuse(r, "routefail")
+		// The error reaches the caller: a route the operator could not write
+		// must retry, not be swallowed.
+		if _, err := r.Reconcile(context.Background(),
+			ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)}); err == nil {
+			t.Fatal("a refused route write returned no error, so nothing requeues and the agent " +
+				"stays unreachable through the Gateway forever")
+		}
+		live := liveAgent(t, a)
+		if live.Status.Phase != assaydv1alpha1.PhaseDegraded {
+			t.Errorf("phase is %q, want Degraded", live.Status.Phase)
+		}
+		if c := condition(live, assaydv1alpha1.CondDegraded); c == nil || c.Status != metav1.ConditionTrue {
+			t.Errorf("Degraded is %v while the phase is Degraded. The condition is owned and "+
+				"non-sticky, so a path that sets only the phase CLEARS it — and design 10 alerts on "+
+				"the condition, so this agent would be unreachable through the Gateway with nobody "+
+				"paged.", c)
+		}
+		assertRouteFailureReported(t, live)
+	})
+	t.Run("never served", func(t *testing.T) {
+		ns := newNamespace(t)
+		a := noneAgent(t, ns, "routefail")
+		r := newGatewayReconciler("assayd-gateway", "assayd")
+		reconcileOnce(t, r, a)
+		reconcileOnce(t, r, a)
+		markAvailable(t, ns, controller.WorkloadName("routefail", revision.MustHash(a.Spec)), 1)
+		refuse(r, "routefail")
+		if _, err := r.Reconcile(context.Background(),
+			ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)}); err == nil {
+			t.Fatal("a refused route write returned no error")
+		}
+		live := liveAgent(t, a)
+		if live.Status.Phase != assaydv1alpha1.PhasePending {
+			t.Errorf("phase is %q; an Agent whose Create never served is Pending (design 03 §3.3.1)",
+				live.Status.Phase)
+		}
+		if c := condition(live, assaydv1alpha1.CondDegraded); c != nil {
+			t.Errorf("Degraded is %v on an Agent that never served", c)
+		}
+		assertRouteFailureReported(t, live)
+	})
+}
 
-	r.Client = &refusingRouteClient{
-		Client: k8s,
-		err: apierrors.NewForbidden(
-			schema.GroupResource{Group: "gateway.networking.k8s.io", Resource: "httproutes"},
-			"routefail-serving", fmt.Errorf("the ClusterRole grants no httproutes")),
-	}
-	// The error reaches the caller: a route the operator could not write must
-	// retry, not be swallowed.
-	if _, err := r.Reconcile(context.Background(),
-		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)}); err == nil {
-		t.Fatal("a refused route write returned no error, so nothing requeues and the agent " +
-			"stays unreachable through the Gateway forever")
-	}
-
-	var live assaydv1alpha1.Agent
-	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
-		t.Fatalf("re-read: %v", err)
-	}
-	if live.Status.Phase != assaydv1alpha1.PhaseDegraded {
-		t.Errorf("phase is %q, want Degraded", live.Status.Phase)
-	}
-	if c := condition(&live, assaydv1alpha1.CondDegraded); c == nil || c.Status != metav1.ConditionTrue {
-		t.Errorf("Degraded is %v while the phase is Degraded. The condition is owned and "+
-			"non-sticky, so a path that sets only the phase CLEARS it — and design 10 alerts on "+
-			"the condition, so this agent would be unreachable through the Gateway with nobody "+
-			"paged.", c)
-	}
-	if c := condition(&live, assaydv1alpha1.CondPolicyApplyIncomplete); c == nil ||
+func assertRouteFailureReported(t *testing.T, live *assaydv1alpha1.Agent) {
+	t.Helper()
+	if c := condition(live, assaydv1alpha1.CondPolicyApplyIncomplete); c == nil ||
 		c.Status != metav1.ConditionTrue || c.Reason != "RouteApplyFailed" {
 		t.Errorf("PolicyApplyIncomplete is %v, want True/RouteApplyFailed", c)
 	}
@@ -578,7 +634,7 @@ func TestARouteThatCannotBeWrittenIsALoudDegradation(t *testing.T) {
 	// inside `c.Status != ConditionTrue`, so Ready=True — the single outcome
 	// the test exists to forbid — skipped the check entirely, and deleting the
 	// reconciler's `Ready=False` for this path left the test green.
-	if c := condition(&live, assaydv1alpha1.CondReady); c == nil || c.Status != metav1.ConditionFalse {
+	if c := condition(live, assaydv1alpha1.CondReady); c == nil || c.Status != metav1.ConditionFalse {
 		t.Errorf("Ready is %v, want False: on a gateway-enabled install an agent with no "+
 			"route is not reachable through the Gateway", c)
 	}
@@ -589,7 +645,7 @@ func TestARouteThatCannotBeWrittenIsALoudDegradation(t *testing.T) {
 // on-call for cache lag — the same treatment ensureService gives the same race.
 func TestALostRaceOnTheRouteDoesNotFlipReady(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "routerace", nil)
+	a := noneAgent(t, ns, "routerace")
 	r := newGatewayReconciler("assayd-gateway", "assayd")
 	rev := revision.MustHash(a.Spec)
 	reconcileOnce(t, r, a)
@@ -634,7 +690,7 @@ func TestALostRaceOnTheRouteDoesNotFlipReady(t *testing.T) {
 // failure the per-revision Service exists to prevent.
 func TestAPortChangeThatNeverComesUpDoesNotMoveTheServingRoute(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "ported", nil)
+	a := noneAgent(t, ns, "ported")
 	r := newGatewayReconciler("assayd-gateway", "assayd")
 	first := revision.MustHash(a.Spec)
 	reconcileOnce(t, r, a)
@@ -705,7 +761,7 @@ func TestAPortChangeThatNeverComesUpDoesNotMoveTheServingRoute(t *testing.T) {
 // path rewrote whatever it found by name.
 func TestARouteAnotherAgentOwnsIsRefusedNotTakenOver(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "claimant", nil)
+	a := noneAgent(t, ns, "claimant")
 	r := newGatewayReconciler("assayd-gateway", "assayd")
 	rev := revision.MustHash(a.Spec)
 	reconcileOnce(t, r, a)
@@ -767,7 +823,7 @@ func TestARouteAnotherAgentOwnsIsRefusedNotTakenOver(t *testing.T) {
 // behind a route nothing will ever remove.
 func TestAPredecessorsRouteIsAdoptedNotRefused(t *testing.T) {
 	ns := newNamespace(t)
-	a := mustCreateAgent(t, ns, "heir", nil)
+	a := noneAgent(t, ns, "heir")
 	r := newGatewayReconciler("assayd-gateway", "assayd")
 	rev := revision.MustHash(a.Spec)
 	reconcileOnce(t, r, a)

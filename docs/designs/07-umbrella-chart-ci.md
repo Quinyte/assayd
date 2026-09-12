@@ -554,7 +554,7 @@ Design 03 A70 implements the operator wiring its first slice needs (03 §1.1). F
 
 | Grant | Why | Scope |
 |---|---|---|
-| `agentgatewaypolicies` (`agentgateway.dev`): `get`, `list`, `watch`, `delete` | the operator watches each Agent's `<agent>-auth`, reads it live on teardown and on a NACK, and deletes it after the route | the generated ClusterRole, because run namespaces are created at run time. **No `create`, `update` or `patch`**: nothing writes a policy yet |
+| `agentgatewaypolicies` (`agentgateway.dev`): `get`, `list`, `watch`, `create`, `update`, `delete` | the operator watches each Agent's `<agent>-auth`, writes it through design 03's `Create` (design 03 A71), reads it live there, on teardown and on a NACK, and deletes it after the route | the generated ClusterRole, because run namespaces are created at run time. **No `patch`**: the compiler writes over owned fields, never by server-side apply. *(`create` and `update` added by design 03 A71, with the code that calls them.)* |
 | `events` (core): `list`, `watch` | the watch on the gateway's `AgentGatewayNackError` Warning Events (design 03 §3.3) | a Role and RoleBinding in `gateway.namespace`, rendered only with `gateway.enabled`. The ClusterRole keeps `create`, `patch` and nothing more |
 
 **Admission (extends A5.9).** Two more policies and bindings are rendered on every install. Each has `failurePolicy: Fail` and its identities inline, and each matches only namespaces labelled `assayd.dev/run-namespace: "true"`, a label A5.9's first policy reserves:

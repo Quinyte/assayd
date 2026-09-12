@@ -50,14 +50,15 @@ fine. Design 03 §3.1 asks for `GatewayIncompatible=CRDsAbsent` on each Agent
 instead, which is the friendlier half of the same fail-closed answer and is not
 implemented; this note says what the code does, not what the design wants.
 
-And turning it on still governs nothing. See below.
+And turning it on authenticates each new Agent's route and governs nothing
+else. It also needs `gateway.servingUrl`. See below.
 
 Also not enforced yet, independent of the gateway: an Agent Card's signature is
 not verified, its advertised skills are not cross-checked against the CR's
 grants, and no registration deadline is counted. See `docs/designs/02-*.md` §5.
 {{- else -}}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  YOUR AGENTS ARE REACHABLE AND STILL UNGOVERNED.
+  YOUR AGENTS ARE REACHABLE, AUTHENTICATED BY API KEY, AND OTHERWISE UNGOVERNED.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 `gateway.enabled` is true, so the operator emits ONE resource per Agent:
@@ -67,13 +68,21 @@ grants, and no registration deadline is counted. See `docs/designs/02-*.md` §5.
     `<agent>.<agent-namespace>.{{ .Values.gateway.hostnameSuffix | default "assayd.internal" }}` and forwarding to that
     revision's Service
 
-That is a PATH, not a guarantee. The policy compiler does not exist: no
-`AgentgatewayPolicy` and no `AgentgatewayBackend` is emitted by anything in this
-release, so requests arriving on that host are UNAUTHENTICATED, and there are
-still no budgets, no rate limits and no tool filtering. Every Agent therefore
-still carries `GovernanceSkipped` — now with reason `PolicyCompilerAbsent`:
+and, for a NEW Agent whose `spec.expose.a2a.auth` is `apikey` or absent, an
+`AgentgatewayPolicy` named `<agent>-auth` beside it: API-key authentication
+over the ConfigMaps labelled `assayd.dev/api-keys: "true"` in that run
+namespace, admitting the group named for the Agent's namespace. Its route is
+published only after an anonymous request through it gets 401, sent to
+`gateway.servingUrl`, which is therefore required. `auth: none` is published
+at once, unauthenticated, labelled `assayd.dev/auth: "none"`.
 
-  kubectl get agent <name> -o jsonpath='{.status.conditions}'
+That is authentication on one route, not governance. No `AgentgatewayBackend`
+is emitted, and there are still no budgets, no rate limits and no tool
+filtering. A route this operator published before it carried the compiler is
+left unauthenticated, and its Agent says so with `GovernanceSkipped`, reason
+`CompilerUpgradeUnsupported`. Each Agent's status says what applies to it:
+
+  kubectl get agent <name> -o jsonpath='{.status.auth}{"\n"}{.status.conditions}'
 
 No NetworkPolicy is materialized in any namespace either, so an agent Pod
 remains reachable directly and anything the gateway would apply is bypassable.
@@ -99,9 +108,11 @@ The host above is a routing key matched against the `Host` header. Nothing here
 creates DNS for it.
 {{- if .Values.gateway.servingUrl }}
 
-`gateway.servingUrl` is set to {{ .Values.gateway.servingUrl }}. The operator
-checks its form at startup and uses it for nothing else: no policy compiler
-runs, so nothing is probed there.
+`gateway.servingUrl` is set to {{ .Values.gateway.servingUrl }}. Each new
+Agent's route is published only after an anonymous request sent there gets
+401. Nothing checks that it reaches the listener named `http`: if it does not,
+every new Agent stays unpublished, with `PolicyApplyIncomplete`, reason
+`AuthEnforcementUnverified`, four minutes after it was created.
 {{- end }}
 {{- end }}
 
@@ -109,4 +120,6 @@ In every run namespace, admission reserves two more writes (design 03 §6):
 an AgentgatewayPolicy may be written only by the operator, and a ConfigMap
 labelled `assayd.dev/api-keys` only by the operator and the identities in
 `admission.apiKeyWriters` (by default, the `system:masters` group). The
-operator writes neither yet, because no policy is emitted.
+operator writes each API-key Agent's `<agent>-auth`. It writes no key set: the
+keys are yours to add, as `sha256:` hashes with a `group` naming the Agent's
+namespace, and until one exists every caller of an API-key Agent gets 401.

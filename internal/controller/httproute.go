@@ -18,22 +18,17 @@ import (
 	"github.com/Quinyte/assayd/internal/compiler"
 )
 
-// ADR-0030 step 3, SECOND half: the mapping the e2e hand-authored is now
-// encoded. This file emits ONE resource — the revision's serving HTTPRoute —
-// and nothing else.
+// ADR-0030 step 3, SECOND half, and design 03's first slice on top of it: the
+// serving route this file emits is now published through the `-auth`
+// transaction in authtxn.go. A new Agent's route is PREPARED, with no
+// backendRefs, and published only once an anonymous request through it gets
+// `401` from the `<agent>-auth` policy the operator wrote (design 03 §3.3.3).
+// An `auth: none` Agent's route is published at once, with the marker label
+// `assayd.dev/auth: "none"` (§3.3.1).
 //
-// **This is not design 03's compiler and must not be read as one.** Only design
-// 03's first slice is approved (2026-09-12), and it is not wired in here yet; the
-// rest of design 03 is not approved. What is
-// encoded here is exactly the resource design 07 A6 already authored by hand
-// and executed against a real Gateway, plus design 03 §3.2's rules about where
-// it lives, what names it, and what may delete it — because those were measured
-// too. Everything else design 03 describes is absent: no AgentgatewayPolicy, no
-// AgentgatewayBackend, no budget, no rate limit, no authentication, no tool
-// allowlist. §3.3.1 would in fact REFUSE to emit this route, because its
-// mandatory `-auth` concern has no producer until design 06 lands; that refusal
-// is not implemented, so the route this operator emits is an UNAUTHENTICATED
-// path to the agent, exactly as the hand-authored one was.
+// Only design 03's first slice is approved (2026-09-12), and this is part of
+// it. Everything else design 03 describes is still absent: no
+// AgentgatewayBackend, no budget, no rate limit, no tool allowlist.
 const (
 	// GatewayListenerName is the listener an agent's serving route attaches to.
 	//
@@ -68,10 +63,9 @@ type GatewayConfig struct {
 	// stated as one rather than presented as the design's.
 	HostnameSuffix string
 	// ServingURL is --gateway-serving-url: the base URL of the Gateway's
-	// serving listener, where design 03 §3.3.3's anonymous probe goes. NOTHING
-	// READS IT YET: no compiler runs, so nothing probes. NewAgentReconciler
-	// checks its form when it is set and does not require it, because §3.3.3
-	// requires it only "whenever the compiler runs".
+	// serving listener, where design 03 §3.3.3's anonymous probe goes. The
+	// compiler runs whenever the gateway is enabled, so NewAgentReconciler
+	// requires it then, as §3.3.3 says, and checks its form.
 	ServingURL string
 }
 
@@ -115,7 +109,7 @@ func (g GatewayConfig) Hostname(agentName, agentNamespace string) string {
 // evidence: a label needs only `update` to forge, so ownedRoutes additionally
 // requires the immutable NAME to match.
 func (r *AgentReconciler) servingRouteFor(
-	agent *assaydv1alpha1.Agent, runNS, rev, name string, servicePort int32,
+	agent *assaydv1alpha1.Agent, runNS, rev, name string, servicePort int32, pub routePublication,
 ) *gatewayv1.HTTPRoute {
 	group := gatewayv1.Group(gatewayv1.GroupName)
 	gwKind := gatewayv1.Kind("Gateway")
@@ -126,7 +120,7 @@ func (r *AgentReconciler) servingRouteFor(
 	backendPort := gatewayv1.PortNumber(servicePort)
 	weight := int32(100)
 
-	return &gatewayv1.HTTPRoute{
+	route := &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 			// The RUN namespace, with the Service it names. A backendRef across
@@ -136,12 +130,15 @@ func (r *AgentReconciler) servingRouteFor(
 			// Agent at every install. The parentRef to a Gateway in another
 			// namespace needs no grant; only backendRefs and Secrets do.
 			Namespace: runNS,
-			Labels: map[string]string{
+			// The marker is decided by the publication and nothing else:
+			// present exactly while the route is published under `none`
+			// (design 03 §3.3.1).
+			Labels: compiler.RouteAuthLabels(pub.mode, map[string]string{
 				LabelAgent:          agent.Name,
 				LabelRevision:       rev,
 				LabelAgentUID:       string(agent.UID),
 				LabelAgentNamespace: agent.Namespace,
-			},
+			}),
 		},
 		Spec: gatewayv1.HTTPRouteSpec{
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
@@ -195,53 +192,50 @@ func (r *AgentReconciler) servingRouteFor(
 			}},
 		},
 	}
+	if pub.prepared {
+		// PREPARED: parentRefs and no backendRefs, so a policy can attach to
+		// it before it carries anything (design 03 §3.3). Such a route is not
+		// dark: it answers 500 on its hostname (spike §2.6), which replaces
+		// nothing on a new Agent. routePublicationFor gives it no mode, so it
+		// carries no marker: nothing is published.
+		route.Spec.Rules[0].BackendRefs = nil
+	}
+	return route
 }
 
-// reconcileServingRoute converges the one route this operator emits, and sweeps
-// any it owns that should no longer exist.
+// routePublication is how one write publishes the serving route. The zero
+// value is published, with no marker. routePublicationFor chooses it from
+// status.auth.
+type routePublication struct {
+	// prepared leaves the route with no backendRefs.
+	prepared bool
+	// mode is the -auth mode the route is published under. Only `none` adds
+	// the marker.
+	mode compiler.AuthMode
+}
+
+// LabelAuth is the marker's key (design 03 §3.3.1).
+const LabelAuth = compiler.LabelAuth
+
+// ensureServingRoute creates or converges the route, and returns it as stored
+// and whether this call created it. Create/update rather than SSA, matching
+// ensureService: one field manager writes these objects and nothing else has
+// an opinion about them.
 //
-// `rev` is the revision that is SERVING — status.activeRevision — not the
-// desired one. A candidate coming up must not take the hostname from the
-// revision still answering on it; that is the whole reason design 02 gives a
-// Service to every revision.
-func (r *AgentReconciler) reconcileServingRoute(
-	ctx context.Context, agent *assaydv1alpha1.Agent, runNS, rev, digest string,
-) error {
-	if !r.Gateway.Enabled {
-		// Nothing is emitted, and nothing is SWEPT either. Design 03 §3.1 says a
-		// `true → false` transition first runs §5's reverse-order teardown; that
-		// teardown is NOT implemented, so a route left behind by an install that
-		// was once enabled stays until the operator is re-enabled or a human
-		// removes it. Said rather than implied: sweeping here would mean listing
-		// a kind whose CRDs a disabled install has no reason to carry, and
-		// pretending to a teardown that does not exist is worse than naming it.
-		return nil
-	}
-	name, err := compiler.ServingRouteName(agent.Name)
-	if err != nil {
-		return err
-	}
-	keep := ""
-	if rev != "" {
-		if err := r.ensureServingRoute(ctx, agent, runNS, rev, digest, name); err != nil {
-			return err
-		}
-		keep = name
-	}
-	return r.collectRoutes(ctx, agent, runNS, keep)
-}
-
-// ensureServingRoute creates or converges the route. Create/update rather than
-// SSA, matching ensureService: one field manager writes these objects and
-// nothing else has an opinion about them.
+// A prepared route names no backend, so it reads no Service: `rev` is only
+// its revision label then.
 func (r *AgentReconciler) ensureServingRoute(
-	ctx context.Context, agent *assaydv1alpha1.Agent, runNS, rev, digest, name string,
-) error {
-	svcPort, err := r.servingBackendPort(ctx, agent, runNS, rev)
-	if err != nil {
-		return err
+	ctx context.Context, agent *assaydv1alpha1.Agent, runNS, rev, digest, name string, pub routePublication,
+) (*gatewayv1.HTTPRoute, bool, error) {
+	var svcPort int32
+	if !pub.prepared {
+		p, err := r.servingBackendPort(ctx, agent, runNS, rev)
+		if err != nil {
+			return nil, false, err
+		}
+		svcPort = p
 	}
-	desired := r.servingRouteFor(agent, runNS, rev, name, svcPort)
+	desired := r.servingRouteFor(agent, runNS, rev, name, svcPort, pub)
 	// Corroboration only, exactly as on the workload and the Service: which
 	// projection the revision this route points at was rendered from. Nothing
 	// branches on it. The collision rule is on the Agent's IDENTITY instead —
@@ -250,7 +244,7 @@ func (r *AgentReconciler) ensureServingRoute(
 	desired.Annotations = map[string]string{RevisionDigestAnnotation: digest}
 
 	var existing gatewayv1.HTTPRoute
-	err = r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
 	switch {
 	case apierrors.IsNotFound(err):
 		if cerr := r.Create(ctx, desired); cerr != nil {
@@ -258,17 +252,17 @@ func (r *AgentReconciler) ensureServingRoute(
 				// Return rather than recurse, for the reason ensureWorkload
 				// records at length. Wrapped in errRouteRaceLost so the caller
 				// knows this is a lost race and not a refusal.
-				return fmt.Errorf("route %s: %w: requeueing to converge it: %v",
+				return nil, false, fmt.Errorf("route %s: %w: requeueing to converge it: %v",
 					desired.Name, errRouteRaceLost, cerr)
 			}
-			return fmt.Errorf("create route %s in %s: %w", desired.Name, runNS, cerr)
+			return nil, false, fmt.Errorf("create route %s in %s: %w", desired.Name, runNS, cerr)
 		}
-		return nil
+		return desired, true, nil
 	case err != nil:
-		return fmt.Errorf("get route %s in %s: %w", desired.Name, runNS, err)
+		return nil, false, fmt.Errorf("get route %s in %s: %w", desired.Name, runNS, err)
 	}
 	if cerr := routeCollision(agent, &existing); cerr != nil {
-		return cerr
+		return nil, false, cerr
 	}
 
 	updated := existing.DeepCopy()
@@ -281,12 +275,41 @@ func (r *AgentReconciler) ensureServingRoute(
 	updated.Spec.Hostnames = desired.Spec.Hostnames
 	updated.Spec.Rules = desired.Spec.Rules
 	if equalRoute(&existing, updated) {
-		return nil
+		return &existing, false, nil
 	}
 	if err := r.Update(ctx, updated); err != nil {
-		return fmt.Errorf("converge route %s in %s: %w", desired.Name, runNS, err)
+		return nil, false, fmt.Errorf("converge route %s in %s: %w", desired.Name, runNS, err)
 	}
-	return nil
+	return updated, false, nil
+}
+
+// currentServingRoute reads the serving route, or nil when there is none. A
+// route of that name that another Agent owns is a collision, not this Agent's
+// route (design 03 §3.2).
+func (r *AgentReconciler) currentServingRoute(
+	ctx context.Context, agent *assaydv1alpha1.Agent, runNS, name string,
+) (*gatewayv1.HTTPRoute, error) {
+	var rt gatewayv1.HTTPRoute
+	switch err := r.Get(ctx, client.ObjectKey{Namespace: runNS, Name: name}, &rt); {
+	case apierrors.IsNotFound(err):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("get route %s in %s: %w", name, runNS, err)
+	}
+	if err := routeCollision(agent, &rt); err != nil {
+		return nil, err
+	}
+	return &rt, nil
+}
+
+// routePublished reports whether a route carries traffic: any backendRef.
+func routePublished(rt *gatewayv1.HTTPRoute) bool {
+	for _, rule := range rt.Spec.Rules {
+		if len(rule.BackendRefs) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // equalRoute compares every field the renderer writes, and nothing else.
@@ -313,6 +336,16 @@ func equalRoute(a, b *gatewayv1.HTTPRoute) bool {
 	}
 	for k, v := range b.Labels {
 		if a.Labels[k] != v {
+			return false
+		}
+	}
+	// The marker is compared both ways. The loop above checks only that the
+	// desired labels are PRESENT, so a planted `assayd.dev/auth: "none"` on a
+	// route that should carry none survived every reconcile in which nothing
+	// else drifted (design 03 A69): a route saying "deliberately
+	// unauthenticated" while it is not.
+	if _, want := b.Labels[LabelAuth]; !want {
+		if _, has := a.Labels[LabelAuth]; has {
 			return false
 		}
 	}
@@ -425,7 +458,7 @@ func eqPtr[T comparable](a, b *T) bool {
 // lag; the error is still returned, so the work queue retries with backoff.
 func transientRouteWrite(err error) bool {
 	return apierrors.IsAlreadyExists(err) || apierrors.IsConflict(err) ||
-		errors.Is(err, errRouteRaceLost)
+		errors.Is(err, errRouteRaceLost) || errors.Is(err, errStaleAgent)
 }
 
 // errRouteRaceLost marks the read-after-write race ensureServingRoute returns
@@ -490,7 +523,7 @@ func (e *routeCollisionError) Error() string {
 // What counts as ANOTHER Agent is the name and namespace on the labels, not the
 // UID alone, and that is deliberate. A route whose UID differs but whose name
 // and namespace are this Agent's is a PREDECESSOR's: an Agent deleted while the
-// gateway was declared off sweeps nothing (reconcileServingRoute), and one
+// gateway was declared off sweeps nothing (reconcileGateway), and one
 // recreated under the same name must adopt that route rather than be wedged by
 // it forever. A route with no `agent-uid` label is adopted for the same reason,
 // whatever its other labels say. None of this is evidence against an attacker — a label needs only
@@ -590,36 +623,25 @@ func (r *AgentReconciler) collectRoutes(
 	return nil
 }
 
-// Reasons on GovernanceSkipped (design 03 §3.1).
-const (
-	// ReasonGatewayDisabled is §3.1's own word for the declared-ungoverned tier
-	// — the row P1 ships and `local` uses.
-	ReasonGatewayDisabled = "GatewayDisabled"
-	// ReasonPolicyCompilerAbsent is the row §3.1 does not have.
-	//
-	// Its table pairs `gateway.enabled: false` with GovernanceSkipped=True and
-	// says nothing about the enabled row, which reads as though turning the
-	// value on makes governance real. It does not: this operator emits a route
-	// and no policy of any kind, so an enabled install is still ungoverned and
-	// the condition still says so — with a different reason, so the two states
-	// are distinguishable by a consumer and by a test. Reporting
-	// GovernanceSkipped=False here would be the loud-and-wrong of rule 8: a
-	// condition naming a plausible cause that was never checked, on the exact
-	// claim the platform is built on.
-	ReasonPolicyCompilerAbsent = "PolicyCompilerAbsent"
-)
+// ReasonGatewayDisabled is GovernanceSkipped's reason on design 03 §3.1's
+// declared-ungoverned tier — the row P1 ships and `local` uses. The reasons
+// for the enabled tier are in authtxn.go.
+const ReasonGatewayDisabled = "GatewayDisabled"
 
 // assessGovernance puts design 03 §3.1's tier condition on every Agent.
 //
-// It runs with the other assessors, BEFORE anything can return early, for the
-// reason the reconciler records there: GovernanceSkipped is owned, so a pass
-// that exits without asserting it CLEARS it — and an Agent that is more
-// degraded, not less, would lose the record of the tier it runs in.
+// It runs with the other assessors, BEFORE anything can return early, so that
+// every status path carries it. With the gateway enabled the compiler runs,
+// and the value comes from status.auth, which is all the paths that return
+// early can see: the value a served -auth earned, and "vacuously False" for an
+// Agent with no route the compiler published. reconcileGateway then refines it
+// from the route itself. The one value only that refinement can know, a
+// refused `Adopt`'s, is kept rather than overwritten here.
 //
 // Ready is never withheld by this. §3.1: only the incident row withholds Ready,
 // so a stock `helm install` never produces a fleet that is permanently
 // un-`Ready`.
-func (r *AgentReconciler) assessGovernance(c *conditionSet) {
+func (r *AgentReconciler) assessGovernance(c *conditionSet, status *assaydv1alpha1.AgentStatus) {
 	if !r.Gateway.Enabled {
 		c.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonGatewayDisabled,
 			"gateway.enabled is false, so this is the deliberately ungoverned tier (design 03 §3.1): "+
@@ -628,23 +650,17 @@ func (r *AgentReconciler) assessGovernance(c *conditionSet) {
 				"namespace. Readiness is not withheld — this is a documented tier, not an incident")
 		return
 	}
-	// A property of the INSTALL, not of this Agent, and the difference is not
-	// pedantry. This runs with the other assessors, before the run namespace is
-	// resolved and before it is known whether this Agent has a serving revision
-	// at all — and it runs for EXTERNAL agents, which never get a route because
-	// they never get a workload. An earlier version said "the serving HTTPRoute
-	// is emitted … and attached to Gateway X/Y", which was false for every
-	// external agent and for every agent in the window before its first
-	// promotion: a condition naming a plausible state nobody checked, which is
-	// rule 8 on the one claim this platform is built on.
-	c.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonPolicyCompilerAbsent,
-		fmt.Sprintf("gateway.enabled is true, so this operator emits ONE resource for an Agent that "+
-			"has a serving revision — that revision's HTTPRoute, into the run namespace, attached "+
-			"to Gateway %s/%s. That is ALL it emits: no AgentgatewayPolicy and no "+
-			"AgentgatewayBackend, so no budget, rate limit, authentication or tool allowlist is "+
-			"enforced anywhere, and traffic arriving through the gateway is unauthenticated. No "+
-			"NetworkPolicy is materialized either, so an agent Pod stays directly reachable. The "+
-			"policy compiler of design 03 does not exist; setting gateway.enabled publishes a "+
-			"path, not a guarantee. Check the route itself for whether one exists for this Agent",
-			r.Gateway.Namespace, r.Gateway.Name))
+	if status.Auth != nil && status.Auth.Mode != "" {
+		st, reason, msg := governanceFor(status.Auth)
+		c.set(assaydv1alpha1.CondGovernanceSkipped, st, reason, msg)
+		return
+	}
+	if status.Auth != nil && status.Auth.Transaction != nil && status.Auth.Transaction.Kind == TxAdopt {
+		// A refused Adopt is recorded; its message is refuseAdopt's, which
+		// names the route, and not asserting keeps it (conditions.go: sticky).
+		return
+	}
+	st, reason, msg := vacuousGovernance("this operator has published no route for this Agent " +
+		"through its compiler")
+	c.set(assaydv1alpha1.CondGovernanceSkipped, st, reason, msg)
 }

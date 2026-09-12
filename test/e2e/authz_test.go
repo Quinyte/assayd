@@ -5,8 +5,6 @@ package e2e
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -18,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/compiler"
 	"github.com/Quinyte/assayd/internal/controller"
 	"github.com/Quinyte/assayd/internal/revision"
 )
@@ -33,19 +32,20 @@ import (
 // the strength of who it is**, while a permitted principal is served on the
 // same route in the same second.
 //
-// **The POLICY is hand-authored, per ADR-0030, and is not the compiler.** Design
-// 03 is not approved — its own Status line says do not implement it — and its
-// policy compiler does not exist; nothing in assayd emits an AgentgatewayPolicy,
-// and after this test nothing still does. What this establishes is that the
-// mapping the compiler will have to produce is one the gateway actually honours
-// — the 401/403 split included — so it can be written against a measurement
-// rather than a schema reading.
+// **The POLICY is the one the OPERATOR emitted**, `<agent>-auth`, through design
+// 03's `Create` transaction (§3.3.3): API-key authentication over the key sets
+// labelled `assayd.dev/api-keys: "true"`, and one CEL rule admitting the group
+// named for the Agent's namespace (§3.4.4). This test used to hand-author the
+// same shape, `assayd-e2e-authz`, and measured it first: 200 for the permitted
+// principal, 403 for the wrong group, 401 with no key, the rule inverted
+// inverting both, and authentication without authorization moving the
+// wrong-group caller to 200. That measurement is what the compiler was written
+// against. The hand-authored policy is gone: beside the emitted one it would be
+// a second `traffic` policy on one route, and two same-level policies on one
+// target resolve at random (§3.2).
 //
-// The ROUTE the policy targets is no longer hand-authored: it is the one the
-// operator emits (design 07 A6.10), and it had to become that. A second route to
-// the same agent would sit beside the emitted one carrying no policy at all, so
-// the 401 and the 403 below would be measured on one route while an
-// unauthenticated path to the same workload stayed open one hostname over.
+// The ROUTE is the operator's too, and it had to be: a second route to the same
+// agent would carry no policy at all.
 func TestTheGatewayRefusesADisallowedPrincipal(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
@@ -73,39 +73,42 @@ func TestTheGatewayRefusesADisallowedPrincipal(t *testing.T) {
 	rev := revision.MustHash(a.Spec)
 	wl := controller.WorkloadName(name, rev)
 	waitAvailable(t, ctx, wl, 4*time.Minute)
-	runNS := controller.RunNamespaceName("assayd-e2e")
 
-	// The policy targets the route the OPERATOR emitted, not one this test
-	// authored. That is not tidiness: a hand-authored second route to the same
-	// agent would sit beside the emitted one carrying no policy at all, so the
-	// 401 and 403 below would be measured on a route while an unauthenticated
-	// path to the same workload stayed open one hostname over. The policy is
-	// still hand-authored — nothing in assayd emits an AgentgatewayPolicy, and
-	// after this test nothing still does.
-	route := waitForEmittedRoute(t, ctx, name, 2*time.Minute)
+	route := waitForPublishedRoute(t, ctx, name, 3*time.Minute)
 	assertRouteAccepted(t, ctx, route, wl)
+	assertServedUnderAPIKey(t, ctx, name)
 	host := emittedHostname(t, name, "assayd-e2e")
 
-	// Two principals, distinguished only by the metadata their credential
-	// carries. Same route, same agent, same moment — so a difference in outcome
-	// can only be the authorization rule.
-	const permittedKey, refusedKey = "assayd-e2e-permitted", "assayd-e2e-refused"
-	applyAPIKeys(t, ctx, runNS, map[string]string{
-		permittedKey: "trusted",
-		refusedKey:   "rogue",
-	})
-	policy := applyAuthzPolicy(t, ctx, runNS, route.GetName(), `apiKey.group == "trusted"`)
+	// The policy is the operator's, by its name and its UID label, not one this
+	// test wrote.
+	policyName, err := compiler.AuthPolicyName(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := &unstructured.Unstructured{}
+	policy.SetAPIVersion(compiler.PolicyAPIVersion)
+	policy.SetKind(compiler.PolicyKind)
+	if err := k8s.Get(ctx, types.NamespacedName{Namespace: runNS, Name: policyName}, policy); err != nil {
+		t.Fatalf("the operator emitted no %s for a published API-key Agent: %v", policyName, err)
+	}
+	if got := policy.GetLabels()[compiler.LabelAgentUID]; got != string(agentUID(t, ctx, "assayd-e2e", name)) {
+		t.Errorf("%s carries agent-uid %q, which is not this Agent's", policyName, got)
+	}
 	assertPolicyAttached(t, ctx, policy)
+
+	// Two principals, distinguished only by the group their credential
+	// carries. Same route, same agent, same moment — so a difference in
+	// outcome can only be the authorization rule.
+	ensureAPIKeys(t, ctx)
 
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
 	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gwSvc, gwNS) + a2aSendMessage
 	body := sendMessage("who am i")
 
-	// The policy is Attached before it is ENFORCING — the gateway is configured
-	// through its own control plane, so there is a window in which the route is
-	// live and unauthenticated requests still succeed. Waiting for the anonymous
-	// refusal is what makes the assertions below about identity rather than about
-	// timing: until this returns 401, a 200 for the permitted key proves nothing.
+	// The operator published the route only after an anonymous request got
+	// 401, so the policy was enforcing on the replica that answered then.
+	// Waiting again costs nothing and keeps the assertions below about identity
+	// rather than timing on a gateway with more than one replica.
 	waitForEnforcement(t, ctx, url, host, body)
 
 	if code := probeCode(t, ctx, "authz-none", url, host, "", body); code != "401" {
@@ -114,105 +117,21 @@ func TestTheGatewayRefusesADisallowedPrincipal(t *testing.T) {
 			"matches nothing", code)
 	}
 
-	// The disallowed principal. Not a bad credential — a GOOD one, belonging to
-	// someone this route does not admit. 403 and not 401 is the whole distinction
+	// The permitted control, waited for: agentgateway reads the key set live.
+	answer := askThroughGateway(t, ctx, "authz-ok", url, host, body)
+	if agent, _ := completedTask(t, answer); agent != name {
+		t.Errorf("the permitted principal got a 200 that is not the agent's answer, so the "+
+			"gateway admitted the request without delivering it: %s", answer)
+	}
+
+	// The disallowed principal. Not a bad credential — a GOOD one, in a group
+	// this route does not admit. 403 and not 401 is the whole distinction
 	// between "I do not know you" and "I know you and no".
 	if code := probeCode(t, ctx, "authz-refused", url, host, refusedKey, body); code != "403" {
 		t.Errorf("the disallowed principal got %s, want 403. A valid credential for the "+
 			"wrong group must be authenticated and then refused; anything else means the "+
 			"gateway is not deciding on identity", code)
 	}
-
-	// The permitted control, on the same route in the same second.
-	if code := probeCode(t, ctx, "authz-ok", url, host, permittedKey, body); code != "200" {
-		t.Fatalf("the PERMITTED principal got %s, want 200 — the rule refuses the caller it "+
-			"is supposed to admit, so the refusals above prove only that the route is shut", code)
-	}
-	answer := httpInClusterHostKey(t, ctx, "authz-body", url, host, permittedKey, body)
-	if agent, _ := completedTask(t, answer); agent != name {
-		t.Errorf("the permitted principal got a 200 that is not the agent's answer, so the "+
-			"gateway admitted the request without delivering it: %s", answer)
-	}
-}
-
-// applyAPIKeys writes the credential set as agentgateway reads it: a ConfigMap
-// whose every entry is a JSON object with a `keyHash` and arbitrary `metadata`.
-//
-// ConfigMaps are not confidential, so the API refuses a raw key here and takes
-// only `sha256:<hex>` — which is why the test hashes rather than storing the
-// credential it is about to present. A real deployment would use secretRef; this
-// is a fixture whose keys are literals in a test file and are not secrets.
-func applyAPIKeys(t *testing.T, ctx context.Context, runNS string, keys map[string]string) {
-	t.Helper()
-	data := map[string]string{}
-	for key, group := range keys {
-		sum := sha256.Sum256([]byte(key))
-		data[key] = fmt.Sprintf(`{"keyHash":"sha256:%s","metadata":{"group":%q}}`,
-			hex.EncodeToString(sum[:]), group)
-	}
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "assayd-e2e-api-keys",
-			Namespace: runNS,
-			Labels:    map[string]string{"assayd.dev/api-keys": "e2e"},
-		},
-		Data: data,
-	}
-	// Written as the administrator design 03 §3.4.4 says writes key sets:
-	// assayd-api-keys refuses anyone else in a run namespace.
-	_ = k8s.Delete(ctx, cm)
-	if err := keyAdminClient(t).Create(ctx, cm); err != nil {
-		t.Fatalf("write the API key set: %v", err)
-	}
-	t.Cleanup(func() { _ = k8s.Delete(context.Background(), cm) })
-}
-
-// applyAuthzPolicy attaches authentication and one authorization rule to the
-// route. The policy lives in the run namespace because AgentgatewayPolicy's
-// targetRefs "must be in the same namespace as the policy" — which is also
-// where design 03 3.2 puts it, for the SAME reason and not a different one: its
-// table gives "a policy attaches to a route; they cannot be split across
-// namespaces" (03:161). The ReferenceGrant argument is the HTTPRoute row's, one
-// line above it.
-func applyAuthzPolicy(t *testing.T, ctx context.Context, runNS, wl, expr string) *unstructured.Unstructured {
-	t.Helper()
-	build := func() *unstructured.Unstructured {
-		return &unstructured.Unstructured{Object: map[string]any{
-			"apiVersion": "agentgateway.dev/v1alpha1",
-			"kind":       "AgentgatewayPolicy",
-			"metadata":   map[string]any{"name": "assayd-e2e-authz", "namespace": runNS},
-			"spec": map[string]any{
-				"targetRefs": []any{map[string]any{
-					"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": wl,
-				}},
-				"traffic": map[string]any{
-					"apiKeyAuthentication": map[string]any{
-						"configMapSelector": map[string]any{
-							"matchLabels": map[string]any{"assayd.dev/api-keys": "e2e"},
-						},
-					},
-					// action Allow, and with any Allow rule configured agentgateway
-					// denies whatever matches none of them. That default-deny is the
-					// property being relied on, so it is stated rather than assumed.
-					"authorization": map[string]any{
-						"action": "Allow",
-						"policy": map[string]any{"matchExpressions": []any{expr}},
-					},
-				},
-			},
-		}}
-	}
-	// Written under the operator's username, because assayd-gateway-policies
-	// admits nobody else in a run namespace (design 03 §6). The harness stands
-	// in for the writer that does not exist yet; see policyAuthorClient.
-	// Deletes need no such identity: the reservation matches CREATE and UPDATE.
-	p := build()
-	_ = k8s.Delete(ctx, build())
-	if err := policyAuthorClient(t).Create(ctx, p); err != nil {
-		t.Fatalf("apply the authorization policy: %v", err)
-	}
-	t.Cleanup(func() { _ = k8s.Delete(context.Background(), build()) })
-	return p
 }
 
 // assertPolicyAttached requires the gateway's controller to have accepted the

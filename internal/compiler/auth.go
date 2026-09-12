@@ -56,6 +56,17 @@ const (
 	APIKeySourceValue = "true"
 )
 
+// KeySource is the canonical form of the key source a policy in runNamespace
+// selects: design 03 §3.3.3's "canonical selector (sorted matchLabels, plus
+// the run namespace)", as `status.auth.keySource` records it. With one
+// constant label there is nothing to sort; the namespace is included because
+// which ConfigMaps a selector reaches beyond its own namespace is unmeasured
+// (§3.4.4). Only this function writes the form, and only this form is
+// compared.
+func KeySource(runNamespace string) string {
+	return runNamespace + "/" + APIKeySourceLabel + "=" + APIKeySourceValue
+}
+
 // The `auth: none` marker (§3.3.1): a LABEL on the serving route, never an
 // empty policy, so that the opt-out cannot fail an acceptance gate and a
 // deliberately unauthenticated route is distinguishable from one that lost its
@@ -90,13 +101,11 @@ const (
 //     would mark an `Adopt`ed Agent whose desired mode is `none`; the design
 //     does not reconcile the two, and this function takes §3.3.3's reading.
 //
-// Deciding which applies is the transaction machinery's, and it is not built.
-// Nothing calls this outside tests. Today's emitter renders no marker, and it
-// handles route labels in two ways: `equalRoute` checks only that the desired
-// labels are present, so a planted marker survives a reconcile in which
-// nothing else drifted; when something else does drift, `ensureServingRoute`
-// replaces the labels wholesale with servingRouteFor's, which carry no marker.
-// Rendering the marker, and comparing its absence, are owed with the wiring.
+// Deciding which applies is the transaction machinery's: the emitter's
+// servingRouteFor calls this with the mode internal/controller's
+// routePublicationFor chooses from status.auth, and its equalRoute compares
+// the marker's absence as well as its presence. A `Lock` (the second bullet)
+// is not built yet.
 func RouteAuthLabels(published AuthMode, base map[string]string) map[string]string {
 	labels := make(map[string]string, len(base)+1)
 	for k, v := range base {
@@ -134,7 +143,7 @@ type AuthTarget struct {
 // NotCompilableError is a desired `-auth` mode the slice cannot compile —
 // §3.3.1's `PolicyCompileFailed`, reason `AuthInputAbsent`. What the caller does
 // with it (I1: a served Agent keeps its last good policy; a never-served one
-// enters no transaction) is the reconciler's, and is not built.
+// enters no transaction) is the reconciler's (internal/controller/authtxn.go).
 type NotCompilableError struct {
 	// Mode is the value of spec.expose.a2a.auth, verbatim.
 	Mode string
@@ -345,10 +354,12 @@ func admitGroupExpression(group string) (string, error) {
 // digest this function produced. Changing the serialization re-keys every
 // recorded digest, which is why the golden test pins one.
 //
-// It is defined over the COMPILED policy. A policy read back from the API
-// server can carry fields the server defaulted into `spec`, and its digest then
-// differs from the one compiled; comparing a stored object with a compiled one
-// is the owned-field comparator's job (§3.3.2), and that is not built.
+// It is defined over the COMPILED policy, and the reconciler also uses it to
+// compare a stored policy with a compiled one. That works because the pinned
+// AgentgatewayPolicy CRD defaults nothing under the fields this renders except
+// `apiKeyAuthentication.mode`, which is emitted anyway (§3.4.4); envtest runs
+// against that CRD, so a default added there fails a test rather than turning
+// the comparison into an update on every reconcile.
 func Digest(policy *unstructured.Unstructured) (string, error) {
 	labels := map[string]string{}
 	for _, k := range []string{LabelAgentUID, LabelAgent, LabelAgentNamespace} {
