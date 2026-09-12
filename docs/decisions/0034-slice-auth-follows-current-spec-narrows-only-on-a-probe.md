@@ -73,6 +73,6 @@ Nothing in this amendment is implemented.
 
 **K2: an owner's edit to `apikey` is consent, and ends `Adopt`'s refusal.** The owner of an `Adopt`ed Agent who edits `auth: none` → `apikey` asked for the route to be closed. Amendment 3's reason for refusing `Adopt`, that nobody asked, does not cover them. So the edit takes the Agent through J2's `Lock`, and it is trusted only after an anonymous `200` → `401`. `Adopt` otherwise stays refused, as Amendment 3 decided.
 
-**Not the human's.** Design 03 A65 reads K2 as covering an edit observed after the refusal, from whatever mode the refusal recorded. An Agent whose spec already said `apikey` when it was first refused stays refused. That reading is the author's, recorded here so that this ADR is not read as deciding it.
+**Not the human's.** Design 03 reads K2 as covering any move to `apikey` that a reconcile observes after the refusal (A65, made to track by A66). An Agent whose spec already said `apikey` when it was first refused stays refused until it is observed under another mode and then under `apikey` again. That reading is the author's, recorded here so that this ADR is not read as deciding it.
 
 Nothing in this amendment is implemented.
