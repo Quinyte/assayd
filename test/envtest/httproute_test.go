@@ -641,8 +641,16 @@ func assertRouteFailureReported(t *testing.T, live *assaydv1alpha1.Agent) {
 }
 
 // A LOST RACE is not a degradation. An AlreadyExists from a stale informer
-// cache resolves on the next pass, and flipping Ready for it would page the
-// on-call for cache lag — the same treatment ensureService gives the same race.
+// cache resolves on the next pass, and marking the Agent Degraded for it would
+// page the on-call for cache lag — the same treatment ensureService gives the
+// same race.
+//
+// It is not a reason to claim Ready either. This Agent's Create has not
+// published its route: the race was over that very write. So Ready is False
+// and the phase is Pending, as on the Create's other passes, and nothing is
+// Degraded. An earlier version of this test asserted Ready=True, on the
+// premise that the agent was serving and nothing about it had changed. Under
+// design 03's Create that premise is false (A71).
 func TestALostRaceOnTheRouteDoesNotFlipReady(t *testing.T) {
 	ns := newNamespace(t)
 	a := noneAgent(t, ns, "routerace")
@@ -671,9 +679,15 @@ func TestALostRaceOnTheRouteDoesNotFlipReady(t *testing.T) {
 		t.Errorf("a stale-cache AlreadyExists made the agent Degraded. It resolves on the next "+
 			"pass; reporting it degrades pages the on-call for informer lag: %+v", live.Status)
 	}
-	if c := condition(&live, assaydv1alpha1.CondReady); c == nil || c.Status != metav1.ConditionTrue {
-		t.Errorf("Ready is %v after a lost race; the agent is serving and nothing about it "+
-			"changed", c)
+	if c := condition(&live, assaydv1alpha1.CondDegraded); c != nil {
+		t.Errorf("a lost race raised Degraded on an Agent that never served: %+v", c)
+	}
+	if live.Status.Phase != assaydv1alpha1.PhasePending {
+		t.Errorf("phase is %q after a lost race in a Create; want Pending", live.Status.Phase)
+	}
+	if c := condition(&live, assaydv1alpha1.CondReady); c == nil || c.Status != metav1.ConditionFalse {
+		t.Errorf("Ready is %v after a lost race in a Create whose route is not published; it "+
+			"must not claim the Agent is reachable", c)
 	}
 }
 

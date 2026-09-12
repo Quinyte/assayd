@@ -271,14 +271,17 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 	// pass this step leaves with an error re-derives nothing, and dropping the
 	// condition there would clear it mid-Lock, one pass before a 401 anybody
 	// attributed. So it is withdrawn on the way in and put back on the way out
-	// of an error that did not re-derive it.
+	// of an error that did not re-derive it, and only while a Lock is still in
+	// the slot: a route re-create that replaced the Lock in this pass clears
+	// its AuthPolicyMissing in the update that replaced it (A62, A63).
 	pre, had := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete)
 	had = had && pre.Reason == ReasonAuthPolicyMissing
 	if had {
 		conds.unset(assaydv1alpha1.CondPolicyApplyIncomplete)
 	}
 	out, err := r.gatewayStep(ctx, agent, runNS, status, conds, desire)
-	if _, set := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); err != nil && had && !set {
+	stillLock := func() bool { tx := authTransaction(status); return tx != nil && tx.Kind == TxLock }
+	if _, set := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); err != nil && had && !set && stillLock() {
 		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, pre.Status, pre.Reason, pre.Message)
 	}
 	return out, err
@@ -796,11 +799,13 @@ func (r *AgentReconciler) recordServed(ctx context.Context, agent *assaydv1alpha
 // present and intact in the same pass. One window remains, and it is named
 // rather than claimed away: a policy deleted after that read and before the
 // route update leaves the route published without it until the next pass,
-// which the policy watch starts. What that pass does depends on where the
-// window fell: here, on a served route, it finds the policy missing and enters
-// the Lock below, and the route stays open meanwhile; at a Create's
-// Publishing, it finds the policy changed and re-enters at PreparingRoute,
-// which strips the route before the policy is written again. So both objects are checked BEFORE the route is touched:
+// which the policy watch starts. What that pass does depends on where it
+// finds the transaction. A Create still short of Served finds the policy
+// missing or changed and re-enters at PreparingRoute, which strips the route
+// before the policy is written again. A transaction already Served, including
+// one whose Publishing found its route published and converged and so wrote
+// nothing and recorded Served in the pass of the window, finds the policy
+// missing here and enters the Lock below, with the route left open. So both objects are checked BEFORE the route is touched:
 //
 //   - a route that is absent, or has lost its backendRefs, is re-created
 //     PREPARED, by a `Create` whose target is status.auth's and never the

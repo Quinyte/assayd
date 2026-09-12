@@ -826,14 +826,16 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, reason, msg)
 				status.Phase = assaydv1alpha1.PhaseDegraded
 			}
-		} else if tx := authTransaction(status); tx != nil &&
-			(tx.Kind == TxLock || (tx.Kind == TxCreate && tx.Stage != StagePublishing)) {
+		} else if tx := authTransaction(status); tx != nil && (tx.Kind == TxLock || tx.Kind == TxCreate) {
 			// A lost race changes no condition of its own, but it must not let
 			// Ready claim what the transaction knows is false: a Lock's route
-			// serves with no policy, and a Create short of Publishing has not
-			// published its route (design 03 §3.3.3). At Publishing the race was
-			// over the route's publication itself, and the next pass decides it,
-			// so Ready is left as it was.
+			// serves with no policy, and a Create short of Served has not got a
+			// route it has proved and converged (design 03 §3.3.3). The rollout
+			// switch above sets Ready=True on every pass, so leaving Ready alone
+			// here would claim exactly that. What does not happen is a page on
+			// cache lag: a never-served Agent is Pending, and only an Agent
+			// that was serving is Degraded, as on every other pass of its
+			// transaction.
 			reason := ReasonAuthEnforcementPending
 			if tx.Kind == TxLock {
 				reason = ReasonAuthPolicyMissing
