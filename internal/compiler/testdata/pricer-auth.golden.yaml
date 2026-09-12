@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Quinyte
+# SPDX-License-Identifier: Apache-2.0
+#
+# GOLDEN FILE, rendered by the code under test. Regenerate with
+#   go test ./internal/compiler -run Golden -update
+# and read the diff: this is the exact object the gateway would be handed once the compiler is wired.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  labels:
+    assayd.dev/agent: pricer
+    assayd.dev/agent-namespace: payments
+    assayd.dev/agent-uid: 0b5f4c2e-7d1a-4e59-9c3b-6a8d2f1e0c47
+  name: pricer-auth
+  namespace: assayd-run-payments
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: pricer-serving
+  traffic:
+    apiKeyAuthentication:
+      configMapSelector:
+        matchLabels:
+          assayd.dev/api-keys: "true"
+      mode: Strict
+    authorization:
+      action: Allow
+      policy:
+        matchExpressions:
+        - apiKey.group == "payments"

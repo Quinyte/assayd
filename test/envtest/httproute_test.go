@@ -20,6 +20,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/compiler"
 	"github.com/Quinyte/assayd/internal/controller"
 	"github.com/Quinyte/assayd/internal/revision"
 )
@@ -36,7 +37,7 @@ import (
 
 func servingRoute(t *testing.T, ns, agentName string) *gatewayv1.HTTPRoute {
 	t.Helper()
-	name, err := controller.ServingRouteName(agentName)
+	name, err := compiler.ServingRouteName(agentName)
 	if err != nil {
 		t.Fatalf("route name: %v", err)
 	}
@@ -710,7 +711,7 @@ func TestARouteAnotherAgentOwnsIsRefusedNotTakenOver(t *testing.T) {
 	reconcileOnce(t, r, a)
 	reconcileOnce(t, r, a)
 
-	name, err := controller.ServingRouteName("claimant")
+	name, err := compiler.ServingRouteName("claimant")
 	if err != nil {
 		t.Fatalf("route name: %v", err)
 	}
@@ -772,7 +773,7 @@ func TestAPredecessorsRouteIsAdoptedNotRefused(t *testing.T) {
 	reconcileOnce(t, r, a)
 	reconcileOnce(t, r, a)
 
-	name, err := controller.ServingRouteName("heir")
+	name, err := compiler.ServingRouteName("heir")
 	if err != nil {
 		t.Fatalf("route name: %v", err)
 	}

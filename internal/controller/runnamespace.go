@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/compiler"
 )
 
 // Design 02 A42/A60: an Agent's workload and its revision material live in an
@@ -58,13 +59,13 @@ const (
 	// LabelAgentNamespace carries the Agent's OWN namespace, on the run
 	// namespace and on every workload Pod: the SVID path segment reads it (A59),
 	// so the move is invisible to authorization.
-	LabelAgentNamespace = "assayd.dev/agent-namespace"
+	LabelAgentNamespace = compiler.LabelAgentNamespace
 	// LabelOwnedBy is observability — the install this namespace belongs to.
 	// It is never consulted as evidence.
 	LabelOwnedBy = "assayd.dev/owned-by"
 	// LabelAgentUID is the provenance label on every workload and copy in a run
 	// namespace (A44/A60). Corroboration, not authority: the name is.
-	LabelAgentUID = "assayd.dev/agent-uid"
+	LabelAgentUID = compiler.LabelAgentUID
 	// AnnotationBindingNonce is stamped on the run namespace at creation. An
 	// annotation, not a label: nothing selects on it.
 	AnnotationBindingNonce = "assayd.dev/binding-nonce"
