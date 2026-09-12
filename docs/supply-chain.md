@@ -58,7 +58,7 @@ cosign verify-attestation --type slsaprovenance1 "${IMAGE}@${DIGEST}" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-`gh attestation verify oci://ghcr.io/quinyte/assayd-operator:0.2.1 --owner Quinyte` reads the same provenance, once it can pull the image.
+`gh attestation verify oci://ghcr.io/quinyte/assayd-operator:0.2.1 --owner Quinyte` reads the same provenance, and needs no credentials now that the package is public. Checked on 2026-09-12: it verified one `https://slsa.dev/provenance/v1` attestation, signed by `.github/workflows/release.yml@refs/tags/v0.2.1`.
 
 ## Digests, not tags
 
