@@ -78,8 +78,7 @@ published before it carried the compiler (`Adopt`, below). A `traffic` policy
 of another name on the same route does not stop the write: it keeps a new
 route unpublished, and an in-place lock unproved, under `ForeignTrafficPolicy`,
 and an Agent already served keeps its policy. The policy carries API-key
-authentication
-over the ConfigMaps labelled `assayd.dev/api-keys: "true"` in that run
+authentication over the ConfigMaps labelled `assayd.dev/api-keys: "true"` in that run
 namespace, admitting the group named for the Agent's namespace. A new Agent's
 route is published only after an anonymous request through it gets 401, sent
 to `gateway.servingUrl`, which is therefore required. `auth: none` is
