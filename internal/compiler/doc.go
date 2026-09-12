@@ -14,10 +14,9 @@
 //
 // **The agent-operator emits what this renders**, through the `Create`
 // transaction in internal/controller/authtxn.go: a new Agent's route is
-// published only after its `<agent>-auth` enforces (§3.3.3). `Lock`, the
-// abandonment of an unfinished transaction, the prepared re-create of a
-// deleted route, and `Adopt`'s record are still owed (§1.1), so a route this
-// operator did not publish through a `Create` is not governed by it.
+// published only after its `<agent>-auth` enforces (§3.3.3). J2's `Lock`, the
+// abandonment of an unfinished transaction, and K2 are still owed (§1.1), and a
+// route this operator did not publish is refused as `Adopt`, not governed.
 //
 // **One dependency is load-bearing here: cel.dev/cel-go** (Apache-2.0; the
 // module was github.com/google/cel-go until v0.32.0 moved it). §3.4.2 requires

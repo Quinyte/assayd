@@ -37,6 +37,16 @@ type AuthProbeAnswer struct {
 	Code int
 }
 
+// probeTransport is http.DefaultTransport with NO proxy. The probe must reach
+// the Gateway's serving listener itself: a proxy taken from HTTP_PROXY in the
+// operator's environment would answer in its place, and a proxy that answers
+// 401 would pass for the Agent's -auth.
+var probeTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil
+	return t
+}()
+
 // httpAuthProber is the probe on a real cluster.
 //
 // It follows no redirect. A `3xx` is an answer to record, and following it
@@ -57,7 +67,7 @@ func (p httpAuthProber) Probe(ctx context.Context, req AuthProbeRequest) (AuthPr
 		return AuthProbeAnswer{}, fmt.Errorf("build the probe of %s: %w", req.URL, err)
 	}
 	r.Host = req.Host
-	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+	c := &http.Client{Transport: probeTransport, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
 	resp, err := c.Do(r)

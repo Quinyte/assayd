@@ -28,9 +28,11 @@ import (
 // backendRefs, its policy is written and converged, and the route is published
 // only after an anonymous request through it gets `401`.
 //
-// What is NOT here, and is the next change's (§1.1's slice, PR 5): `Lock`, the
-// abandonment of an unfinished `Create`, the prepared re-create of a deleted
-// route, `Adopt`'s record and K2, and a NACK moving status. Each is named where
+// Also here: a served API-key Agent's deleted route re-created prepared and
+// published only through `Create`'s probe, its missing policy re-created by the
+// `Lock` of a missing policy, and `Adopt`'s refusal with its record. What is NOT
+// here, and is the next change's (§1.1's slice, PR 5): J2's `Lock`, the
+// abandonment of an unfinished transaction, K2, and a NACK moving status. Each is named where
 // the code meets its trigger, so that PR 5 edits a stated seam rather than
 // finding one.
 
@@ -52,6 +54,7 @@ const (
 const (
 	TxCreate              = "Create"
 	TxAdopt               = "Adopt"
+	TxLock                = "Lock"
 	StageRefused          = "Refused"
 	StagePreparingRoute   = "PreparingRoute"
 	StageApplyingPolicies = "ApplyingPolicies"
@@ -318,6 +321,11 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 	switch {
 	case tx != nil && tx.Kind == TxCreate:
 		return r.runCreate(ctx, agent, runNS, name, status, conds, out)
+	case tx != nil && tx.Kind == TxLock && recorded != "" && tx.TargetMode == recorded:
+		// A Lock that re-creates a missing policy: §3.3's re-creation test, a
+		// Lock whose targetMode equals the recorded mode. J2's and K2's Locks
+		// are not built, and fall to the arm below.
+		return r.runLock(ctx, agent, runNS, name, status, conds, out)
 	case tx != nil:
 		// Nothing here writes another kind, and nothing here knows how to finish
 		// one. Leaving everything as found, loudly, is the one safe answer.
@@ -623,6 +631,10 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 		}
 	}
 	out.requeue = requeue
+	if status.Auth.Mode != "" {
+		// A re-create: this Agent was serving (§3.3.1's aggregation).
+		out.served = true
+	}
 	msg := fmt.Sprintf("the Create of this Agent's -auth (target %s) is in stage %s: %s",
 		tx.TargetMode, tx.Stage, unmet)
 	if deadlinePassed {
@@ -727,17 +739,48 @@ func (r *AgentReconciler) recordServed(ctx context.Context, agent *assaydv1alpha
 // reconcileServed keeps a served Agent's route published under the mode
 // status.auth records, and its `<agent>-auth` as status.auth records it.
 //
-// Nothing here deletes the policy. A compile failure means "the desired
-// policy is unknown", never "no policy is desired" (§3.3.1, I1). The three
-// paths that may delete it are the finalizer, an abandonment and an applied
-// change to `none`, and only the first is built.
+// **The invariant, for an API-key Agent: backendRefs are never written onto
+// its route unless `<agent>-auth` is present, intact, converged, and a 401 was
+// attributed.** So both objects are checked BEFORE the route is touched:
 //
-// A deleted route comes back published at once, as the shipped emitter did.
-// Design 03 §3.3.3 re-creates it prepared and publishes it only through a new
-// `Create`'s probe; that is the next change's.
+//   - a route that is absent, or has lost its backendRefs, is re-created
+//     PREPARED, by a `Create` whose target is status.auth's and never the
+//     spec's, and published only through that Create's probe (§3.3.3). A
+//     prune that takes the route and the policy together ends here, whichever
+//     delete is seen first;
+//   - a policy that is missing beside a published route is re-created from
+//     status.auth by a `Lock` from ApplyingPolicies, and trusted only once an
+//     anonymous request gets a 401 that can be attributed (§3.3.3). The route
+//     is not withdrawn: it is already open, and withdrawing it would hand
+//     anyone who can delete a policy a switch that takes the Agent off the air.
+//
+// Nothing here deletes the policy. A compile failure means "the desired
+// policy is unknown", never "no policy is desired" (§3.3.1, I1).
 func (r *AgentReconciler) reconcileServed(ctx context.Context, agent *assaydv1alpha1.Agent, runNS, name string,
 	status *assaydv1alpha1.AgentStatus, conds *conditionSet, out gatewayOutcome,
 ) (gatewayOutcome, error) {
+	apikey := status.Auth.Mode == string(compiler.AuthModeAPIKey)
+	if apikey && status.ActiveRevision != "" {
+		rt, err := r.currentServingRoute(ctx, agent, runNS, name)
+		if err != nil {
+			return out, err
+		}
+		if rt == nil || !routePublished(rt) {
+			return r.recreateRoute(ctx, agent, runNS, name, status, conds, out)
+		}
+		present, err := r.authPolicyPresent(ctx, agent, runNS)
+		if err != nil {
+			return out, err
+		}
+		if !present {
+			return r.lockMissingPolicy(ctx, agent, runNS, name, status, conds, out)
+		}
+		// Re-asserted before the route, so that a promotion never moves the
+		// route's backendRef while the policy has been changed out of band.
+		if err := r.reassertServedPolicy(ctx, agent, runNS, status.Auth); err != nil {
+			return out, &gatewayError{reason: ReasonPolicyWriteFailed, err: err}
+		}
+	}
 	keep := ""
 	if status.ActiveRevision != "" {
 		if _, _, err := r.ensureServingRoute(ctx, agent, runNS, status.ActiveRevision,
@@ -749,52 +792,222 @@ func (r *AgentReconciler) reconcileServed(ctx context.Context, agent *assaydv1al
 	if err := r.collectRoutes(ctx, agent, runNS, keep); err != nil {
 		return out, err
 	}
-	st, reason, msg := governanceFor(status.Auth)
-	if status.Auth.Mode == string(compiler.AuthModeAPIKey) {
-		missing, err := r.reassertServedPolicy(ctx, agent, runNS, status.Auth)
-		if err != nil {
-			return out, &gatewayError{reason: ReasonPolicyWriteFailed, err: err}
-		}
-		if missing {
-			policyName, _ := compiler.AuthPolicyName(agent.Name)
-			m := fmt.Sprintf("status.auth records this Agent as served under apikey, and its "+
-				"policy %s/%s does not exist, so its route serves with no key. Design 03 §3.3.3 "+
-				"re-creates it with Lock, and this operator does not build Lock yet, so it is "+
-				"NOT re-created. Delete the Agent and create it again to restore its -auth",
-				runNS, policyName)
-			st, reason, msg = metav1.ConditionTrue, ReasonAuthPolicyMissing, m
-			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, ReasonAuthPolicyMissing, m)
-			if out.withhold == nil {
-				out.withhold, out.served = &failure{ReasonAuthPolicyMissing, m}, true
-			}
-		}
-	}
 	// The value the served policy earned, compile failure or not (§3.3.1).
+	st, reason, msg := governanceFor(status.Auth)
 	conds.set(assaydv1alpha1.CondGovernanceSkipped, st, reason, msg)
 	return out, nil
 }
 
-// reassertServedPolicy re-asserts a served `<agent>-auth` to the policy
-// status.auth records (§3.3.1): a pure function of the Agent, checked against
-// appliedDigest. It reports whether the policy is missing, which it does not
-// re-create.
-func (r *AgentReconciler) reassertServedPolicy(ctx context.Context, agent *assaydv1alpha1.Agent,
-	runNS string, auth *assaydv1alpha1.AuthStatus) (bool, error) {
-	recorded, err := compiler.AuthPolicy(compiler.AuthInput{AgentName: agent.Name,
-		AgentNamespace: agent.Namespace, AgentUID: agent.UID, RunNamespace: runNS})
+// recreateRoute is §3.3.3's re-create of a served Agent's deleted or stripped
+// `<agent>-serving`: `{kind: Create, targetMode, targetDigest}` taken from
+// status.auth, recorded before the prepared route is written. It displaces a
+// missing-policy Lock, whose policy the Create writes at ApplyingPolicies, and
+// which has no Publishing of its own (A62). It is never abandoned.
+func (r *AgentReconciler) recreateRoute(ctx context.Context, agent *assaydv1alpha1.Agent, runNS, name string,
+	status *assaydv1alpha1.AgentStatus, conds *conditionSet, out gatewayOutcome,
+) (gatewayOutcome, error) {
+	deadline := metav1.NewTime(time.Now().Add(r.authDeadline()).Truncate(time.Second))
+	status.Auth.Transaction = &assaydv1alpha1.AuthTransaction{Kind: TxCreate, TargetMode: status.Auth.Mode,
+		TargetDigest: status.Auth.AppliedDigest, Stage: StagePreparingRoute, Deadline: &deadline}
+	if err := r.persistStatus(ctx, agent, status); err != nil {
+		return out, err
+	}
+	return r.runCreate(ctx, agent, runNS, name, status, conds, out)
+}
+
+// lockMissingPolicy records §3.3.3's Lock of a missing policy, from
+// ApplyingPolicies, with its target taken from status.auth.
+func (r *AgentReconciler) lockMissingPolicy(ctx context.Context, agent *assaydv1alpha1.Agent, runNS, name string,
+	status *assaydv1alpha1.AgentStatus, conds *conditionSet, out gatewayOutcome,
+) (gatewayOutcome, error) {
+	deadline := metav1.NewTime(time.Now().Add(r.authDeadline()).Truncate(time.Second))
+	status.Auth.Transaction = &assaydv1alpha1.AuthTransaction{Kind: TxLock, TargetMode: status.Auth.Mode,
+		TargetDigest: status.Auth.AppliedDigest, Stage: StageApplyingPolicies, Written: true, Deadline: &deadline}
+	if err := r.persistStatus(ctx, agent, status); err != nil {
+		return out, err
+	}
+	return r.runLock(ctx, agent, runNS, name, status, conds, out)
+}
+
+// runLock runs a Lock of a missing policy: ApplyingPolicies → Converging →
+// ProbingAfter → Served, on a route that stays published throughout. It writes
+// nothing to the route. A route found absent or stripped displaces it with
+// the route re-create.
+func (r *AgentReconciler) runLock(ctx context.Context, agent *assaydv1alpha1.Agent, runNS, name string,
+	status *assaydv1alpha1.AgentStatus, conds *conditionSet, out gatewayOutcome,
+) (gatewayOutcome, error) {
+	tx := status.Auth.Transaction
+	rt, err := r.currentServingRoute(ctx, agent, runNS, name)
+	if err != nil {
+		return out, err
+	}
+	if (rt == nil || !routePublished(rt)) && status.ActiveRevision != "" {
+		return r.recreateRoute(ctx, agent, runNS, name, status, conds, out)
+	}
+	if rt == nil {
+		return out, fmt.Errorf("a Lock of %s's missing policy has no route and no serving revision", agent.Name)
+	}
+	target, err := createTarget(agent, runNS, tx)
+	if err != nil {
+		return out, err
+	}
+	now := time.Now()
+	deadlinePassed := tx.Deadline != nil && !now.Before(tx.Deadline.Time)
+	var unmet string
+	requeue := time.Duration(0)
+steps:
+	for step := 0; ; step++ {
+		if step == 12 {
+			unmet = "the transaction moved back and forth without settling in one pass; a write " +
+				"it made did not keep"
+			requeue = AuthProbeInterval
+			break
+		}
+		switch tx.Stage {
+		case StageApplyingPolicies:
+			if _, err := r.ensureAuthPolicy(ctx, agent, target.Policy); err != nil {
+				return out, &gatewayError{reason: ReasonPolicyWriteFailed, err: err}
+			}
+			tx.Stage = StageConverging
+			if err := r.persistStatus(ctx, agent, status); err != nil {
+				return out, err
+			}
+		case StageConverging, StageProbingAfter:
+			policy, intact, err := r.authPolicyIntact(ctx, agent, runNS, target)
+			if err != nil {
+				return out, err
+			}
+			if !intact {
+				tx.Stage = StageApplyingPolicies
+				if err := r.persistStatus(ctx, agent, status); err != nil {
+					return out, err
+				}
+				continue
+			}
+			if tx.Stage == StageConverging {
+				ok, why := routeConverged(rt, r.Gateway)
+				if ok {
+					ok, why = policyConverged(policy, r.Gateway)
+				}
+				if !ok {
+					unmet = why
+					break steps
+				}
+				tx.Stage = StageProbingAfter
+				if err := r.persistStatus(ctx, agent, status); err != nil {
+					return out, err
+				}
+				continue
+			}
+			answer, perr := r.probeAgent(ctx, agent)
+			tx.Probe = &assaydv1alpha1.AuthProbe{}
+			if perr == nil {
+				code := int32(answer.Code)
+				tx.Probe.After = &code
+			}
+			attributed, why := cardAttributes(agent, status, rt)
+			if perr == nil && answer.Code == 401 && attributed {
+				return r.recordServed(ctx, agent, runNS, target, status, conds, out)
+			}
+			if err := r.persistStatus(ctx, agent, status); err != nil {
+				return out, err
+			}
+			unmet = describeProbe(agent, answer, perr)
+			if perr == nil && answer.Code == 401 {
+				unmet = "the last anonymous probe got a 401 that cannot be attributed: " + why
+			}
+			requeue = AuthProbeInterval
+			if deadlinePassed {
+				requeue = CardRetryInterval
+			}
+			break steps
+		default:
+			return out, fmt.Errorf("status.auth.transaction is a Lock in stage %q, which this "+
+				"operator does not know", tx.Stage)
+		}
+	}
+	if requeue == 0 {
+		requeue = CardRetryInterval
+		if !deadlinePassed {
+			requeue = tx.Deadline.Sub(now) + time.Second
+		}
+	}
+	out.requeue = requeue
+	policyName, _ := compiler.AuthPolicyName(agent.Name)
+	msg := fmt.Sprintf("status.auth records this Agent as served under apikey, and its policy %s/%s "+
+		"was missing, so its route served with no key. It has been re-created from status.auth, "+
+		"and is trusted only once an anonymous request through the route gets a 401 that can be "+
+		"attributed (design 03 §3.3.3, the Lock of a missing policy). The route is not withdrawn. "+
+		"The Lock is in stage %s: %s", runNS, policyName, tx.Stage, unmet)
+	if deadlinePassed {
+		msg += fmt.Sprintf(". Its deadline, %s, has passed, and the Lock keeps working",
+			tx.Deadline.UTC().Format(time.RFC3339))
+	}
+	conds.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonAuthPolicyMissing, msg)
+	conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, ReasonAuthPolicyMissing, msg)
+	if out.withhold == nil {
+		out.withhold = &failure{ReasonAuthPolicyMissing, msg}
+	}
+	out.served = true
+	return out, nil
+}
+
+// cardAttributes is §3.3.3's attribution for a 401 on a published route: it
+// counts only while status.cards records a digest for a revision the route's
+// backendRefs serve. The operator's own card fetch records one only from an
+// anonymous 200 with a valid card on the same path, so that backend answered
+// the path anonymously at its fetchedAt, and a 401 there now comes from
+// something in front of it. With no digest, a backend's own 401 would pass
+// for the lock whether or not the policy took.
+func cardAttributes(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus, rt *gatewayv1.HTTPRoute) (bool, string) {
+	for _, rule := range rt.Spec.Rules {
+		for _, ref := range rule.BackendRefs {
+			for _, c := range status.Cards {
+				if c.Digest != "" && WorkloadName(agent.Name, c.Revision) == string(ref.Name) {
+					return true, ""
+				}
+			}
+		}
+	}
+	return false, "no card digest is recorded for a revision the route serves, so the backend's " +
+		"anonymous answer on the card path was never observed, and the 401 could be the backend's own"
+}
+
+// authPolicyPresent reports whether `<agent>-auth` exists, read live.
+func (r *AgentReconciler) authPolicyPresent(ctx context.Context, agent *assaydv1alpha1.Agent, runNS string) (bool, error) {
+	name, err := compiler.AuthPolicyName(agent.Name)
 	if err != nil {
 		return false, err
 	}
+	switch err := r.Get(ctx, types.NamespacedName{Namespace: runNS, Name: name}, NewAgentgatewayPolicy()); {
+	case apierrors.IsNotFound(err):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("read policy %s in %s: %w", name, runNS, err)
+	}
+	return true, nil
+}
+
+// reassertServedPolicy re-asserts a served `<agent>-auth` to the policy
+// status.auth records (§3.3.1): a pure function of the Agent, checked against
+// appliedDigest. A policy that is missing is the Lock's, not this.
+func (r *AgentReconciler) reassertServedPolicy(ctx context.Context, agent *assaydv1alpha1.Agent,
+	runNS string, auth *assaydv1alpha1.AuthStatus) error {
+	recorded, err := compiler.AuthPolicy(compiler.AuthInput{AgentName: agent.Name,
+		AgentNamespace: agent.Namespace, AgentUID: agent.UID, RunNamespace: runNS})
+	if err != nil {
+		return err
+	}
 	digest, err := compiler.Digest(recorded)
 	if err != nil {
-		return false, err
+		return err
 	}
 	existing := NewAgentgatewayPolicy()
 	switch err := r.Get(ctx, types.NamespacedName{Namespace: runNS, Name: recorded.GetName()}, existing); {
 	case apierrors.IsNotFound(err):
-		return true, nil
+		return nil
 	case err != nil:
-		return false, fmt.Errorf("read policy %s in %s: %w", recorded.GetName(), runNS, err)
+		return fmt.Errorf("read policy %s in %s: %w", recorded.GetName(), runNS, err)
 	}
 	if digest != auth.AppliedDigest {
 		// What this build renders is not what was served, so the served policy
@@ -802,12 +1015,10 @@ func (r *AgentReconciler) reassertServedPolicy(ctx context.Context, agent *assay
 		log.FromContext(ctx).Info("not re-asserting the served -auth policy: this operator renders a "+
 			"different digest than status.auth records", "policy", recorded.GetName(),
 			"recorded", auth.AppliedDigest, "rendered", digest)
-		return false, nil
+		return nil
 	}
-	if _, err := r.writeAuthPolicy(ctx, agent, existing, recorded, digest); err != nil {
-		return false, err
-	}
-	return false, nil
+	_, err = r.writeAuthPolicy(ctx, agent, existing, recorded, digest)
+	return err
 }
 
 // refuseAdopt is `Adopt`, refused (§3.3.3): no policy is written, and the

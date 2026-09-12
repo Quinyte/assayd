@@ -623,6 +623,14 @@ func (r *AgentReconciler) collectRoutes(
 	return nil
 }
 
+// authTransaction is status.auth.transaction, or nil.
+func authTransaction(status *assaydv1alpha1.AgentStatus) *assaydv1alpha1.AuthTransaction {
+	if status.Auth == nil {
+		return nil
+	}
+	return status.Auth.Transaction
+}
+
 // ReasonGatewayDisabled is GovernanceSkipped's reason on design 03 §3.1's
 // declared-ungoverned tier — the row P1 ships and `local` uses. The reasons
 // for the enabled tier are in authtxn.go.
@@ -648,6 +656,18 @@ func (r *AgentReconciler) assessGovernance(c *conditionSet, status *assaydv1alph
 				"no route is emitted, no budget or rate limit is enforced, there is no gateway "+
 				"authentication and no tool filtering, and no NetworkPolicy is materialized in any "+
 				"namespace. Readiness is not withheld — this is a documented tier, not an incident")
+		return
+	}
+	if tx := authTransaction(status); tx != nil && tx.Kind == TxLock {
+		c.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonAuthPolicyMissing,
+			"a served Agent's -auth policy was missing and is being re-created; the route serves "+
+				"with no key until an anonymous request through it gets an attributed 401 "+
+				"(design 03 §3.3.3)")
+		return
+	} else if tx != nil && tx.Kind == TxCreate && status.Auth.Mode != "" {
+		st, reason, msg := vacuousGovernance("this Agent's route is being re-created as a prepared " +
+			"route, and is not published")
+		c.set(assaydv1alpha1.CondGovernanceSkipped, st, reason, msg)
 		return
 	}
 	if status.Auth != nil && status.Auth.Mode != "" {

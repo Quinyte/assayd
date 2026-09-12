@@ -212,8 +212,10 @@ func TestTheNackReadIsARoleInTheGatewaysNamespace(t *testing.T) {
 		args []string
 		ns   string
 	}{
-		{"the Gateway's own namespace", []string{"--set", "gateway.enabled=true", "--set", "gateway.namespace=gw-elsewhere"}, "gw-elsewhere"},
-		{"unset falls back to the operator's, as admission.yaml does", []string{"--set", "gateway.enabled=true"}, "assayd-system"},
+		{"the Gateway's own namespace", []string{"--set", "gateway.enabled=true",
+			"--set", "gateway.servingUrl=http://gw.example:8080", "--set", "gateway.namespace=gw-elsewhere"}, "gw-elsewhere"},
+		{"unset falls back to the operator's, as admission.yaml does", []string{"--set", "gateway.enabled=true",
+			"--set", "gateway.servingUrl=http://gw.example:8080"}, "assayd-system"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			docs := render(t, tc.args...)

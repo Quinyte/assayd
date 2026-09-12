@@ -110,9 +110,12 @@ creates DNS for it.
 
 `gateway.servingUrl` is set to {{ .Values.gateway.servingUrl }}. Each new
 Agent's route is published only after an anonymous request sent there gets
-401. Nothing checks that it reaches the listener named `http`: if it does not,
-every new Agent stays unpublished, with `PolicyApplyIncomplete`, reason
-`AuthEnforcementUnverified`, four minutes after it was created.
+401. Nothing checks that it reaches the listener named `http`. If it reaches
+no listener, every new Agent stays unpublished, with `PolicyApplyIncomplete`,
+reason `AuthEnforcementUnverified`, four minutes after it was created. If it
+reaches anything else that answers 401 on its own, a proxy or a Gateway-level
+auth policy for instance, that 401 can pass for the Agent's own policy, and
+nothing here detects it (design 03 §3.3.3; §8.1 owes the conformance case).
 {{- end }}
 {{- end }}
 

@@ -866,11 +866,18 @@ func earliest(a, b time.Duration) time.Duration {
 // spec, never a revision (ADR-0034, F2).
 func (r *AgentReconciler) authHoldsPromotion(status *assaydv1alpha1.AgentStatus, d authDesire,
 	pin *releasePin) string {
-	if !r.Gateway.Enabled || pin != nil || status.Auth == nil || status.Auth.Mode == "" || d.compiles() {
+	if !r.Gateway.Enabled || pin != nil || status.Auth == nil || d.compiles() {
 		return ""
 	}
-	return "its -auth input does not compile, and a served Agent's route keeps its last good -auth " +
-		"(design 03 §3.3.1, I1). PolicyCompileFailed says what to change"
+	// A served Agent, and one whose Create is in flight: that Create finishes
+	// to its recorded target and publishes the revision the route names, so a
+	// revision an uncompilable edit minted must not become that revision.
+	inFlight := status.Auth.Transaction != nil && status.Auth.Transaction.Kind == TxCreate
+	if status.Auth.Mode == "" && !inFlight {
+		return ""
+	}
+	return "its -auth input does not compile, and this Agent's route keeps the -auth it has or is " +
+		"being given (design 03 §3.3.1, I1). PolicyCompileFailed says what to change"
 }
 
 // withholdReady applies design 03 §3.3.1's aggregation for the -auth step: a

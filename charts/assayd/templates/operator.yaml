@@ -87,10 +87,13 @@ spec:
             # nothing, which is what an install with no Gateway should do.
             - --gateway-url={{ . }}
             {{- end }}
+            {{- if and .Values.gateway.enabled (not .Values.gateway.servingUrl) }}
+            {{- fail "gateway.enabled is true and gateway.servingUrl is empty. The operator publishes a new Agent's route only after an anonymous request to the Gateway's serving listener gets 401 (design 03 3.3.3), and refuses to start without its address: set gateway.servingUrl to the listener <agent>-serving attaches to (listener http)" }}
+            {{- end }}
             {{- with .Values.gateway.servingUrl }}
             # The Gateway's SERVING listener, where design 03 3.3.3's anonymous
-            # probe will go. Validated at startup and used by nothing yet: no
-            # compiler runs, so nothing probes.
+            # probe goes. Required with the gateway enabled, and validated at
+            # startup.
             - --gateway-serving-url={{ . }}
             {{- end }}
             - --health-probe-bind-address=:8081

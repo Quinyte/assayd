@@ -357,7 +357,8 @@ func admitGroupExpression(group string) (string, error) {
 // It is defined over the COMPILED policy, and the reconciler also uses it to
 // compare a stored policy with a compiled one. That works because the pinned
 // AgentgatewayPolicy CRD defaults nothing under the fields this renders except
-// `apiKeyAuthentication.mode`, which is emitted anyway (§3.4.4); envtest runs
+// `apiKeyAuthentication.mode` and `authorization.action`, and both are emitted
+// (§3.4.4); envtest runs
 // against that CRD, so a default added there fails a test rather than turning
 // the comparison into an update on every reconcile.
 func Digest(policy *unstructured.Unstructured) (string, error) {

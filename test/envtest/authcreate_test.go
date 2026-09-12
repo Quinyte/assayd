@@ -720,21 +720,6 @@ func TestAServedPolicyChangedOutOfBandIsReasserted(t *testing.T) {
 	}
 }
 
-// A served policy deleted out of band leaves the route serving with no key.
-// `Lock` re-creates it (§3.3.3) and is not built, so this operator does not;
-// it says so rather than reporting the route governed.
-func TestAServedPolicyDeletedIsReportedAndNotClaimed(t *testing.T) {
-	a, r, _ := servedAPIKeyAgent(t, "unlocked")
-	name, _ := compiler.AuthPolicyName("unlocked")
-	if err := k8s.Delete(context.Background(), policyExists(t, runNS(a.Namespace), name)); err != nil {
-		t.Fatal(err)
-	}
-	reconcileOnce(t, r, a)
-	condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyMissing")
-	condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyMissing")
-	condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AuthPolicyMissing")
-}
-
 // A route published before this operator carried a compiler, with nothing in
 // status.auth, is `Adopt`'s trigger: refused. No policy is written, the route
 // keeps serving, and GovernanceSkipped says it is unauthenticated (§3.3.3).

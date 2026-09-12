@@ -126,14 +126,18 @@ gateway:
   # which names the listener agents send egress to. Design 03 3.3.3 sends the
   # compiler's anonymous `401` probe here, with the Agent's Host header.
   #
-  # Rendered as --gateway-serving-url only when set. REQUIRED whenever
-  # `enabled` is true: the policy compiler runs then, and it publishes a new
-  # Agent's route only after an anonymous request sent HERE, with the Agent's
-  # Host header, gets 401 from the Agent's `<agent>-auth` policy. The operator
-  # refuses to start with the gateway enabled and this unset, and refuses a
-  # value that is not an absolute http(s) URL naming only a host and port.
-  # Whether the URL reaches the right listener is not checked: a wrong one
-  # holds every new Agent unpublished, and its Agents say so.
+  # Rendered as --gateway-serving-url. REQUIRED whenever `enabled` is true:
+  # the chart refuses to render without it, and the operator refuses to start.
+  # The policy compiler publishes a new Agent's route only after an anonymous
+  # request sent HERE, with the Agent's Host header, gets 401. The operator
+  # refuses a value that is not an absolute http(s) URL naming only a host and
+  # port, and checks nothing else. A URL that reaches no listener holds every
+  # new Agent unpublished, and its Agents say so. A URL that reaches a
+  # different listener, a proxy, or anything that answers 401 on its own, or a
+  # Gateway carrying a Gateway-level auth policy, can answer the 401 the
+  # Agent's own policy did not, and nothing detects that: design 03 §3.3.3
+  # records it as open, and §8.1 owes the conformance case on the `http`
+  # listener.
   servingUrl: ""
   # The namespace the Gateway object lives in, which is NOT the namespace the
   # operator runs in. Design 03 3.2 puts gateway-scoped resources in "the

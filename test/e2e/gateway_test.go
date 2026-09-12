@@ -377,10 +377,10 @@ func TestTheOperatorRecreatesARouteThatWasDeleted(t *testing.T) {
 			"this test cannot distinguish a recreate from a delete that did nothing")
 	}
 
-	// Published at once: the Agent is served, and design 03 §3.3.3's prepared
-	// re-create of a deleted route is not built yet (A71). Its <agent>-auth
-	// survived the delete and targets the route by name.
-	after := waitForPublishedRoute(t, ctx, name, 2*time.Minute)
+	// Re-created PREPARED and published only after an anonymous request through
+	// it got 401 (design 03 §3.3.3): its target is status.auth's, and its
+	// <agent>-auth, which survived the delete, targets the route by name.
+	after := waitForPublishedRoute(t, ctx, name, 3*time.Minute)
 	assertEmittedHostname(t, after, name, "assayd-e2e")
 	if after.GetUID() == before.GetUID() {
 		t.Fatalf("the route came back with the same UID (%s), so it was never actually gone",
@@ -393,6 +393,12 @@ func TestTheOperatorRecreatesARouteThatWasDeleted(t *testing.T) {
 	gwNS, gwName := requireGateway(t)
 	gwSvc := gatewayService(t, ctx, gwNS, gwName)
 	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gwSvc, gwNS) + a2aSendMessage
+	// The re-created route is authenticated: a caller with no key is refused.
+	if code := probeCode(t, ctx, "recreated-anon", url, emittedHostname(t, name, "assayd-e2e"), "",
+		sendMessage("anonymous")); code != "401" {
+		t.Errorf("an anonymous request through the re-created route got %s, want 401 from the "+
+			"operator's <agent>-auth", code)
+	}
 	ensureAPIKeys(t, ctx)
 	body := askThroughGateway(t, ctx, "recreated", url, emittedHostname(t, name, "assayd-e2e"),
 		sendMessage("after the delete"))
