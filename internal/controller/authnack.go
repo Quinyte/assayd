@@ -104,6 +104,20 @@ const (
 	maxNackPages = 10
 )
 
+func (r *AgentReconciler) nackPage() int {
+	if r.NackPageSize > 0 {
+		return r.NackPageSize
+	}
+	return nackPageSize
+}
+
+func (r *AgentReconciler) nackPages() int {
+	if r.NackMaxPages > 0 {
+		return r.NackMaxPages
+	}
+	return maxNackPages
+}
+
 // freshNack returns what a genuine NACK naming this policy says, when one was
 // last seen strictly AFTER the policy's last write, or "".
 //
@@ -118,17 +132,17 @@ const (
 // filtered by the API server on type and reason: the RBAC is a Role there. A
 // failed list is logged, and the pass goes on as if no NACK was seen.
 func (r *AgentReconciler) freshNack(ctx context.Context, agent *assaydv1alpha1.Agent, runNS string,
-	policy *unstructured.Unstructured) string {
+	policy *unstructured.Unstructured, out *gatewayOutcome) string {
 	if policy == nil || r.Gateway.Namespace == "" {
 		return ""
 	}
 	var list corev1.EventList
 	cont := ""
-	for page := 0; page < maxNackPages; page++ {
+	for page := 0; page < r.nackPages(); page++ {
 		var chunk corev1.EventList
 		if err := r.reader().List(ctx, &chunk, client.InNamespace(r.Gateway.Namespace),
 			client.MatchingFields{"type": corev1.EventTypeWarning, "reason": NackEventReason},
-			client.Limit(nackPageSize), client.Continue(cont)); err != nil {
+			client.Limit(int64(r.nackPage())), client.Continue(cont)); err != nil {
 			log.FromContext(ctx).Error(err, "could not list the Gateway's NACK Events; this pass takes "+
 				"no NACK into account", "agent", agent.Namespace+"/"+agent.Name)
 			return ""
@@ -141,6 +155,12 @@ func (r *AgentReconciler) freshNack(ctx context.Context, agent *assaydv1alpha1.A
 	if cont != "" {
 		log.FromContext(ctx).Info("the Gateway's namespace holds more NACK Events than one pass reads; "+
 			"the rest are not taken into account", "read", len(list.Items))
+		// On the transaction's own condition, because pages come in name order
+		// and whoever can write Events there can bury a genuine NACK past the
+		// cap (slice PR 5's third review).
+		out.nackNote = fmt.Sprintf(". NACK Events in the Gateway's namespace past the first %d were "+
+			"not inspected, so a NACK among them is not taken into account here; the probe still "+
+			"decides (design 03 A72)", len(list.Items))
 	}
 	written := policyWrittenAt(policy)
 	key := types.NamespacedName{Namespace: runNS, Name: policy.GetName()}

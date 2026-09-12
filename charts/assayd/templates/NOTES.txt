@@ -68,8 +68,13 @@ grants, and no registration deadline is counted. See `docs/designs/02-*.md` §5.
     `<agent>.<agent-namespace>.{{ .Values.gateway.hostnameSuffix | default "assayd.internal" }}` and forwarding to that
     revision's Service
 
-and, for every Agent whose `spec.expose.a2a.auth` is `apikey` or absent, an
-`AgentgatewayPolicy` named `<agent>-auth` beside it: API-key authentication
+and, for an Agent whose `spec.expose.a2a.auth` is `apikey` or absent, an
+`AgentgatewayPolicy` named `<agent>-auth` beside it. Three are refused one,
+and their status says why: an Agent still carrying a stored `spec.budget`
+(until it is removed), one whose route a `traffic` policy the operator did not
+emit also targets, or that has a policy at its `<agent>-auth` name without its
+UID (`ForeignTrafficPolicy`), and a route this operator published before it
+carried the compiler (`Adopt`, below). The policy carries API-key authentication
 over the ConfigMaps labelled `assayd.dev/api-keys: "true"` in that run
 namespace, admitting the group named for the Agent's namespace. A new Agent's
 route is published only after an anonymous request through it gets 401, sent

@@ -495,7 +495,8 @@ var errRouteGone = errors.New("the serving route is gone, and an API-key route i
 
 // errRouteRaceLost marks the read-after-write race ensureServingRoute returns
 // rather than recursing into, for the reason ensureWorkload records at length.
-var errRouteRaceLost = errors.New("a route appeared between the read and the create")
+var errRouteRaceLost = errors.New("the cached read found no route and the API server already holds " +
+	"one: the cache is behind, or another writer created it")
 
 // servingBackendPort is the port the SERVING revision's Service publishes,
 // read off that Service by port name. See servingRouteFor for why it may not be

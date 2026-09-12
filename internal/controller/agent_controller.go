@@ -121,6 +121,11 @@ type AgentReconciler struct {
 	// AuthDeadline is the `-auth` transaction's deadline. Zero means
 	// AuthTransactionDeadline, the design's constant; only tests set it.
 	AuthDeadline time.Duration
+	// NackPageSize and NackMaxPages bound the NACK Events one pass reads.
+	// Zero means nackPageSize and maxNackPages; envtest sets them small so the
+	// page loop and the cap can be pinned.
+	NackPageSize int
+	NackMaxPages int
 
 	installMu  sync.Mutex
 	installUID string

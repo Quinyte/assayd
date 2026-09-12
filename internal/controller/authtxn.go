@@ -128,6 +128,9 @@ type gatewayOutcome struct {
 	// nack is a genuine NACK naming this Agent's `<agent>-auth` since its last
 	// write, as its message says (§3.3.2), or "".
 	nack string
+	// nackNote says that NACK Events past the page cap were not inspected,
+	// or "". It is appended to the transaction's own message.
+	nackNote string
 }
 
 // authDesire is what the current spec's -auth compiles to, and whether any
@@ -281,7 +284,7 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, pre.Status, pre.Reason, pre.Message)
 	}
 	if err == nil {
-		reportForeign(status, conds, &out)
+		reportForeign(agent, runNS, status, conds, &out)
 	}
 	return out, err
 }
@@ -296,7 +299,8 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 // A refused Adopt keeps GovernanceSkipped=CompilerUpgradeUnsupported, whose
 // message is the only one that names that Agent's way out; the foreign policy
 // is reported on PolicyApplyIncomplete there.
-func reportForeign(status *assaydv1alpha1.AgentStatus, conds *conditionSet, out *gatewayOutcome) {
+func reportForeign(agent *assaydv1alpha1.Agent, runNS string, status *assaydv1alpha1.AgentStatus,
+	conds *conditionSet, out *gatewayOutcome) {
 	if len(out.foreign) == 0 {
 		return
 	}
@@ -306,6 +310,13 @@ func reportForeign(status *assaydv1alpha1.AgentStatus, conds *conditionSet, out 
 		"is taken. A route not yet published is not published, a published route is not "+
 		"withdrawn, and the operator never deletes it, because it is not this Agent's <agent>-auth "+
 		"by name and label. Remove it (design 03 §3.2)", strings.Join(out.foreign, ", "))
+	if foreignAtOwnName(out.foreign, agent, runNS) {
+		own, _ := compiler.AuthPolicyName(agent.Name)
+		msg += fmt.Sprintf(". %s/%s sits at this Agent's own -auth name and does not carry its UID, so it "+
+			"is not re-asserted. If it was this Agent's policy with its UID label removed, delete it: "+
+			"the operator then writes this Agent's own policy there, for a served Agent by the Lock "+
+			"of a missing policy", runNS, own)
+	}
 	if c, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); ok {
 		// One condition carries every failing path (§3.3.1).
 		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, c.Reason,
@@ -421,9 +432,23 @@ func (r *AgentReconciler) authStep(ctx context.Context, agent *assaydv1alpha1.Ag
 	if fails := compileFailures(desire, recorded, inFlight); len(fails) > 0 {
 		if abandonedLock && fails[0].reason == ReasonAuthInputAbsent {
 			policy, _ := compiler.AuthPolicyName(agent.Name)
-			fails[0].message += fmt.Sprintf(". The Lock to apikey was abandoned before it was proved, "+
-				"and %s was deleted, so this route serves UNAUTHENTICATED again, whether or not the "+
-				"gateway had taken the policy (design 03 §3.3.3)", policy)
+			// "Deleted" only when it is gone. A policy at the name that is not
+			// this Agent's was left by the name-and-label rule, and it may still
+			// be enforcing on the route (slice PR 5's third review).
+			remains, err := r.authPolicyPresent(ctx, agent, runNS)
+			if err != nil {
+				return out, err
+			}
+			if remains {
+				fails[0].message += fmt.Sprintf(". The Lock to apikey was abandoned before it was proved. "+
+					"%s/%s is still there and is not this Agent's: it does not carry this Agent's UID, so "+
+					"it was not deleted, and it may still be enforcing on this route, which status "+
+					"records as unauthenticated. Remove it (design 03 §3.2, §3.3.3)", runNS, policy)
+			} else {
+				fails[0].message += fmt.Sprintf(". The Lock to apikey was abandoned before it was proved, "+
+					"and %s was deleted, so this route serves UNAUTHENTICATED again, whether or not the "+
+					"gateway had taken the policy (design 03 §3.3.3)", policy)
+			}
 		}
 		conds.set(assaydv1alpha1.CondPolicyCompileFailed, metav1.ConditionTrue, fails[0].reason,
 			joinFailures(fails))
@@ -590,11 +615,19 @@ func (r *AgentReconciler) abandon(ctx context.Context, agent *assaydv1alpha1.Age
 		if rt != nil && routePublished(rt) {
 			// First, whatever the new mode: the route loses its backendRefs
 			// before anything else goes, so it never carries backends with no
-			// policy, even while a delete of it is held (§3.3.3).
-			if _, _, err := r.ensureServingRoute(ctx, agent, runNS, status.ActiveRevision,
-				status.ActiveRevisionDigest, name, routePublication{prepared: true}); err != nil {
-				return out, false, err
+			// policy, even while a delete of it is held (§3.3.3). Stripped on the
+			// object the live read returned: through the cache, a route the
+			// cache does not hold yet would turn the strip into a create that
+			// the API server refuses (slice PR 5's third review).
+			stripped := rt.DeepCopy()
+			for i := range stripped.Spec.Rules {
+				stripped.Spec.Rules[i].BackendRefs = nil
 			}
+			if err := r.Update(ctx, stripped); err != nil {
+				return out, false, fmt.Errorf("strip route %s in %s before the abandonment removes "+
+					"anything: %w", name, runNS, err)
+			}
+			rt = stripped
 		}
 		if rt != nil && !desire.compiles() {
 			// No prepared route exists while the serving route does not compile
@@ -869,7 +902,7 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 				}
 				continue
 			}
-			if n := r.freshNack(ctx, agent, runNS, policy); n != "" {
+			if n := r.freshNack(ctx, agent, runNS, policy, &out); n != "" {
 				// A NACK returns the machine to Converging and advances
 				// nothing (§3.3).
 				out.nack, unmet = n, n
@@ -1020,6 +1053,7 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 	}
 
 	// Waiting.
+	unmet += out.nackNote
 	if requeue == 0 {
 		requeue = CardRetryInterval
 		if !deadlinePassed {
@@ -1367,7 +1401,7 @@ steps:
 				}
 				continue
 			}
-			if n := r.freshNack(ctx, agent, runNS, policy); n != "" {
+			if n := r.freshNack(ctx, agent, runNS, policy, &out); n != "" {
 				out.nack, unmet = n, n
 				if tx.Stage != StageConverging {
 					tx.Stage = StageConverging
@@ -1437,6 +1471,7 @@ steps:
 				"operator does not know", tx.Stage)
 		}
 	}
+	unmet += out.nackNote
 	if requeue == 0 {
 		requeue = CardRetryInterval
 		if !deadlinePassed {
