@@ -22,8 +22,9 @@ import (
 // encoded. This file emits ONE resource — the revision's serving HTTPRoute —
 // and nothing else.
 //
-// **This is not design 03's compiler and must not be read as one.** Design 03
-// is not approved and its own Status line says do not implement it. What is
+// **This is not design 03's compiler and must not be read as one.** Only design
+// 03's first slice is approved (2026-09-12), and it is not wired in here yet; the
+// rest of design 03 is not approved. What is
 // encoded here is exactly the resource design 07 A6 already authored by hand
 // and executed against a real Gateway, plus design 03 §3.2's rules about where
 // it lives, what names it, and what may delete it — because those were measured
