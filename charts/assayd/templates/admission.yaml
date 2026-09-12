@@ -174,7 +174,7 @@ spec:
     - name: addedFinalizer
       expression: "has(object.metadata.finalizers) && object.metadata.finalizers.exists(f, oldObject == null || !has(oldObject.metadata.finalizers) || !(f in oldObject.metadata.finalizers))"
     - name: addedOwner
-      expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, oldObject == null || !has(oldObject.metadata.ownerReferences) || !oldObject.metadata.ownerReferences.exists(p, p.uid == o.uid))"
+      expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, oldObject == null || !has(oldObject.metadata.ownerReferences) || !oldObject.metadata.ownerReferences.exists(p, p.uid == o.uid && p.apiVersion == o.apiVersion && p.kind == o.kind && p.name == o.name))"
     - name: touched
       expression: "oldObject == null || object.spec != oldObject.spec || (has(object.metadata.labels) ? object.metadata.labels : {}) != (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}) || variables.addedFinalizer || variables.addedOwner"
   validations:
@@ -250,7 +250,7 @@ spec:
     - name: addedFinalizer
       expression: "has(object.metadata.finalizers) && object.metadata.finalizers.exists(f, oldObject == null || !has(oldObject.metadata.finalizers) || !(f in oldObject.metadata.finalizers))"
     - name: addedOwner
-      expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, oldObject == null || !has(oldObject.metadata.ownerReferences) || !oldObject.metadata.ownerReferences.exists(p, p.uid == o.uid))"
+      expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, oldObject == null || !has(oldObject.metadata.ownerReferences) || !oldObject.metadata.ownerReferences.exists(p, p.uid == o.uid && p.apiVersion == o.apiVersion && p.kind == o.kind && p.name == o.name))"
     # And `immutable`, either way: set, it freezes a key set against revocation;
     # the API server refuses to unset it, so that direction is its guard, not ours.
     - name: touched

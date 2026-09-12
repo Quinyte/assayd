@@ -428,6 +428,16 @@ func TestOnlyTheOperatorAuthorsAPolicyInARunNamespace(t *testing.T) {
 	if err := k8s.Get(ctx, client.ObjectKeyFromObject(orphan), orphaned); err != nil {
 		t.Fatal(err)
 	}
+	// The garbage collector finds an owner by apiVersion, kind and name, and
+	// only then compares the UID. An existing reference rewritten to point
+	// elsewhere, keeping its UID, looks dangling to it, so the policy would be
+	// collected. A retargeted reference is an addition, and refused.
+	retargeted := orphaned.DeepCopy()
+	retargeted.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "v1", Kind: "Secret",
+		Name: "elsewhere", UID: "0f0e0d0c-0000-0000-0000-00000000dead"}})
+	if err := asIntruder.Update(ctx, retargeted); !refusedBy(err, policy) {
+		t.Errorf("a non-operator retargeted an existing ownerReference while keeping its UID: %v", err)
+	}
 	orphaned.SetOwnerReferences(nil)
 	if err := asGC.Update(ctx, orphaned); err != nil {
 		t.Errorf("the garbage collector could not remove an ownerReference from a policy: %v", err)
