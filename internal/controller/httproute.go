@@ -5,11 +5,8 @@ package controller
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -18,6 +15,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/compiler"
 )
 
 // ADR-0030 step 3, SECOND half: the mapping the e2e hand-authored is now
@@ -36,10 +34,6 @@ import (
 // is not implemented, so the route this operator emits is an UNAUTHENTICATED
 // path to the agent, exactly as the hand-authored one was.
 const (
-	// RouteConcernServing is the `<concern>` of design 03 §3.2's naming grammar
-	// for the A2A serving route.
-	RouteConcernServing = "serving"
-
 	// GatewayListenerName is the listener an agent's serving route attaches to.
 	//
 	// It is a constant rather than a value because nothing in this repository
@@ -89,59 +83,6 @@ const DefaultGatewayHostnameSuffix = "assayd.internal"
 // revision is promoted.
 func (g GatewayConfig) Hostname(agentName, agentNamespace string) string {
 	return agentName + "." + agentNamespace + "." + g.HostnameSuffix
-}
-
-// EmittedName is design 03 §3.2's naming rule for every resource this operator
-// emits at the gateway: `<name>-<concern>[-<rev>]`, and past 63 characters
-// `<name>` is truncated and a 16-hex (64-bit) hash of the UNTRUNCATED whole
-// name is appended.
-//
-// The suffix is 16 hex and not 8 for the reason design 03 §3.2 records: a
-// chosen collision against 32 bits took 1.2 seconds when it was measured, and
-// two crafted long names colliding in the suffix would map one Agent's
-// resources onto another's. The hash covers the whole assembled name rather
-// than only `<name>`, so two Agents cannot collide by differing only in a
-// concern or a revision that the truncation kept.
-//
-// A name whose concern and revision alone leave no room to truncate is an
-// ERROR, never a silent mangling — design 03 §3.2: "a suffix collision is a
-// compile error naming both inputs, never a silent reuse", and a name truncated
-// to nothing is the same failure one step earlier.
-func EmittedName(name, concern, rev string) (string, error) {
-	tail := "-" + concern
-	if rev != "" {
-		tail += "-" + rev
-	}
-	full := name + tail
-	if len(full) <= 63 {
-		return full, nil
-	}
-	const hashHex = 16
-	keep := 63 - len(tail) - 1 - hashHex // 1 for the hash's separator
-	if keep < 1 {
-		return "", fmt.Errorf("cannot name an emitted resource for %q: the concern and revision "+
-			"alone are %d characters, which leaves nothing of the name inside the 63-character "+
-			"limit", name, len(tail))
-	}
-	sum := sha256.Sum256([]byte(full))
-	return strings.TrimRight(name[:keep], "-") + tail + "-" + hex.EncodeToString(sum[:])[:hashHex], nil
-}
-
-// ServingRouteName is the object name of one Agent's serving route.
-//
-// It carries NO revision, and that is the design's shape rather than a
-// simplification. Design 03 §3.2 lists "revision weights" as a property of one
-// HTTPRoute and design 20's fallback row shifts `spec.rules[].backendRefs[]
-// .weight` on "the serving HTTPRoute", singular — so a revision is a backendRef
-// within one route, not a route of its own. A route per revision would put two
-// routes on one hostname for the length of every rollout, and a listener merges
-// them: the revision being rolled out would take a share of production traffic
-// with no weight ever having been shifted, which is precisely the ungated
-// window design 03 §3.3's ordering exists to close. Deleting the old route
-// first trades that for a window with no route at all. One object whose
-// backendRef is updated in place has neither.
-func ServingRouteName(agentName string) (string, error) {
-	return EmittedName(agentName, RouteConcernServing, "")
 }
 
 // servingRouteFor renders the route for one Agent, pointing at one revision.
@@ -269,7 +210,7 @@ func (r *AgentReconciler) reconcileServingRoute(
 		// pretending to a teardown that does not exist is worse than naming it.
 		return nil
 	}
-	name, err := ServingRouteName(agent.Name)
+	name, err := compiler.ServingRouteName(agent.Name)
 	if err != nil {
 		return err
 	}
@@ -533,7 +474,7 @@ func (e *routeCollisionError) Error() string {
 //
 // The collision §3.2 guards against is between AGENTS, not revisions: the name
 // carries no revision, so the question is whether two different Agents map to
-// one name. EmittedName makes that a 64-bit hash collision, and this is what
+// one name. compiler.EmittedName makes that a 64-bit hash collision, and this is what
 // turns one into a refusal naming both inputs rather than one Agent quietly
 // rewriting another's route. Before it, update authority was looser than
 // delete authority — the sweep required the UID label to match before
@@ -574,7 +515,7 @@ func routeCollision(agent *assaydv1alpha1.Agent, existing *gatewayv1.HTTPRoute) 
 func (r *AgentReconciler) ownedRoutes(
 	ctx context.Context, agent *assaydv1alpha1.Agent, runNS string,
 ) ([]gatewayv1.HTTPRoute, error) {
-	name, err := ServingRouteName(agent.Name)
+	name, err := compiler.ServingRouteName(agent.Name)
 	if err != nil {
 		return nil, err
 	}

@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/compiler"
 	"github.com/Quinyte/assayd/internal/controller"
 	"github.com/Quinyte/assayd/internal/revision"
 )
@@ -269,12 +270,14 @@ func assertEmittedHostname(t *testing.T, route *unstructured.Unstructured, agent
 
 // emittedRouteKey locates the object by calling the operator's own naming
 // function, which is the code under test — so this helper cannot detect a change
-// to the name SHAPE. That is pinned in exactly one place, by the literal
-// `agent-serving` in TestEmittedNameIsADNSLabelAndInjectiveAtTheLimit; if that
-// assertion goes, nothing anywhere holds the name to the design's grammar.
+// to the name SHAPE. That is pinned elsewhere, and only in unit tests: by the
+// literal `agent-serving` in internal/compiler's
+// TestEmittedNameIsADNSLabelAndInjectiveAtTheLimit, and by `pricer-serving` in
+// the golden files under internal/compiler/testdata and
+// internal/controller/testdata.
 func emittedRouteKey(t *testing.T, agentName string) types.NamespacedName {
 	t.Helper()
-	n, err := controller.ServingRouteName(agentName)
+	n, err := compiler.ServingRouteName(agentName)
 	if err != nil {
 		t.Fatalf("serving route name for %s: %v", agentName, err)
 	}

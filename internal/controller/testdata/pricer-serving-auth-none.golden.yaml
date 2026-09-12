@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2026 Quinyte
+# SPDX-License-Identifier: Apache-2.0
+#
+# GOLDEN FILE, rendered by the code under test. Regenerate with
+#   go test ./internal/controller -run Golden -update
+# and read the diff.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  labels:
+    assayd.dev/agent: pricer
+    assayd.dev/agent-namespace: payments
+    assayd.dev/agent-uid: 0b5f4c2e-7d1a-4e59-9c3b-6a8d2f1e0c47
+    assayd.dev/auth: none
+    assayd.dev/revision: abc1234567
+  name: pricer-serving
+  namespace: assayd-run-payments
+spec:
+  hostnames:
+  - pricer.payments.assayd.internal
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: assayd
+    namespace: assayd-gateway
+    sectionName: http
+  rules:
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: pricer-abc1234567
+      port: 8080
+      weight: 100
+    matches:
+    - path:
+        type: PathPrefix
+        value: /

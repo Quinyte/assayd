@@ -43,13 +43,14 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/compiler"
 	"github.com/Quinyte/assayd/internal/revision"
 )
 
 const (
 	// LabelAgent and LabelRevision let the operator find the workloads it owns
 	// without trusting names, and let a human find them with kubectl.
-	LabelAgent    = "assayd.dev/agent"
+	LabelAgent    = compiler.LabelAgent
 	LabelRevision = "assayd.dev/revision"
 
 	// Finalizer gates the ordered teardown of §3.7. The teardown steps that need

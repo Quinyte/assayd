@@ -4,7 +4,6 @@
 package controller
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 
@@ -12,72 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/compiler"
 )
-
-// dns1123Label is the shape every object name here must have. A name that is
-// not one is rejected by the API server at create time, which is a failure the
-// operator discovers per Agent rather than in a test.
-var dns1123Label = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
-
-// Design 03 §3.2's naming rule, at and past the limit.
-//
-// The rule matters for the same reason design 02 A42's does: it names an object
-// that is a boundary. Two Agents whose emitted names collided would have one
-// Agent's serving route deleted by the other's sweep — the sweep's authority is
-// the NAME, so a name that is not injective hands one Agent authority over
-// another's traffic.
-func TestEmittedNameIsADNSLabelAndInjectiveAtTheLimit(t *testing.T) {
-	short, err := EmittedName("agent", RouteConcernServing, "")
-	if err != nil {
-		t.Fatalf("short name: %v", err)
-	}
-	if short != "agent-serving" {
-		t.Errorf("a name that fits is not hashed: got %q, want %q", short, "agent-serving")
-	}
-	withRev, err := EmittedName("agent", RouteConcernServing, "0123456789")
-	if err != nil {
-		t.Fatalf("name with revision: %v", err)
-	}
-	if withRev != "agent-serving-0123456789" {
-		t.Errorf("the optional <rev> is not appended as `<name>-<concern>-<rev>`: %q", withRev)
-	}
-
-	// Two long names that share every character the truncation keeps. Under an
-	// unhashed truncation these are one name.
-	prefix := strings.Repeat("a", 60)
-	one, err := EmittedName(prefix+"-one", RouteConcernServing, "")
-	if err != nil {
-		t.Fatalf("long name: %v", err)
-	}
-	two, err := EmittedName(prefix+"-two", RouteConcernServing, "")
-	if err != nil {
-		t.Fatalf("long name: %v", err)
-	}
-	for _, n := range []string{short, withRev, one, two} {
-		if len(n) > 63 {
-			t.Errorf("emitted name %q is %d characters; a DNS label is at most 63", n, len(n))
-		}
-		if !dns1123Label.MatchString(n) {
-			t.Errorf("emitted name %q is not a DNS-1123 label", n)
-		}
-	}
-	if one == two {
-		t.Errorf("two different names truncate to one emitted name (%q). The sweep's authority is "+
-			"the name, so a collision hands one Agent the power to delete another's serving route.",
-			one)
-	}
-	// The concern must survive truncation, or two concerns of one Agent collide
-	// with each other — which is the same failure one level down.
-	if !strings.Contains(one, "-"+RouteConcernServing+"-") {
-		t.Errorf("the concern did not survive truncation: %q", one)
-	}
-
-	// A concern and revision that leave no room is an ERROR, never a mangled
-	// name. Design 03 §3.2: never a silent reuse.
-	if _, err := EmittedName("a", strings.Repeat("c", 70), ""); err == nil {
-		t.Error("a concern longer than the whole limit produced a name instead of an error")
-	}
-}
 
 // The hostname is per AGENT and includes the Agent's own namespace, so two
 // Agents of the same name in two namespaces do not answer for each other.
@@ -108,7 +43,7 @@ func TestTheServingRouteIsTheResourceTheE2EAuthoredByHand(t *testing.T) {
 			Runtime: &assaydv1alpha1.AgentRuntime{Image: "ghcr.io/acme/a@sha256:" + strings.Repeat("0", 64)},
 		},
 	}
-	name, err := ServingRouteName(agent.Name)
+	name, err := compiler.ServingRouteName(agent.Name)
 	if err != nil {
 		t.Fatalf("name: %v", err)
 	}
