@@ -776,8 +776,9 @@ func TestOnlyAGenuineFreshNackDrivesStatus(t *testing.T) {
 	nackFor(t, a, "genuine-"+ns, controller.AgentgatewayControllerName, later)
 	reconcileOnce(t, r, a)
 	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthEnforcementUnverified")
-	if c != nil && !strings.Contains(c.Message, "rejected") {
-		t.Errorf("the NACK's condition does not say the gateway rejected the policy: %s", c.Message)
+	if c != nil && (!strings.Contains(c.Message, "rejected") || !strings.Contains(c.Message, "delete that Event")) {
+		t.Errorf("the NACK's condition does not say the gateway rejected the policy, and how to "+
+			"release the hold: %s", c.Message)
 	}
 	if tx := txOf(t, a); tx.Stage != "Converging" {
 		t.Errorf("a genuine NACK did not return the transaction to Converging: %+v", tx)

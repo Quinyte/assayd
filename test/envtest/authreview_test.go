@@ -168,8 +168,11 @@ func TestAnUnrenderableTargetWritesNothing(t *testing.T) {
 	}
 }
 
-// A policy at this Agent's -auth name that another Agent owns is refused and
-// left as it is, by the route's collision rule (§3.2).
+// A policy at this Agent's -auth name that another Agent owns is not this
+// Agent's by §3.2's name-and-label rule: it is reported as
+// ForeignTrafficPolicy, left as it is, and the Create holds before writing
+// (slice PR 5's second review made this one rule for every mode; before it,
+// the pass refused with an error).
 func TestAPolicyAnotherAgentOwnsIsNotTakenOver(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "claims", nil)
@@ -187,9 +190,14 @@ func TestAPolicyAnotherAgentOwnsIsNotTakenOver(t *testing.T) {
 		t.Fatal(err)
 	}
 	markAvailable(t, ns, controller.WorkloadName("claims", revision.MustHash(a.Spec)), 1)
-	err := reconcileErr(t, r, a)
-	if err == nil || !strings.Contains(err.Error(), "incumbent") || !strings.Contains(err.Error(), "claims") {
-		t.Fatalf("a policy another Agent owns was converged, or refused without naming both: %v", err)
+	reconcileOnce(t, r, a)
+	reconcileOnce(t, r, a)
+	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "ForeignTrafficPolicy")
+	if c != nil && !strings.Contains(c.Message, foreign.GetName()) {
+		t.Errorf("the foreign policy is not named: %s", c.Message)
+	}
+	if routePublished(t, ns, "claims") {
+		t.Error("a route was published beside another Agent's policy at its -auth name")
 	}
 	got := policyExists(t, runNS(ns), foreign.GetName())
 	if got.GetLabels()[compiler.LabelAgentUID] != "uid-of-another-agent" {

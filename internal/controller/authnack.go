@@ -97,6 +97,13 @@ func policyWrittenAt(p *unstructured.Unstructured) time.Time {
 	return at
 }
 
+// nackPageSize and maxNackPages bound the NACK Events one pass reads: whoever
+// can write Events in the Gateway's namespace chooses how many exist.
+const (
+	nackPageSize = 100
+	maxNackPages = 10
+)
+
 // freshNack returns what a genuine NACK naming this policy says, when one was
 // last seen strictly AFTER the policy's last write, or "".
 //
@@ -116,11 +123,24 @@ func (r *AgentReconciler) freshNack(ctx context.Context, agent *assaydv1alpha1.A
 		return ""
 	}
 	var list corev1.EventList
-	if err := r.reader().List(ctx, &list, client.InNamespace(r.Gateway.Namespace),
-		client.MatchingFields{"type": corev1.EventTypeWarning, "reason": NackEventReason}); err != nil {
-		log.FromContext(ctx).Error(err, "could not list the Gateway's NACK Events; this pass takes "+
-			"no NACK into account", "agent", agent.Namespace+"/"+agent.Name)
-		return ""
+	cont := ""
+	for page := 0; page < maxNackPages; page++ {
+		var chunk corev1.EventList
+		if err := r.reader().List(ctx, &chunk, client.InNamespace(r.Gateway.Namespace),
+			client.MatchingFields{"type": corev1.EventTypeWarning, "reason": NackEventReason},
+			client.Limit(nackPageSize), client.Continue(cont)); err != nil {
+			log.FromContext(ctx).Error(err, "could not list the Gateway's NACK Events; this pass takes "+
+				"no NACK into account", "agent", agent.Namespace+"/"+agent.Name)
+			return ""
+		}
+		list.Items = append(list.Items, chunk.Items...)
+		if cont = chunk.Continue; cont == "" {
+			break
+		}
+	}
+	if cont != "" {
+		log.FromContext(ctx).Info("the Gateway's namespace holds more NACK Events than one pass reads; "+
+			"the rest are not taken into account", "read", len(list.Items))
 	}
 	written := policyWrittenAt(policy)
 	key := types.NamespacedName{Namespace: runNS, Name: policy.GetName()}
@@ -153,6 +173,8 @@ func (r *AgentReconciler) freshNack(ctx context.Context, agent *assaydv1alpha1.A
 	return fmt.Sprintf("the gateway rejected %s at %s (Warning Event %s/%s, %s: %s). A NACK'd "+
 		"policy keeps the previous configuration serving while its conditions read converged, so "+
 		"the transaction is back in Converging, and no probe answer is taken while this Event is "+
-		"newer than the policy's last write (design 03 §3.3.2)", key, at.UTC().Format(time.RFC3339),
+		"newer than the policy's last write. Read the policy's status and the Event. To release the "+
+		"hold, delete that Event, or wait for the API server to expire it, one hour after it was last "+
+		"seen by default (design 03 §3.3.2)", key, at.UTC().Format(time.RFC3339),
 		found.Namespace, found.Name, NackEventReason, detail)
 }

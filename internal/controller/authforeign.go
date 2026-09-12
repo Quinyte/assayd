@@ -37,16 +37,29 @@ func (r *AgentReconciler) foreignTrafficPolicies(ctx context.Context, agent *ass
 	if err != nil {
 		return nil, err
 	}
-	list := &unstructured.UnstructuredList{}
-	list.SetAPIVersion(compiler.PolicyAPIVersion)
-	list.SetKind(compiler.PolicyKind + "List")
-	if err := r.reader().List(ctx, list, client.InNamespace(runNS)); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
+	// Paged, so one pass holds at most a page of policies at a time. No label
+	// or field selector can narrow it: a foreign policy carries no label this
+	// operator chose, and a CRD serves no field selector but name and
+	// namespace (A72 gives the cost).
+	var items []unstructured.Unstructured
+	cont := ""
+	for {
+		list := &unstructured.UnstructuredList{}
+		list.SetAPIVersion(compiler.PolicyAPIVersion)
+		list.SetKind(compiler.PolicyKind + "List")
+		if err := r.reader().List(ctx, list, client.InNamespace(runNS), client.Limit(policyPageSize),
+			client.Continue(cont)); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("list the policies in %s to find a foreign traffic policy: %w", runNS, err)
 		}
-		return nil, fmt.Errorf("list the policies in %s to find a foreign traffic policy: %w", runNS, err)
+		items = append(items, list.Items...)
+		if cont = list.GetContinue(); cont == "" {
+			break
+		}
 	}
-	if len(list.Items) == 0 {
+	if len(items) == 0 {
 		return nil, nil
 	}
 	labels, err := r.servingRouteLabels(ctx, agent, runNS, route)
@@ -54,8 +67,8 @@ func (r *AgentReconciler) foreignTrafficPolicies(ctx context.Context, agent *ass
 		return nil, err
 	}
 	var out []string
-	for i := range list.Items {
-		p := &list.Items[i]
+	for i := range items {
+		p := &items[i]
 		if p.GetName() == own && p.GetLabels()[compiler.LabelAgentUID] == string(agent.UID) {
 			continue
 		}
@@ -69,6 +82,9 @@ func (r *AgentReconciler) foreignTrafficPolicies(ctx context.Context, agent *ass
 	sort.Strings(out)
 	return out, nil
 }
+
+// policyPageSize is how many policies one list call returns.
+const policyPageSize = 250
 
 // servingRouteLabels are the labels a selector is matched against: the stored
 // route's, or, while it does not exist, the provenance labels every serving

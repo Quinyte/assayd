@@ -310,6 +310,26 @@ func (r *AgentReconciler) currentServingRoute(
 	return &rt, nil
 }
 
+// liveServingRoute reads the serving route through the uncached reader, or
+// nil when there is none. A decision whose wrong answer publishes or
+// abandons a route cannot rest on the informer cache: Adopt's trigger and an
+// abandonment read the route here (slice PR 5's second review).
+func (r *AgentReconciler) liveServingRoute(
+	ctx context.Context, agent *assaydv1alpha1.Agent, runNS, name string,
+) (*gatewayv1.HTTPRoute, error) {
+	var rt gatewayv1.HTTPRoute
+	switch err := r.reader().Get(ctx, client.ObjectKey{Namespace: runNS, Name: name}, &rt); {
+	case apierrors.IsNotFound(err):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("read route %s in %s live: %w", name, runNS, err)
+	}
+	if err := routeCollision(agent, &rt); err != nil {
+		return nil, err
+	}
+	return &rt, nil
+}
+
 // routePublished reports whether a route carries traffic: any backendRef.
 func routePublished(rt *gatewayv1.HTTPRoute) bool {
 	for _, rule := range rt.Spec.Rules {

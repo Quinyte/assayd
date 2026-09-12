@@ -388,7 +388,10 @@ func (r *AgentReconciler) authStep(ctx context.Context, agent *assaydv1alpha1.Ag
 		// compile failure, because `Adopt` compiles nothing and outranks it
 		// (§3.4.4). The refusal is recorded, so that deleting the route is not
 		// an exit from it.
-		existing, err := r.currentServingRoute(ctx, agent, runNS, name)
+		// Read live: a cached copy of a route an abandonment has just deleted
+		// would read as Adopt, and Adopt re-creates it published with no policy
+		// (slice PR 5's second review).
+		existing, err := r.liveServingRoute(ctx, agent, runNS, name)
 		if err != nil {
 			return out, err
 		}
@@ -578,20 +581,40 @@ func (r *AgentReconciler) abandon(ctx context.Context, agent *assaydv1alpha1.Age
 		"(design 03 §3.3.3)", "kind", tx.Kind, "stage", tx.Stage, "target", tx.TargetMode,
 		"desired", desiredModeName(agent), "written", tx.Written)
 	if tx.Kind == TxCreate {
-		rt, err := r.currentServingRoute(ctx, agent, runNS, name)
+		// Read live: a cached "gone" would skip the strip and let the policy go
+		// while the route still carried backends (slice PR 5's second review).
+		rt, err := r.liveServingRoute(ctx, agent, runNS, name)
 		if err != nil {
 			return out, false, err
 		}
-		switch {
-		case rt == nil:
-		case !desire.compiles():
-			if err := r.collectRoutes(ctx, agent, runNS, ""); err != nil {
-				return out, false, err
-			}
-		case routePublished(rt):
+		if rt != nil && routePublished(rt) {
+			// First, whatever the new mode: the route loses its backendRefs
+			// before anything else goes, so it never carries backends with no
+			// policy, even while a delete of it is held (§3.3.3).
 			if _, _, err := r.ensureServingRoute(ctx, agent, runNS, status.ActiveRevision,
 				status.ActiveRevisionDigest, name, routePublication{prepared: true}); err != nil {
 				return out, false, err
+			}
+		}
+		if rt != nil && !desire.compiles() {
+			// No prepared route exists while the serving route does not compile
+			// (§3.3.1), so it is deleted, and the abandonment waits until a live
+			// read says it is gone. Until then status.auth keeps the Create: an
+			// empty record beside a route still in the API is Adopt's trigger,
+			// and Adopt would publish that route again with no policy.
+			if rt.DeletionTimestamp.IsZero() {
+				uid := rt.UID
+				if err := r.Delete(ctx, rt, client.Preconditions{UID: &uid}); err != nil &&
+					!apierrors.IsNotFound(err) {
+					return out, false, fmt.Errorf("delete route %s in %s: %w", name, runNS, err)
+				}
+			}
+			still, err := r.liveServingRoute(ctx, agent, runNS, name)
+			if err != nil {
+				return out, false, err
+			}
+			if still != nil {
+				return abandonWaiting(conds, out, status, tx, agent, heldBy("HTTPRoute", still)), false, nil
 			}
 		}
 	}
@@ -601,16 +624,7 @@ func (r *AgentReconciler) abandon(ctx context.Context, agent *assaydv1alpha1.Age
 			return out, false, &gatewayError{reason: ReasonPolicyWriteFailed, err: err}
 		}
 		if waiting != "" {
-			msg := fmt.Sprintf("the -auth %s to %s is abandoned, because the desired mode is now %s, "+
-				"and the policy it wrote is not gone yet: %s. status.auth keeps the transaction until "+
-				"it is (design 03 §3.3.3)", tx.Kind, tx.TargetMode, desiredModeName(agent), waiting)
-			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, ReasonAuthAbandonWaiting, msg)
-			if out.withhold == nil {
-				out.withhold = &failure{ReasonAuthAbandonWaiting, msg}
-			}
-			out.served = status.Auth.Mode != "" || tx.Kind == TxLock
-			out.requeue = 30 * time.Second
-			return out, false, nil
+			return abandonWaiting(conds, out, status, tx, agent, waiting), false, nil
 		}
 	}
 	switch {
@@ -631,8 +645,9 @@ func (r *AgentReconciler) abandon(ctx context.Context, agent *assaydv1alpha1.Age
 		// A never-served Create's recorded state is an unpublished route and
 		// nothing in status.auth. Its successor is entered by the caller, in the
 		// update that writes it. With none to enter, the empty record is
-		// written here: the route was deleted above, so Adopt's trigger, a
-		// published route beside an empty record, cannot hold.
+		// written here, only once a live read found the route gone, and Adopt's
+		// trigger reads the route live too, so a route this abandonment deleted
+		// cannot come back as Adopt's.
 		status.Auth = nil
 		if !desire.compiles() {
 			if err := r.persistStatus(ctx, agent, status); err != nil {
@@ -642,6 +657,46 @@ func (r *AgentReconciler) abandon(ctx context.Context, agent *assaydv1alpha1.Age
 		return out, true, nil
 	}
 }
+
+// abandonWaiting is an abandonment that must wait for an object it removes:
+// a route or a policy whose delete a finalizer holds. The transaction stays
+// in the slot, PolicyApplyIncomplete says what it waits for, and the pass
+// rechecks every 30 s, as teardown does (A70).
+func abandonWaiting(conds *conditionSet, out gatewayOutcome, status *assaydv1alpha1.AgentStatus,
+	tx *assaydv1alpha1.AuthTransaction, agent *assaydv1alpha1.Agent, waiting string) gatewayOutcome {
+	msg := fmt.Sprintf("the -auth %s to %s is abandoned, because the desired mode is now %s, and what "+
+		"it must remove is not gone yet: %s. status.auth keeps the transaction until it is (design 03 "+
+		"§3.3.3)", tx.Kind, tx.TargetMode, desiredModeName(agent), waiting)
+	conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, ReasonAuthAbandonWaiting, msg)
+	if out.withhold == nil {
+		out.withhold = &failure{ReasonAuthAbandonWaiting, msg}
+	}
+	out.served = status.Auth.Mode != "" || tx.Kind == TxLock
+	out.requeue = 30 * time.Second
+	return out
+}
+
+// foreignAtOwnName reports whether a policy at this Agent's -auth name is
+// foreign: it does not carry this Agent's UID, so by §3.2's name-and-label
+// rule it is not this Agent's, and it is neither taken over nor deleted.
+func foreignAtOwnName(foreign []string, agent *assaydv1alpha1.Agent, runNS string) bool {
+	own, err := compiler.AuthPolicyName(agent.Name)
+	if err != nil {
+		return false
+	}
+	for _, f := range foreign {
+		if f == runNS+"/"+own {
+			return true
+		}
+	}
+	return false
+}
+
+// ownNameHeld is what a transaction waits on while a policy at its -auth name
+// is not its own.
+const ownNameHeld = "a policy at this Agent's -auth name does not carry this Agent's UID, so by the " +
+	"name-and-label rule it is not this Agent's: it is neither taken over nor deleted, and nothing is " +
+	"written until it is removed (design 03 §3.2)"
 
 // enterLock records J2's `Lock`, or K2's, which replaces a refused Adopt's
 // record: `{kind: Lock, targetMode: apikey, targetDigest}` from the spec, at
@@ -777,6 +832,10 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 			continue
 		}
 		if stage == StageApplyingPolicies {
+			if foreignAtOwnName(out.foreign, agent, runNS) {
+				unmet, requeue = ownNameHeld, AuthProbeInterval
+				break
+			}
 			// Every entry repeats the write, a re-entry included: it is
 			// create/update over owned fields, so a write that already landed is
 			// a no-op, and a crash before it landed cannot skip it (§3.3.3).
@@ -898,8 +957,21 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 				// traffic policy stands, whichever stage saw it: a 401 taken
 				// before it landed, or a none route, which runs no probe. One
 				// already published is not withdrawn (slice PR 5's review).
-				unmet = "a traffic policy the operator did not emit targets the route, so it is not " +
-					"published: " + strings.Join(out.foreign, ", ")
+				cur, err := r.currentServingRoute(ctx, agent, runNS, name)
+				if err != nil {
+					return out, err
+				}
+				if cur != nil && routePublished(cur) {
+					// This stage already published it: it is not withdrawn, and
+					// the messages must not say it is unpublished.
+					published = true
+					unmet = "a traffic policy the operator did not emit targets the route, which is " +
+						"published and is not withdrawn; the Create does not reach Served while it " +
+						"stands: " + strings.Join(out.foreign, ", ")
+				} else {
+					unmet = "a traffic policy the operator did not emit targets the route, so it is not " +
+						"published: " + strings.Join(out.foreign, ", ")
+				}
 				requeue = AuthProbeInterval
 				break
 			}
@@ -1272,6 +1344,10 @@ steps:
 				return out, err
 			}
 		case StageApplyingPolicies:
+			if foreignAtOwnName(out.foreign, agent, runNS) {
+				unmet, requeue = ownNameHeld, AuthProbeInterval
+				break steps
+			}
 			if _, err := r.ensureAuthPolicy(ctx, agent, target.Policy); err != nil {
 				return out, &gatewayError{reason: ReasonPolicyWriteFailed, err: err}
 			}
@@ -1562,6 +1638,13 @@ func (r *AgentReconciler) reassertServedPolicy(ctx context.Context, agent *assay
 	case err != nil:
 		return fmt.Errorf("read policy %s in %s: %w", recorded.GetName(), runNS, err)
 	}
+	if existing.GetLabels()[LabelAgentUID] != string(agent.UID) {
+		// Not this Agent's by the name-and-label rule: reported as
+		// ForeignTrafficPolicy, and neither taken over nor deleted (§3.2).
+		log.FromContext(ctx).Info("not re-asserting a policy at this Agent's -auth name that does not "+
+			"carry its UID", "policy", recorded.GetName())
+		return nil
+	}
 	if digest != auth.AppliedDigest {
 		// What this build renders is not what was served, so the served policy
 		// cannot be reproduced here. It is left as found (§3.3.1).
@@ -1763,22 +1846,22 @@ func runtimeDeepCopy(v any) any {
 	return u.DeepCopy().Object["v"]
 }
 
-// policyCollision is routeCollision's rule for the policy (§3.2): a policy at
-// this Agent's -auth name that ANOTHER Agent owns is refused, never taken
-// over; a predecessor's, or one carrying no UID, is converged.
+// policyCollision is §3.2's name-and-label rule for the policy: a policy at
+// this Agent's -auth name is this Agent's only when it carries this Agent's
+// UID. Any other, another Agent's, a deleted predecessor's, or one carrying
+// no UID, is refused and never taken over. It is reported as
+// ForeignTrafficPolicy while it targets the route, and the transactions hold
+// before this is reached (foreignAtOwnName). A71 converged a predecessor's;
+// slice PR 5's second review made one rule for every mode (A72).
 func policyCollision(agent *assaydv1alpha1.Agent, existing *unstructured.Unstructured) error {
 	l := existing.GetLabels()
-	uid, ok := l[LabelAgentUID]
-	if !ok || uid == string(agent.UID) {
+	if l[LabelAgentUID] == string(agent.UID) {
 		return nil
 	}
-	if l[LabelAgent] == agent.Name && l[LabelAgentNamespace] == agent.Namespace {
-		return nil
-	}
-	return fmt.Errorf("policy %s/%s is already Agent %s/%s's -auth, and Agent %s/%s maps to the same "+
-		"name. Two Agents' emitted names collided (design 03 §3.2); the policy is left as it is "+
-		"rather than taken over", existing.GetNamespace(), existing.GetName(),
-		l[LabelAgentNamespace], l[LabelAgent], agent.Namespace, agent.Name)
+	return fmt.Errorf("policy %s/%s has this Agent's -auth name and does not carry its UID (it carries "+
+		"%q, for Agent %s/%s). By design 03 §3.2's name-and-label rule it is not this Agent's, so it is "+
+		"left as it is rather than taken over", existing.GetNamespace(), existing.GetName(),
+		l[LabelAgentUID], l[LabelAgentNamespace], l[LabelAgent])
 }
 
 // authPolicyIntact reads the stored `<agent>-auth` and reports whether it is
