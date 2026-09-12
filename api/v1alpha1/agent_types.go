@@ -56,7 +56,13 @@ type AgentSpec struct {
 	// the developer believes in and nothing applies. The type stays because an
 	// Agent stored before the refusal may carry one, and the revision projection
 	// still reads it. The refusal is removed in the change that ships
-	// enforcement.
+	// enforcement. An upgraded install refuses only once this CRD is applied:
+	// the chart ships the CRD under crds/, which helm upgrade never updates.
+	//
+	// An Agent stored with a budget before the refusal accepts every write that
+	// leaves its spec unchanged, and refuses any spec edit until the budget is
+	// removed. A typed Update is a spec edit, because the round-trip adds empty
+	// blocks, so the operator writes its finalizer with a metadata patch.
 	// +optional
 	Budget *BudgetSpec `json:"budget,omitempty"`
 
@@ -385,6 +391,10 @@ type ExposeSpec struct {
 // — for a developer who never chose one, and the API server would write it into
 // every stored object, where nobody can tell it from a choice.
 //
+// An upgraded install enforces this only once this CRD is applied: the chart
+// ships the CRD under crds/, which helm upgrade never updates, so until then
+// auth still defaults to oauth and apikey is refused.
+//
 // +kubebuilder:validation:XValidation:rule="has(self.auth)",message="spec.expose.a2a.auth is required and has no default: set apikey (keys in the group named for this namespace), none (an unauthenticated route), or oauth (not compilable until design 06 ships)"
 type ExposeProtocol struct {
 	// +kubebuilder:validation:Enum=cluster;org;public
@@ -657,11 +667,14 @@ type BudgetStatus struct {
 // the transaction in flight. The operator alone writes it, and nothing writes
 // it yet.
 //
-// §3.3's group and key-source transaction fields (targetGroups,
-// targetKeySource, afterShift) are deliberately absent. In the slice the key
-// source is a constant compiled into the operator and the admitted group is the
-// one named for the Agent's namespace, so neither can change and nothing could
-// fill them. They arrive with the scope that makes them reachable.
+// Three of §3.3's transaction fields are deliberately absent. targetGroups
+// and targetKeySource are filled only by a group or key-source change, and in
+// the slice the key source is a constant compiled into the operator and the
+// admitted group is the one named for the Agent's namespace, so neither can
+// change. afterShift is Loosen's flag for waiting on its edit's weight shift,
+// and the slice runs no Loosen. They arrive with the scope that makes them
+// reachable. An install that keeps this CRD prunes them without an error if a
+// later operator writes them (design 03 A68).
 //
 // Every field is optional. The presence rules in the field comments are the
 // design's, and THE SCHEMA DOES NOT ENFORCE THEM: a CEL rule on status rejects

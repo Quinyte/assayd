@@ -72,7 +72,13 @@ spec:
                   the developer believes in and nothing applies. The type stays because an
                   Agent stored before the refusal may carry one, and the revision projection
                   still reads it. The refusal is removed in the change that ships
-                  enforcement.
+                  enforcement. An upgraded install refuses only once this CRD is applied:
+                  the chart ships the CRD under crds/, which helm upgrade never updates.
+
+                  An Agent stored with a budget before the refusal accepts every write that
+                  leaves its spec unchanged, and refuses any spec edit until the budget is
+                  removed. A typed Update is a spec edit, because the round-trip adds empty
+                  blocks, so the operator writes its finalizer with a metadata patch.
                 properties:
                   maxHops:
                     format: int32
@@ -108,6 +114,10 @@ spec:
                       default would choose the Agent's identity story — OAuth or shared bearer keys
                       — for a developer who never chose one, and the API server would write it into
                       every stored object, where nobody can tell it from a choice.
+
+                      An upgraded install enforces this only once this CRD is applied: the chart
+                      ships the CRD under crds/, which helm upgrade never updates, so until then
+                      auth still defaults to oauth and apikey is refused.
                     properties:
                       auth:
                         description: |-

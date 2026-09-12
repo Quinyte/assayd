@@ -262,8 +262,17 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	if !containsString(agent.Finalizers, Finalizer) {
+		// A merge patch on metadata.finalizers, never a typed Update. A typed
+		// round-trip adds `card: {}` and `runtime.resources: {}` to a spec written
+		// without them, so spec changes, CRD validation ratcheting stops exempting
+		// it, and a rule the stored object predates refuses the write: an Agent
+		// stored with spec.budget before ADR-0034 B2 could never get its
+		// finalizer (design 03 §3.1). The optimistic lock keeps the conflict
+		// check Update had, so replacing the list cannot drop another writer's
+		// finalizer.
+		base := agent.DeepCopy()
 		agent.Finalizers = append(agent.Finalizers, Finalizer)
-		if err := r.Update(ctx, &agent); err != nil {
+		if err := r.Patch(ctx, &agent, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add finalizer to %s: %w", req.NamespacedName, err)
 		}
 		// Requeue explicitly rather than relying on our own write producing a watch
@@ -1591,8 +1600,12 @@ func (r *AgentReconciler) finalize(ctx context.Context, agent *assaydv1alpha1.Ag
 	if err := r.releaseRunNamespaceIfLast(ctx, agent); err != nil {
 		return ctrl.Result{}, err
 	}
+	// A metadata patch, for the reason the add gives: a typed Update of an
+	// Agent stored with spec.budget is refused, the release fails forever, and
+	// `kubectl delete` leaves the Agent Terminating after its workloads are gone.
+	base := agent.DeepCopy()
 	agent.Finalizers = removeString(agent.Finalizers, Finalizer)
-	if err := r.Update(ctx, agent); err != nil {
+	if err := r.Patch(ctx, agent, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		return ctrl.Result{}, fmt.Errorf("release finalizer on %s/%s: %w", agent.Namespace, agent.Name, err)
 	}
 	return ctrl.Result{}, nil

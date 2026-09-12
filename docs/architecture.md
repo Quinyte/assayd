@@ -99,7 +99,7 @@ spec:
       version: "v12"
   tools:
     - name: claims-system
-  budget: {tokensPerDay: 2M, usdPerDay: 40}   # refused at admission until enforced (ADR-0034 B2)
+  budget: {tokensPerDay: 2M, usdPerDay: 40}   # refused at admission until enforced (ADR-0034 B2); helm upgrade keeps an older installed CRD
   gates:
     - evalSuiteRef: pa-regression
   expose:
