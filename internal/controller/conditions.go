@@ -44,6 +44,12 @@ func (c *conditionSet) get(condType assaydv1alpha1.ConditionType) (metav1.Condit
 	return cond, ok
 }
 
+// unset withdraws what this pass asserted for a type, so that a later step
+// that re-derives it is not overruled by an earlier default.
+func (c *conditionSet) unset(condType assaydv1alpha1.ConditionType) {
+	delete(c.asserted, string(condType))
+}
+
 // ownedTypes are the conditions this reconciler is the sole author of. A type
 // here that the pass did not assert is cleared rather than carried forward,
 // because a stale SandboxDowngraded on an agent that no longer requests a

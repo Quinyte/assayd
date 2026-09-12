@@ -198,6 +198,35 @@ func TestGovernanceSkippedNamesWhichUngovernedTierThisIs(t *testing.T) {
 	}
 }
 
+// The paths that return before the -auth step see only status.auth, and a
+// transaction in flight there changes what they may claim: a Lock of a
+// missing policy is AuthPolicyMissing on BOTH conditions, raised until an
+// attributed 401; a re-create of a served Agent's route is vacuously False,
+// because the route is unpublished. Neither is the value the served -auth
+// earned.
+func TestGovernanceOnAnAuthTransactionInFlight(t *testing.T) {
+	on := &AgentReconciler{Gateway: GatewayConfig{Enabled: true, Name: "assayd", Namespace: "gw"}}
+	served := func(kind string) *assaydv1alpha1.AgentStatus {
+		return &assaydv1alpha1.AgentStatus{Auth: &assaydv1alpha1.AuthStatus{Mode: "apikey",
+			Verified:    &assaydv1alpha1.AuthVerification{ReplicasProbed: 1},
+			Transaction: &assaydv1alpha1.AuthTransaction{Kind: kind, TargetMode: "apikey"}}}
+	}
+	lock := newConditionSet(1)
+	on.assessGovernance(lock, served("Lock"))
+	for _, typ := range []assaydv1alpha1.ConditionType{assaydv1alpha1.CondGovernanceSkipped,
+		assaydv1alpha1.CondPolicyApplyIncomplete} {
+		if c, ok := lock.get(typ); !ok || c.Status != metav1.ConditionTrue || c.Reason != "AuthPolicyMissing" {
+			t.Errorf("a Lock of a missing policy: %s is %+v, want True/AuthPolicyMissing", typ, c)
+		}
+	}
+	recreate := newConditionSet(1)
+	on.assessGovernance(recreate, served("Create"))
+	if c, ok := recreate.get(assaydv1alpha1.CondGovernanceSkipped); !ok || c.Status != metav1.ConditionFalse ||
+		c.Reason != "Governed" || !strings.Contains(c.Message, "re-created") {
+		t.Errorf("a route re-create: GovernanceSkipped is %+v, want vacuously False, naming the re-create", c)
+	}
+}
+
 // The classification, asserted through merge() rather than by reading the maps.
 //
 // The first version of this test did `if !stickyTypes[CondGovernanceSkipped]`,

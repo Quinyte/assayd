@@ -247,6 +247,13 @@ func (r *AgentReconciler) ensureServingRoute(
 	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
 	switch {
 	case apierrors.IsNotFound(err):
+		if !pub.prepared && pub.mode == compiler.AuthModeAPIKey {
+			// An API-key route is never CREATED published. It is published only
+			// as an update of a route that exists, which a Create prepared and
+			// probed. A route that vanished between a caller's check and this
+			// read is the caller's to re-prepare (design 03 §3.3.3).
+			return nil, false, errRouteGone
+		}
 		if cerr := r.Create(ctx, desired); cerr != nil {
 			if apierrors.IsAlreadyExists(cerr) {
 				// Return rather than recurse, for the reason ensureWorkload
@@ -461,6 +468,10 @@ func transientRouteWrite(err error) bool {
 		errors.Is(err, errRouteRaceLost) || errors.Is(err, errStaleAgent)
 }
 
+// errRouteGone is a published API-key route found missing at the write:
+// ensureServingRoute will not create one, and the caller re-prepares it.
+var errRouteGone = errors.New("the serving route is gone, and an API-key route is never created published")
+
 // errRouteRaceLost marks the read-after-write race ensureServingRoute returns
 // rather than recursing into, for the reason ensureWorkload records at length.
 var errRouteRaceLost = errors.New("a route appeared between the read and the create")
@@ -659,10 +670,15 @@ func (r *AgentReconciler) assessGovernance(c *conditionSet, status *assaydv1alph
 		return
 	}
 	if tx := authTransaction(status); tx != nil && tx.Kind == TxLock {
-		c.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonAuthPolicyMissing,
-			"a served Agent's -auth policy was missing and is being re-created; the route serves "+
-				"with no key until an anonymous request through it gets an attributed 401 "+
-				"(design 03 §3.3.3)")
+		// Both conditions, so that a pass which returns before the -auth step
+		// does not clear PolicyApplyIncomplete in the middle of the Lock: it is
+		// raised until an attributed 401 (§3.3.3). The -auth step re-derives
+		// both when it runs.
+		const m = "a served Agent's -auth policy was missing and is being re-created; the route " +
+			"serves with no key until an anonymous request through it gets an attributed 401 " +
+			"(design 03 §3.3.3)"
+		c.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonAuthPolicyMissing, m)
+		c.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, ReasonAuthPolicyMissing, m)
 		return
 	} else if tx != nil && tx.Kind == TxCreate && status.Auth.Mode != "" {
 		st, reason, msg := vacuousGovernance("this Agent's route is being re-created as a prepared " +

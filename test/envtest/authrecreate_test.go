@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -132,7 +133,12 @@ func TestADeletedPolicyIsRecreatedAndTrustedOnlyOnAnAttributed401(t *testing.T) 
 	if auth := authOf(t, a); auth.Transaction != nil || auth.Mode != "apikey" {
 		t.Fatalf("the Lock did not reach Served on an attributed 401: %+v", auth)
 	}
-	condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionFalse, "AuthVerifiedOnOneReplica")
+	g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionFalse, "AuthVerifiedOnOneReplica")
+	fetched := liveAgent(t, a).Status.Cards[0].FetchedAt.UTC().Format(time.RFC3339)
+	if g != nil && (!strings.Contains(g.Message, "transition not observed") || !strings.Contains(g.Message, fetched)) {
+		t.Errorf("Served on an attributed 401 must say the transition was not observed and name the "+
+			"card digest's fetchedAt (%s): %s", fetched, g.Message)
+	}
 	if c := condition(liveAgent(t, a), assaydv1alpha1.CondPolicyApplyIncomplete); c != nil {
 		t.Errorf("AuthPolicyMissing outlived the probe that passed: %+v", c)
 	}
@@ -158,8 +164,10 @@ func TestAnUnattributable401DoesNotEndTheLock(t *testing.T) {
 		t.Fatalf("an unattributable 401 ended the Lock: %+v", authOf(t, a))
 	}
 	c := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyMissing")
-	if c != nil && !strings.Contains(c.Message, "cannot be attributed") {
-		t.Errorf("the message does not say the 401 could not be attributed: %s", c.Message)
+	if c != nil && (!strings.Contains(c.Message, "cannot be attributed") ||
+		!strings.Contains(c.Message, "transition is not observed")) {
+		t.Errorf("the message does not say the 401 could not be attributed and the transition is "+
+			"not observed: %s", c.Message)
 	}
 }
 

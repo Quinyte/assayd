@@ -160,6 +160,14 @@ func compileFailures(d authDesire, recorded, inFlight string) []failure {
 			msg += "This Agent's route is published under the Create's target once it is proved, " +
 				"and the revision this spec minted gains no weight while the input does not " +
 				"compile (design 03 §3.3.1, I1)." + pending
+		} else if recorded != "" && inFlight != "" {
+			// A Create beside a recorded mode is a re-create of a deleted route:
+			// the route is unpublished until its probe passes (§3.3.3).
+			msg += fmt.Sprintf("The -auth this Agent was last served with, %s, is still the one "+
+				"applied, and its route is being re-created: it is UNPUBLISHED until an anonymous "+
+				"request through it gets 401, and is then published under %s. The revision this "+
+				"spec minted gains no weight while the input does not compile (design 03 §3.3.1, "+
+				"I1; §3.3.3)", recorded, recorded)
 		} else if recorded != "" {
 			msg += fmt.Sprintf("The -auth this Agent was last served with, %s, is still enforced, "+
 				"its route keeps serving under it, and the revision this spec minted gains no "+
@@ -271,6 +279,11 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 	if err != nil {
 		return out, err
 	}
+	// assessGovernance raised PolicyApplyIncomplete for a Lock in flight, for
+	// the paths that never reach this step. This step re-derives it.
+	if pc, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); ok && pc.Reason == ReasonAuthPolicyMissing {
+		conds.unset(assaydv1alpha1.CondPolicyApplyIncomplete)
+	}
 	auth := status.Auth
 	recorded := ""
 	var tx *assaydv1alpha1.AuthTransaction
@@ -332,7 +345,18 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 		return out, fmt.Errorf("status.auth.transaction is a %s, which this operator does not run; "+
 			"the route and the policy are left as they are", tx.Kind)
 	case recorded != "":
-		return r.reconcileServed(ctx, agent, runNS, name, status, conds, out)
+		res, err := r.reconcileServed(ctx, agent, runNS, name, status, conds, out)
+		if tx := authTransaction(status); err == nil && tx != nil && tx.Kind == TxCreate {
+			// A route re-create began in this pass, after the compile failure
+			// was judged: say what is true now, that the route is unpublished
+			// (§3.3.3), and not that it keeps serving.
+			if fails := compileFailures(desire, recorded, tx.TargetMode); len(fails) > 0 {
+				conds.set(assaydv1alpha1.CondPolicyCompileFailed, metav1.ConditionTrue, fails[0].reason,
+					joinFailures(fails))
+				res.withhold = &failure{fails[0].reason, joinFailures(fails)}
+			}
+		}
+		return res, err
 	}
 
 	// Never served. A transaction is entered only for a target that compiles
@@ -605,6 +629,15 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 			}
 			rt, _, err := r.ensureServingRoute(ctx, agent, runNS, rev, revDigest, name,
 				routePublicationFor(status.Auth))
+			if errors.Is(err, errRouteGone) {
+				// Gone between the check above and the write: re-prepared, never
+				// created published.
+				tx.Stage = StagePreparingRoute
+				if err := r.persistStatus(ctx, agent, status); err != nil {
+					return out, err
+				}
+				continue
+			}
 			if err != nil {
 				return out, err
 			}
@@ -739,9 +772,15 @@ func (r *AgentReconciler) recordServed(ctx context.Context, agent *assaydv1alpha
 // reconcileServed keeps a served Agent's route published under the mode
 // status.auth records, and its `<agent>-auth` as status.auth records it.
 //
-// **The invariant, for an API-key Agent: backendRefs are never written onto
-// its route unless `<agent>-auth` is present, intact, converged, and a 401 was
-// attributed.** So both objects are checked BEFORE the route is touched:
+// **For an API-key Agent, a route with backendRefs is never CREATED.**
+// ensureServingRoute refuses to (errRouteGone), so backendRefs reach the route
+// only as an update of a route that exists, one a Create prepared and published
+// after a 401. And that update happens only after `<agent>-auth` was read
+// present and intact in the same pass. One window remains, and it is named
+// rather than claimed away: a policy deleted after that read and before the
+// route update leaves the route published without it until the next pass,
+// which the policy watch starts, and which finds it missing and enters the
+// Lock below. So both objects are checked BEFORE the route is touched:
 //
 //   - a route that is absent, or has lost its backendRefs, is re-created
 //     PREPARED, by a `Create` whose target is status.auth's and never the
@@ -783,8 +822,13 @@ func (r *AgentReconciler) reconcileServed(ctx context.Context, agent *assaydv1al
 	}
 	keep := ""
 	if status.ActiveRevision != "" {
-		if _, _, err := r.ensureServingRoute(ctx, agent, runNS, status.ActiveRevision,
-			status.ActiveRevisionDigest, name, routePublicationFor(status.Auth)); err != nil {
+		_, _, err := r.ensureServingRoute(ctx, agent, runNS, status.ActiveRevision,
+			status.ActiveRevisionDigest, name, routePublicationFor(status.Auth))
+		if errors.Is(err, errRouteGone) {
+			// Gone between the check above and the write.
+			return r.recreateRoute(ctx, agent, runNS, name, status, conds, out)
+		}
+		if err != nil {
 			return out, err
 		}
 		keep = name
@@ -905,16 +949,25 @@ steps:
 				code := int32(answer.Code)
 				tx.Probe.After = &code
 			}
-			attributed, why := cardAttributes(agent, status, rt)
+			attributed, fetchedAt, why := cardAttributes(agent, status, rt)
 			if perr == nil && answer.Code == 401 && attributed {
-				return r.recordServed(ctx, agent, runNS, target, status, conds, out)
+				served, err := r.recordServed(ctx, agent, runNS, target, status, conds, out)
+				if err == nil {
+					st, reason, msg := governanceFor(status.Auth)
+					conds.set(assaydv1alpha1.CondGovernanceSkipped, st, reason, msg+". Its policy was "+
+						"missing and was re-created, and the 401 that proved it is attributed by the "+
+						"card digest the operator's own fetch recorded at "+fetchedAt+": transition "+
+						"not observed (design 03 §3.3.3)")
+				}
+				return served, err
 			}
 			if err := r.persistStatus(ctx, agent, status); err != nil {
 				return out, err
 			}
 			unmet = describeProbe(agent, answer, perr)
 			if perr == nil && answer.Code == 401 {
-				unmet = "the last anonymous probe got a 401 that cannot be attributed: " + why
+				unmet = "the last anonymous probe got a 401 that cannot be attributed, so the " +
+					"transition is not observed: " + why
 			}
 			requeue = AuthProbeInterval
 			if deadlinePassed {
@@ -959,18 +1012,27 @@ steps:
 // the path anonymously at its fetchedAt, and a 401 there now comes from
 // something in front of it. With no digest, a backend's own 401 would pass
 // for the lock whether or not the policy took.
-func cardAttributes(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus, rt *gatewayv1.HTTPRoute) (bool, string) {
+//
+// It returns the digest's fetchedAt, which the message names: how old the
+// anonymous answer it rests on is (§3.3.3).
+func cardAttributes(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus,
+	rt *gatewayv1.HTTPRoute) (bool, string, string) {
 	for _, rule := range rt.Spec.Rules {
 		for _, ref := range rule.BackendRefs {
 			for _, c := range status.Cards {
 				if c.Digest != "" && WorkloadName(agent.Name, c.Revision) == string(ref.Name) {
-					return true, ""
+					at := "an unrecorded time"
+					if c.FetchedAt != nil {
+						at = c.FetchedAt.UTC().Format(time.RFC3339)
+					}
+					return true, at, ""
 				}
 			}
 		}
 	}
-	return false, "no card digest is recorded for a revision the route serves, so the backend's " +
-		"anonymous answer on the card path was never observed, and the 401 could be the backend's own"
+	return false, "", "no card digest is recorded for a revision the route serves, so the " +
+		"backend's anonymous answer on the card path was never observed, and the 401 could be the " +
+		"backend's own"
 }
 
 // authPolicyPresent reports whether `<agent>-auth` exists, read live.

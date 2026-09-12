@@ -5,11 +5,56 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
+
+// The probe, as it is sent, never goes through a proxy from the operator's
+// environment. A proxy that answered 401 would pass for the Agent's -auth.
+//
+// Run in a child process, because net/http reads HTTP_PROXY once per process
+// and skips any proxy for a loopback host. The child probes a hostname that is
+// not loopback and does not resolve, with HTTP_PROXY set to a proxy that
+// answers 401: sent directly, the probe gets no answer; through the proxy, it
+// gets 401. A control request through the default client, in the same child,
+// must get the 401, or the test would prove nothing.
+func TestTheProbeNeverTakesAProxyFromTheEnvironment(t *testing.T) {
+	const target = "http://gateway.probe.invalid:8080/.well-known/agent-card.json"
+	if os.Getenv("ASSAYD_PROBE_PROXY_CHILD") == "1" {
+		a, err := httpAuthProber{timeout: 2 * time.Second}.Probe(context.Background(),
+			AuthProbeRequest{URL: target, Host: "pricer.payments.assayd.internal"})
+		fmt.Printf("PROBE code=%d failed=%v\n", a.Code, err != nil)
+		control := 0
+		if resp, err := http.Get(target); err == nil {
+			control = resp.StatusCode
+			_ = resp.Body.Close()
+		}
+		fmt.Printf("CONTROL code=%d\n", control)
+		return
+	}
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer proxy.Close()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestTheProbeNeverTakesAProxyFromTheEnvironment$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "ASSAYD_PROBE_PROXY_CHILD=1",
+		"HTTP_PROXY="+proxy.URL, "http_proxy="+proxy.URL, "NO_PROXY=", "no_proxy=")
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "CONTROL code=401") {
+		t.Fatalf("the control request did not go through the environment's proxy, so this test "+
+			"cannot show the probe avoids it:\n%s", out)
+	}
+	if !strings.Contains(string(out), "PROBE code=0 failed=true") {
+		t.Errorf("the probe went through HTTP_PROXY, or answered otherwise than a direct request "+
+			"to a host that does not resolve:\n%s", out)
+	}
+}
 
 // The production probe: one anonymous GET to the serving listener, carrying
 // the Agent's Host header, bounded by its timeout, following no redirect, and
