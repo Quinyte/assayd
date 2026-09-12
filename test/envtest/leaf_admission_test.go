@@ -145,6 +145,14 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 		"spec.Runtime.Env[].ValueFrom.ResourceFieldRef.ContainerName": "ADR-0031",
 		"spec.Runtime.Env[].ValueFrom.ResourceFieldRef.Resource":      "ADR-0031",
 		"spec.Runtime.Env[].ValueFrom.ResourceFieldRef.Divisor":       "ADR-0031",
+		// ADR-0034 B2 (design 03 §3.1): spec.budget is refused while nothing
+		// enforces it, so no budget leaf has an admissible perturbation. The
+		// refusal is removed in the change that ships enforcement, and these
+		// entries with it.
+		"spec.Budget.TokensPerDay":         "ADR-0034 B2",
+		"spec.Budget.USDPerDay":            "ADR-0034 B2",
+		"spec.Budget.TaskTimeout.Duration": "ADR-0034 B2",
+		"spec.Budget.MaxHops":              "ADR-0034 B2",
 	}
 
 	for i, l := range leaves {

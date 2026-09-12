@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -317,5 +318,118 @@ func TestConditionConstantsAreTyped(t *testing.T) {
 		t.Errorf("%d condition constants are untyped string literals: %v\n"+
 			"An untyped constant lets a bare string reach conditionSet.set, which is how a typo "+
 			"compiles and then says nothing at runtime.", len(bad), bad)
+	}
+}
+
+// validations returns the x-kubernetes-validations rules on a schema node, as
+// rule → message.
+func validations(node map[string]any) map[string]string {
+	out := map[string]string{}
+	raw, _ := node["x-kubernetes-validations"].([]any)
+	for _, r := range raw {
+		m := r.(map[string]any)
+		rule, _ := m["rule"].(string)
+		msg, _ := m["message"].(string)
+		out[rule] = msg
+	}
+	return out
+}
+
+func enumOf(node map[string]any) []string {
+	raw, _ := node["enum"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		out = append(out, v.(string))
+	}
+	sort.Strings(out)
+	return out
+}
+
+func propertyNames(node map[string]any) []string {
+	props, _ := node["properties"].(map[string]any)
+	out := make([]string, 0, len(props))
+	for k := range props {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Design 03 §3.4.4 (ADR-0034 C2): expose.a2a.auth is required and has NO
+// default, and apikey is a value. Required by CEL rather than by `required`, so
+// the refusal carries a message that names the fix;
+// test/envtest/auth_admission_test.go proves a real API server applies it.
+func TestExposeAuthIsRequiredAndHasNoDefault(t *testing.T) {
+	auth := descend(t, agentSchema(t), "spec.expose.a2a.auth")
+	if d, ok := auth["default"]; ok {
+		t.Errorf("spec.expose.a2a.auth defaults to %v. Design 03 §3.4.4 forbids a default: it "+
+			"would pick the Agent's identity story for the developer, and the API server writes a "+
+			"default into every stored object, where nobody can tell it from a choice.", d)
+	}
+	if got, want := strings.Join(enumOf(auth), ","), "apikey,none,oauth"; got != want {
+		t.Errorf("spec.expose.a2a.auth's enum is %s, want %s", got, want)
+	}
+
+	const msg = "spec.expose.a2a.auth is required and has no default: set apikey (keys in the " +
+		"group named for this namespace), none (an unauthenticated route), or oauth (not " +
+		"compilable until design 06 ships)"
+	a2a := descend(t, agentSchema(t), "spec.expose.a2a")
+	if got, ok := validations(a2a)["has(self.auth)"]; !ok || got != msg {
+		t.Errorf("spec.expose.a2a has no has(self.auth) rule with §3.4.4's message.\n got: %q (present %v)\nwant: %q",
+			got, ok, msg)
+	}
+
+	// The slice adds no allowedGroups (§1.1): every Agent admits the group named
+	// for its namespace, which is why no group change can arise in the slice.
+	if got := strings.Join(propertyNames(a2a), ","); got != "auth,visibility" {
+		t.Errorf("spec.expose.a2a has fields %s; the slice owes exactly auth and visibility", got)
+	}
+}
+
+// Design 03 §3.1 (ADR-0034 B2): spec.budget is refused while nothing enforces
+// it. The BudgetSpec type stays, because an Agent stored before the refusal may
+// carry one and the revision projection still reads it.
+func TestBudgetIsRefusedAtAdmission(t *testing.T) {
+	const msg = "spec.budget is not enforced yet: no gateway rate limit and no spend backstop " +
+		"exist (ADR-0030 step 1). Remove spec.budget; it is accepted again when design 03's " +
+		"-ratelimit and design 04's spend aggregation ship."
+	if got, ok := validations(descend(t, agentSchema(t), "spec"))["!has(self.budget)"]; !ok || got != msg {
+		t.Errorf("spec has no !has(self.budget) rule with §3.1's message.\n got: %q (present %v)\nwant: %q",
+			got, ok, msg)
+	}
+}
+
+// status.auth is design 03 §3.3's schema in the first slice's subset (§1.1):
+// "without its group and key-source transaction fields". The field sets are
+// pinned exactly, so a later-scope field (targetGroups, targetKeySource,
+// afterShift) cannot arrive unapproved. Nothing is required, because a refused
+// Adopt records only its kind and stage, and {mode: none} carries no key
+// source, groups, digest or verification.
+func TestStatusAuthIsTheSlicesSubset(t *testing.T) {
+	s := agentSchema(t)
+	for path, want := range map[string]string{
+		"status.auth": "admittedGroups,appliedDigest,keySource,mode,transaction,verified",
+		"status.auth.transaction": "beforeObserved,beforeRevision,deadline,kind,probe,refusedMode," +
+			"stage,targetDigest,targetMode,written",
+		"status.auth.verified":          "replicasDeclared,replicasProbed",
+		"status.auth.transaction.probe": "after,before",
+	} {
+		node := descend(t, s, path)
+		if got := strings.Join(propertyNames(node), ","); got != want {
+			t.Errorf("%s has fields %s, want %s", path, got, want)
+		}
+		if req, ok := node["required"]; ok {
+			t.Errorf("%s requires %v; every status.auth field is optional", path, req)
+		}
+	}
+	for path, want := range map[string]string{
+		"status.auth.mode":                    "apikey,none",
+		"status.auth.transaction.kind":        "Adopt,Create,Lock,Loosen,Narrow",
+		"status.auth.transaction.targetMode":  "apikey,none",
+		"status.auth.transaction.refusedMode": "apikey,none,oauth",
+	} {
+		if got := strings.Join(enumOf(descend(t, s, path)), ","); got != want {
+			t.Errorf("%s's enum is %s, want %s", path, got, want)
+		}
 	}
 }

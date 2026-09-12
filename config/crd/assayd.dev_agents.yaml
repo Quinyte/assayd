@@ -66,9 +66,19 @@ spec:
             properties:
               budget:
                 description: |-
-                  Budget is enforced in two tiers (ADR-0020): the gateway applies a
-                  conservative local approximation, and design 04's receipt aggregate is the
-                  exact tier. Per-day windows reset at 00:00 UTC.
+                  Budget is REFUSED at admission (design 03 §3.1, ADR-0034 B2). Nothing
+                  enforces a budget yet: no gateway rate limit is compiled and design 04's
+                  spend aggregation does not exist, so an admitted budget would be a limit
+                  the developer believes in and nothing applies. The type stays because an
+                  Agent stored before the refusal may carry one, and the revision projection
+                  still reads it. The refusal is removed in the change that ships
+                  enforcement. An upgraded install refuses only once this CRD is applied:
+                  the chart ships the CRD under crds/, which helm upgrade never updates.
+
+                  An Agent stored with a budget before the refusal accepts every write that
+                  leaves its spec unchanged, and refuses any spec edit until the budget is
+                  removed. A typed Update is a spec edit, because the round-trip adds empty
+                  blocks, so the operator writes its finalizer with a metadata patch.
                 properties:
                   maxHops:
                     format: int32
@@ -98,12 +108,39 @@ spec:
                   standards.
                 properties:
                   a2a:
+                    description: |-
+                      ExposeProtocol is one protocol's exposure. An a2a block must state its
+                      authentication, and auth has no default (design 03 §3.4.4, ADR-0034 C2): a
+                      default would choose the Agent's identity story — OAuth or shared bearer keys
+                      — for a developer who never chose one, and the API server would write it into
+                      every stored object, where nobody can tell it from a choice.
+
+                      An upgraded install enforces this only once this CRD is applied: the chart
+                      ships the CRD under crds/, which helm upgrade never updates, so until then
+                      auth still defaults to oauth and apikey is refused.
                     properties:
                       auth:
-                        default: oauth
+                        description: |-
+                          Auth is how the Agent's route authenticates callers. It is required by a
+                          CEL rule on the a2a block rather than by `required`, so the refusal names
+                          the fix.
+
+                            - apikey: API keys, admitting the one group named for this Agent's
+                              namespace. There is no field that names another group (design 03 §1.1).
+                            - none: an unauthenticated route.
+                            - oauth: admitted, and not compilable until design 06 ships.
+
+                          NOTHING ENFORCES ANY OF THESE YET. No controller reads this value except
+                          to hash it into the revision, and the policy compiler that would turn
+                          apikey into a gateway policy does not exist. With the gateway enabled,
+                          every Agent's route is unauthenticated whatever this says, and
+                          GovernanceSkipped reports it. An Agent stored while this field defaulted
+                          carries auth: oauth whether or not a person chose it: removing a default
+                          migrates nothing.
                         enum:
                         - none
                         - oauth
+                        - apikey
                         type: string
                       visibility:
                         default: cluster
@@ -113,6 +150,12 @@ spec:
                         - public
                         type: string
                     type: object
+                    x-kubernetes-validations:
+                    - message: 'spec.expose.a2a.auth is required and has no default:
+                        set apikey (keys in the group named for this namespace), none
+                        (an unauthenticated route), or oauth (not compilable until
+                        design 06 ships)'
+                      rule: has(self.auth)
                 type: object
               external:
                 description: |-
@@ -930,6 +973,11 @@ spec:
             - message: set exactly one of spec.runtime (an agent this cluster runs)
                 or spec.external (an agent running elsewhere)
               rule: has(self.runtime) != has(self.external)
+            - message: 'spec.budget is not enforced yet: no gateway rate limit and
+                no spend backstop exist (ADR-0030 step 1). Remove spec.budget; it
+                is accepted again when design 03''s -ratelimit and design 04''s spend
+                aggregation ship.'
+              rule: '!has(self.budget)'
           status:
             properties:
               activeRevision:
@@ -947,6 +995,172 @@ spec:
                   its gate. The names stay, because a workload needs one and the ACTIVE
                   column needs to be readable; the decision moved to these.
                 type: string
+              auth:
+                description: |-
+                  Auth is the per-Agent -auth's applied record: design 03 §3.3's
+                  status.auth, in the first slice's subset (§1.1), owed to design 02. It is
+                  separate from any per-revision record because -auth belongs to no
+                  revision: it follows the Agent's current spec.
+
+                  NOTHING WRITES THIS FIELD YET, so it is absent on every Agent. The schema
+                  ships first because the chart installs this CRD under crds/, which helm
+                  upgrade never updates: a status field an operator writes before its CRD
+                  carries it is pruned without an error.
+                properties:
+                  admittedGroups:
+                    description: |-
+                      AdmittedGroups is the sorted set of groups the last Served transaction
+                      verified. Present exactly when Mode is apikey. In the slice it is the one
+                      group named for the Agent's namespace.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  appliedDigest:
+                    description: |-
+                      AppliedDigest is the SHA-256 over the canonical -auth policy last Served.
+                      Present exactly when Mode is apikey.
+                    type: string
+                  keySource:
+                    description: |-
+                      KeySource is the canonical selector the served policy selects. Present
+                      exactly when Mode is apikey.
+                    type: string
+                  mode:
+                    description: |-
+                      Mode is the served -auth mode. It is absent until a transaction first
+                      reaches Served; a Create of an auth: none route then records
+                      {mode: none} and nothing beside it. So Mode present means a compiler has
+                      recorded this Agent's served -auth state. Adopt keys on status.auth as a
+                      whole, never on Mode alone (design 03 §3.3.3).
+                    enum:
+                    - apikey
+                    - none
+                    type: string
+                  transaction:
+                    description: |-
+                      Transaction is the -auth transaction in flight, absent in steady state.
+                      It is keyed on its target (TargetMode, plus TargetDigest for apikey),
+                      never on the Agent's generation, so an edit that leaves the desired -auth
+                      unchanged does not disturb it (design 03 §3.3).
+                    properties:
+                      beforeObserved:
+                        description: |-
+                          BeforeObserved is Lock's: its one before-answer was 200 with a recorded
+                          card digest, so Served can say "transition observed".
+                        type: boolean
+                      beforeRevision:
+                        description: |-
+                          BeforeRevision is Lock's: the revision the route's one backendRef named
+                          when that answer came, whose recorded digest the card matched.
+                          BeforeObserved counts only while the backendRef still names it, and a
+                          promotion clears both.
+                        type: string
+                      deadline:
+                        description: |-
+                          Deadline is when the current stage's deadline outcome fires. It is a
+                          condition, not a timeout: past it the transaction raises
+                          PolicyApplyIncomplete and stays in its stage (design 03 §3.3).
+                        format: date-time
+                        type: string
+                      kind:
+                        description: |-
+                          Kind is the transaction. The slice runs Create, Lock and Adopt, and an
+                          Adopt only ever sits at stage Refused. Narrow and Loosen are design 03
+                          §3.3's later scope: specified, not approved, and nothing can enter them.
+                          They are in the enum anyway. The chart installs this CRD under crds/,
+                          which helm upgrade never updates, so an enum naming only the slice's
+                          kinds would make a later operator that writes Narrow against this CRD
+                          lose its entire status write, the failure A52 withdrew a condition enum
+                          for.
+                        enum:
+                        - Create
+                        - Lock
+                        - Narrow
+                        - Loosen
+                        - Adopt
+                        type: string
+                      probe:
+                        description: Probe holds the answers the probe last observed,
+                          never the keys.
+                        properties:
+                          after:
+                            description: |-
+                              After is the last anonymous answer after the policy was written. The
+                              design trusts the policy only on a 401 (design 03 §3.3.3).
+                            format: int32
+                            type: integer
+                          before:
+                            description: |-
+                              Before is Lock's one before-answer: the status an anonymous request to
+                              the Agent's card path got before the policy was written. Absent when no
+                              answer came, including when the request timed out. The write never waits
+                              on it.
+                            format: int32
+                            type: integer
+                        type: object
+                      refusedMode:
+                        description: |-
+                          RefusedMode is Adopt's: the desired mode when the Agent was first
+                          refused, kept on every later reconcile. An owner's later edit to apikey,
+                          from a RefusedMode that is not apikey, is the consent that ends the
+                          refusal (K2, design 03 §3.3.3). An Agent whose spec already said apikey
+                          when it was refused records apikey, and stays refused.
+                        enum:
+                        - none
+                        - apikey
+                        - oauth
+                        type: string
+                      stage:
+                        description: |-
+                          Stage is one of design 03 §3.3's stage names: PreparingRoute,
+                          ProbingBefore, ApplyingPolicies, Converging, ProbingAfter, Publishing,
+                          Served, or Refused for an Adopt.
+                        type: string
+                      targetDigest:
+                        description: |-
+                          TargetDigest is the SHA-256 of the canonical policy being applied.
+                          Present exactly when TargetMode is apikey.
+                        type: string
+                      targetMode:
+                        description: |-
+                          TargetMode is the mode being applied. A transaction is entered only for
+                          a target that compiles (design 03 §3.3.1): none always does, and apikey
+                          does when its canonical policy can be rendered. A refused Adopt applies
+                          nothing and records no target.
+                        enum:
+                        - none
+                        - apikey
+                        type: string
+                      written:
+                        description: |-
+                          Written is set in the status update that ENTERS ApplyingPolicies, before
+                          the policy write, so a crash between the two reads as written. Every
+                          re-entry then repeats the write, which is idempotent (design 03 §3.3.3).
+                        type: boolean
+                    type: object
+                  verified:
+                    description: |-
+                      Verified records how much of the gateway the enforcement probe reached.
+                      Present exactly when Mode is apikey.
+                    properties:
+                      replicasDeclared:
+                        description: |-
+                          ReplicasDeclared is the number of gateway replicas the install declares.
+                          The design types it "int or unknown", and ABSENT MEANS UNKNOWN. That is
+                          the slice's case: the declared replica count is not a prerequisite of the
+                          slice, and no flag carries it. Under H2, a probe that passes with the
+                          count unknown still means Ready=True, with an informational reason.
+                        format: int32
+                        type: integer
+                      replicasProbed:
+                        description: |-
+                          ReplicasProbed is the number of gateway replicas the passing probe
+                          reached.
+                        format: int32
+                        type: integer
+                    type: object
+                type: object
               budget:
                 properties:
                   tokensRemaining:

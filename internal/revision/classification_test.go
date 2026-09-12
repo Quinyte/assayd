@@ -153,7 +153,7 @@ func mutateField(t *testing.T, path string) assaydv1alpha1.AgentSpec {
 		tokens := int64(2000000)
 		s.Budget = &assaydv1alpha1.BudgetSpec{TokensPerDay: &tokens}
 	case "Expose":
-		s.Expose = &assaydv1alpha1.ExposeSpec{A2A: &assaydv1alpha1.ExposeProtocol{Visibility: "org"}}
+		s.Expose = &assaydv1alpha1.ExposeSpec{A2A: &assaydv1alpha1.ExposeProtocol{Visibility: "org", Auth: "apikey"}}
 	case "External.Endpoint":
 		s = baseFor(path)
 		s.External.Endpoint = "https://other.example.com"

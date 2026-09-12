@@ -14,6 +14,7 @@ import (
 // Design 02 §3.1 (r3, integrated). Exactly one of Runtime or External is set.
 //
 // +kubebuilder:validation:XValidation:rule="has(self.runtime) != has(self.external)",message="set exactly one of spec.runtime (an agent this cluster runs) or spec.external (an agent running elsewhere)"
+// +kubebuilder:validation:XValidation:rule="!has(self.budget)",message="spec.budget is not enforced yet: no gateway rate limit and no spend backstop exist (ADR-0030 step 1). Remove spec.budget; it is accepted again when design 03's -ratelimit and design 04's spend aggregation ship."
 type AgentSpec struct {
 	// Runtime describes an in-cluster agent workload.
 	// +optional
@@ -49,9 +50,19 @@ type AgentSpec struct {
 	// +optional
 	LLM *LLMSpec `json:"llm,omitempty"`
 
-	// Budget is enforced in two tiers (ADR-0020): the gateway applies a
-	// conservative local approximation, and design 04's receipt aggregate is the
-	// exact tier. Per-day windows reset at 00:00 UTC.
+	// Budget is REFUSED at admission (design 03 §3.1, ADR-0034 B2). Nothing
+	// enforces a budget yet: no gateway rate limit is compiled and design 04's
+	// spend aggregation does not exist, so an admitted budget would be a limit
+	// the developer believes in and nothing applies. The type stays because an
+	// Agent stored before the refusal may carry one, and the revision projection
+	// still reads it. The refusal is removed in the change that ships
+	// enforcement. An upgraded install refuses only once this CRD is applied:
+	// the chart ships the CRD under crds/, which helm upgrade never updates.
+	//
+	// An Agent stored with a budget before the refusal accepts every write that
+	// leaves its spec unchanged, and refuses any spec edit until the budget is
+	// removed. A typed Update is a spec edit, because the round-trip adds empty
+	// blocks, so the operator writes its finalizer with a metadata patch.
 	// +optional
 	Budget *BudgetSpec `json:"budget,omitempty"`
 
@@ -374,12 +385,38 @@ type ExposeSpec struct {
 	A2A *ExposeProtocol `json:"a2a,omitempty"`
 }
 
+// ExposeProtocol is one protocol's exposure. An a2a block must state its
+// authentication, and auth has no default (design 03 §3.4.4, ADR-0034 C2): a
+// default would choose the Agent's identity story — OAuth or shared bearer keys
+// — for a developer who never chose one, and the API server would write it into
+// every stored object, where nobody can tell it from a choice.
+//
+// An upgraded install enforces this only once this CRD is applied: the chart
+// ships the CRD under crds/, which helm upgrade never updates, so until then
+// auth still defaults to oauth and apikey is refused.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.auth)",message="spec.expose.a2a.auth is required and has no default: set apikey (keys in the group named for this namespace), none (an unauthenticated route), or oauth (not compilable until design 06 ships)"
 type ExposeProtocol struct {
 	// +kubebuilder:validation:Enum=cluster;org;public
 	// +kubebuilder:default=cluster
 	Visibility string `json:"visibility,omitempty"`
-	// +kubebuilder:validation:Enum=none;oauth
-	// +kubebuilder:default=oauth
+	// Auth is how the Agent's route authenticates callers. It is required by a
+	// CEL rule on the a2a block rather than by `required`, so the refusal names
+	// the fix.
+	//
+	//   - apikey: API keys, admitting the one group named for this Agent's
+	//     namespace. There is no field that names another group (design 03 §1.1).
+	//   - none: an unauthenticated route.
+	//   - oauth: admitted, and not compilable until design 06 ships.
+	//
+	// NOTHING ENFORCES ANY OF THESE YET. No controller reads this value except
+	// to hash it into the revision, and the policy compiler that would turn
+	// apikey into a gateway policy does not exist. With the gateway enabled,
+	// every Agent's route is unauthenticated whatever this says, and
+	// GovernanceSkipped reports it. An Agent stored while this field defaulted
+	// carries auth: oauth whether or not a person chose it: removing a default
+	// migrates nothing.
+	// +kubebuilder:validation:Enum=none;oauth;apikey
 	// +optional
 	Auth string `json:"auth,omitempty"`
 }
@@ -528,6 +565,17 @@ type AgentStatus struct {
 	Cards []CardStatus `json:"cards,omitempty"`
 	// +optional
 	Budget *BudgetStatus `json:"budget,omitempty"`
+	// Auth is the per-Agent -auth's applied record: design 03 §3.3's
+	// status.auth, in the first slice's subset (§1.1), owed to design 02. It is
+	// separate from any per-revision record because -auth belongs to no
+	// revision: it follows the Agent's current spec.
+	//
+	// NOTHING WRITES THIS FIELD YET, so it is absent on every Agent. The schema
+	// ships first because the chart installs this CRD under crds/, which helm
+	// upgrade never updates: a status field an operator writes before its CRD
+	// carries it is pruned without an error.
+	// +optional
+	Auth *AuthStatus `json:"auth,omitempty"`
 	// Eval carries the last gate result. It is a printer column because it answers
 	// "why is this Held?", which a developer would otherwise reconstruct by
 	// reading conditions.
@@ -612,6 +660,158 @@ type BudgetStatus struct {
 	USDSpentToday *string `json:"usdSpentToday,omitempty"`
 	// +optional
 	WindowResetsAt *metav1.Time `json:"windowResetsAt,omitempty"`
+}
+
+// AuthStatus is design 03 §3.3's status.auth in the first slice's subset
+// (§1.1): the served -auth mode, what the last Served transaction verified, and
+// the transaction in flight. The operator alone writes it, and nothing writes
+// it yet.
+//
+// Three of §3.3's transaction fields are deliberately absent. targetGroups
+// and targetKeySource are filled only by a group or key-source change, and in
+// the slice the key source is a constant compiled into the operator and the
+// admitted group is the one named for the Agent's namespace, so neither can
+// change. afterShift is Loosen's flag for waiting on its edit's weight shift,
+// and the slice runs no Loosen. They arrive with the scope that makes them
+// reachable. An install that keeps this CRD prunes them without an error if a
+// later operator writes them (design 03 A68).
+//
+// Every field is optional. The presence rules in the field comments are the
+// design's, and THE SCHEMA DOES NOT ENFORCE THEM: a CEL rule on status rejects
+// the whole status write when it fails, which is the failure A52 withdrew a
+// condition enum for (see AgentStatus.Conditions). The writer must hold to
+// them; no rule here does.
+//
+// The mode enums are safe where that condition enum was not. A mode is only
+// ever recorded from a spec this same CRD admitted, so an operator never needs
+// to write a mode its installed CRD lacks.
+type AuthStatus struct {
+	// Mode is the served -auth mode. It is absent until a transaction first
+	// reaches Served; a Create of an auth: none route then records
+	// {mode: none} and nothing beside it. So Mode present means a compiler has
+	// recorded this Agent's served -auth state. Adopt keys on status.auth as a
+	// whole, never on Mode alone (design 03 §3.3.3).
+	// +kubebuilder:validation:Enum=apikey;none
+	// +optional
+	Mode string `json:"mode,omitempty"`
+	// KeySource is the canonical selector the served policy selects. Present
+	// exactly when Mode is apikey.
+	// +optional
+	KeySource string `json:"keySource,omitempty"`
+	// AdmittedGroups is the sorted set of groups the last Served transaction
+	// verified. Present exactly when Mode is apikey. In the slice it is the one
+	// group named for the Agent's namespace.
+	// +listType=set
+	// +optional
+	AdmittedGroups []string `json:"admittedGroups,omitempty"`
+	// AppliedDigest is the SHA-256 over the canonical -auth policy last Served.
+	// Present exactly when Mode is apikey.
+	// +optional
+	AppliedDigest string `json:"appliedDigest,omitempty"`
+	// Verified records how much of the gateway the enforcement probe reached.
+	// Present exactly when Mode is apikey.
+	// +optional
+	Verified *AuthVerification `json:"verified,omitempty"`
+	// Transaction is the -auth transaction in flight, absent in steady state.
+	// It is keyed on its target (TargetMode, plus TargetDigest for apikey),
+	// never on the Agent's generation, so an edit that leaves the desired -auth
+	// unchanged does not disturb it (design 03 §3.3).
+	// +optional
+	Transaction *AuthTransaction `json:"transaction,omitempty"`
+}
+
+// AuthVerification is how much of the gateway a passing -auth enforcement
+// probe reached (design 03 §3.3.3, H2).
+type AuthVerification struct {
+	// ReplicasProbed is the number of gateway replicas the passing probe
+	// reached.
+	// +optional
+	ReplicasProbed int32 `json:"replicasProbed,omitempty"`
+	// ReplicasDeclared is the number of gateway replicas the install declares.
+	// The design types it "int or unknown", and ABSENT MEANS UNKNOWN. That is
+	// the slice's case: the declared replica count is not a prerequisite of the
+	// slice, and no flag carries it. Under H2, a probe that passes with the
+	// count unknown still means Ready=True, with an informational reason.
+	// +optional
+	ReplicasDeclared *int32 `json:"replicasDeclared,omitempty"`
+}
+
+// AuthTransaction is one -auth transaction's persisted state, so a restarted
+// operator re-enters it where it stopped (design 03 §3.3, §3.3.3).
+type AuthTransaction struct {
+	// Kind is the transaction. The slice runs Create, Lock and Adopt, and an
+	// Adopt only ever sits at stage Refused. Narrow and Loosen are design 03
+	// §3.3's later scope: specified, not approved, and nothing can enter them.
+	// They are in the enum anyway. The chart installs this CRD under crds/,
+	// which helm upgrade never updates, so an enum naming only the slice's
+	// kinds would make a later operator that writes Narrow against this CRD
+	// lose its entire status write, the failure A52 withdrew a condition enum
+	// for.
+	// +kubebuilder:validation:Enum=Create;Lock;Narrow;Loosen;Adopt
+	// +optional
+	Kind string `json:"kind,omitempty"`
+	// TargetMode is the mode being applied. A transaction is entered only for
+	// a target that compiles (design 03 §3.3.1): none always does, and apikey
+	// does when its canonical policy can be rendered. A refused Adopt applies
+	// nothing and records no target.
+	// +kubebuilder:validation:Enum=none;apikey
+	// +optional
+	TargetMode string `json:"targetMode,omitempty"`
+	// TargetDigest is the SHA-256 of the canonical policy being applied.
+	// Present exactly when TargetMode is apikey.
+	// +optional
+	TargetDigest string `json:"targetDigest,omitempty"`
+	// Stage is one of design 03 §3.3's stage names: PreparingRoute,
+	// ProbingBefore, ApplyingPolicies, Converging, ProbingAfter, Publishing,
+	// Served, or Refused for an Adopt.
+	// +optional
+	Stage string `json:"stage,omitempty"`
+	// Written is set in the status update that ENTERS ApplyingPolicies, before
+	// the policy write, so a crash between the two reads as written. Every
+	// re-entry then repeats the write, which is idempotent (design 03 §3.3.3).
+	// +optional
+	Written bool `json:"written,omitempty"`
+	// Deadline is when the current stage's deadline outcome fires. It is a
+	// condition, not a timeout: past it the transaction raises
+	// PolicyApplyIncomplete and stays in its stage (design 03 §3.3).
+	// +optional
+	Deadline *metav1.Time `json:"deadline,omitempty"`
+	// Probe holds the answers the probe last observed, never the keys.
+	// +optional
+	Probe *AuthProbe `json:"probe,omitempty"`
+	// BeforeObserved is Lock's: its one before-answer was 200 with a recorded
+	// card digest, so Served can say "transition observed".
+	// +optional
+	BeforeObserved bool `json:"beforeObserved,omitempty"`
+	// BeforeRevision is Lock's: the revision the route's one backendRef named
+	// when that answer came, whose recorded digest the card matched.
+	// BeforeObserved counts only while the backendRef still names it, and a
+	// promotion clears both.
+	// +optional
+	BeforeRevision string `json:"beforeRevision,omitempty"`
+	// RefusedMode is Adopt's: the desired mode when the Agent was first
+	// refused, kept on every later reconcile. An owner's later edit to apikey,
+	// from a RefusedMode that is not apikey, is the consent that ends the
+	// refusal (K2, design 03 §3.3.3). An Agent whose spec already said apikey
+	// when it was refused records apikey, and stays refused.
+	// +kubebuilder:validation:Enum=none;apikey;oauth
+	// +optional
+	RefusedMode string `json:"refusedMode,omitempty"`
+}
+
+// AuthProbe holds the anonymous answers an -auth probe last observed, as HTTP
+// status codes. It never holds a key.
+type AuthProbe struct {
+	// Before is Lock's one before-answer: the status an anonymous request to
+	// the Agent's card path got before the policy was written. Absent when no
+	// answer came, including when the request timed out. The write never waits
+	// on it.
+	// +optional
+	Before *int32 `json:"before,omitempty"`
+	// After is the last anonymous answer after the policy was written. The
+	// design trusts the policy only on a 401 (design 03 §3.3.3).
+	// +optional
+	After *int32 `json:"after,omitempty"`
 }
 
 // Agent names are capped so that `<name>-<revision>` — the workload name the
