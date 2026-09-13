@@ -1,0 +1,35 @@
+# Actions are pinned by commit SHA and tools by version, not by moving tag.
+# assayd's own admission story requires agent images to be cosign-signed and
+# digest-pinned; a CI that pipes an unpinned script from a moving branch into
+# bash would be the platform failing its own bar in the most visible place.
+
+# Reruns envtest three times in one process. `make envtest` runs it once, so a
+# test that leaves state behind, or derives a name that collides on a second
+# run, passes every PR and is only found by whoever next reruns it by hand. Its
+# isolation was fixed in #32; this job keeps it fixed. It is not a required
+# check: a failure here is a harness regression to fix, not a product defect.
+name: envtest-rerun
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  envtest-rerun:
+    name: envtest, three runs in one process
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: envtest, -count=3
+        run: make envtest ENVTEST_COUNT=3 ENVTEST_TIMEOUT=30m
