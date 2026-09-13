@@ -55,23 +55,28 @@ func all(cs []int, want int) bool {
 	return len(cs) > 0
 }
 
-// settle waits until n answers in a row with one key are the same code, and
-// returns them. A key set or a policy change reaches the proxy asynchronously,
-// and a case must not measure the moment before it lands.
-func settle(t *testing.T, gw string, port int, host, key string, n int, timeout time.Duration) []int {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	var got []int
-	for time.Now().Before(deadline) {
-		got = codes(t, n, gw, port, host, key)
-		if all(got, got[0]) {
-			return got
+// deleteAndWaitLater removes an object when the test ends and waits until it
+// is gone, so a re-run on a kept cluster does not apply into a namespace or a
+// Gateway that is still being deleted. An empty ns is a cluster-scoped kind.
+func deleteAndWaitLater(t *testing.T, kind, ns, name string) {
+	t.Cleanup(func() {
+		args := []string{"delete", kind, name, "--ignore-not-found", "--wait=true", "--timeout=180s"}
+		if ns != "" {
+			args = append(args, "-n", ns)
 		}
-		time.Sleep(time.Second)
-	}
-	t.Fatalf("the answers to key %q never settled in %s: last %v", key, timeout, got)
-	return nil
+		if out, err := kubectl(t, args...); err != nil {
+			t.Logf("clean up %s %s: %s", kind, name, out)
+		}
+	})
 }
+
+// Every wait below is for a NEW answer, with the old one allowed on the way,
+// through awaitCode. An earlier helper, settle, returned the first three
+// answers that agreed, stale or not, so a wait for a key set or a policy to
+// land passed on the old state whenever it had not landed yet; it passed in
+// practice only because propagation beat about 100 ms, and on a loaded
+// gateway it would have failed naming the wrong cause (an independent review
+// of this change).
 
 // ---- §8.1 cluster case 3: a key set in another namespace ------------------
 
@@ -82,7 +87,7 @@ func settle(t *testing.T, gw string, port int, host, key string, n int, timeout 
 // admits. That key gets 401, as an unknown key does: the selector reached
 // only the policy's own namespace. A key in the policy's namespace, in the
 // same group, is admitted in the same round, so the 401 is not a policy that
-// refuses everything.
+// refuses everyone.
 //
 // It is what §3.4.4's tenancy sentence waited on: a labelled ConfigMap in
 // another namespace mints no principal for this policy. It measures one
@@ -93,7 +98,7 @@ func TestSliceAKeySetInAnotherNamespaceDoesNotAdmit(t *testing.T) {
 	const elsewhere = "conf-elsewhere"
 	const keyElsewhere = "conf-elsewhere-key"
 	// Written before the policy, so a selector that did reach it would have it
-	// from the start.
+	// from the start. The namespace goes with its key set when the test ends.
 	if err := apply(t, fmt.Sprintf(`
 apiVersion: v1
 kind: Namespace
@@ -102,11 +107,11 @@ metadata: {name: %s}
 %s`, elsewhere, keySet(elsewhere, "conf-elsewhere-keys", map[string]string{keyElsewhere: sliceTeam}))); err != nil {
 		t.Fatal(err)
 	}
+	deleteAndWaitLater(t, "namespace", "", elsewhere)
 	host := publishedWithAuth(t, gw, agentName("xns"))
-	if got := settle(t, gw, servingPort, host, keyTeam, 3, time.Minute); got[0] != 200 {
-		t.Fatalf("a key in the policy's own namespace, in its group, got %v; the control must be "+
-			"admitted, or this case measures a policy that refuses everyone", got)
-	}
+	awaitCode(t, gw, servingPort, host, cardPath, keyTeam, 200, nil, time.Minute,
+		"a key in the policy's own namespace, in its group: the control must be admitted, or this "+
+			"case measures a policy that refuses everyone")
 	// A canary in the policy's own namespace, written AFTER the other
 	// namespace's key set. Once the gateway admits it, the key sets have been
 	// read at least up to that write, so a selector that reached the other
@@ -119,10 +124,9 @@ metadata: {name: %s}
 		t.Fatal(err)
 	}
 	deleteLater(t, "configmap", sliceNS, "conf-xns-canary")
-	if got := settle(t, gw, servingPort, host, canary, 3, 2*time.Minute); got[0] != 200 {
-		t.Fatalf("the canary written after the other namespace's key set got %v, so the key sets "+
-			"were never read and nothing below measures the other namespace's", got)
-	}
+	awaitCode(t, gw, servingPort, host, cardPath, canary, 200, []int{401}, 2*time.Minute,
+		"the canary written after the other namespace's key set: until it is admitted the key sets "+
+			"have not been read, and nothing below measures the other namespace's")
 	if got := codes(t, 5, gw, servingPort, host, keyElsewhere); !all(got, 401) {
 		t.Errorf("a key in the admitted group, stored only in namespace %s, got %v; want 401 every "+
 			"time. Anything else means configMapSelector reaches another namespace, and §3.4.4's "+
@@ -137,7 +141,18 @@ metadata: {name: %s}
 // which ConfigMap gives the key which group, and every second pair of writes
 // reverses the order the two ConfigMaps are written in, so a winner chosen by
 // name and one chosen by write order give different answers.
-const dupWrites = 8
+//
+// The case asserts that the key is admitted at least once and refused at
+// least once, and that is probabilistic. In the three runs the research note
+// quotes, the rarer outcome came up in 2, 4 and 2 of 8 writes, so take its
+// rate as at least 1 in 4. Treating the writes as independent, which is
+// assumed and not measured, a gateway behaving as measured fails the case by
+// chance with probability 0.75^N + 0.25^N. At the earlier N = 8 that is about
+// 10%. At N = 28 it is 0.75^28 ≈ 3.2 × 10⁻⁴ (ln 0.75 ≈ −0.2877, × 28 ≈
+// −8.06), plus 0.25^28, which is negligible: about 0.03%, under the 0.1% an
+// independent review of this change asked for. 28 keeps the four-write
+// pattern whole. 24 would be just over 0.1%.
+const dupWrites = 28
 
 // dupAnswers is how many answers are taken once a write has landed. All must
 // agree.
@@ -158,9 +173,9 @@ const dupAnswers = 30
 // write has landed, every one of dupAnswers answers is the same, admitted as
 // one group or refused as the other; and across the writes the key is
 // admitted at least once and refused at least once, so a duplicate does move a
-// credential into and out of the admitted group. WHICH ConfigMap wins is
-// logged, by name and by write order, and not asserted: the CRD calls it
-// undefined, so it may change without notice.
+// credential into and out of the admitted group. The last is probabilistic
+// (dupWrites). WHICH ConfigMap wins is logged, by name and by write order, and
+// not asserted: the CRD calls it undefined, so it may change without notice.
 func TestSliceADuplicateKeyHashIsNotRefused(t *testing.T) {
 	gw := sliceFixture(t)
 	const keyDup = "conf-dup-key"
@@ -195,10 +210,9 @@ func TestSliceADuplicateKeyHashIsNotRefused(t *testing.T) {
 			host = publishedWithAuth(t, gw, agentName("dup"))
 		}
 		for _, cm := range order {
-			if got := settle(t, gw, servingPort, host, canary(cm, i), 3, 2*time.Minute); got[0] != 200 {
-				t.Fatalf("write %d: the canary in conf-dup-%s got %v, so the write never landed and "+
-					"nothing after it measures that write", i+1, cm, got)
-			}
+			awaitCode(t, gw, servingPort, host, cardPath, canary(cm, i), 200, []int{401}, 2*time.Minute,
+				fmt.Sprintf("write %d: the canary in conf-dup-%s; until it is admitted the write has not "+
+					"landed, and nothing after it measures that write", i+1, cm))
 		}
 		got := codes(t, dupAnswers, gw, servingPort, host, keyDup)
 		if !all(got, got[0]) {
@@ -229,12 +243,22 @@ func TestSliceADuplicateKeyHashIsNotRefused(t *testing.T) {
 			i+1, groups["a"], groups["b"], order[0], order[1], got[0], winner)
 	}
 	t.Logf("DUPLICATE-KEY winners by name %v, by write order %v", byName, byOrder)
-	if admitted == 0 || refused == 0 {
-		t.Errorf("across %d writes the duplicated key was admitted %d times and refused %d times. "+
-			"Its two entries name different groups, and measured on 1.5.0 the credential takes "+
-			"each of them at some write, whichever way the groups are laid out; one answer only "+
-			"means the gateway does something §3.4.4 does not say, such as taking the union of "+
-			"the groups", dupWrites, admitted, refused)
+	// Each missing side means something different. Never admitted: the key
+	// was refused whichever ConfigMap gave it the admitted group, which is what
+	// a gateway that requires every entry to admit (an intersection) does.
+	// Never refused: the reverse, a gateway that admits when any entry does (a
+	// union). Either can also be chance, at the rate dupWrites states.
+	switch {
+	case admitted == 0:
+		t.Errorf("across %d writes the duplicated key was refused every time and never admitted. "+
+			"A gateway that requires every entry of a duplicate to admit (an intersection of its "+
+			"groups) does that, and §3.4.4 says one entry wins. It can also be chance: at the lowest "+
+			"admit rate measured, about 0.75^%d", dupWrites, dupWrites)
+	case refused == 0:
+		t.Errorf("across %d writes the duplicated key was admitted every time and never refused. "+
+			"A gateway that admits when any entry of a duplicate does (a union of its groups) does "+
+			"that, and §3.4.4 says one entry wins. It can also be chance, at a rate no higher than "+
+			"about 0.75^%d", dupWrites, dupWrites)
 	}
 }
 
@@ -246,7 +270,8 @@ func TestSliceADuplicateKeyHashIsNotRefused(t *testing.T) {
 // `<agent>-auth`. The Gateway's policy admits group `gwgroup` from a key set
 // in the Gateway's namespace; the route's admits the Agent's namespace group.
 //
-// Two results, both measured on 1.5.0:
+// Two results, both measured on 1.5.0, for this one shape (Strict API-key
+// authentication and one authorization rule, at both levels):
 //
 //   - Once `<agent>-auth` is on the route, the route's policy decides alone:
 //     the Gateway's key gets 401 and the route's key 200. They do not merge,
@@ -257,7 +282,8 @@ func TestSliceADuplicateKeyHashIsNotRefused(t *testing.T) {
 //     probe waits for (§3.3.3). So on such a Gateway the probe can pass with
 //     no `-auth` enforcing, and the route is then published under the
 //     Gateway's policy, admitting the Gateway's keys. That is §3.3.3's open
-//     MINOR 5, measured.
+//     MINOR 5, measured. The same 401 reaches `Lock`'s card-digest branch on a
+//     serving route, which is §3.3.3's open item too (A74).
 func TestSliceARoutePolicyOverridesAGatewayLevelOne(t *testing.T) {
 	sliceFixture(t)
 	const gwName = "conf-slice-gwpol"
@@ -266,6 +292,9 @@ func TestSliceARoutePolicyOverridesAGatewayLevelOne(t *testing.T) {
 		keySet(sliceGatewayNS, "conf-gw-keys", map[string]string{keyGw: "gwgroup"})); err != nil {
 		t.Fatal(err)
 	}
+	// The second Gateway runs a proxy Deployment of its own, and goes with it.
+	deleteAndWaitLater(t, "gateway", sliceGatewayNS, gwName)
+	deleteLater(t, "configmap", sliceGatewayNS, "conf-gw-keys")
 	gw := gatewayAddress(t, gwName)
 
 	// The Gateway-level policy: the compiler's shape, moved to the Gateway's
@@ -299,21 +328,10 @@ func TestSliceARoutePolicyOverridesAGatewayLevelOne(t *testing.T) {
 	// route is programmed under the Gateway's policy. A 404 is a route not yet
 	// attached, and the wait goes on past it. A new Gateway's proxy that is not
 	// yet listening is gatewayAddress's to wait out, so no answer at all fails
-	// here. A first fix for that race tolerated it in this loop, which would
-	// also have passed over a dropped connection (an independent review of
-	// this change).
-	for deadline := time.Now().Add(2 * time.Minute); ; {
-		got := settle(t, gw, servingPort, host, keyGw, 3, 2*time.Minute)
-		if got[0] == 500 {
-			break
-		}
-		if got[0] != 404 || time.Now().After(deadline) {
-			t.Fatalf("the Gateway's own key on the prepared route got %v, where code 0 is no answer "+
-				"at all; want 500, authorised by the Gateway's policy and then no backend. Without "+
-				"it nothing below says the route is under that policy", got)
-		}
-		time.Sleep(time.Second)
-	}
+	// here, as does anything else.
+	awaitCode(t, gw, servingPort, host, cardPath, keyGw, 500, []int{404}, 2*time.Minute,
+		"the Gateway's own key on the prepared route: 500, authorised by the Gateway's policy and "+
+			"then no backend, is the sign the route is under that policy")
 	if got := codes(t, 3, gw, servingPort, host, ""); !all(got, 401) {
 		t.Errorf("an anonymous request on a prepared route, with only a Gateway-level auth policy, "+
 			"got %v. 401 is what makes §3.3.3's MINOR 5 real: `Create`'s probe would take it as "+
@@ -324,10 +342,9 @@ func TestSliceARoutePolicyOverridesAGatewayLevelOne(t *testing.T) {
 	if err := apply(t, routeOn(route, gwName, host, "conf-rev1")); err != nil {
 		t.Fatal(err)
 	}
-	if got := settle(t, gw, servingPort, host, keyGw, 3, 2*time.Minute); got[0] != 200 {
-		t.Fatalf("with only the Gateway-level policy, the Gateway's key on the published route got "+
-			"%v; the control needs it admitted, or the Gateway's policy is not enforcing", got)
-	}
+	awaitCode(t, gw, servingPort, host, cardPath, keyGw, 200, []int{500}, 2*time.Minute,
+		"with only the Gateway-level policy, the Gateway's key on the published route: the control "+
+			"needs it admitted, or the Gateway's policy is not enforcing")
 	// The Gateway's policy lives in the Gateway's namespace, and the route's
 	// key is stored only in the route's. §3.4.4 reads this as a second
 	// namespace the selector did not reach.
@@ -341,11 +358,12 @@ func TestSliceARoutePolicyOverridesAGatewayLevelOne(t *testing.T) {
 	applyObject(t, p)
 	deleteLater(t, "agentgatewaypolicy", sliceNS, p.GetName())
 	requireAttached(t, p.GetName())
-	if got := settle(t, gw, servingPort, host, keyGw, 3, 2*time.Minute); got[0] != 401 {
-		t.Errorf("with <agent>-auth on the route, the Gateway-level policy's key got %v; want 401. "+
-			"200 means the Gateway's rule still admits beside the route's, and §3.2's route-level "+
-			"detection is not enough", got)
-	}
+	// Attached can precede enforcement, so this waits for the Gateway's key to
+	// go from 200 to 401 rather than taking whatever it gets first.
+	awaitCode(t, gw, servingPort, host, cardPath, keyGw, 401, []int{200}, 2*time.Minute,
+		"with <agent>-auth on the route, the Gateway-level policy's key: 200 that never turns to "+
+			"401 means the Gateway's rule still admits beside the route's, and §3.2's route-level "+
+			"detection is not enough")
 	for _, c := range []struct {
 		key  string
 		want int

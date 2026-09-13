@@ -219,7 +219,7 @@ spec:
   containers:
   - name: c
     image: %s
-    command: ["sleep", "7200"]`,
+    command: ["sleep", "infinity"]`,
 		sliceNS, sliceGatewayNS, gatewayYAML(sliceGateway),
 		keySet(sliceNS, "conf-slice-keys", sliceKeyGroups),
 		backend("conf-rev1"), backend("conf-rev2"),

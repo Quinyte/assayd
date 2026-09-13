@@ -72,6 +72,12 @@ slice_cluster_test.go:938: LOCK-LATENCY trial=10 from_write_start_ms=14.5 from_w
 slice_cluster_test.go:948: LOCK-LATENCY n=10 from_write_start: min_ms=13.4 median_ms=14.2 max_ms=14.6; from_write_return: min_ms=10.8 median_ms=11.3 max_ms=11.8; write: median_ms=2.9; probe_interval: median_ms=0.20; bracket: median_ms=0.23 max_ms=0.32; max_gap: median_ms=4.05 max_ms=5.72; deadline=4m0s
 ```
 
+The run that closed the next round of review fixes changed no code in this case, and agreed. Its summary line:
+
+```
+slice_cluster_test.go:948: LOCK-LATENCY n=10 from_write_start: min_ms=13.8 median_ms=14.5 max_ms=14.8; from_write_return: min_ms=11.1 median_ms=11.5 max_ms=12.0; write: median_ms=2.8; probe_interval: median_ms=0.20; bracket: median_ms=0.26 max_ms=0.39; max_gap: median_ms=4.85 max_ms=5.97; deadline=4m0s
+```
+
 - **Latency:** 13.4–14.6 ms from the write's start, median 14.2 ms; 10.8–11.8 ms from its return, median 11.3 ms. Upper bounds.
 - **Held:** after each first `401`, 5,629 to 6,157 anonymous requests, over about 1.1 s and counting those still buffered at the stop, every one `401`.
 - **Bracket:** 0.10–0.32 ms. In every trial the last `200` and the first `401` arrived within a third of a millisecond of each other.
@@ -95,9 +101,42 @@ These are design 03 §8.1's `cluster` cases that the first-slice bullet lists, a
   slice_cluster_test.go:1144: promotion: 26499 anonymous requests across it, 407 between the promotion and the new revision first being seen (longest pause 762µs), 26092 after, every one refused with 401
   ```
 - **A key set in another namespace (case 3).** A `ConfigMap` with the key-source label in namespace `conf-elsewhere` held a key in the admitted group. Then a canary key set was written in the policy's own namespace, and the case waited for the gateway to admit the canary. After that, the other namespace's key got `401` five times out of five, and a key in the same group in the policy's namespace got `200`. Case 7 adds a second namespace: a Gateway-level policy in the Gateway's namespace refused, with `401`, a key stored only in the route's namespace. The canary's proof rests on the controller reading `ConfigMap` events in order, which one cluster-wide watch delivers; that is not measured separately.
-- **A duplicate `keyHash` under a different group (case 4).** It is not refused. Two `ConfigMap`s, `conf-dup-a` and `conf-dup-b`, held the same hash under two groups. Each of 8 writes swapped the groups, and every second pair reversed the order the two were written in. Each write also added a canary key of its own to each `ConfigMap`, and was taken as landed only once both canaries were admitted. Then 30 answers were taken, and all 30 had to agree.
+- **A duplicate `keyHash` under a different group (case 4).** It is not refused. Two `ConfigMap`s, `conf-dup-a` and `conf-dup-b`, held the same hash under two groups. Each of 28 writes (8 in the case's earlier form) swapped the groups, and every second pair reversed the order the two were written in. Each write also added a canary key of its own to each `ConfigMap`, and was taken as landed only once both canaries were admitted. Then 30 answers were taken, and all 30 had to agree.
   - The key never got `401`. After every landed write it was admitted (`200`) or refused (`403`) as a member of **one** of the two groups, all 30 answers the same.
-  - The closing run. `conf-dup-a` won two writes:
+  - The closing run of the case's current, 28-write form. The key was admitted 17 times and refused 11, and `conf-dup-a` won three writes:
+
+    ```
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 1: a=conf-team b=rogue, written a then b: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 2: a=rogue b=conf-team, written a then b: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 3: a=conf-team b=rogue, written b then a: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 4: a=rogue b=conf-team, written b then a: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 5: a=conf-team b=rogue, written a then b: HTTP 200, so conf-dup-a won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 6: a=rogue b=conf-team, written a then b: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 7: a=conf-team b=rogue, written b then a: HTTP 200, so conf-dup-a won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 8: a=rogue b=conf-team, written b then a: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 9: a=conf-team b=rogue, written a then b: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 10: a=rogue b=conf-team, written a then b: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 11: a=conf-team b=rogue, written b then a: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 12: a=rogue b=conf-team, written b then a: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 13: a=conf-team b=rogue, written a then b: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 14: a=rogue b=conf-team, written a then b: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 15: a=conf-team b=rogue, written b then a: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 16: a=rogue b=conf-team, written b then a: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 17: a=conf-team b=rogue, written a then b: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 18: a=rogue b=conf-team, written a then b: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 19: a=conf-team b=rogue, written b then a: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 20: a=rogue b=conf-team, written b then a: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 21: a=conf-team b=rogue, written a then b: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 22: a=rogue b=conf-team, written a then b: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 23: a=conf-team b=rogue, written b then a: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 24: a=rogue b=conf-team, written b then a: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 25: a=conf-team b=rogue, written a then b: HTTP 200, so conf-dup-a won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 26: a=rogue b=conf-team, written a then b: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 27: a=conf-team b=rogue, written b then a: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:242: DUPLICATE-KEY write 28: a=rogue b=conf-team, written b then a: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:245: DUPLICATE-KEY winners by name map[conf-dup-a:3 conf-dup-b:25], by write order map[written first:15 written last:13]
+    ```
+  - The closing run of the case's earlier, 8-write form. `conf-dup-a` won two writes:
 
     ```
     slice_keys_cluster_test.go:228: DUPLICATE-KEY write 1: a=conf-team b=rogue, written a then b: HTTP 403, so conf-dup-b won
@@ -110,7 +149,7 @@ These are design 03 §8.1's `cluster` cases that the first-slice bullet lists, a
     slice_keys_cluster_test.go:228: DUPLICATE-KEY write 8: a=rogue b=conf-team, written b then a: HTTP 200, so conf-dup-b won
     slice_keys_cluster_test.go:231: DUPLICATE-KEY winners by name map[conf-dup-a:2 conf-dup-b:6], by write order map[written first:4 written last:4]
     ```
-  - The closing run of the change's previous commit, with the same case code. `conf-dup-b` won every write, in both write orders:
+  - An earlier closing run of the 8-write form. `conf-dup-b` won every write, in both write orders:
 
     ```
     slice_keys_cluster_test.go:228: DUPLICATE-KEY write 1: a=conf-team b=rogue, written a then b: HTTP 403, so conf-dup-b won
@@ -137,7 +176,8 @@ These are design 03 §8.1's `cluster` cases that the first-slice bullet lists, a
     slice_keys_cluster_test.go:215: DUPLICATE-KEY winners by name map[conf-dup-a:2 conf-dup-b:6], by write order map[written first:4 written last:4]
     ```
   - Neither the name nor the write order explains every write. `conf-dup-b` wins most writes, and not all of them, and a rewrite that changes no group can move the winner. So "which one wins" is not stated here as a rule, and the CRD calls it undefined. What is stated is that a duplicate can put the credential in either group at any write to either `ConfigMap`, with nothing reporting it.
-  - What the committed assertion rules out: a gateway that refuses a duplicate, takes the union of its groups, or takes their intersection. It does not state which entry wins.
+  - What the committed assertion rules out: a gateway that refuses a duplicate, takes the union of its groups (it would never refuse), or takes their intersection (it would never admit). It does not state which entry wins.
+  - **The assertion is probabilistic.** In the three 8-write runs quoted here the rarer outcome came up 2, 4 and 2 times, so take its rate as at least 1 in 4. Treating the writes as independent, which is assumed and not measured, a gateway behaving as measured fails "admitted at least once and refused at least once" by chance with probability 0.75^N + 0.25^N: about 10% at N = 8, and about 3.2 × 10⁻⁴ at N = 28 (ln 0.75 ≈ −0.2877; × 28 ≈ −8.06; e^−8.06 ≈ 0.00032). The case runs 28 writes, so about 0.03%.
   - **An earlier version of this section is withdrawn.** It reported writes taken as landed after a ten-second sleep, with nothing proving it, so they may have measured writes that had not yet reached the gateway. An independent review of this change found it.
 - **An explicit `mode: Strict` (case 5).** The compiler's policy and the same policy with `mode` removed gave the same four answers: anonymous `401`, unknown key `401`, admitted key `200`, wrong-group key `403`. The API server stored the second with `mode: Strict`.
 - **A Gateway-level policy beside `<agent>-auth` (case 7).** A second Gateway, with a policy in its own namespace targeting the Gateway: API-key authentication over a key set in that namespace, admitting group `gwgroup`.
