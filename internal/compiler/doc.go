@@ -23,7 +23,7 @@
 // a real CEL string encoder, and the CEL rule's group literal is printed by
 // cel-go's unparser, so the rule's correctness rests on that unparser. It
 // encodes a string literal with Go's strconv.Quote, which agrees with CEL's
-// escapes only on valid UTF-8; admitGroupExpression refuses anything else, and
+// escapes only on valid UTF-8; AdmitGroupsExpression refuses anything else, and
 // TestTheGroupLiteralIsCELEncodedNotConcatenated proves the output with
 // cel-go's own parser. An upgrade that changes the unparser must pass that
 // test; it is the check that the encoder still round-trips.

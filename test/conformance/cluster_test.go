@@ -48,9 +48,15 @@ func apply(t *testing.T, manifest string) error {
 // minute pass in 0.66s by reading a pre-patch converged status.
 func conds(t *testing.T, kind, name string) (map[string]string, map[string]string) {
 	t.Helper()
+	return condsIn(t, "default", kind, name)
+}
+
+// condsIn is conds for an object in namespace ns.
+func condsIn(t *testing.T, ns, kind, name string) (map[string]string, map[string]string) {
+	t.Helper()
 	var got map[string]any
 	for i := 0; i < 90; i++ {
-		out, err := kubectl(t, "get", kind, name, "-n", "default", "-o", "json")
+		out, err := kubectl(t, "get", kind, name, "-n", ns, "-o", "json")
 		if err == nil {
 			_ = json.Unmarshal([]byte(out), &got)
 			gen := float64(-1)
