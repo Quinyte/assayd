@@ -314,8 +314,15 @@ func AuthPolicy(in AuthInput) (*unstructured.Unstructured, error) {
 // An empty set, an empty group and a repeated group are refused, never
 // rendered. An empty set has no expression to emit, and E2 means one is never
 // asked for (§3.2). `apiKey.group == ""` would admit the keys stored with no
-// group rather than nobody. A repeat is an input error, whatever it would
-// admit. `groups` is not modified.
+// group rather than nobody. A repeat is refused as an input error. That is
+// this code's call, not §3.4.4's, which says nothing of repeats; the later
+// scope's `allowedGroups` may make a set of it at admission instead. `groups`
+// is not modified.
+//
+// **What a gateway has been shown**: the one-group expression, and one
+// two-group expression on one line (`make conformance-cluster`,
+// TestSliceATwoGroupExpressionAdmitsBothGroups). A set long enough to wrap
+// across lines (below) is valid CEL, and no gateway has been shown one.
 //
 // §3.4.2 requires a real CEL string encoder and never concatenation, so the
 // expression is built as a CEL AST and printed by cel-go's own unparser; the

@@ -117,61 +117,108 @@ metadata: {name: %s}
 
 // ---- §8.1 cluster case 4: a duplicate keyHash -----------------------------
 
-// dupWrites is how many times the duplicate's two groups are swapped. Each
-// write swaps which ConfigMap names which group.
-const dupWrites = 6
+// dupWrites is how many times the duplicate is rewritten. Each write swaps
+// which ConfigMap gives the key which group, and every second pair of writes
+// reverses the order the two ConfigMaps are written in, so a winner chosen by
+// name and one chosen by write order give different answers.
+const dupWrites = 8
+
+// dupAnswers is how many answers are taken once a write has landed. All must
+// agree.
+const dupAnswers = 30
 
 // TestSliceADuplicateKeyHashIsNotRefused measures the CRD's "the behavior is
 // undefined" for one key hash stored in two selected ConfigMaps under two
 // groups (§3.4.4: "writing a known key's hash under another group re-groups
-// that credential rather than adding one"). The gateway does not refuse the
-// duplicate: the key keeps authenticating, never 401, and it is admitted or
-// refused by the one group rule as if it belonged to ONE of the two groups.
-// Within one write the answer is stable. Which group it takes is not pinned:
-// measured on 1.5.0 it followed neither the ConfigMap names nor the order they
-// were written in (the research note), so asserting either would pin what the
-// CRD calls undefined.
+// that credential rather than adding one").
+//
+// Each write carries a CANARY in each ConfigMap: a key of its own, new with
+// every write, in the admitted group. The write is taken as landed only once
+// both canaries are admitted. The first version of this case slept ten
+// seconds instead, and its answers could come from a write that had not
+// landed (the second review of A74).
+//
+// Asserted: the duplicate is not refused, and the key never gets 401; once a
+// write has landed, every one of dupAnswers answers is the same, admitted as
+// one group or refused as the other; and across the writes the key is
+// admitted at least once and refused at least once, so a duplicate does move a
+// credential into and out of the admitted group. WHICH ConfigMap wins is
+// logged, by name and by write order, and not asserted: the CRD calls it
+// undefined, so it may change without notice.
 func TestSliceADuplicateKeyHashIsNotRefused(t *testing.T) {
 	gw := sliceFixture(t)
 	const keyDup = "conf-dup-key"
-	write := func(aGroup, bGroup string) {
-		t.Helper()
-		if err := apply(t, keySet(sliceNS, "conf-dup-a", map[string]string{keyDup: aGroup})+"\n---\n"+
-			keySet(sliceNS, "conf-dup-b", map[string]string{keyDup: bGroup})); err != nil {
-			t.Fatalf("the API server refused a duplicate key hash in a second ConfigMap: %v", err)
-		}
-	}
 	deleteLater(t, "configmap", sliceNS, "conf-dup-a")
 	deleteLater(t, "configmap", sliceNS, "conf-dup-b")
-	write(sliceTeam, "rogue")
-	host := publishedWithAuth(t, gw, agentName("dup"))
+	canary := func(cm string, i int) string { return fmt.Sprintf("conf-canary-%s-%s-%d", cm, runID, i) }
+	writeOne := func(cm, group string, i int) {
+		t.Helper()
+		if err := apply(t, keySet(sliceNS, "conf-dup-"+cm,
+			map[string]string{keyDup: group, canary(cm, i): sliceTeam})); err != nil {
+			t.Fatalf("the API server refused a duplicate key hash in ConfigMap conf-dup-%s: %v", cm, err)
+		}
+	}
 
-	var seen []string
+	var host string
+	var admitted, refused int
+	byName := map[string]int{}
+	byOrder := map[string]int{}
 	for i := 0; i < dupWrites; i++ {
-		a, b := sliceTeam, "rogue"
+		groups := map[string]string{"a": sliceTeam, "b": "rogue"}
 		if i%2 == 1 {
-			a, b = b, a
+			groups = map[string]string{"a": "rogue", "b": sliceTeam}
 		}
-		if i > 0 {
-			write(a, b)
-			// A key set is read live; give the write time to land before the
-			// answer is taken as the state it produced.
-			time.Sleep(10 * time.Second)
+		order := []string{"a", "b"}
+		if (i/2)%2 == 1 {
+			order = []string{"b", "a"}
 		}
-		got := settle(t, gw, servingPort, host, keyDup, 5, time.Minute)
+		for _, cm := range order {
+			writeOne(cm, groups[cm], i)
+		}
+		if host == "" {
+			host = publishedWithAuth(t, gw, agentName("dup"))
+		}
+		for _, cm := range order {
+			if got := settle(t, gw, servingPort, host, canary(cm, i), 3, 2*time.Minute); got[0] != 200 {
+				t.Fatalf("write %d: the canary in conf-dup-%s got %v, so the write never landed and "+
+					"nothing after it measures that write", i+1, cm, got)
+			}
+		}
+		got := codes(t, dupAnswers, gw, servingPort, host, keyDup)
+		if !all(got, got[0]) {
+			t.Fatalf("write %d: once the write had landed, the duplicated key's answers were %v. "+
+				"They are not stable, so the gateway chooses per request, and §3.4.4's \"one of "+
+				"the two groups\" is not what it does", i+1, got)
+		}
+		var winner string
 		switch got[0] {
 		case 200:
-			seen = append(seen, fmt.Sprintf("write %d (a=%s, b=%s): admitted, as group %s", i+1, a, b, sliceTeam))
+			admitted++
+			winner = map[bool]string{true: "a", false: "b"}[groups["a"] == sliceTeam]
 		case 403:
-			seen = append(seen, fmt.Sprintf("write %d (a=%s, b=%s): refused 403, as group rogue", i+1, a, b))
+			refused++
+			winner = map[bool]string{true: "a", false: "b"}[groups["a"] == "rogue"]
 		default:
 			t.Fatalf("write %d: the duplicated key got %v. A 401 means the gateway refused the "+
 				"duplicate or dropped the key, which would make §3.4.4's re-grouping sentence "+
 				"false; any other code is not an answer the group rule gives", i+1, got)
 		}
+		byName["conf-dup-"+winner]++
+		if winner == order[1] {
+			byOrder["written last"]++
+		} else {
+			byOrder["written first"]++
+		}
+		t.Logf("DUPLICATE-KEY write %d: a=%s b=%s, written %s then %s: HTTP %d, so conf-dup-%s won",
+			i+1, groups["a"], groups["b"], order[0], order[1], got[0], winner)
 	}
-	for _, s := range seen {
-		t.Logf("DUPLICATE-KEY %s", s)
+	t.Logf("DUPLICATE-KEY winners by name %v, by write order %v", byName, byOrder)
+	if admitted == 0 || refused == 0 {
+		t.Errorf("across %d writes the duplicated key was admitted %d times and refused %d times. "+
+			"Its two entries name different groups, and measured on 1.5.0 the credential takes "+
+			"each of them at some write, whichever way the groups are laid out; one answer only "+
+			"means the gateway does something §3.4.4 does not say, such as taking the union of "+
+			"the groups", dupWrites, admitted, refused)
 	}
 }
 
@@ -233,8 +280,20 @@ func TestSliceARoutePolicyOverridesAGatewayLevelOne(t *testing.T) {
 	}
 	deleteLater(t, "httproute", sliceNS, route)
 	// The Gateway's own key reaching the missing backend (500) is the sign the
-	// route is programmed under the Gateway's policy.
-	settle(t, gw, servingPort, host, keyGw, 3, 2*time.Minute)
+	// route is programmed under the Gateway's policy. A 404 is a route not yet
+	// attached, and settle waits past it.
+	for deadline := time.Now().Add(2 * time.Minute); ; {
+		got := settle(t, gw, servingPort, host, keyGw, 3, 2*time.Minute)
+		if got[0] == 500 {
+			break
+		}
+		if got[0] != 404 || time.Now().After(deadline) {
+			t.Fatalf("the Gateway's own key on the prepared route got %v; want 500, authorised by "+
+				"the Gateway's policy and then no backend. Without it nothing below says the route "+
+				"is under that policy", got)
+		}
+		time.Sleep(time.Second)
+	}
 	if got := codes(t, 3, gw, servingPort, host, ""); !all(got, 401) {
 		t.Errorf("an anonymous request on a prepared route, with only a Gateway-level auth policy, "+
 			"got %v. 401 is what makes §3.3.3's MINOR 5 real: `Create`'s probe would take it as "+
@@ -248,6 +307,14 @@ func TestSliceARoutePolicyOverridesAGatewayLevelOne(t *testing.T) {
 	if got := settle(t, gw, servingPort, host, keyGw, 3, 2*time.Minute); got[0] != 200 {
 		t.Fatalf("with only the Gateway-level policy, the Gateway's key on the published route got "+
 			"%v; the control needs it admitted, or the Gateway's policy is not enforcing", got)
+	}
+	// The Gateway's policy lives in the Gateway's namespace, and the route's
+	// key is stored only in the route's. §3.4.4 reads this as a second
+	// namespace the selector did not reach.
+	if got := codes(t, 3, gw, servingPort, host, keyTeam); !all(got, 401) {
+		t.Errorf("with only the Gateway-level policy, a key stored only in the route's namespace got "+
+			"%v; want 401. Anything else means the Gateway's selector read a key set outside its "+
+			"own namespace, and §3.4.4's measured scope is wrong", got)
 	}
 
 	p := authPolicy(t, agent)

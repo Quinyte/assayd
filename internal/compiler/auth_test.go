@@ -405,17 +405,30 @@ func TestALongGroupSetStillParsesToEveryGroup(t *testing.T) {
 
 // Refused, never rendered: an empty set, an empty group, a repeated group, and
 // invalid UTF-8 anywhere in the set.
+//
+// Each error must name its own cause. The empty set most of all: cel-go's
+// unparser also fails on the nil expression an empty set would build, so
+// without its own check the set would still be refused, with a message about
+// an unparser rather than about the input.
 func TestAnUnrenderableGroupSetIsRefused(t *testing.T) {
-	for name, in := range map[string][]string{
-		"nil set":              nil,
-		"empty set":            {},
-		"empty group":          {""},
-		"empty among others":   {"audit", ""},
-		"repeated group":       {"audit", "payments", "audit"},
-		"invalid UTF-8 second": {"audit", "\xff"},
+	for name, c := range map[string]struct {
+		in   []string
+		says string
+	}{
+		"nil set":              {nil, "the set is empty"},
+		"empty set":            {[]string{}, "the set is empty"},
+		"empty group":          {[]string{""}, "a group is empty"},
+		"empty among others":   {[]string{"audit", ""}, "a group is empty"},
+		"repeated group":       {[]string{"audit", "payments", "audit"}, "is repeated"},
+		"invalid UTF-8 second": {[]string{"audit", "\xff"}, "not valid UTF-8"},
 	} {
-		if got, err := AdmitGroupsExpression(in); err == nil {
-			t.Errorf("%s: %q encoded to %q; want an error", name, in, got)
+		got, err := AdmitGroupsExpression(c.in)
+		if err == nil {
+			t.Errorf("%s: %q encoded to %q; want an error", name, c.in, got)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.says) {
+			t.Errorf("%s: the error %q does not say %q", name, err, c.says)
 		}
 	}
 }

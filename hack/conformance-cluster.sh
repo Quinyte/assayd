@@ -29,8 +29,10 @@ for tool in k3d kubectl helm go; do
   command -v "$tool" >/dev/null || { echo "conformance needs $tool on PATH"; exit 1; }
 done
 
-# The run's own log, never a fixed path: two runs on one machine, or two
-# worktrees, would otherwise read each other's `--- SKIP` lines.
+# The run's own log, never a fixed path, so a run never reads another run's
+# `--- SKIP` lines. That alone does not make two runs safe together: each
+# deletes and re-creates its clusters by name, so two runs at once need
+# different CONF_CLUSTER values.
 LOG="$(mktemp "${TMPDIR:-/tmp}/conformance.XXXXXX")"
 
 cleanup() {
@@ -102,6 +104,17 @@ run_suite -skip '^TestSlice' || status=1
 echo "==> phase 2: the first slice's cases, on agentgateway $SLICE_AGW_VERSION"
 provision "$SLICE_CLUSTER" "$SLICE_AGW_VERSION"
 CONF_SLICE_AGW_VERSION="$SLICE_AGW_VERSION" run_suite -run '^TestSlice' || status=1
+
+# A `-run` that matches nothing is green: `go test` prints "no tests to run"
+# and exits 0, with no SKIP line to catch. So every TestSlice function must
+# have reported a PASS, and there must be at least one.
+want=$(grep -h '^func TestSlice' test/conformance/*_test.go | wc -l | tr -d ' ')
+passed=$(grep -c -- '^--- PASS: TestSlice' "$LOG" || true)
+if [ "$want" -lt 1 ] || [ "$passed" -ne "$want" ]; then
+  echo
+  echo "FAIL: phase 2 declares $want TestSlice cases and $passed of them passed."
+  status=1
+fi
 
 # A SKIP is not a PASS. `go test` exits 0 for a skipped test, so a suite whose
 # load-bearing test went inconclusive would report success and the claim it

@@ -23,6 +23,7 @@ package conformance
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -36,6 +37,7 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -462,7 +464,11 @@ func TestSliceAPreparedRouteAnswers500Then401OnTheServingListener(t *testing.T) 
 	took := awaitCode(t, gw, servingPort, host, cardPath, "", 401, []int{500},
 		controller.AuthTransactionDeadline,
 		"`Create`'s anonymous probe on the prepared route once <agent>-auth is written (§3.3.3)")
-	t.Logf("prepared route: first anonymous 401 %s after the policy reported Attached", took.Round(time.Millisecond))
+	// Not a latency. awaitCode probes once a second through `kubectl exec`,
+	// so `took` is at most one probe's round trip when the first probe after
+	// Attached is already refused. It bounds the wait from above and no more.
+	t.Logf("prepared route: refused within %s of the policy reporting Attached (an upper bound: "+
+		"one probe round trip at 1 s cadence)", took.Round(time.Millisecond))
 
 	expectCode(t, gw, servingPort, host, cardPath, keyUnknown, 401,
 		"an unknown key on the prepared route (the spike's second row)")
@@ -501,16 +507,27 @@ type stamped struct {
 	at   time.Time
 }
 
-// startStream runs `curl` in a loop in the traffic Pod against one host. The
-// loop ends when a stop file appears or after `bound`, so a killed test never
-// leaves it running.
+// streamBatch is how many requests one `curl` process sends before the loop
+// checks its stop file.
+const streamBatch = 500
+
+// startStream sends anonymous requests back to back from the traffic Pod to
+// one host. The loop ends when a stop file appears or after `bound`, so a
+// killed test never leaves it running.
+//
+// One `curl` process sends a batch of requests through a URL glob, each on a
+// NEW connection (`Connection: close`), so a policy the proxy applies per
+// connection still shows on the next request. An earlier version started one
+// `curl` per request, and its ~65 ms of process start was the resolution of
+// every latency this measured (the second review of A74).
 func startStream(t *testing.T, gw, host, tag string, bound time.Duration) *codeStream {
 	t.Helper()
 	stopFile := "/tmp/stop-" + tag
 	script := fmt.Sprintf(`rm -f %[1]s; end=$(( $(date +%%s) + %[2]d )); `+
 		`while [ ! -f %[1]s ] && [ "$(date +%%s)" -lt "$end" ]; do `+
-		`curl -s -o /dev/null -w '%%{http_code}\n' --max-time 2 -H 'Host: %[3]s' 'http://%[4]s:%[5]d%[6]s'; done`,
-		stopFile, int(bound.Seconds()), host, gw, servingPort, cardPath)
+		`curl -s -H 'Connection: close' -H 'Host: %[3]s' -o /dev/null -w '%%{http_code}\n' --max-time 2 `+
+		`'http://%[4]s:%[5]d%[6]s?n=[1-%[7]d]'; done`,
+		stopFile, int(bound.Seconds()), host, gw, servingPort, cardPath, streamBatch)
 	cmd := exec.Command("kubectl", "exec", sliceCurlPod, "-n", sliceNS, "--", "sh", "-c", script)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
@@ -581,14 +598,28 @@ const lockTrials = 10
 // §3.3.3): on a route that is already SERVING, an anonymous request goes from
 // the backend's 200 to 401 once `<agent>-auth` is written onto it, and passes
 // through nothing else — no 5xx, no 404 — because the route keeps its
-// backendRefs throughout. It also measures how long that takes, from the
-// moment the policy write returned to the first 401, which nothing had
-// measured: §3.3.3's 4-minute deadline for `Lock` rested on a prepared-route
-// measurement and a test tolerance. The numbers are recorded in
-// docs/research/agentgateway-published-route-lock-latency-2026-09.md.
+// backendRefs throughout. It also measures how long that takes, which nothing
+// had measured: §3.3.3's 4-minute deadline for `Lock` rested on a
+// prepared-route measurement and a test tolerance. The numbers are recorded
+// in docs/research/agentgateway-published-route-lock-latency-2026-09.md.
+//
+// **What the figure is.** The time from the START of the policy write to the
+// arrival of the first 401. The API server commits somewhere inside the
+// write, so this is an upper bound on commit-to-enforcement, loose by the
+// write's own duration (also logged), the loop's interval, and the streaming
+// delay. The time from the write's RETURN is logged too, and can be negative:
+// the proxy may enforce before the response reaches the test.
+//
+// An earlier version wrote with `kubectl apply` straight after an answer
+// arrived, from a loop that started one `curl` per request. Its figures were
+// that loop's rhythm, and a gateway faster than `kubectl` would have failed
+// the trial (the second review of A74). Now the write is one client-go
+// request after a random pause, the loop sends a request every few
+// milliseconds, and a 401 is accepted whenever it arrives.
 func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 	gw := sliceFixture(t)
-	var lat, fromBegin []time.Duration
+	pc := policyClient(t)
+	var fromStart, fromReturn, writes, intervals []time.Duration
 	for i := 1; i <= lockTrials; i++ {
 		agent := agentName(fmt.Sprintf("lock%d", i))
 		route, _ := compiler.ServingRouteName(agent)
@@ -614,31 +645,39 @@ func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 				run = 0
 			}
 		}
-		s.drain()
-
 		p := authPolicy(t, agent)
-		body, _ := json.Marshal(p.Object)
+		warm(t, pc)
+		// A random pause, so the write does not start at a fixed phase of the
+		// loop: straight after an answer arrived, the next one was always one
+		// interval away, and that interval was what an earlier version measured.
+		randomPause(250 * time.Millisecond)
+		s.drain()
 		begin := time.Now()
-		if err := apply(t, string(body)); err != nil {
+		if _, err := pc.Create(context.Background(), p, metav1.CreateOptions{}); err != nil {
 			t.Fatalf("trial %d: write the policy: %v", i, err)
 		}
 		written := time.Now()
 		deleteLater(t, "agentgatewaypolicy", sliceNS, p.GetName())
 
-		var between int
+		var after int
 		var first time.Time
 		for first.IsZero() {
-			a, ok := s.next(controller.AuthTransactionDeadline - time.Since(written))
+			a, ok := s.next(controller.AuthTransactionDeadline - time.Since(begin))
 			if !ok {
 				t.Fatalf("trial %d: no anonymous 401 within §3.3.3's %s deadline after the policy "+
-					"write (%d answers, all 200): `Lock` would report AuthLockUnverified here",
-					i, controller.AuthTransactionDeadline, between)
+					"write (%d answers after it, all 200): `Lock` would report AuthLockUnverified "+
+					"here", i, controller.AuthTransactionDeadline, after)
 			}
-			switch {
-			case a.code == 401 && a.at.After(written):
+			switch a.code {
+			case 401:
+				// Whenever it arrives. No policy existed before the write
+				// began, so a 401 is the write's, even one that beats the
+				// write's response to the test.
 				first = a.at
-			case a.code == 200:
-				between++
+			case 200:
+				if a.at.After(written) {
+					after++
+				}
 			default:
 				t.Fatalf("trial %d: an anonymous request got HTTP %d while the policy was being "+
 					"applied to a serving route. `Lock` keeps the route's backendRefs "+
@@ -661,26 +700,25 @@ func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 		expectCode(t, gw, servingPort, host, cardPath, keyTeam, 200,
 			fmt.Sprintf("trial %d: a key in the Agent's namespace group after the lock", i))
 
-		// The latency is from the write RETURNING to the first 401 reaching the
-		// test. The commit is somewhere inside the write, so the latency from
-		// the commit lies between that figure and the one from the write's
-		// start; both are logged. The loop's interval is the resolution: a
-		// 401 is seen at most one interval after the proxy starts answering it.
-		d := first.Sub(written)
-		lat = append(lat, d)
-		fromBegin = append(fromBegin, first.Sub(begin))
-		t.Logf("LOCK-LATENCY trial=%d from_write_return_ms=%d from_write_start_ms=%d "+
-			"probe_interval_ms=%d anonymous_200s_after_write=%d",
-			i, d.Milliseconds(), first.Sub(begin).Milliseconds(), s.interval().Milliseconds(), between)
+		fromStart = append(fromStart, first.Sub(begin))
+		fromReturn = append(fromReturn, first.Sub(written))
+		writes = append(writes, written.Sub(begin))
+		intervals = append(intervals, s.interval())
+		t.Logf("LOCK-LATENCY trial=%d from_write_start_ms=%.1f from_write_return_ms=%.1f "+
+			"write_ms=%.1f probe_interval_ms=%.2f anonymous_200s_after_write=%d",
+			i, ms(first.Sub(begin)), ms(first.Sub(written)), ms(written.Sub(begin)), ms(s.interval()), after)
 	}
 
-	sortDurations(lat)
-	sortDurations(fromBegin)
-	t.Logf("LOCK-LATENCY n=%d from_write_return: min_ms=%d median_ms=%d max_ms=%d; "+
-		"from_write_start: median_ms=%d max_ms=%d; deadline=%s",
-		len(lat), lat[0].Milliseconds(), median(lat).Milliseconds(), lat[len(lat)-1].Milliseconds(),
-		median(fromBegin).Milliseconds(), fromBegin[len(fromBegin)-1].Milliseconds(),
-		controller.AuthTransactionDeadline)
+	for _, d := range [][]time.Duration{fromStart, fromReturn, writes, intervals} {
+		sortDurations(d)
+	}
+	last := len(fromStart) - 1
+	t.Logf("LOCK-LATENCY n=%d from_write_start: min_ms=%.1f median_ms=%.1f max_ms=%.1f; "+
+		"from_write_return: min_ms=%.1f median_ms=%.1f max_ms=%.1f; write: median_ms=%.1f; "+
+		"probe_interval: median_ms=%.2f; deadline=%s",
+		len(fromStart), ms(fromStart[0]), ms(median(fromStart)), ms(fromStart[last]),
+		ms(fromReturn[0]), ms(median(fromReturn)), ms(fromReturn[last]), ms(median(writes)),
+		ms(median(intervals)), controller.AuthTransactionDeadline)
 }
 
 func sortDurations(d []time.Duration) { sort.Slice(d, func(a, b int) bool { return d[a] < d[b] }) }
@@ -737,17 +775,21 @@ func TestSliceATwoGroupExpressionAdmitsBothGroups(t *testing.T) {
 // ---- §8.1 cluster case 1: one per-Agent policy across a promotion ---------
 
 // TestSliceOnePerAgentPolicyCoversAPromotion measures the gateway half of
-// §8.1's cluster case 1 and §1.1's argument that a J2 `Lock` needs no ordering
-// against a weight shift: the per-Agent `-auth` targets the ROUTE, so a
-// promotion — the route's one backendRef moving from one revision's Service to
-// the next — leaves exactly one traffic policy on the route and that policy
-// enforcing on the new revision. Anonymous requests sent throughout the
-// promotion never reach either revision.
+// §8.1's cluster case 1: the per-Agent `-auth` targets the ROUTE, so a
+// promotion — the route's one backendRef moving, in place, from one
+// revision's Service to the next — leaves that policy enforcing on the new
+// revision. Anonymous requests sent throughout the promotion never reach
+// either revision.
 //
-// The other half of case 1, that a second traffic policy on the route is
-// reported as ForeignTrafficPolicy, is the operator's detection
-// (internal/controller/authforeign.go). No operator runs here; envtest pins it
-// against the real CRD (A72).
+// What it does not exercise: the route is locked first and promoted after,
+// with a single backendRef. A `Lock` racing a promotion, which §1.1 argues
+// needs no ordering, and a weighted two-backend shift, are not measured here.
+//
+// The rest of case 1 is the operator's: that it emits exactly one traffic
+// policy, and that a second is reported as ForeignTrafficPolicy
+// (internal/controller/authforeign.go). No operator runs here, and this test
+// writes the only policy, so asserting either would test the fixture. envtest
+// pins them against the real CRD (A72).
 func TestSliceOnePerAgentPolicyCoversAPromotion(t *testing.T) {
 	gw := sliceFixture(t)
 	agent := agentName("promo")
@@ -769,8 +811,11 @@ func TestSliceOnePerAgentPolicyCoversAPromotion(t *testing.T) {
 	}
 
 	s := startStream(t, gw, host, "promo-"+runID, 5*time.Minute)
-	if _, ok := s.next(30 * time.Second); !ok {
+	if a, ok := s.next(30 * time.Second); !ok {
 		t.Fatal("the request loop produced nothing")
+	} else if a.code != 401 {
+		t.Fatalf("before the promotion an anonymous request got HTTP %d; the route must be locked "+
+			"before anything below measures it", a.code)
 	}
 	promote(t, agent, route)
 
@@ -806,30 +851,6 @@ func TestSliceOnePerAgentPolicyCoversAPromotion(t *testing.T) {
 	}
 	t.Logf("promotion: %d anonymous requests across it, every one refused with 401", anon)
 	expectCode(t, gw, servingPort, host, cardPath, "", 401, "an anonymous request after the promotion")
-
-	out, err := kubectl(t, "get", "agentgatewaypolicies", "-n", sliceNS, "-o", "json")
-	if err != nil {
-		t.Fatal(out)
-	}
-	var list struct {
-		Items []unstructured.Unstructured `json:"items"`
-	}
-	if err := json.Unmarshal([]byte(out), &list); err != nil {
-		t.Fatal(err)
-	}
-	var on []string
-	for _, it := range list.Items {
-		refs, _, _ := unstructured.NestedSlice(it.Object, "spec", "targetRefs")
-		for _, r := range refs {
-			m, _ := r.(map[string]any)
-			if m["kind"] == "HTTPRoute" && m["name"] == route {
-				on = append(on, it.GetName())
-			}
-		}
-	}
-	if len(on) != 1 || on[0] != p.GetName() {
-		t.Errorf("after the promotion the policies targeting %s are %v; want exactly %s", route, on, p.GetName())
-	}
 }
 
 // promote is the promotion: the route's one backendRef moves to the next
