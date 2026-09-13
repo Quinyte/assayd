@@ -294,10 +294,10 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 	// pass's conditions for the paths that return before this step. This step
 	// derives them afresh, so the seed is withdrawn here, and kept aside only
 	// to put back the hold of a pass that lost a race before it read anything.
-	if c, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); ok && c.Reason == ReasonGatewayAuthPolicy {
+	if c, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); ok && carriedReason(c.Reason) {
 		conds.unset(assaydv1alpha1.CondPolicyApplyIncomplete)
 	}
-	if c, ok := conds.get(assaydv1alpha1.CondGovernanceSkipped); ok && c.Reason == ReasonGatewayAuthPolicy {
+	if c, ok := conds.get(assaydv1alpha1.CondGovernanceSkipped); ok && carriedReason(c.Reason) {
 		r.assessGovernance(conds, status)
 	}
 	stored, hasStored := storedHold(agent, status)
@@ -421,6 +421,21 @@ func (r *AgentReconciler) seedStoredAbove(agent *assaydv1alpha1.Agent, status *a
 			conds.carry(carried(c))
 		}
 	}
+	// A ForeignTrafficPolicy, which only the -auth step detects too, is
+	// carried the same way: its GovernanceSkipped, which assessGovernance has
+	// just overwritten, and its PolicyApplyIncomplete, where W1 or a hold
+	// beside it is stored under its reason.
+	for _, t := range []assaydv1alpha1.ConditionType{assaydv1alpha1.CondGovernanceSkipped,
+		assaydv1alpha1.CondPolicyApplyIncomplete} {
+		c := meta.FindStatusCondition(agent.Status.Conditions, string(t))
+		if c == nil || c.Status != metav1.ConditionTrue || c.Reason != ReasonForeignTrafficPolicy {
+			continue
+		}
+		if _, set := conds.get(t); set && t == assaydv1alpha1.CondPolicyApplyIncomplete {
+			continue
+		}
+		conds.carry(carried(*c))
+	}
 	if auth := status.Auth; auth == nil || auth.Mode != string(compiler.AuthModeAPIKey) || auth.Transaction != nil {
 		return
 	}
@@ -442,6 +457,13 @@ func (r *AgentReconciler) seedStoredAbove(agent *assaydv1alpha1.Agent, status *a
 // policy until a pass reaches that step, and the condition says so.
 const carriedNote = " | carried as the last pass that read the Gateway stored it, at the generation it " +
 	"names; this pass returned before the -auth step and did not read the Gateway again (design 03 A75)"
+
+// carriedReason reports whether a condition's reason is one seedStoredAbove
+// carries, and so one the -auth step withdraws and derives afresh. Neither is
+// raised by anything that runs before that step.
+func carriedReason(reason string) bool {
+	return reason == ReasonGatewayAuthPolicy || reason == ReasonForeignTrafficPolicy
+}
 
 // carried is c, as the last pass stored it, marked once as carried.
 func carried(c metav1.Condition) metav1.Condition {
