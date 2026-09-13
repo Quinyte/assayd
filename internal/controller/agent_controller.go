@@ -370,6 +370,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	r.assessSandbox(&agent, conds)
 	r.assessTaskState(&agent, status, conds)
 	r.assessGovernance(conds, status)
+	// Design 03 A75: the last pass's hold and W1, which only the -auth step
+	// derives, so that a pass returning before it does not clear them.
+	r.seedStoredAbove(&agent, status, conds)
 
 	// A42/A60: everything below goes into the operator-owned run namespace, and
 	// the operator must be able to prove it created that namespace before it
@@ -831,8 +834,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, reason, msg)
 				status.Phase = assaydv1alpha1.PhaseDegraded
 			}
-		} else if tx := authTransaction(status); tx != nil && (tx.Kind == TxCreate ||
-			(tx.Kind == TxLock && (isReCreation(status.Auth) ||
+		} else if tx, held := authTransaction(status), heldAbove(conds); tx != nil && (tx.Kind == TxCreate ||
+			(tx.Kind == TxLock && (held || isReCreation(status.Auth) ||
 				(tx.Deadline != nil && !time.Now().Before(tx.Deadline.Time))))) {
 			// A J2 or K2 Lock withholds Ready only once its deadline has passed:
 			// before that its route serves as it did before the edit (design 03
@@ -846,6 +849,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			// cache lag: a never-served Agent is Pending, and only an Agent
 			// that was serving is Degraded, as on every other pass of its
 			// transaction.
+			// A Gateway-level hold, which reconcileGateway put back from the last
+			// pass (design 03 A75), keeps its reason and withholds Ready for a J2
+			// or K2 Lock too, as a held pass does; a missing-policy Lock keeps
+			// AuthPolicyMissing, which outranks it.
 			reason := ReasonAuthEnforcementPending
 			if tx.Kind == TxLock {
 				reason = ReasonAuthPolicyMissing
@@ -853,9 +860,16 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 					reason = ReasonAuthLockUnverified
 				}
 			}
-			withholdReady(status, conds, gatewayOutcome{served: status.Auth.Mode != "",
+			if held && !(tx.Kind == TxLock && isReCreation(status.Auth)) {
+				reason = ReasonGatewayAuthPolicy
+			}
+			withholdReady(status, conds, gatewayOutcome{served: status.Auth.Mode != "" || tx.Kind == TxLock,
 				withhold: &failure{reason, fmt.Sprintf("the -auth %s is in stage %s, and this pass lost "+
 					"a race and is retried: %v", tx.Kind, tx.Stage, rerr)}})
+		} else if w := gw.withhold; w != nil && w.reason == ReasonGatewayAuthPolicy {
+			// W1 on a served Agent, which reconcileGateway re-derives on a lost
+			// race too: Ready stays withheld for the pass (design 03 A75).
+			withholdReady(status, conds, gw)
 		}
 		status.Conditions = conds.merge(agent.Status.Conditions)
 		status.ObservedGeneration = agent.Generation

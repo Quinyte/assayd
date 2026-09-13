@@ -114,24 +114,37 @@ func askThroughGateway(t *testing.T, ctx context.Context, tag, url, host, body s
 
 // assertServedUnderAPIKey requires the Agent's `Create` to have reached
 // `Served` under the API-key policy, and to say what one probe proved (H2).
+//
+// It waits for GovernanceSkipped to settle. The operator writes status.auth
+// ahead of the pass's conditions (persistStatus), so for a moment a reader
+// sees Served beside the previous pass's GovernanceSkipped, AuthLockPending
+// for a Lock. Design 03 A75's served report reads the Gateway between the two
+// writes, which widened that moment, and one e2e run failed on the first look.
+// The assertion is on what the condition settles to within the deadline.
 func assertServedUnderAPIKey(t *testing.T, ctx context.Context, agentName string) {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute)
 	var a assaydv1alpha1.Agent
+	last := ""
 	for time.Now().Before(deadline) {
 		if err := k8s.Get(ctx, types.NamespacedName{Namespace: "assayd-e2e", Name: agentName}, &a); err == nil &&
 			a.Status.Auth != nil && a.Status.Auth.Mode == "apikey" && a.Status.Auth.Transaction == nil {
 			for _, c := range a.Status.Conditions {
-				if c.Type == string(assaydv1alpha1.CondGovernanceSkipped) {
-					if c.Status != metav1.ConditionFalse || c.Reason != "AuthVerifiedOnOneReplica" {
-						t.Errorf("GovernanceSkipped is %s/%s on a served API-key Agent; with no replica "+
-							"count declared, H2 says False/AuthVerifiedOnOneReplica", c.Status, c.Reason)
-					}
+				if c.Type != string(assaydv1alpha1.CondGovernanceSkipped) {
+					continue
+				}
+				if c.Status == metav1.ConditionFalse && c.Reason == "AuthVerifiedOnOneReplica" {
 					return
 				}
+				last = string(c.Status) + "/" + c.Reason
 			}
 		}
 		time.Sleep(2 * time.Second)
+	}
+	if last != "" {
+		t.Errorf("GovernanceSkipped settled at %s on a served API-key Agent; with no replica count "+
+			"declared, H2 says False/AuthVerifiedOnOneReplica", last)
+		return
 	}
 	t.Fatalf("%s never reached Served under apikey: status.auth=%+v", agentName, a.Status.Auth)
 }

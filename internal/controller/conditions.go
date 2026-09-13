@@ -50,6 +50,14 @@ func (c *conditionSet) unset(condType assaydv1alpha1.ConditionType) {
 	delete(c.asserted, string(condType))
 }
 
+// carry asserts a condition exactly as an earlier pass stored it, its
+// ObservedGeneration included: that says which generation observed it, and
+// this pass did not. merge keeps its LastTransitionTime, because its status is
+// unchanged.
+func (c *conditionSet) carry(cond metav1.Condition) {
+	c.asserted[cond.Type] = cond
+}
+
 // ownedTypes are the conditions this reconciler is the sole author of. A type
 // here that the pass did not assert is cleared rather than carried forward,
 // because a stale SandboxDowngraded on an agent that no longer requests a
