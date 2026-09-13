@@ -859,6 +859,60 @@ func TestAnEarlyReturnCarriesAForeignTrafficPolicy(t *testing.T) {
 	condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionFalse, "AuthVerifiedOnOneReplica")
 }
 
+// staleAgentReader answers every live read of an Agent with a newer
+// resourceVersion than the cached copy holds, so requireFreshAgent refuses the
+// pass with errStaleAgent, a transient error, before any -auth sub-step runs.
+type staleAgentReader struct{ client.Reader }
+
+func (s staleAgentReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object,
+	opts ...client.GetOption) error {
+	if err := s.Reader.Get(ctx, key, obj, opts...); err != nil {
+		return err
+	}
+	if a, ok := obj.(*assaydv1alpha1.Agent); ok {
+		a.ResourceVersion += "0"
+	}
+	return nil
+}
+
+// A75, the check of 4f933fb's MAJOR: a carried ForeignTrafficPolicy is
+// withdrawn and GovernanceSkipped derived afresh as the pass enters the -auth
+// step, not by a sub-step. A pass that reaches that step after its foreign
+// policy went, and fails transiently before any sub-step could assert
+// GovernanceSkipped itself, still writes the derived value, not the carried
+// one.
+func TestACarriedForeignTrafficPolicyIsWithdrawnOnATransientError(t *testing.T) {
+	a, r, _ := servedAPIKeyAgent(t, "aboveforeignstale")
+	intruder := plantForeign(t, a)
+	reconcileOnce(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "ForeignTrafficPolicy")
+	orig := r.LabelAuthorityPresent
+	r.LabelAuthorityPresent = func(context.Context) (bool, error) { return false, nil }
+	reconcileOnce(t, r, a)
+	g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "ForeignTrafficPolicy")
+	mustContain(t, g, "GovernanceSkipped", "carried as the last pass that read the Gateway stored it")
+	r.LabelAuthorityPresent = orig
+	if err := k8s.Delete(context.Background(), intruder); err != nil {
+		t.Fatal(err)
+	}
+	base := r.Reader
+	if base == nil {
+		base = k8s
+	}
+	r.Reader = staleAgentReader{Reader: base}
+	if err := reconcileErr(t, r, a); err == nil || !strings.Contains(err.Error(), "older than the live one") {
+		t.Fatalf("the injected stale read did not reach the caller: %v", err)
+	}
+	live := liveAgent(t, a)
+	if g := condition(live, assaydv1alpha1.CondGovernanceSkipped); g == nil || g.Reason == "ForeignTrafficPolicy" {
+		t.Errorf("a pass that reached the -auth step kept a carried ForeignTrafficPolicy on a transient error: %+v", g)
+	}
+	if c := condition(live, assaydv1alpha1.CondPolicyApplyIncomplete); c != nil && c.Reason == "ForeignTrafficPolicy" {
+		t.Errorf("a pass that reached the -auth step kept a carried PolicyApplyIncomplete on a transient error: %+v", c)
+	}
+	condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionFalse, "AuthVerifiedOnOneReplica")
+}
+
 // A75, the check of 1c0703a's MAJOR 2: a lost race on a pass that reached
 // the -auth step and failed before its Gateway read puts back the stored
 // hold, and a hold an early return had marked carried comes back without that
