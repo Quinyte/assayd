@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -60,9 +61,10 @@ const (
 // selects: design 03 §3.3.3's "canonical selector (sorted matchLabels, plus
 // the run namespace)", as `status.auth.keySource` records it. With one
 // constant label there is nothing to sort; the namespace is included because
-// which ConfigMaps a selector reaches beyond its own namespace is unmeasured
-// (§3.4.4). Only this function writes the form, and only this form is
-// compared.
+// a selector reads the policy's own namespace: measured at agentgateway 1.5.0
+// for one other namespace, and re-measured at every upgrade by
+// `make conformance-cluster` (§3.4.4, TestSliceAKeySetInAnotherNamespaceDoesNotAdmit).
+// Only this function writes the form, and only this form is compared.
 func KeySource(runNamespace string) string {
 	return runNamespace + "/" + APIKeySourceLabel + "=" + APIKeySourceValue
 }
@@ -263,7 +265,7 @@ func AuthPolicy(in AuthInput) (*unstructured.Unstructured, error) {
 	if err != nil {
 		return nil, err
 	}
-	admit, err := admitGroupExpression(in.AgentNamespace)
+	admit, err := AdmitGroupsExpression([]string{in.AgentNamespace})
 	if err != nil {
 		return nil, err
 	}
@@ -301,8 +303,19 @@ func AuthPolicy(in AuthInput) (*unstructured.Unstructured, error) {
 	}}, nil
 }
 
-// admitGroupExpression is the CEL rule admitting one group:
-// `apiKey.group == "<group>"`.
+// AdmitGroupsExpression is the CEL rule admitting a set of groups:
+// `apiKey.group == "<group>"` for one, and for more, one expression joining an
+// `==` per group with `||`, in sorted order (§3.4.4). The slice's policy calls
+// it with one group, the Agent's namespace. More than one has no producer yet:
+// §3.4.4's `allowedGroups` is later scope. It is exported so that
+// `make conformance-cluster` can measure the compiler's own two-group output
+// at a real gateway, which §3.4.4 owes before that scope is built.
+//
+// An empty set, an empty group and a repeated group are refused, never
+// rendered. An empty set has no expression to emit, and E2 means one is never
+// asked for (§3.2). `apiKey.group == ""` would admit the keys stored with no
+// group rather than nobody. A repeat is an input error, whatever it would
+// admit. `groups` is not modified.
 //
 // §3.4.2 requires a real CEL string encoder and never concatenation, so the
 // expression is built as a CEL AST and printed by cel-go's own unparser; the
@@ -317,19 +330,44 @@ func AuthPolicy(in AuthInput) (*unstructured.Unstructured, error) {
 // here rather than encoded. No slice input reaches that branch: a namespace is
 // a DNS label, and it needs no escaping at all. The encoder is here for
 // §3.4.4's later `allowedGroups` and §3.4.2's tool names. The unparser wraps
-// long lines only at `&&` and `||`, so one `==` is always emitted on one line.
-func admitGroupExpression(group string) (string, error) {
-	if !utf8.ValidString(group) {
-		return "", fmt.Errorf("encode the CEL rule admitting group %q: it is not valid UTF-8, and "+
-			"CEL would read its escaped bytes as other characters", group)
+// long lines only at `&&` and `||`, and past 80 columns it breaks the line
+// after an `||`. So one `==` is always on one line, and a long set of groups
+// spans several, which CEL reads as whitespace.
+func AdmitGroupsExpression(groups []string) (string, error) {
+	if len(groups) == 0 {
+		return "", fmt.Errorf("encode the CEL rule admitting groups: the set is empty, and " +
+			"no expression admits nobody")
 	}
+	sorted := append([]string(nil), groups...)
+	sort.Strings(sorted)
 	fac := ast.NewExprFactory()
-	expr := fac.NewCall(1, operators.Equals,
-		fac.NewSelect(2, fac.NewIdent(3, "apiKey"), "group"),
-		fac.NewLiteral(4, celtypes.String(group)))
+	id := int64(0)
+	next := func() int64 { id++; return id }
+	var expr ast.Expr
+	for i, group := range sorted {
+		switch {
+		case group == "":
+			return "", fmt.Errorf("encode the CEL rule admitting groups %q: a group is empty, "+
+				"and `apiKey.group == \"\"` admits the keys stored with no group", groups)
+		case i > 0 && group == sorted[i-1]:
+			return "", fmt.Errorf("encode the CEL rule admitting groups %q: group %q is repeated",
+				groups, group)
+		case !utf8.ValidString(group):
+			return "", fmt.Errorf("encode the CEL rule admitting group %q: it is not valid UTF-8, and "+
+				"CEL would read its escaped bytes as other characters", group)
+		}
+		eq := fac.NewCall(next(), operators.Equals,
+			fac.NewSelect(next(), fac.NewIdent(next(), "apiKey"), "group"),
+			fac.NewLiteral(next(), celtypes.String(group)))
+		if expr == nil {
+			expr = eq
+			continue
+		}
+		expr = fac.NewCall(next(), operators.LogicalOr, expr, eq)
+	}
 	out, err := parser.Unparse(expr, ast.NewSourceInfo(nil))
 	if err != nil {
-		return "", fmt.Errorf("encode the CEL rule admitting group %q: %w", group, err)
+		return "", fmt.Errorf("encode the CEL rule admitting groups %q: %w", groups, err)
 	}
 	return out, nil
 }

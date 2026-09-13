@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -290,7 +291,7 @@ func TestTheGroupLiteralIsCELEncodedNotConcatenated(t *testing.T) {
 		`\" || true || \"`,
 		"ñandú", "支付", "🙂", "${group}", strings.Repeat("a", 300),
 	} {
-		expr, err := admitGroupExpression(s)
+		expr, err := AdmitGroupsExpression([]string{s})
 		if err != nil {
 			t.Errorf("encode %q: %v", s, err)
 			continue
@@ -313,6 +314,108 @@ func TestTheGroupLiteralIsCELEncodedNotConcatenated(t *testing.T) {
 		}
 		if rhs.Kind() != ast.LiteralKind || rhs.AsLiteral() != types.String(s) {
 			t.Errorf("group %q encoded to %q, whose literal does not decode back to the group", s, expr)
+		}
+	}
+}
+
+// parseGroups parses an admit expression with CEL's own parser and returns the
+// group literals of its `==` terms, left to right, failing unless the whole
+// expression is a left-nested `||` chain of `apiKey.group == "<literal>"`.
+func parseGroups(t *testing.T, expr string) []string {
+	t.Helper()
+	parsed, iss := parser.Parse(common.NewTextSource(expr))
+	if iss != nil && len(iss.GetErrors()) > 0 {
+		t.Fatalf("%q does not parse as CEL: %s", expr, iss.ToDisplayString())
+	}
+	var walk func(e ast.Expr) []string
+	walk = func(e ast.Expr) []string {
+		if e.Kind() != ast.CallKind || len(e.AsCall().Args()) != 2 {
+			t.Fatalf("%q holds a term that is not a binary call", expr)
+		}
+		args := e.AsCall().Args()
+		switch e.AsCall().FunctionName() {
+		case operators.LogicalOr:
+			return append(walk(args[0]), walk(args[1])...)
+		case operators.Equals:
+			lhs, rhs := args[0], args[1]
+			if lhs.Kind() != ast.SelectKind || lhs.AsSelect().FieldName() != "group" ||
+				lhs.AsSelect().Operand().Kind() != ast.IdentKind ||
+				lhs.AsSelect().Operand().AsIdent() != "apiKey" || rhs.Kind() != ast.LiteralKind {
+				t.Fatalf("%q holds an `==` that is not apiKey.group against a literal", expr)
+			}
+			s, ok := rhs.AsLiteral().(types.String)
+			if !ok {
+				t.Fatalf("%q compares apiKey.group with a literal that is not a string", expr)
+			}
+			return []string{string(s)}
+		}
+		t.Fatalf("%q holds an operator other than || and ==", expr)
+		return nil
+	}
+	return walk(parsed.Expr())
+}
+
+// §3.4.4's worked multi-group example, exactly: one expression, the groups in
+// sorted order, whatever order they arrive in. This is the string
+// `make conformance-cluster` measures at a real gateway
+// (TestSliceATwoGroupExpressionAdmitsBothGroups).
+func TestTwoGroupsCompileToOneSortedExpression(t *testing.T) {
+	in := []string{"payments", "audit"}
+	got, err := AdmitGroupsExpression(in)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if want := `apiKey.group == "audit" || apiKey.group == "payments"`; got != want {
+		t.Errorf("two groups encoded to %q, want §3.4.4's %q", got, want)
+	}
+	if in[0] != "payments" || in[1] != "audit" {
+		t.Errorf("the caller's slice was reordered to %q; the encoder must sort a copy", in)
+	}
+	if groups := parseGroups(t, got); len(groups) != 2 || groups[0] != "audit" || groups[1] != "payments" {
+		t.Errorf("%q parses back to groups %q, want [audit payments]", got, groups)
+	}
+}
+
+// Sixteen groups of 63 characters — the later scope's maxItems at the widest
+// DNS label — wrap across lines at `||`, and still parse back to exactly those
+// sixteen literals, in sorted order.
+func TestALongGroupSetStillParsesToEveryGroup(t *testing.T) {
+	var in []string
+	for i := 15; i >= 0; i-- {
+		in = append(in, fmt.Sprintf("g%02d-%s", i, strings.Repeat("x", 59)))
+	}
+	got, err := AdmitGroupsExpression(in)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if !strings.Contains(got, "\n") {
+		t.Errorf("sixteen long groups were not wrapped; the doc comment says the unparser " +
+			"breaks lines past 80 columns, and would then be wrong")
+	}
+	groups := parseGroups(t, got)
+	if len(groups) != 16 {
+		t.Fatalf("%d groups parsed back, want 16", len(groups))
+	}
+	for i, g := range groups {
+		if want := fmt.Sprintf("g%02d-%s", i, strings.Repeat("x", 59)); g != want {
+			t.Errorf("term %d is %q, want %q", i, g, want)
+		}
+	}
+}
+
+// Refused, never rendered: an empty set, an empty group, a repeated group, and
+// invalid UTF-8 anywhere in the set.
+func TestAnUnrenderableGroupSetIsRefused(t *testing.T) {
+	for name, in := range map[string][]string{
+		"nil set":              nil,
+		"empty set":            {},
+		"empty group":          {""},
+		"empty among others":   {"audit", ""},
+		"repeated group":       {"audit", "payments", "audit"},
+		"invalid UTF-8 second": {"audit", "\xff"},
+	} {
+		if got, err := AdmitGroupsExpression(in); err == nil {
+			t.Errorf("%s: %q encoded to %q; want an error", name, in, got)
 		}
 	}
 }
@@ -478,7 +581,7 @@ func unset(u *unstructured.Unstructured, path ...string) {
 // the encoder exists for.
 func TestInvalidUTF8IsRefusedNotMisencoded(t *testing.T) {
 	for _, s := range []string{"\xff", "a\xc3", "\xed\xa0\x80"} {
-		if expr, err := admitGroupExpression(s); err == nil {
+		if expr, err := AdmitGroupsExpression([]string{s}); err == nil {
 			t.Errorf("group %q (invalid UTF-8) was encoded as %q; CEL would read it as another "+
 				"string, so it must be refused", s, expr)
 		}
