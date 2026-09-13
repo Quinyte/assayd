@@ -370,6 +370,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	r.assessSandbox(&agent, conds)
 	r.assessTaskState(&agent, status, conds)
 	r.assessGovernance(conds, status)
+	// Design 03 A75: the last pass's hold and W1, which only the -auth step
+	// derives, so that a pass returning before it does not clear them.
+	r.seedStoredAbove(&agent, status, conds)
 
 	// A42/A60: everything below goes into the operator-owned run namespace, and
 	// the operator must be able to prove it created that namespace before it

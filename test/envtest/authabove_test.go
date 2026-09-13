@@ -11,6 +11,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -813,6 +814,124 @@ func TestALostRaceKeepsTheHoldAndW1(t *testing.T) {
 		condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
 		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "GatewayAuthPolicy")
 	})
+}
+
+// A75, the check of f6ceea1's MINOR 1, shaped like its probe: a J2 Lock
+// held by a Gateway-level policy; the policy removed; the next pass reads the
+// Gateway clean, its probe answers 500, and its status write loses the race.
+// The last pass's hold must not come back: this pass read the Gateway and
+// found nothing.
+func TestReviewStaleHoldAfterRemoval(t *testing.T) {
+	a, r, stub, key := heldJ2(t, "abovestale", 0, func(a *assaydv1alpha1.Agent, stub *stubProber) client.ObjectKey {
+		return gatewayAuthPolicy(t, a, stub)
+	})
+	condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
+	removePolicy(t, key)
+	stub.answerOnce(a.Name, 500)
+	r.Client = &statusConflictOnce{Client: k8s}
+	if err := reconcileErr(t, r, a); err == nil || !apierrors.IsConflict(err) {
+		t.Fatalf("the injected race did not reach the caller: %v", err)
+	}
+	live := liveAgent(t, a)
+	if c := condition(live, assaydv1alpha1.CondPolicyApplyIncomplete); c != nil && c.Reason == "GatewayAuthPolicy" {
+		t.Errorf("a stale hold came back after its policy was removed and a clean read: %s", c.Message)
+	}
+	if c := condition(live, assaydv1alpha1.CondReady); c != nil && c.Reason == "GatewayAuthPolicy" {
+		t.Errorf("Ready carries a stale GatewayAuthPolicy: %+v", c)
+	}
+}
+
+// A75, the check's MINOR 2: a hold is put back only while the transaction is
+// still at ProbingAfter. A Create that credited a clean 401 is at Publishing;
+// a stored hold beside it, as a lost final write would leave one, is not
+// restored when its next pass loses a race before any read.
+func TestAHoldIsNotRestoredPastProbingAfter(t *testing.T) {
+	a, r, stub := probingCreate(t, "abovepast", 0)
+	key := gatewayAuthPolicy(t, a, stub)
+	reconcileOnce(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
+	removePolicy(t, key)
+	stub.hold(a.Name, false)
+	r.Client = &routeUpdateConflict{Client: k8s}
+	if err := reconcileErr(t, r, a); err == nil || !apierrors.IsConflict(err) {
+		t.Fatalf("the injected race did not reach the caller: %v", err)
+	}
+	if tx := txOf(t, a); tx == nil || tx.Stage != "Publishing" {
+		t.Fatalf("the clean 401 did not move the Create to Publishing: %+v", tx)
+	}
+	// That pass's final write is taken as lost: its hold is put back into
+	// stored status, as it would have stayed.
+	live := liveAgent(t, a)
+	meta.SetStatusCondition(&live.Status.Conditions, metav1.Condition{
+		Type: string(assaydv1alpha1.CondPolicyApplyIncomplete), Status: metav1.ConditionTrue,
+		Reason: "GatewayAuthPolicy", Message: "the last pass's hold", ObservedGeneration: live.Generation})
+	if err := k8s.Status().Update(context.Background(), live); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileErr(t, r, a); err == nil || !apierrors.IsConflict(err) {
+		t.Fatalf("the injected race did not reach the caller: %v", err)
+	}
+	if c := condition(liveAgent(t, a), assaydv1alpha1.CondPolicyApplyIncomplete); c != nil &&
+		c.Reason == "GatewayAuthPolicy" {
+		t.Errorf("a hold was put back beside a Create already at Publishing: %s", c.Message)
+	}
+}
+
+// A75, the check's MINOR 3: a pass that returns before the -auth step, here
+// on a run namespace it may not use, keeps the last pass's hold and W1.
+func TestAnEarlyReturnKeepsTheHoldAndW1(t *testing.T) {
+	noAuthority := func(context.Context) (bool, error) { return false, nil }
+	t.Run("W1 on a served Agent", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "aboveearlywone")
+		key := gatewayPolicy(t, "gw-"+a.Name, map[string]any{
+			"targetRefs": onGateway(suiteGatewayName, ""), "traffic": apiKeyTraffic(t, a)})
+		reconcileOnce(t, r, a)
+		condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
+		r.LabelAuthorityPresent = noAuthority
+		reconcileOnce(t, r, a)
+		condIs(t, a, assaydv1alpha1.CondRunNamespaceUnavailable, metav1.ConditionTrue, "LabelAuthorityAbsent")
+		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
+		mustContain(t, g, "GovernanceSkipped", key.String())
+		condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
+	})
+	t.Run("a held Create", func(t *testing.T) {
+		a, r, stub := probingCreate(t, "aboveearlycreate", 0)
+		key := gatewayAuthPolicy(t, a, stub)
+		reconcileOnce(t, r, a)
+		r.LabelAuthorityPresent = noAuthority
+		reconcileOnce(t, r, a)
+		condIs(t, a, assaydv1alpha1.CondRunNamespaceUnavailable, metav1.ConditionTrue, "LabelAuthorityAbsent")
+		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
+		mustContain(t, c, "PolicyApplyIncomplete", key.String())
+	})
+}
+
+// A75: W1's seed does not outlive its policy. Removed, then a pass that
+// reads the Gateway clean and loses a race before its own report: neither
+// GovernanceSkipped nor PolicyApplyIncomplete keeps GatewayAuthPolicy.
+func TestW1ClearsOnALostRaceAfterRemoval(t *testing.T) {
+	a, r, _ := servedAPIKeyAgent(t, "abovewoneraceclear")
+	key := gatewayPolicy(t, "gw-"+a.Name, map[string]any{
+		"targetRefs": onGateway(suiteGatewayName, ""), "traffic": apiKeyTraffic(t, a)})
+	reconcileOnce(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
+	removePolicy(t, key)
+	rt := servingRoute(t, a.Namespace, a.Name)
+	rt.Spec.Hostnames = append(rt.Spec.Hostnames, "drifted.example.com")
+	if err := k8s.Update(context.Background(), rt); err != nil {
+		t.Fatal(err)
+	}
+	r.Client = &routeUpdateConflict{Client: k8s}
+	if err := reconcileErr(t, r, a); err == nil || !apierrors.IsConflict(err) {
+		t.Fatalf("the injected race did not reach the caller: %v", err)
+	}
+	live := liveAgent(t, a)
+	if g := condition(live, assaydv1alpha1.CondGovernanceSkipped); g != nil && g.Reason == "GatewayAuthPolicy" {
+		t.Errorf("W1's GovernanceSkipped outlived its policy on a lost race: %s", g.Message)
+	}
+	if c := condition(live, assaydv1alpha1.CondPolicyApplyIncomplete); c != nil && c.Reason == "GatewayAuthPolicy" {
+		t.Errorf("W1's PolicyApplyIncomplete outlived its policy on a lost race: %s", c.Message)
+	}
 }
 
 // A75, the review's MINOR 1, shaped like its experiment: a policy that stood

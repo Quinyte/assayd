@@ -178,9 +178,10 @@ func (g gatewayAuth) servedNote(gw GatewayConfig, mode string) string {
 			"A74 case 7 measured one refusing an anonymous request with 401 on a route with no -auth, so " +
 			"callers may be refused although status says auth: none"
 	}
-	return head + ". No policy on the Gateway sets more than authentication alone: for A74 case 7's " +
-		"measured shape, under inheritance Default and a PostRouting phase, <agent>-auth's authentication " +
-		"replaces the Gateway's on this route"
+	return head + ". No policy on the Gateway sets more than authentication alone, under inheritance " +
+		"Default and a PostRouting phase. For API-key authentication, A74 case 7 measured <agent>-auth's " +
+		"authentication replacing the Gateway's on this route; for basic and JWT authentication that " +
+		"replacement is unmeasured"
 }
 
 // gatewayAuthPolicies is A75's read: the assayd Gateway, live, and every

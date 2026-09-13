@@ -136,6 +136,12 @@ type gatewayOutcome struct {
 	// nackNote says that NACK Events past the page cap were not inspected,
 	// or "". It is appended to the transaction's own message.
 	nackNote string
+	// aboveRead says that this pass's -auth step read the Gateway (A75), and
+	// aboveHold, when set, is the hold that read found. On a lost race a hold
+	// found this pass is raised again, and the last pass's is put back only
+	// when no read ran.
+	aboveRead bool
+	aboveHold string
 }
 
 // authDesire is what the current spec's -auth compiles to, and whether any
@@ -283,31 +289,34 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 	if had {
 		conds.unset(assaydv1alpha1.CondPolicyApplyIncomplete)
 	}
-	// A75's hold is raised by this step alone, and assessGovernance derives
-	// nothing for it, so the hold of the last pass is taken from stored status,
-	// to be put back on the same terms: a lost race must not clear it, nor
-	// Ready's reason with it, for a pass in which nothing was credited.
-	if !had {
-		if c := meta.FindStatusCondition(agent.Status.Conditions, string(assaydv1alpha1.CondPolicyApplyIncomplete)); c != nil &&
-			c.Status == metav1.ConditionTrue && c.Reason == ReasonGatewayAuthPolicy {
-			pre, had = *c, true
-		}
+	// A75's hold and W1 are raised by this step alone, and assessGovernance
+	// derives neither, so seedStoredAbove carried the last pass's into this
+	// pass's conditions for the paths that return before this step. This step
+	// derives them afresh, so the seed is withdrawn here, and kept aside only
+	// to put back the hold of a pass that lost a race before it read anything.
+	if c, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); ok && c.Reason == ReasonGatewayAuthPolicy {
+		conds.unset(assaydv1alpha1.CondPolicyApplyIncomplete)
 	}
+	if c, ok := conds.get(assaydv1alpha1.CondGovernanceSkipped); ok && c.Reason == ReasonGatewayAuthPolicy {
+		r.assessGovernance(conds, status)
+	}
+	stored, hasStored := storedHold(agent, status)
 	out, err := r.gatewayStep(ctx, agent, runNS, status, conds, desire)
-	inFlight := func() bool {
-		tx := authTransaction(status)
-		if tx == nil {
-			return false
+	stillLock := func() bool { tx := authTransaction(status); return tx != nil && tx.Kind == TxLock }
+	if _, set := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); err != nil && !set {
+		switch {
+		case out.aboveHold != "":
+			// This pass read the Gateway, found a hold, and then lost a race.
+			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, ReasonGatewayAuthPolicy,
+				out.aboveHold)
+		case hasStored && !out.aboveRead:
+			// No read ran this pass, so the last pass's hold is all there is. A
+			// pass that read the Gateway and found nothing says so by leaving it
+			// cleared, whatever it lost afterwards.
+			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, stored.Status, stored.Reason, stored.Message)
+		case had && stillLock():
+			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, pre.Status, pre.Reason, pre.Message)
 		}
-		if pre.Reason == ReasonGatewayAuthPolicy {
-			// Only while the transaction is still where the hold keeps it: a
-			// pass that credited and then lost a race has left ProbingAfter.
-			return (tx.Kind == TxCreate || tx.Kind == TxLock) && tx.Stage == StageProbingAfter
-		}
-		return tx.Kind == TxLock
-	}
-	if _, set := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); err != nil && had && !set && inFlight() {
-		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, pre.Status, pre.Reason, pre.Message)
 	}
 	if err == nil {
 		reportForeign(agent, runNS, status, conds, &out)
@@ -371,6 +380,55 @@ func (r *AgentReconciler) reportAboveServed(ctx context.Context, agent *assaydv1
 	if c, ok := conds.get(assaydv1alpha1.CondGovernanceSkipped); ok {
 		conds.set(assaydv1alpha1.CondGovernanceSkipped, c.Status, c.Reason,
 			c.Message+" | "+above.servedNote(r.Gateway, auth.Mode))
+	}
+}
+
+// storedHold is the last pass's A75 hold, from stored status, when it can
+// still stand: PolicyApplyIncomplete=GatewayAuthPolicy beside a Create or Lock
+// still at ProbingAfter, where the hold keeps it. A transaction that has left
+// ProbingAfter credited a 401 and has no hold to carry.
+func storedHold(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus) (metav1.Condition, bool) {
+	c := meta.FindStatusCondition(agent.Status.Conditions, string(assaydv1alpha1.CondPolicyApplyIncomplete))
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != ReasonGatewayAuthPolicy {
+		return metav1.Condition{}, false
+	}
+	tx := authTransaction(status)
+	if tx == nil || (tx.Kind != TxCreate && tx.Kind != TxLock) || tx.Stage != StageProbingAfter {
+		return metav1.Condition{}, false
+	}
+	return *c, true
+}
+
+// seedStoredAbove carries the last pass's A75 conditions into this pass's
+// set, right after the assessors: the hold of a transaction still at
+// ProbingAfter (storedHold), and W1 on a served Agent with no transaction. A
+// pass that returns before the -auth step, on a run namespace or material it
+// cannot use, writes them as they were, rather than clearing them for a pass
+// in which nothing was read. The -auth step withdraws the seed and derives
+// both afresh (reconcileGateway).
+func (r *AgentReconciler) seedStoredAbove(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus,
+	conds *conditionSet) {
+	if !r.Gateway.Enabled {
+		return
+	}
+	if _, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); !ok {
+		if c, ok := storedHold(agent, status); ok {
+			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, c.Status, c.Reason, c.Message)
+		}
+	}
+	if auth := status.Auth; auth == nil || auth.Mode != string(compiler.AuthModeAPIKey) || auth.Transaction != nil {
+		return
+	}
+	gs := meta.FindStatusCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGovernanceSkipped))
+	if gs == nil || gs.Status != metav1.ConditionTrue || gs.Reason != ReasonGatewayAuthPolicy {
+		return
+	}
+	conds.set(assaydv1alpha1.CondGovernanceSkipped, gs.Status, gs.Reason, gs.Message)
+	if c := meta.FindStatusCondition(agent.Status.Conditions, string(assaydv1alpha1.CondPolicyApplyIncomplete)); c != nil &&
+		c.Status == metav1.ConditionTrue && c.Reason == ReasonGatewayAuthPolicy {
+		if _, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); !ok {
+			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, c.Status, c.Reason, c.Message)
+		}
 	}
 }
 
@@ -1083,6 +1141,10 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 			host := r.Gateway.Hostname(agent.Name, agent.Namespace)
 			above = r.gatewayAuthPolicies(ctx, host)
 			held = above.stands()
+			out.aboveRead = true
+			if held {
+				out.aboveHold = above.holdMessage(r.Gateway, runNS, policyName, false)
+			}
 			if len(out.foreign) > 0 {
 				// A foreign traffic policy could answer the 401 as well as
 				// this Agent's, at random: no answer is taken, and the route
@@ -1117,6 +1179,9 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 					above = again
 				}
 				held = held || again.stands()
+				if held {
+					out.aboveHold = above.holdMessage(r.Gateway, runNS, policyName, true)
+				}
 			}
 			if got401 && !held {
 				tx.Stage = StagePublishing
@@ -1619,6 +1684,10 @@ steps:
 			host := r.Gateway.Hostname(agent.Name, agent.Namespace)
 			above = r.gatewayAuthPolicies(ctx, host)
 			held = above.stands()
+			out.aboveRead = true
+			if held {
+				out.aboveHold = above.holdMessage(r.Gateway, runNS, policyName, false)
+			}
 			if len(out.foreign) > 0 {
 				// Two same-level traffic policies resolve at random, so a 401
 				// says nothing about which one answered (§3.2).
@@ -1654,7 +1723,10 @@ steps:
 				if again.stands() || !held {
 					above = again
 				}
-				if held = held || again.stands(); !held {
+				if held = held || again.stands(); held {
+					out.aboveHold = above.holdMessage(r.Gateway, runNS, policyName, true)
+				}
+				if !held {
 					return r.lockServed(ctx, agent, runNS, name, target, status, conds, out, reCreate,
 						observed, beforeRev, fetchedAt)
 				}

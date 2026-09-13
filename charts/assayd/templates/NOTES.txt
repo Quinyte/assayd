@@ -112,9 +112,11 @@ transformation and more: design 03 §3.2's field table), or
 published and no lock is recorded: `PolicyApplyIncomplete`, reason
 `GatewayAuthPolicy`, and each held Agent pages until you remove or rescope it.
 A served Agent keeps serving; one beside such a policy that sets anything but
-authentication alone reports `GatewayAuthPolicy` too, because it cannot be ruled
-out that the policy widens or bypasses the route's own authentication. The operator reads the Gateway by
-name, which this chart's `-gateway-labels` Role grants.
+authentication alone, with its phase unset or `PostRouting`, reports
+`GatewayAuthPolicy` too, because it cannot be ruled out that the policy widens
+or bypasses the route's own authentication; `PreRouting` authentication counts
+as more than authentication alone. The operator reads the Gateway by name,
+which this chart's `-gateway-labels` Role grants.
 
 The Gateway object itself is yours to create — this chart ships no agentgateway
 subchart. Its listener must admit the run namespaces, or every route is rejected
