@@ -498,67 +498,82 @@ type codeStream struct {
 	first, last time.Time
 	// run counts the answers so far that reached the test within burstGap of
 	// the one before, back to back: delivered in the same write, not one at a
-	// time. maxRun is the longest such run.
-	run, maxRun int
-	// reused counts requests that opened no connection of their own.
-	reused int
+	// time. maxRun is the longest such run, and batched counts the answers
+	// that arrived in runs of batchRun or more.
+	run, maxRun, batched int
+	// maxGap is the longest time between two answers' arrivals: a curl
+	// restart, a slow request, or a stall in the stream.
+	maxGap time.Duration
+	// failed counts requests that got no answer at all (curl's `000`), and
+	// reused those answered on a connection an earlier request opened.
+	failed, reused int
+	// readErr is the stream reader's error, if it stopped on one.
+	readErr error
+	// done is closed once the reader has read the stream to its end.
+	done chan struct{}
 }
 
 // burstGap: two answers closer than this reached the test in one write.
 const burstGap = 50 * time.Microsecond
 
-// maxHold is the longest an answer may have waited in a batch before the
-// stream's timings stop being the gateway's. Measured with the loop's own
-// curl: written to stdout, musl's buffer delivered runs of 256 answers, which
-// hold the first of them for tens of milliseconds. Written to stderr through
-// `kubectl exec`, the stream still coalesces a few lines when curl answers
-// faster than it forwards them, a hold well under a millisecond. A first
-// version of this guard failed on the SHARE of close arrivals, and so failed
-// the second kind too.
-const maxHold = 5 * time.Millisecond
+// batchRun and maxBatchedShare detect a buffered stream, and that is all they
+// detect. Measured with the loop's own curl: its codes written to stdout,
+// which musl buffers in 1 KiB, arrived in runs of a hundred and more, which
+// holds every answer. Written to stderr through `kubectl exec`, a few lines
+// still coalesce now and then, and occasionally a long run does, but those are
+// a small share of the answers. A buffer puts most answers in long runs.
+//
+// Two earlier forms of this check claimed more. One failed on the share of
+// close arrivals, and so failed honest runs. The next failed when the longest
+// run times the mean interval passed 5 ms, and called that the stream's
+// resolution. It was no bound: answers are not evenly spaced, and a restart
+// or a slow request leaves a gap of several milliseconds that no run records.
+// Independent reviews of this change found both. The latency case reports
+// the gaps it actually saw instead.
+const (
+	batchRun        = 32
+	maxBatchedShare = 0.5
+)
 
 // interval is the mean time between answers so far.
 func (s *codeStream) interval() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.intervalLocked()
-}
-
-func (s *codeStream) intervalLocked() time.Duration {
 	if s.n < 2 {
 		return 0
 	}
 	return s.last.Sub(s.first) / time.Duration(s.n-1)
 }
 
-// hold is how long the first answer of the longest batch can have waited: the
-// batch's length times the loop's interval. With the interval, it is the
-// stream's resolution.
-func (s *codeStream) hold() time.Duration {
+// gap is the longest time between two answers' arrivals so far.
+func (s *codeStream) gap() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return time.Duration(s.maxRun) * s.intervalLocked()
+	return s.maxGap
 }
 
-// check fails the test unless every request so far opened a connection of its
-// own and no batch of answers could have held one past maxHold. Either failure
-// would make the stream's timings a property of the loop rather than of the
-// gateway.
+// check fails the test unless the stream was read to its end without an
+// error, every request was answered on a connection of its own, and the
+// stream was not buffered. It does not bound how late an answer reaches the
+// test.
 func (s *codeStream) check(t *testing.T, what string) {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.n < 2 {
+	switch {
+	case s.readErr != nil:
+		t.Fatalf("%s: the request loop's stream stopped on an error: %v", what, s.readErr)
+	case s.n < 2:
 		t.Fatalf("%s: the request loop answered %d times, too few to measure anything", what, s.n)
-	}
-	if s.reused > 0 {
+	case s.failed > 0:
+		t.Fatalf("%s: %d of %d requests got no answer at all (curl's 000). The gateway, the network "+
+			"or the traffic Pod failed, and no policy decision was measured", what, s.failed, s.n)
+	case s.reused > 0:
 		t.Fatalf("%s: %d of %d requests reused a connection, so a policy the proxy applies per "+
 			"connection could hide behind it", what, s.reused, s.n)
-	}
-	if h := time.Duration(s.maxRun) * s.intervalLocked(); h > maxHold {
-		t.Fatalf("%s: up to %d answers reached the test in one write, so the first of them may "+
-			"have waited %s, more than %s: the timings measure the batching, not the gateway",
-			what, s.maxRun+1, h, maxHold)
+	case float64(s.batched)/float64(s.n) > maxBatchedShare:
+		t.Fatalf("%s: %d of %d answers reached the test in runs of %d or more. The stream is "+
+			"buffered, and its timings measure the buffer, not the gateway", what, s.batched, s.n, batchRun)
 	}
 }
 
@@ -602,13 +617,23 @@ func startStream(t *testing.T, gw, host, tag string, bound time.Duration) *codeS
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start the request loop: %v", err)
 	}
-	s := &codeStream{codes: make(chan stamped, 1<<16)}
+	s := &codeStream{codes: make(chan stamped, 1<<16), done: make(chan struct{})}
+	// endRun closes the current run of coalesced answers, counting its
+	// answers as batched when it is long. Called with s.mu held.
+	endRun := func() {
+		if s.run+1 >= batchRun {
+			s.batched += s.run + 1
+		}
+		s.run = 0
+	}
 	go func() {
+		defer close(s.done)
+		defer close(s.codes)
 		sc := bufio.NewScanner(out)
 		for sc.Scan() {
 			// "<http_code> <num_connects>". A line that is not both is an
-			// answer with code 0 and no connection of its own, so it fails a
-			// trial rather than passing unread.
+			// answer with code 0, so it fails a trial rather than passing
+			// unread.
 			var code, conns int
 			if f := strings.Fields(sc.Text()); len(f) == 2 {
 				code, _ = strconv.Atoi(f[0])
@@ -616,36 +641,57 @@ func startStream(t *testing.T, gw, host, tag string, bound time.Duration) *codeS
 			}
 			now := time.Now()
 			s.mu.Lock()
-			switch {
-			case s.n == 0:
+			if s.n == 0 {
 				s.first = now
-			case now.Sub(s.last) < burstGap:
-				s.run++
-				if s.run > s.maxRun {
-					s.maxRun = s.run
+			} else {
+				gap := now.Sub(s.last)
+				if gap > s.maxGap {
+					s.maxGap = gap
 				}
-			default:
-				s.run = 0
+				if gap < burstGap {
+					s.run++
+					if s.run > s.maxRun {
+						s.maxRun = s.run
+					}
+				} else {
+					endRun()
+				}
 			}
-			if conns == 0 {
+			switch {
+			case code == 0:
+				s.failed++
+			case conns == 0:
 				s.reused++
 			}
 			s.n, s.last = s.n+1, now
 			s.mu.Unlock()
 			s.codes <- stamped{code: code, at: now}
 		}
-		close(s.codes)
+		s.mu.Lock()
+		endRun()
+		s.readErr = sc.Err()
+		s.mu.Unlock()
 	}()
 	s.stop = func() {
 		s.stopMu.Do(func() {
 			_, _ = kubectl(t, "exec", sliceCurlPod, "-n", sliceNS, "--", "touch", stopFile)
-			done := make(chan struct{})
-			go func() { _ = cmd.Wait(); close(done) }()
+			// The reader first, then the process: os/exec's Wait closes the
+			// pipe, and waiting before the reader is done can drop the
+			// stream's tail. The loop stops within one batch of the stop
+			// file, which the channel holds. If it does not, or nothing is
+			// reading and the channel is full, kill the loop and drain what
+			// is left, so the reader reaches the end.
 			select {
-			case <-done:
+			case <-s.done:
 			case <-time.After(15 * time.Second):
 				_ = cmd.Process.Kill()
+				go func() {
+					for range s.codes {
+					}
+				}()
+				<-s.done
 			}
+			_ = cmd.Wait()
 		})
 	}
 	t.Cleanup(s.stop)
@@ -700,12 +746,16 @@ const lockTrials = 10
 // the trial. The next version's loop wrote its codes to a buffered stdout, so
 // answers reached the test 256 at a time. Independent reviews of this change
 // found both. Now the write is one client-go request after a random pause, a
-// 401 is accepted whenever it arrives, and each trial fails unless its
-// answers arrived one by one on connections of their own (codeStream.check).
+// 401 is accepted whenever it arrives, and each trial fails if a request got
+// no answer, reused a connection, or the stream was buffered
+// (codeStream.check). No precision is claimed beyond the upper bound: each
+// trial logs the bracket in which the policy landed, from the last 200's
+// arrival to the first 401's, and the stream's longest gap, and those are
+// what the stream saw, not a bound on the gateway.
 func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 	gw := sliceFixture(t)
 	pc := policyClient(t)
-	var fromStart, fromReturn, writes, intervals, holds []time.Duration
+	var fromStart, fromReturn, writes, intervals, brackets, gaps []time.Duration
 	for i := 1; i <= lockTrials; i++ {
 		agent := agentName(fmt.Sprintf("lock%d", i))
 		route, _ := compiler.ServingRouteName(agent)
@@ -746,7 +796,7 @@ func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 		deleteLater(t, "agentgatewaypolicy", sliceNS, p.GetName())
 
 		var after int
-		var first time.Time
+		var first, lastOK time.Time
 		for first.IsZero() {
 			a, ok := s.next(controller.AuthTransactionDeadline - time.Since(begin))
 			if !ok {
@@ -761,9 +811,14 @@ func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 				// write's response to the test.
 				first = a.at
 			case 200:
+				lastOK = a.at
 				if a.at.After(written) {
 					after++
 				}
+			case 0:
+				t.Fatalf("trial %d: an anonymous request got no answer at all (curl's 000). The "+
+					"gateway, the network or the traffic Pod failed, which is not a policy decision, "+
+					"and this trial measures nothing", i)
 			default:
 				t.Fatalf("trial %d: an anonymous request got HTTP %d while the policy was being "+
 					"applied to a serving route. `Lock` keeps the route's backendRefs "+
@@ -787,27 +842,40 @@ func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 		expectCode(t, gw, servingPort, host, cardPath, keyTeam, 200,
 			fmt.Sprintf("trial %d: a key in the Agent's namespace group after the lock", i))
 
+		// The bracket is when the policy landed, as the stream saw it: after
+		// the last 200's request and before the first 401's. Its lower edge is
+		// the write's start when no 200 arrived after it, because no policy
+		// existed before. It is what the stream saw, not a bound on the
+		// gateway: an answer is stamped on arrival, and answers are not
+		// evenly spaced.
+		lower := begin
+		if lastOK.After(begin) {
+			lower = lastOK
+		}
 		fromStart = append(fromStart, first.Sub(begin))
 		fromReturn = append(fromReturn, first.Sub(written))
 		writes = append(writes, written.Sub(begin))
 		intervals = append(intervals, s.interval())
-		holds = append(holds, s.hold())
+		brackets = append(brackets, first.Sub(lower))
+		gaps = append(gaps, s.gap())
 		t.Logf("LOCK-LATENCY trial=%d from_write_start_ms=%.1f from_write_return_ms=%.1f "+
-			"write_ms=%.1f probe_interval_ms=%.2f hold_ms=%.2f anonymous_200s_after_write=%d",
+			"write_ms=%.1f probe_interval_ms=%.2f bracket_ms=%.2f max_gap_ms=%.2f",
 			i, ms(first.Sub(begin)), ms(first.Sub(written)), ms(written.Sub(begin)), ms(s.interval()),
-			ms(s.hold()), after)
+			ms(first.Sub(lower)), ms(s.gap()))
 	}
 
-	for _, d := range [][]time.Duration{fromStart, fromReturn, writes, intervals, holds} {
+	for _, d := range [][]time.Duration{fromStart, fromReturn, writes, intervals, brackets, gaps} {
 		sortDurations(d)
 	}
 	last := len(fromStart) - 1
 	t.Logf("LOCK-LATENCY n=%d from_write_start: min_ms=%.1f median_ms=%.1f max_ms=%.1f; "+
 		"from_write_return: min_ms=%.1f median_ms=%.1f max_ms=%.1f; write: median_ms=%.1f; "+
-		"probe_interval: median_ms=%.2f; hold: median_ms=%.2f max_ms=%.2f; deadline=%s",
+		"probe_interval: median_ms=%.2f; bracket: median_ms=%.2f max_ms=%.2f; "+
+		"max_gap: median_ms=%.2f max_ms=%.2f; deadline=%s",
 		len(fromStart), ms(fromStart[0]), ms(median(fromStart)), ms(fromStart[last]),
 		ms(fromReturn[0]), ms(median(fromReturn)), ms(fromReturn[last]), ms(median(writes)),
-		ms(median(intervals)), ms(median(holds)), ms(holds[last]), controller.AuthTransactionDeadline)
+		ms(median(intervals)), ms(median(brackets)), ms(brackets[last]),
+		ms(median(gaps)), ms(gaps[last]), controller.AuthTransactionDeadline)
 }
 
 func sortDurations(d []time.Duration) { sort.Slice(d, func(a, b int) bool { return d[a] < d[b] }) }
@@ -906,40 +974,66 @@ func TestSliceOnePerAgentPolicyCoversAPromotion(t *testing.T) {
 		t.Fatalf("before the promotion an anonymous request got HTTP %d; the route must be locked "+
 			"before anything below measures it", a.code)
 	}
+	// Every answer is read as it arrives, for the whole promotion, so none goes
+	// unchecked and the loop never stalls on a full channel. An earlier version
+	// read the stream only afterwards, and a keyed poll of up to two minutes
+	// could outrun the channel, leaving the tail unmeasured (an independent
+	// review of this change).
+	type tally struct {
+		at             []time.Time
+		badCode, badAt int
+	}
+	tallied := make(chan tally, 1)
+	go func() {
+		var r tally
+		for a := range s.codes {
+			r.at = append(r.at, a.at)
+			if a.code != 401 && r.badCode == 0 {
+				r.badCode, r.badAt = a.code, len(r.at)
+			}
+		}
+		tallied <- r
+	}()
 	promote(t, agent, route)
 
 	deadline := time.Now().Add(2 * time.Minute)
 	served := ""
+	var rev2Seen time.Time
 	for time.Now().Before(deadline) {
 		served = send(t, gw, servingPort, host, "/hostname", keyTeam).body
 		if strings.HasPrefix(served, "conf-rev2-") {
+			rev2Seen = time.Now()
 			break
 		}
 		time.Sleep(time.Second)
 	}
-	if !strings.HasPrefix(served, "conf-rev2-") {
+	if rev2Seen.IsZero() {
 		t.Fatalf("a keyed request was still served by %q two minutes after the promotion", served)
 	}
 	// Keep the anonymous loop running past the moment the new revision was
 	// first seen, so the window covers the proxy's switch on both sides.
 	time.Sleep(5 * time.Second)
 	s.stop()
+	r := <-tallied
 	s.check(t, "the promotion")
-	var anon int
-	for a := range s.codes {
-		anon++
-		if a.code != 401 {
-			t.Fatalf("anonymous request %d during the promotion got HTTP %d: a revision was "+
-				"reachable without a key while the route moved to it", anon, a.code)
+	if r.badCode != 0 {
+		t.Fatalf("anonymous request %d during the promotion got HTTP %d: a revision was "+
+			"reachable without a key while the route moved to it", r.badAt, r.badCode)
+	}
+	var afterSwitch int
+	for _, at := range r.at {
+		if at.After(rev2Seen) {
+			afterSwitch++
 		}
 	}
-	// Enough answers that "all refused" means something: at the loop's rate,
-	// several seconds of requests either side of the switch.
-	if anon < 30 {
-		t.Fatalf("only %d anonymous requests were answered across the promotion; too few to "+
-			"say the route was never open", anon)
+	// Enough answers after the switch was seen that "all refused" covers it,
+	// and a loop that stalled or stopped early fails here.
+	if afterSwitch < 1000 {
+		t.Fatalf("only %d anonymous requests were answered after the new revision was first "+
+			"seen, of %d in all; the window must cover the switch on both sides", afterSwitch, len(r.at))
 	}
-	t.Logf("promotion: %d anonymous requests across it, every one refused with 401", anon)
+	t.Logf("promotion: %d anonymous requests across it, %d of them after the new revision was "+
+		"first seen, every one refused with 401", len(r.at), afterSwitch)
 	expectCode(t, gw, servingPort, host, cardPath, "", 401, "an anonymous request after the promotion")
 }
 

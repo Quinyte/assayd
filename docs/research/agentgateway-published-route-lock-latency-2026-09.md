@@ -1,10 +1,11 @@
 # agentgateway 1.5.0: how long does a published route take to lock, and what else the slice's cluster cases found (2026-09-13)
 
 - **Question** (design 03 §8.1, first-slice bullet; §3.3.3's deadline paragraph): J2's `Lock` writes `<agent>-auth` onto a route that is **already serving**, and trusts it only once an anonymous request goes `200` → `401`. How long does that take after the write, and does the route pass through anything but `200` and `401` on the way? §3.3.3's 4-minute deadline for `Lock` rested on one hand measurement of a *prepared* route and on a test tolerance. Nothing had timed a published route.
-- **Answer: about 15 ms, and nothing else on the way.** Over 20 trials in two runs, the first anonymous `401` arrived **13.9–16.1 ms after the policy write started (median 14.3 ms)**. The write itself took about 3 ms. Each trial also checks and reports its own resolution: the request loop answered about every 0.25 ms, and the longest batch of answers its stream delivered could have held one for at most 4.4 ms. So each figure is good to about 5 ms. Every answer before the `401` was the backend's `200`, and the next 20 after it were all `401`.
-- **Two earlier sets of figures in this note are withdrawn.** Independent reviews of this change found the fault in each, and both sets hold only as upper bounds.
+- **Answer: within about 16 ms, and nothing else on the way.** Over 10 trials, the first anonymous `401` arrived **14.0–16.1 ms after the policy write started (median 14.6 ms)**. The write itself took about 3 ms. Every answer before the `401` was the backend's `200`, and the next 20 after it were all `401`. **These are upper bounds, and no tighter precision is claimed.** Every error in the method adds delay after the write's start, so none can make a figure too small. How much too large each figure is has not been established. The stream's answers are not evenly spaced (below), and a policy that lands in a gap between them is seen late by up to that gap.
+- **Three earlier claims in this note are withdrawn.** Independent reviews of this change found each.
   - **13–77 ms, median 19 ms**, was the measuring loop's own rhythm. Each write started straight after an answer arrived, from a loop that started one `curl` per request, about 65 ms apart. So the next answer was always about one loop interval away, and `kubectl apply` took about 45 ms of that interval.
-  - **30–118 ms, medians 95 and 59 ms**, was a buffer's flushes. The fixed loop wrote its codes to `curl`'s stdout, which musl holds in a 1 KiB buffer, so answers reached the test 256 at a time. Its pinned `curl` was also a `linux/386` image, emulated on this arm64 host, which made every request about twice as slow. The loop now writes to stderr, runs `curl` natively, and fails any trial whose own resolution it cannot vouch for (the method, below).
+  - **30–118 ms, medians 95 and 59 ms**, was a buffer's flushes. The next loop wrote its codes to `curl`'s stdout, which musl holds in a 1 KiB buffer, so answers reached the test 256 at a time. Its pinned `curl` was also a `linux/386` image, emulated on this arm64 host.
+  - **"Each figure is good to about 5 ms"** was no bound. It multiplied the longest run of coalesced answers by the mean interval between answers. But answers are not evenly spaced: every `curl` restart leaves a gap of a few milliseconds, one process has gaps of about 3 ms, and a policy that lands in one is seen late by up to that gap, which no run records.
 - **What this means for the deadline: no change.** 4 minutes is about 15,000 times the worst case measured. The measurement does not argue for a longer deadline. It does not justify a shorter one either. It is one idle, single-replica cluster, and it says nothing of a loaded gateway, several replicas, or the operator's own path, where status convergence and a 5 s probe cadence come before the first probe. A shorter deadline would page sooner on a lock that is genuinely late, and would risk paging on one that is only slow. That trade has no evidence either way here, so the constant stays, and the design says why (design 03 A74).
 - **Measured against:** agentgateway and agentgateway-crds **1.5.0** (controller image `cr.agentgateway.dev/controller:v1.5.0`, read back from the running Deployment), Gateway API **v1.6.0** standard, on k3d **v5.8.3** with its default k3s **v1.33.6-k3s1**, one server node and no agents, Docker 29.2.1, one gateway replica, on an otherwise idle arm64 laptop. The traffic Pod runs `curlimages/curl` 8.11.1's multi-arch image, natively.
 - **Reproduce:** `make conformance-cluster`. The trials are `TestSliceAPublishedRouteLocksFrom200To401`, and each prints a `LOCK-LATENCY` line.
@@ -17,77 +18,75 @@ Everything runs in the test's own namespace behind its own Gateway. The Gateway 
 1. **The policy is the compiler's.** Each `<agent>-auth` is `compiler.AuthPolicy`'s output for an Agent in namespace `conf-team`: API-key authentication (`mode: Strict`, the constant key-source selector) and one CEL rule admitting group `conf-team`. It is exactly what the operator writes.
 2. **The route is the emitter's shape**, written by the test: `<agent>-serving`, `parentRefs` to the `http` listener, the Agent's hostname, `PathPrefix: /`, and one `backendRef` to an `agnhost netexec` Service, which answers `200` at every path.
 3. **Each trial is a new Agent**, with its own route and hostname, so no trial inherits another's configuration. The route must answer an anonymous `200` before the trial starts.
-4. **A request loop runs inside the cluster**, from a Pod in the same namespace, through the Gateway's Service. Each `curl` process sends 500 requests through a URL glob, each with `Connection: close`, and the loop starts the next process until a stop file appears. There is a gap of one process start, a few milliseconds, every 500 requests.
-   - **Each answer is written to `curl`'s stderr**, which is unbuffered, as its code and its `%{num_connects}`, and is stamped when it reaches the test through `kubectl exec`.
-   - **The loop checks itself, and a trial fails if the check fails.** Any request reporting `num_connects` of 0 reused a connection, which a policy applied per connection could hide behind. Answers that reach the test within 50 µs of each other came in one write, so the longest such run, times the loop's interval, is how long its first answer can have waited. That **hold** must stay under 5 ms, and each trial reports it. With the interval, it is the trial's resolution.
-   - **How the check was set.** Measured by hand first, through Docker: the loop's own `curl` to stderr gave 15 of 499 answers inside 50 µs, with no gap over 0.6 ms, and every request a connection of its own; to stdout, 496 of 499; and without `Connection: close`, 499 of 500 requests reused one. Through `kubectl exec` a few answers still arrive together, because the native `curl` answers faster than the stream forwards single lines. A first form of the check failed on the share of such arrivals, and so failed runs whose batches held an answer for about a millisecond. The hold is what matters, so the hold is what is checked.
-5. **The write is one request.** The policy is created through client-go, on a connection warmed by a list just before, so the timing brackets that one request and nothing else. A random pause of up to 250 ms comes first, so the write does not start at a fixed point in the loop's rhythm.
-6. **Latency is from the write's start to the arrival of the first `401`.** The API server commits somewhere inside the write, so this is an upper bound on the time from commit to enforcement. It is loose by the write's own duration and the trial's resolution. The time from the write's return is logged too. A `401` is accepted whenever it arrives, even before the write's response: no policy existed before the write started.
-7. **Only `200` or `401` may appear.** Any other code while the policy lands fails the trial, because `Lock` keeps the route's `backendRefs` throughout (§3.3.3). After the first `401`, the next 20 answers must all be `401`, so a lock that flapped would fail. A key in the admitted group must still get `200` afterwards.
+4. **A request loop runs inside the cluster**, from a Pod in the same namespace, through the Gateway's Service. Each `curl` process sends 500 requests through a URL glob, each with `Connection: close`, and the loop starts the next process until a stop file appears. Each answer is written to `curl`'s stderr, which is unbuffered, as its code and its `%{num_connects}`, and is stamped when it reaches the test through `kubectl exec`.
+5. **The loop is checked, and a trial fails if the check fails.** The check fails if a request got no answer at all (`curl`'s `000`), which is a failure of the gateway, the network or the Pod and not a policy decision. It fails if a request reused a connection (`num_connects` of 0), which a policy applied per connection could hide behind. And it fails if more than half the answers arrived in runs of 32 or more within 50 µs of each other, which is what a buffered stream does. Measured by hand first, through Docker: the loop's own `curl` to stderr gave 15 of 499 answers inside 50 µs, and every request a connection of its own; to stdout, 496 of 499; and without `Connection: close`, 499 of 500 requests reused one. Through `kubectl exec` a few answers still arrive together now and then, because `curl` answers faster than the stream forwards single lines, but they are a small share of the answers.
+6. **The check detects faults. It does not measure precision.** Each trial reports what the stream saw instead:
+   - the **bracket**: from the arrival of the last `200` to the arrival of the first `401`, or from the write's start if no `200` arrived after it. The policy landed inside it, as the stream saw it;
+   - the stream's **longest gap** between two answers.
+
+   Both describe the stream around the landing. Neither is a bound on the gateway, because an answer is stamped when it arrives, not when it was answered.
+7. **The write is one request.** The policy is created through client-go, on a connection warmed by a list just before, so the timing brackets that one request and nothing else. A random pause of up to 250 ms comes first, so the write does not start at a fixed point in the loop's rhythm.
+8. **Latency is from the write's start to the arrival of the first `401`.** The API server commits somewhere inside the write, so this is an upper bound on the time from commit to enforcement. A `401` is accepted whenever it arrives, even before the write's response: no policy existed before the write started.
+9. **Only `200` or `401` may appear.** Any other code while the policy lands fails the trial, because `Lock` keeps the route's `backendRefs` throughout (§3.3.3). After the first `401`, the next 20 answers must all be `401`, so a lock that flapped would fail. A key in the admitted group must still get `200` afterwards.
 
 ## Results
 
-A hand run of `go test -tags cluster -run '^TestSlice'` on 2026-09-13, against a cluster provisioned as the script does:
+**Cited here: one run**, the `make conformance-cluster` run that closed the change, on 2026-09-13. Its lines are quoted exactly as the test printed them. Earlier runs gave figures of the same size, but their logs were not kept, so they are not cited.
 
-| Trial | From write start (ms) | From write return (ms) | Write (ms) | Loop interval (ms) | Hold (ms) | Anonymous `200`s after the write |
-|---|---|---|---|---|---|---|
-| 1 | 14.6 | 11.9 | 2.7 | 0.26 | 1.06 | 44 |
-| 2 | 14.8 | 11.7 | 3.1 | 0.25 | 1.26 | 37 |
-| 3 | 14.2 | 11.4 | 2.8 | 0.24 | 1.22 | 36 |
-| 4 | 14.5 | 11.8 | 2.7 | 0.26 | 1.06 | 41 |
-| 5 | 14.6 | 11.5 | 3.1 | 0.21 | 1.04 | 37 |
-| 6 | 14.0 | 11.3 | 2.7 | 0.23 | 1.17 | 29 |
-| 7 | 14.0 | 11.3 | 2.7 | 0.24 | 4.38 | 31 |
-| 8 | 14.2 | 11.4 | 2.9 | 0.21 | 1.88 | 37 |
-| 9 | 15.2 | 12.2 | 3.0 | 0.25 | 2.79 | 35 |
-| 10 | 14.3 | 11.3 | 3.0 | 0.25 | 2.24 | 36 |
-| **n=10** | **min 14.0, median 14.4, max 15.2** | **min 11.3, median 11.5, max 12.2** | median 2.8 | median 0.25 | median 1.24, max 4.38 | 29–44 |
+```
+slice_cluster_test.go:861: LOCK-LATENCY trial=1 from_write_start_ms=14.7 from_write_return_ms=11.9 write_ms=2.9 probe_interval_ms=0.25 bracket_ms=0.24 max_gap_ms=2.91
+slice_cluster_test.go:861: LOCK-LATENCY trial=2 from_write_start_ms=14.4 from_write_return_ms=11.4 write_ms=3.0 probe_interval_ms=0.25 bracket_ms=0.29 max_gap_ms=0.76
+slice_cluster_test.go:861: LOCK-LATENCY trial=3 from_write_start_ms=14.0 from_write_return_ms=11.1 write_ms=2.8 probe_interval_ms=0.21 bracket_ms=0.29 max_gap_ms=0.73
+slice_cluster_test.go:861: LOCK-LATENCY trial=4 from_write_start_ms=14.4 from_write_return_ms=11.7 write_ms=2.7 probe_interval_ms=0.24 bracket_ms=0.26 max_gap_ms=3.06
+slice_cluster_test.go:861: LOCK-LATENCY trial=5 from_write_start_ms=15.2 from_write_return_ms=12.0 write_ms=3.1 probe_interval_ms=0.23 bracket_ms=0.19 max_gap_ms=3.27
+slice_cluster_test.go:861: LOCK-LATENCY trial=6 from_write_start_ms=14.7 from_write_return_ms=11.9 write_ms=2.9 probe_interval_ms=0.24 bracket_ms=0.26 max_gap_ms=3.42
+slice_cluster_test.go:861: LOCK-LATENCY trial=7 from_write_start_ms=15.4 from_write_return_ms=12.5 write_ms=3.0 probe_interval_ms=0.24 bracket_ms=0.44 max_gap_ms=3.39
+slice_cluster_test.go:861: LOCK-LATENCY trial=8 from_write_start_ms=14.3 from_write_return_ms=11.5 write_ms=2.9 probe_interval_ms=0.24 bracket_ms=0.30 max_gap_ms=0.67
+slice_cluster_test.go:861: LOCK-LATENCY trial=9 from_write_start_ms=14.2 from_write_return_ms=11.5 write_ms=2.7 probe_interval_ms=0.24 bracket_ms=0.04 max_gap_ms=3.65
+slice_cluster_test.go:861: LOCK-LATENCY trial=10 from_write_start_ms=16.1 from_write_return_ms=13.4 write_ms=2.8 probe_interval_ms=0.24 bracket_ms=3.17 max_gap_ms=3.17
+slice_cluster_test.go:871: LOCK-LATENCY n=10 from_write_start: min_ms=14.0 median_ms=14.6 max_ms=16.1; from_write_return: min_ms=11.1 median_ms=11.8 max_ms=13.4; write: median_ms=2.9; probe_interval: median_ms=0.24; bracket: median_ms=0.28 max_ms=3.17; max_gap: median_ms=3.11 max_ms=3.65; deadline=4m0s
+```
 
-The `make conformance-cluster` run that closed the change, on a fresh cluster the same day:
+- **Latency:** 14.0–16.1 ms from the write's start, median 14.6 ms; 11.1–13.4 ms from its return, median 11.8 ms. Upper bounds.
+- **Bracket:** 0.04–3.17 ms, median 0.28 ms. In nine trials the last `200` and the first `401` arrived within half a millisecond of each other. In trial 10 they were 3.17 ms apart, which is that trial's longest gap: the policy landed while the stream was quiet, and that trial's figure is late by up to that much.
+- **Longest gap:** 0.67–3.65 ms per trial, which is the `curl` restart every 500 requests and the occasional slow request.
+- **The open window.** After the write returned, the route stayed open to anyone for about 12 ms more, the from-return figure. Counting the `200`s in that window measures the loop's request rate, not the gateway, so it is not reported.
 
-| Trial | From write start (ms) | From write return (ms) | Write (ms) | Loop interval (ms) | Hold (ms) | Anonymous `200`s after the write |
-|---|---|---|---|---|---|---|
-| 1 | 14.5 | 11.7 | 2.8 | 0.25 | 0.76 | 40 |
-| 2 | 14.3 | 11.4 | 2.9 | 0.24 | 0.98 | 38 |
-| 3 | 14.2 | 11.5 | 2.7 | 0.24 | 1.91 | 38 |
-| 4 | 14.3 | 11.5 | 2.7 | 0.24 | 1.43 | 38 |
-| 5 | 14.8 | 11.3 | 3.4 | 0.22 | 1.09 | 35 |
-| 6 | 14.6 | 11.6 | 3.0 | 0.24 | 0.98 | 40 |
-| 7 | 16.1 | 13.0 | 3.2 | 0.26 | 3.31 | 26 |
-| 8 | 13.9 | 11.4 | 2.6 | 0.25 | 2.00 | 41 |
-| 9 | 14.4 | 11.5 | 2.8 | 0.25 | 1.00 | 38 |
-| 10 | 14.2 | 11.6 | 2.7 | 0.22 | 1.35 | 39 |
-| **n=10** | **min 13.9, median 14.3, max 16.1** | **min 11.3, median 11.5, max 13.0** | median 2.8 | median 0.24 | median 1.22, max 3.31 | 26–41 |
+**The prepared route** (`TestSliceAPreparedRouteAnswers500Then401OnTheServingListener`), on the `http` listener, where the 2026-09-11 spike used `tools`. It answered `500` before the policy and `401` after it, and nothing else in between. An unknown key got `401`, and a valid key reached the missing backend and got `500`, as the spike found. The case logs how long the `401` took after the policy reported `Attached`. That is **not a latency**, and it is an upper bound only. The case probes once a second through `kubectl exec`, and the first probe after `Attached` was already refused, so the figure is one probe's round trip. It asserts only that the `401` arrives within the 4-minute deadline:
 
-**Both runs together: 20 trials, 13.9–16.1 ms from the write's start.** The spread across trials, about 2 ms, is inside each trial's own resolution, so this measurement cannot say whether propagation itself varies. Twenty trials on one idle cluster is too few to state a tail.
+```
+slice_cluster_test.go:476: prepared route: refused within 51ms of the policy reporting Attached (an upper bound: one probe round trip at 1 s cadence)
+```
 
-The last column counts requests answered `200` after the write returned: 26 to 44 per trial. They are what the backend answered in the window between the write landing at the API server and the proxy taking the policy, to anyone. Before the stream was fixed this column was inflated, because answers buffered before the write were counted as arriving after it.
-
-**The prepared route** (`TestSliceAPreparedRouteAnswers500Then401OnTheServingListener`), on the `http` listener this time, where the 2026-09-11 spike used `tools`. It answered `500` before the policy and `401` after it, and nothing else in between. An unknown key got `401`, and a valid key reached the missing backend and got `500`, as the spike found. The case also logs how long the `401` took after the policy reported `Attached`: 45–105 ms across the runs. That is **not a latency**. The case probes once a second through `kubectl exec`, and the first probe after `Attached` was already refused, so the figure is one probe's round trip. It bounds the wait from above and no more. The case asserts only that the `401` arrives within the 4-minute deadline.
-
-## What else the same runs measured
+## What else the same run measured
 
 These are design 03 §8.1's `cluster` cases that the first-slice bullet lists, and case 2, which §3.4.4 owes. Each is a test in `test/conformance/slice_*_cluster_test.go`, and each was killed by a mutation of its own (below).
 
 - **Two groups (§8.1 case 2).** `compiler.AdmitGroupsExpression` renders `apiKey.group == "a" || apiKey.group == "b"`. With that rule, keys in `a` and `b` got `200`, a key in `c` got `403`, and anonymous got `401`.
-- **A promotion (case 1, the gateway half).** The route was locked first. Then its one `backendRef` was moved from one revision's Service to the next, in place, and the per-Agent policy kept enforcing on the new revision. 26,999 anonymous requests were sent across the switch, and every one got `401`. Not exercised: a `Lock` racing a promotion, and a weighted two-backend shift. That the operator emits exactly one `traffic` policy is the operator's, and envtest's to pin.
+- **A promotion (case 1, the gateway half).** The route was locked first. Then its one `backendRef` was moved from one revision's Service to the next, in place, and the per-Agent policy kept enforcing on the new revision. Every answer was read as it arrived. Not exercised: a `Lock` racing a promotion, and a weighted two-backend shift. That the operator emits exactly one `traffic` policy is the operator's, and envtest's to pin.
+
+  ```
+  slice_cluster_test.go:1035: promotion: 26999 anonymous requests across it, 26583 of them after the new revision was first seen, every one refused with 401
+  ```
 - **A key set in another namespace (case 3).** A `ConfigMap` with the key-source label in namespace `conf-elsewhere` held a key in the admitted group. Then a canary key set was written in the policy's own namespace, and the case waited for the gateway to admit the canary. After that, the other namespace's key got `401` five times out of five, and a key in the same group in the policy's namespace got `200`. Case 7 adds a second namespace: a Gateway-level policy in the Gateway's namespace refused, with `401`, a key stored only in the route's namespace. The canary's proof rests on the controller reading `ConfigMap` events in order, which one cluster-wide watch delivers; that is not measured separately.
 - **A duplicate `keyHash` under a different group (case 4).** It is not refused. Two `ConfigMap`s, `conf-dup-a` and `conf-dup-b`, held the same hash under two groups. Each of 8 writes swapped the groups, and every second pair reversed the order the two were written in. Each write also added a canary key of its own to each `ConfigMap`, and was taken as landed only once both canaries were admitted. Then 30 answers were taken, and all 30 had to agree.
   - The key never got `401`. After every landed write it was admitted (`200`) or refused (`403`) as a member of **one** of the two groups, all 30 answers the same.
-  - Five runs of 8 landed writes each:
+  - The run's lines:
 
-    | Run | Groups | `conf-dup-b` won | `conf-dup-a` won | Won by the one written last |
-    |---|---|---|---|---|
-    | hand run, emulated `curl` | swapped each write | 7 | 1 | 5 |
-    | `make conformance-cluster`, emulated `curl` | swapped each write | 6 | 2 | 6 |
-    | mutation M8b (below) | the same on every write | 6 | 2 | 4 |
-    | hand run, native `curl` | swapped each write | 6 | 2 | 4 |
-    | closing `make conformance-cluster` | swapped each write | 8 | 0 | 4 |
-    | **total, 40 writes** | | **33** | **7** | **23** |
-
-    This case does not use the request loop, so the loop's faults do not touch it, and the emulated runs stand.
-  - Neither the name nor the write order explains every write. In the M8b run the groups never changed, only the canaries did, and the winner still moved twice. So "which one wins" is not stated here as a rule, and the CRD calls it undefined. What is stated is that a duplicate can put the credential in either group at any write to either `ConfigMap`, with nothing reporting it.
-  - **An earlier version of this section is withdrawn.** It reported 15 writes over three runs, which followed neither names nor order. Those writes were taken as landed after a ten-second sleep, with nothing proving it, so they may have measured writes that had not yet reached the gateway. An independent review of this change found it, and its own run with canaries saw `conf-dup-b` win 12 writes out of 12.
+    ```
+    slice_keys_cluster_test.go:228: DUPLICATE-KEY write 1: a=conf-team b=rogue, written a then b: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:228: DUPLICATE-KEY write 2: a=rogue b=conf-team, written a then b: HTTP 403, so conf-dup-a won
+    slice_keys_cluster_test.go:228: DUPLICATE-KEY write 3: a=conf-team b=rogue, written b then a: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:228: DUPLICATE-KEY write 4: a=rogue b=conf-team, written b then a: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:228: DUPLICATE-KEY write 5: a=conf-team b=rogue, written a then b: HTTP 200, so conf-dup-a won
+    slice_keys_cluster_test.go:228: DUPLICATE-KEY write 6: a=rogue b=conf-team, written a then b: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:228: DUPLICATE-KEY write 7: a=conf-team b=rogue, written b then a: HTTP 403, so conf-dup-b won
+    slice_keys_cluster_test.go:228: DUPLICATE-KEY write 8: a=rogue b=conf-team, written b then a: HTTP 200, so conf-dup-b won
+    slice_keys_cluster_test.go:231: DUPLICATE-KEY winners by name map[conf-dup-a:2 conf-dup-b:6], by write order map[written first:6 written last:2]
+    ```
+  - Neither the name nor the write order explains every write. Earlier runs, whose logs were not kept, leaned towards `conf-dup-b` too and also split. In one of them, a mutation run in which the two groups never changed, only the canaries did, the winner still moved. So "which one wins" is not stated here as a rule, and the CRD calls it undefined. What is stated is that a duplicate can put the credential in either group at any write to either `ConfigMap`, with nothing reporting it.
+  - What the committed assertion rules out: a gateway that refuses a duplicate, takes the union of its groups, or takes their intersection. It does not state which entry wins.
+  - **An earlier version of this section is withdrawn.** It reported writes taken as landed after a ten-second sleep, with nothing proving it, so they may have measured writes that had not yet reached the gateway. An independent review of this change found it, and its own run with canaries saw `conf-dup-b` win 12 writes out of 12.
 - **An explicit `mode: Strict` (case 5).** The compiler's policy and the same policy with `mode` removed gave the same four answers: anonymous `401`, unknown key `401`, admitted key `200`, wrong-group key `403`. The API server stored the second with `mode: Strict`.
 - **A Gateway-level policy beside `<agent>-auth` (case 7).** A second Gateway, with a policy in its own namespace targeting the Gateway: API-key authentication over a key set in that namespace, admitting group `gwgroup`.
   - With **only** the Gateway's policy, a **prepared** route answered anonymous `401`. The Gateway's key reached the missing backend and got `500`. So `Create`'s probe cannot tell this `401` from its own policy's (design 03 §3.3.3, the sixth critique's MINOR 5).
@@ -97,7 +96,7 @@ These are design 03 §8.1's `cluster` cases that the first-slice bullet lists, a
 
 ## Mutations
 
-Each case was run with a change that must make it fail, and each change was restored from a copy afterwards. INVALID means the mutant did not build, which proves nothing. No mutant was INVALID.
+Each case was run with a change that must make it fail, and each change was restored from a copy afterwards. INVALID means the mutant did not build, which proves nothing. No mutant was INVALID. The mutation runs' logs were not kept either; what each was killed by is recorded here as it was read at the time.
 
 **The first batch**, against the first version of each case:
 
@@ -117,7 +116,7 @@ Each case was run with a change that must make it fail, and each change was rest
 
 The five mutations of `compiler.AdmitGroupsExpression` itself were killed by its unit tests: no sort, sorting the caller's slice, no repeat check, no empty-group check, and the first group only.
 
-**The second batch**, against the cases after the first review:
+**The second batch**, after the first review:
 
 | Case | Mutation | Result |
 |---|---|---|
@@ -126,27 +125,33 @@ The five mutations of `compiler.AdmitGroupsExpression` itself were killed by its
 | promotion | promoted by writing a second route for the new revision | killed: anonymous request 95 got `200` |
 | duplicate key | the key written in no selected `ConfigMap` | killed: `401` on all 30 answers |
 | duplicate key | no conflicting group: both `ConfigMap`s give the admitted group | killed: admitted 8 times, refused 0 |
-| duplicate key | the groups never swapped between writes | **survived**, correctly: the winner moved between writes anyway, so both outcomes still occurred. Its writes are the M8b row above |
+| duplicate key | the groups never swapped between writes | **survived**, correctly: the winner moved between writes anyway, so both outcomes still occurred |
 | Gateway-level policy | no Gateway-level policy | killed: anonymous got `500` on the prepared route |
 | Gateway-level policy | no `<agent>-auth` beside it | killed: the Gateway's key got `200` |
 | Gateway-level policy | the route's key also stored in the Gateway's namespace | killed: it got `403`, not `401` |
 | `AdmitGroupsExpression` | the empty-set check removed | killed: the error no longer said "the set is empty" |
 
-The review had found that last mutation surviving: the CEL unparser refused the empty set anyway, with a message about the unparser. The test now requires each refusal's own message. `TestTheSliceCasesRunTheE2EsAgentgatewayRelease` was killed by moving `SLICE_AGW_VERSION` to 1.5.1.
+`TestTheSliceCasesRunTheE2EsAgentgatewayRelease` was killed by moving `SLICE_AGW_VERSION` to 1.5.1.
 
-**The third batch**, against the stream's checks and case 3's canary, after the second review:
+**The third batch**, after the second review:
 
 | Case | Mutation | Result |
 |---|---|---|
 | published route | the route loses its backend just before the policy write | killed by the only-`200`-or-`401` rule: an anonymous request got `500` |
-| published route | the codes written to stdout again | killed by the hold check: up to 171 answers in one write, a hold of 27 ms |
-| published route | `Connection: close` removed | killed by the connection check: 1,996 of 2,000 requests reused a connection |
+| published route | the codes written to stdout again | killed: up to 171 answers in one write |
+| published route | `Connection: close` removed | killed: 1,996 of 2,000 requests reused a connection |
 | key set elsewhere | the canary written in the other namespace | killed: the canary was never admitted, `401` |
 
-The first published-route mutation is the one the second review asked for. Stripping the route after the write, in the first two batches, was caught by the admitted key's check instead, because the policy landed before the route lost its backend.
+**The fourth batch**, after the third review, against the checks it changed:
+
+| Case | Mutation | Result |
+|---|---|---|
+| published route | the codes written to stdout again | killed by the buffer check: 998 of 1,000 answers in runs of 32 or more |
+| published route | `Connection: close` removed | killed: 1,497 of 1,500 requests reused a connection |
+| promotion | the stream stopped at the promotion | killed: no answers after the new revision was first seen |
 
 ## Limits
 
 - **One replica, one idle cluster.** Every latency is what one proxy took to receive its configuration, with nothing else happening. H2 (design 03 §3.3.3) is the rule for more replicas. It is not measured here.
-- **Each figure is an upper bound on its trial**, loose by the write's duration and by the trial's resolution, which the trial reports and fails past 5 ms.
+- **Upper bounds only.** How tight each figure is, is not established: the stream's answers are uneven, and a policy landing in a gap is seen late by up to it. Each trial reports its bracket and its longest gap so the reader can judge.
 - **No operator.** The operator's `Lock` adds status convergence (§3.3.2's tuple) and a 5 s probe cadence before its first probe. This measures only what those wait for.
