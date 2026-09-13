@@ -1,6 +1,6 @@
 # ADR-0034: The slice's gateway auth is one API-key policy per Agent that follows the current spec, and it narrows in place only on a probe
 
-- **Status**: accepted · 2026-09-11 · **supersedes ADR-0033** (including its Amendment 1). Decided by the human in three rounds: on `reviews/03-a52-recritique.md` (target, input, `Adopt`), on `reviews/03-a53-critique.md` (A1, B2, C2), and on `reviews/03-a54-critique.md` (D2, E2, F2). Design 03 A55 writes the last three in. · **Amended 2026-09-11 (Amendment 1)**: two clauses of D2 are re-attributed to design 03's author, and the human's G, H2 and I1 are recorded. · **Amended 2026-09-12 (Amendment 2)**: the human's J2 is recorded. · **Amended 2026-09-12 (Amendment 3)**: the human's decision that `Adopt` stays refused is recorded, with its reason, consent. · **Amended 2026-09-12 (Amendment 4)**: the human approved design 03's first slice and decided K2.
+- **Status**: accepted · 2026-09-11 · **supersedes ADR-0033** (including its Amendment 1). Decided by the human in three rounds: on `reviews/03-a52-recritique.md` (target, input, `Adopt`), on `reviews/03-a53-critique.md` (A1, B2, C2), and on `reviews/03-a54-critique.md` (D2, E2, F2). Design 03 A55 writes the last three in. · **Amended 2026-09-11 (Amendment 1)**: two clauses of D2 are re-attributed to design 03's author, and the human's G, H2 and I1 are recorded. · **Amended 2026-09-12 (Amendment 2)**: the human's J2 is recorded. · **Amended 2026-09-12 (Amendment 3)**: the human's decision that `Adopt` stays refused is recorded, with its reason, consent. · **Amended 2026-09-12 (Amendment 4)**: the human approved design 03's first slice and decided K2. · **Amended 2026-09-13 (Amendment 5)**: the human decided L1 for the Gateway-level auth gap, accepted its two costs, and decided W1.
 - **Context**: ADR-0033 was titled "the compiler refuses to tighten a live route". Its Amendment 1 made the policy tighten in place, so the title stated a reversed decision. AGENTS.md says a reversed decision gets a superseding ADR, so this one records the whole current set in one place. The fourth critique of design 03 found three more defects that were decisions and not corrections:
   - a key-source change cut every old-source key fleet-wide at once;
   - a disjoint group change passed through a window in which every caller was refused, and the design called that window bounded;
@@ -76,3 +76,31 @@ Nothing in this amendment is implemented.
 **Not the human's.** Design 03 reads K2 as covering any move to `apikey` that a reconcile observes after the refusal (A65, made to track by A66). An Agent whose spec already said `apikey` when it was first refused stays refused until it is observed under another mode and then under `apikey` again. That reading is the author's, recorded here so that this ADR is not read as deciding it.
 
 Nothing in this amendment is implemented.
+
+## Amendment 5 (2026-09-13, the human's decisions on the Gateway-level auth gap: L1, its costs, and W1)
+
+**L1, detect and hold. The human decided it on 2026-09-13.** Design 03 A74 measured the gap on agentgateway 1.5.0. A `traffic` policy that targets the assayd Gateway and carries API-key authentication answers an anonymous request on an Agent's route with `401` before `<agent>-auth` exists. Neither `Create`'s probe nor `Lock`'s card-digest attribution can tell that `401` from `<agent>-auth`'s. So either could record `Served` under `apikey` while `<agent>-auth` had not taken, or never would.
+
+- **Decision.** The operator reads the assayd Gateway and the policies on it. While a policy stands that targets the Gateway on a listener that can take the Agent's traffic, and that could answer an anonymous request with a status of its choosing, neither `Create` nor any `Lock` credits a `401` or records `Served`. The transaction holds, and the Agent says so loudly, naming the policy. Design 03 A75 gives the rule and its field table.
+- **What it costs. The human accepted both costs on 2026-09-13.**
+  - **Re-creations of served Agents hold too.** A served Agent whose route is deleted out of band stays unpublished, so it is off the air. A served Agent whose policy is deleted keeps its missing-policy `Lock` open, and pages. Both last until the Gateway-level policy is removed.
+  - **ListenerSets.** Whenever the Gateway's `spec.allowedListeners.namespaces.from` is anything but `None`, which is `All`, `Same` or `Selector`, including a `Selector` that matches nothing, every new Agent holds, whether or not any ListenerSet or policy exists. A ListenerSet's listener can capture an Agent's traffic, and the slice does not inspect ListenerSets. A Gateway with no `allowedListeners` admits none. The chart ships no Gateway, so that default is Gateway API's, not the chart's.
+  - **Held Agents page.** Every held Agent raises `PolicyApplyIncomplete`, and design 10 pages on it after 5 minutes, until an administrator removes the policy, scopes it off the Gateway, or sets `from: None`. An install that keeps such a policy on purpose holds every new Agent unpublished, and every J2 or K2 lock unproved.
+  - No opt-out is built. Building one later is a new decision.
+- **Rejected.** L2, detect and report while still recording `Served`, weakens what `Served` proves. L3, document the assumption, leaves status wrong.
+
+**W1, a served Agent whose route a Gateway-level rule can widen stops reading `Governed`. The human decided it on 2026-09-13, on design 03 A75's measurement.** A Gateway-level `Allow` rule was measured admitting, on a route, a group its `<agent>-auth` refuses: `authorization` rules merge across attachment points. So, for an Agent already `Served`:
+
+- its route keeps serving and is never withdrawn;
+- if a counting Gateway-level policy sets any `authorization`, or `strategy.inheritance: Override`, the Agent reads `GovernanceSkipped=True` and `PolicyApplyIncomplete=True`, both reason `GatewayAuthPolicy`, and it pages, as intended. Both messages name the policy, and say the route admits whatever the Gateway-level authorization rule allows, beyond its own `<agent>-auth`, until the policy is removed, or rescoped off the Gateway or off its serving listener. `Ready` follows design 03 §3.3.1's aggregation for `PolicyApplyIncomplete` on a served Agent, which withholds it: `Degraded`;
+- a counting policy that sets only authentication, and no authorization, is replaced by the route's authentication, which is A74 case 7's measured shape. It stays a note on `GovernanceSkipped`'s message.
+
+The merge is asserted, not assumed: `TestSliceAGatewayLevelAllowRuleWidensTheRoute` fails if a later agentgateway stops merging, and then this amendment is revisited.
+
+**Not the human's.** Design 03 A75 made these calls. They are recorded here so that this ADR is not read as deciding them:
+
+- a held J2 or K2 `Lock` withholds `Ready` at once, so that design 03 §3.3.1's aggregation holds for it;
+- which `spec` fields count, in A75's table, with every field the table does not call harmless counting;
+- a Gateway read, or a policy list, that fails holds, like any other cause.
+
+Design 03 A75 implements this amendment (`internal/controller/authabove.go`, `authtxn.go`). The opt-out is not built.

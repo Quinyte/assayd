@@ -378,3 +378,207 @@ func TestSliceARoutePolicyOverridesAGatewayLevelOne(t *testing.T) {
 		}
 	}
 }
+
+// ---- design 03 A75: a Gateway-level Allow rule beside -auth ----------------
+
+// TestSliceAGatewayLevelAllowRuleWidensTheRoute pins what case 7 could not
+// tell apart for authorization. The CRD says authorization rules applied "at
+// the same or different attachment points" are merged. Case 7's Gateway rule
+// admitted a group whose key only the Gateway's key set held, so that key
+// failed authentication on the route under either reading. Here the
+// Gateway-level rule admits "rogue", the group of keyRogue, which the
+// ROUTE's key set holds and the route's rule refuses with 403.
+//
+// Measured on 1.5.0 (2026-09-13): keyRogue gets 200, in both shapes. The
+// rules merge, and a Gateway-level Allow widens who the route admits. Design
+// 03 A75's W1 and ADR-0034 Amendment 5 rest on it, so this case asserts the
+// merge: an agentgateway that stops merging fails it, and they are revisited.
+//
+// Two shapes: authorization alone, and case 7's (API-key authentication and
+// authorization). Each is shown to be enforcing on the Gateway first, by a
+// canary route with no -auth whose anonymous answer moves off 200 when it
+// lands, and only then is keyRogue sampled.
+func TestSliceAGatewayLevelAllowRuleWidensTheRoute(t *testing.T) {
+	sliceFixture(t)
+	const gwName = "conf-slice-gwallow"
+	const keyGwAllow = "conf-gwallow-key"
+	if err := apply(t, gatewayYAML(gwName)+"\n---\n"+
+		keySet(sliceGatewayNS, "conf-gwallow-keys", map[string]string{keyGwAllow: "rogue"})); err != nil {
+		t.Fatal(err)
+	}
+	deleteAndWaitLater(t, "gateway", sliceGatewayNS, gwName)
+	deleteLater(t, "configmap", sliceGatewayNS, "conf-gwallow-keys")
+	gw := gatewayAddress(t, gwName)
+
+	agent, canary := agentName("gwallow"), agentName("gwallow-canary")
+	route, _ := compiler.ServingRouteName(agent)
+	canaryRoute, _ := compiler.ServingRouteName(canary)
+	host, canaryHost := sliceHost(agent), sliceHost(canary)
+	if err := apply(t, routeOn(route, gwName, host, "conf-rev1")+"\n---\n"+
+		routeOn(canaryRoute, gwName, canaryHost, "conf-rev1")); err != nil {
+		t.Fatal(err)
+	}
+	deleteLater(t, "httproute", sliceNS, route)
+	deleteLater(t, "httproute", sliceNS, canaryRoute)
+	p := authPolicy(t, agent)
+	applyObject(t, p)
+	deleteLater(t, "agentgatewaypolicy", sliceNS, p.GetName())
+	requireAttached(t, p.GetName())
+	awaitCode(t, gw, servingPort, host, cardPath, keyRogue, 403, []int{404, 200}, 2*time.Minute,
+		"keyRogue on the route under <agent>-auth alone: 403, the route's rule refusing its group")
+	expectCode(t, gw, servingPort, host, cardPath, keyTeam, 200, "keyTeam on the route under <agent>-auth alone")
+	awaitCode(t, gw, servingPort, canaryHost, cardPath, "", 200, []int{404}, 2*time.Minute,
+		"the canary route, with no policy on it or on its Gateway: 200")
+
+	gp := authPolicy(t, agentName("gwallow-gw"))
+	gp.SetNamespace(sliceGatewayNS)
+	gp.SetName("conf-gwallow-" + runID)
+	if err := unstructured.SetNestedSlice(gp.Object, []any{map[string]any{
+		"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": gwName}}, "spec", "targetRefs"); err != nil {
+		t.Fatal(err)
+	}
+	if err := unstructured.SetNestedStringSlice(gp.Object, []string{`apiKey.group == "rogue"`},
+		"spec", "traffic", "authorization", "policy", "matchExpressions"); err != nil {
+		t.Fatal(err)
+	}
+	deleteLater(t, "agentgatewaypolicy", sliceGatewayNS, gp.GetName())
+	for _, shape := range []struct {
+		name  string
+		authn bool
+	}{{"authorization alone", false}, {"case 7's shape", true}} {
+		obj := gp.DeepCopy()
+		if !shape.authn {
+			unstructured.RemoveNestedField(obj.Object, "spec", "traffic", "apiKeyAuthentication")
+		}
+		applyObject(t, obj)
+		if cs, _ := condsIn(t, sliceGatewayNS, "agentgatewaypolicy", obj.GetName()); cs["Attached"] != "True" {
+			t.Fatalf("%s: the Gateway-level policy did not attach: %v", shape.name, cs)
+		}
+		landed := awaitOffCode(t, gw, canaryHost, 200, 2*time.Minute,
+			shape.name+": the canary route's anonymous answer, once the Gateway-level policy enforces")
+		t.Logf("%s: the canary's anonymous answer went from 200 to %d, so the Gateway-level policy enforces",
+			shape.name, landed)
+		got := codes(t, 5, gw, servingPort, host, keyRogue)
+		t.Logf("%s: keyRogue on the route, under <agent>-auth and a Gateway-level Allow for its group: %v",
+			shape.name, got)
+		if !all(got, 200) {
+			t.Errorf("%s: keyRogue got %v on a route whose <agent>-auth refuses its group, beside a "+
+				"Gateway-level Allow for it. On 1.5.0 it got 200: authorization rules merge across "+
+				"attachment points, and design 03 A75's W1 rests on that. Anything else means agentgateway "+
+				"stopped merging: revisit design 03 A75 and ADR-0034 Amendment 5, rather than change this "+
+				"assertion", shape.name, got)
+		}
+		if got := codes(t, 3, gw, servingPort, host, keyTeam); !all(got, 200) {
+			t.Errorf("%s: keyTeam, which the route admits, got %v", shape.name, got)
+		}
+		// Off again, and seen off on the canary, before the next shape lands.
+		if out, err := kubectl(t, "delete", "agentgatewaypolicy", obj.GetName(), "-n", sliceGatewayNS,
+			"--wait=true"); err != nil {
+			t.Fatalf("remove the Gateway-level policy: %v: %s", err, out)
+		}
+		awaitCode(t, gw, servingPort, canaryHost, cardPath, "", 200, []int{landed}, 2*time.Minute,
+			shape.name+": the canary back to 200 once the Gateway-level policy is removed")
+	}
+}
+
+// awaitOffCode waits until an anonymous request to host gets something other
+// than from, requires it to be a refusal, 401 or 403, twice more in a row,
+// and returns it. Any other code fails: a canary that moves to 500 or 404 did
+// not measure a policy.
+func awaitOffCode(t *testing.T, gw, host string, from int, timeout time.Duration, why string) int {
+	t.Helper()
+	start := time.Now()
+	for time.Since(start) < timeout {
+		got := send(t, gw, servingPort, host, cardPath, "").code
+		if got == from {
+			time.Sleep(time.Second)
+			continue
+		}
+		if got != 401 && got != 403 {
+			t.Fatalf("%s: got HTTP %d, which is not a refusal", why, got)
+		}
+		for i := 0; i < 2; i++ {
+			if again := send(t, gw, servingPort, host, cardPath, "").code; again != got {
+				t.Fatalf("%s: got %d, then %d", why, got, again)
+			}
+		}
+		return got
+	}
+	t.Fatalf("%s: still %d after %s", why, from, timeout)
+	return 0
+}
+
+// TestSliceAGatewayLevelOverridePolicyTakesTheRoute measures what design 03
+// A75's W1 takes from the CRD's description of strategy.inheritance:
+// Override, that "this policy blocks traffic policies at more-specific
+// attachment points from being included in the effective policy". A
+// Gateway-level policy of case 7's shape, admitting "gwgroup" from a key set
+// in the Gateway's namespace, sets Override beside the route's <agent>-auth.
+//
+//   - Override takes the route: the Gateway's key, which only the Gateway's
+//     key set holds, gets 200 on it, and keyTeam, which only the route's
+//     holds, gets 401.
+//   - Override is ignored: keyTeam 200, and the Gateway's key 401.
+func TestSliceAGatewayLevelOverridePolicyTakesTheRoute(t *testing.T) {
+	sliceFixture(t)
+	const gwName = "conf-slice-gwover"
+	const keyGwOver = "conf-gwover-key"
+	if err := apply(t, gatewayYAML(gwName)+"\n---\n"+
+		keySet(sliceGatewayNS, "conf-gwover-keys", map[string]string{keyGwOver: "gwgroup"})); err != nil {
+		t.Fatal(err)
+	}
+	deleteAndWaitLater(t, "gateway", sliceGatewayNS, gwName)
+	deleteLater(t, "configmap", sliceGatewayNS, "conf-gwover-keys")
+	gw := gatewayAddress(t, gwName)
+
+	agent, canary := agentName("gwover"), agentName("gwover-canary")
+	route, _ := compiler.ServingRouteName(agent)
+	canaryRoute, _ := compiler.ServingRouteName(canary)
+	host, canaryHost := sliceHost(agent), sliceHost(canary)
+	if err := apply(t, routeOn(route, gwName, host, "conf-rev1")+"\n---\n"+
+		routeOn(canaryRoute, gwName, canaryHost, "conf-rev1")); err != nil {
+		t.Fatal(err)
+	}
+	deleteLater(t, "httproute", sliceNS, route)
+	deleteLater(t, "httproute", sliceNS, canaryRoute)
+	p := authPolicy(t, agent)
+	applyObject(t, p)
+	deleteLater(t, "agentgatewaypolicy", sliceNS, p.GetName())
+	requireAttached(t, p.GetName())
+	awaitCode(t, gw, servingPort, host, cardPath, keyGwOver, 401, []int{404, 200}, 2*time.Minute,
+		"the Gateway's key on the route under <agent>-auth alone: 401, not in the route's key set")
+	expectCode(t, gw, servingPort, host, cardPath, keyTeam, 200, "keyTeam on the route under <agent>-auth alone")
+	awaitCode(t, gw, servingPort, canaryHost, cardPath, "", 200, []int{404}, 2*time.Minute,
+		"the canary route, with no policy on it or on its Gateway: 200")
+
+	gp := authPolicy(t, agentName("gwover-gw"))
+	gp.SetNamespace(sliceGatewayNS)
+	gp.SetName("conf-gwover-" + runID)
+	if err := unstructured.SetNestedSlice(gp.Object, []any{map[string]any{
+		"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": gwName}}, "spec", "targetRefs"); err != nil {
+		t.Fatal(err)
+	}
+	if err := unstructured.SetNestedStringSlice(gp.Object, []string{`apiKey.group == "gwgroup"`},
+		"spec", "traffic", "authorization", "policy", "matchExpressions"); err != nil {
+		t.Fatal(err)
+	}
+	if err := unstructured.SetNestedField(gp.Object, "Override", "spec", "strategy", "inheritance"); err != nil {
+		t.Fatal(err)
+	}
+	applyObject(t, gp)
+	deleteLater(t, "agentgatewaypolicy", sliceGatewayNS, gp.GetName())
+	if cs, _ := condsIn(t, sliceGatewayNS, "agentgatewaypolicy", gp.GetName()); cs["Attached"] != "True" {
+		t.Fatalf("the Gateway-level Override policy did not attach: %v", cs)
+	}
+	landed := awaitOffCode(t, gw, canaryHost, 200, 2*time.Minute,
+		"the canary route's anonymous answer, once the Gateway-level Override policy enforces")
+	t.Logf("the canary's anonymous answer went from 200 to %d, so the Override policy enforces", landed)
+	over := codes(t, 5, gw, servingPort, host, keyGwOver)
+	team := codes(t, 5, gw, servingPort, host, keyTeam)
+	t.Logf("beside <agent>-auth and a Gateway-level Override policy: the Gateway's key %v, keyTeam %v", over, team)
+	if !all(over, 200) || !all(team, 401) {
+		t.Errorf("Override did not take the route: the Gateway's key got %v and keyTeam %v, where the CRD's "+
+			"description predicts 200 and 401. Design 03 A75's W1 flags an Override policy on a served "+
+			"Agent on that description: revisit it", over, team)
+	}
+}

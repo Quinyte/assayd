@@ -28,36 +28,21 @@ import (
 // policies carrying `assayd.dev/agent`, and a foreign policy is exactly one it
 // may not hold (GatewayWatchCacheOptions).
 //
-// Route-level targets only. A `traffic` policy on the Gateway or a
-// ListenerSet is neither detected nor claimed harmless (§3.2); whether it
-// merges with the route's is unmeasured.
+// Route-level targets only. A policy on the assayd Gateway is A75's
+// (authabove.go): read on every ProbingAfter pass and again after a 401, it
+// holds a transaction, and on a served Agent it may be W1's, rather than being
+// reported here. Measured on 1.5.0: for A74 case 7's shape
+// the route's authentication replaces the Gateway's, but authorization rules
+// merge across the two, so a Gateway-level Allow widens the route (§3.2, A75).
 func (r *AgentReconciler) foreignTrafficPolicies(ctx context.Context, agent *assaydv1alpha1.Agent,
 	runNS, route string) ([]string, error) {
 	own, err := compiler.AuthPolicyName(agent.Name)
 	if err != nil {
 		return nil, err
 	}
-	// Paged, so one pass holds at most a page of policies at a time. No label
-	// or field selector can narrow it: a foreign policy carries no label this
-	// operator chose, and a CRD serves no field selector but name and
-	// namespace (A72 gives the cost).
-	var items []unstructured.Unstructured
-	cont := ""
-	for {
-		list := &unstructured.UnstructuredList{}
-		list.SetAPIVersion(compiler.PolicyAPIVersion)
-		list.SetKind(compiler.PolicyKind + "List")
-		if err := r.reader().List(ctx, list, client.InNamespace(runNS), client.Limit(policyPageSize),
-			client.Continue(cont)); err != nil {
-			if apierrors.IsNotFound(err) {
-				return nil, nil
-			}
-			return nil, fmt.Errorf("list the policies in %s to find a foreign traffic policy: %w", runNS, err)
-		}
-		items = append(items, list.Items...)
-		if cont = list.GetContinue(); cont == "" {
-			break
-		}
+	items, err := r.listPolicies(ctx, runNS, "a foreign traffic policy", true)
+	if err != nil {
+		return nil, err
 	}
 	if len(items) == 0 {
 		return nil, nil
@@ -85,6 +70,36 @@ func (r *AgentReconciler) foreignTrafficPolicies(ctx context.Context, agent *ass
 
 // policyPageSize is how many policies one list call returns.
 const policyPageSize = 250
+
+// listPolicies lists every AgentgatewayPolicy in ns, live, through the
+// uncached reader, and paged, so one pass holds at most a page at a time. No
+// label or field selector can narrow it: a policy this operator did not emit
+// carries no label it chose, and a CRD serves no field selector but name and
+// namespace (A72 gives the cost). With notServedIsEmpty, a kind that is not
+// served lists nothing, as §3.2's foreign detection reads it; without, as
+// A75's read needs, it is an error like any other, because a list that cannot
+// be made holds there. `purpose` says what the list is for, in the error.
+func (r *AgentReconciler) listPolicies(ctx context.Context, ns, purpose string,
+	notServedIsEmpty bool) ([]unstructured.Unstructured, error) {
+	var items []unstructured.Unstructured
+	cont := ""
+	for {
+		list := &unstructured.UnstructuredList{}
+		list.SetAPIVersion(compiler.PolicyAPIVersion)
+		list.SetKind(compiler.PolicyKind + "List")
+		if err := r.reader().List(ctx, list, client.InNamespace(ns), client.Limit(policyPageSize),
+			client.Continue(cont)); err != nil {
+			if notServedIsEmpty && apierrors.IsNotFound(err) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("list the policies in %s to find %s: %w", ns, purpose, err)
+		}
+		items = append(items, list.Items...)
+		if cont = list.GetContinue(); cont == "" {
+			return items, nil
+		}
+	}
+}
 
 // servingRouteLabels are the labels a selector is matched against: the stored
 // route's, or, while it does not exist, the provenance labels every serving

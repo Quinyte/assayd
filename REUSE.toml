@@ -53,7 +53,7 @@ SPDX-License-Identifier = "Apache-2.0"
 # artefact with our copyright line would be a false claim — which is precisely
 # the kind of thing a licence scanner exists to catch.
 [[annotations]]
-path = ["test/conformance/testdata/agentgateway-crds-1.4.1.tgz"]
+path = ["test/conformance/testdata/agentgateway-crds-1.4.1.tgz", "test/conformance/testdata/agentgateway-crds-1.5.0.tgz"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "Solo.io, Inc."
 SPDX-License-Identifier = "Apache-2.0"

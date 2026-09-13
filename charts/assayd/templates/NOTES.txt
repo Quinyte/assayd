@@ -101,6 +101,21 @@ applies to it:
 No NetworkPolicy is materialized in any namespace either, so an agent Pod
 remains reachable directly and anything the gateway would apply is bypassable.
 
+A policy of your own on that Gateway can hold every Agent (design 03 A75). While
+an `AgentgatewayPolicy` in the Gateway's namespace targets it on listener `http`,
+or on another listener on its port that can take the Agent's host, and sets
+anything that could answer an anonymous request with 401 or a status of its
+choosing (authentication, authorization, extAuth, extProc, directResponse,
+transformation and more: design 03 §3.2's field table), or
+`strategy.inheritance: Override`, or while the Gateway's
+`spec.allowedListeners.namespaces.from` is anything but `None`, no new Agent is
+published and no lock is recorded: `PolicyApplyIncomplete`, reason
+`GatewayAuthPolicy`, and each held Agent pages until you remove or rescope it.
+A served Agent keeps serving; one beside such a policy that sets
+`authorization` or `Override` reports `GatewayAuthPolicy` too, because its route
+then admits what the Gateway's rule allows. The operator reads the Gateway by
+name, which this chart's `-gateway-labels` Role grants.
+
 The Gateway object itself is yours to create — this chart ships no agentgateway
 subchart. Its listener must admit the run namespaces, or every route is rejected
 and every request 404s with no other signal:

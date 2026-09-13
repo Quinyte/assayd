@@ -63,11 +63,34 @@ type stubProber struct {
 	// foreign makes a policy the operator did not emit answer 401 at any
 	// path, as a foreign traffic policy on the route would (§3.2).
 	foreign map[string]bool
+	// above makes the probe answer 401 at any path while any of the named
+	// policies exists: an authenticating policy on the Gateway or on a
+	// ListenerSet refuses an anonymous request on a route with no -auth, as
+	// A74 case 7 measured (A75).
+	above map[string][]client.ObjectKey
+	// beforeProbe runs once, before the next probe of an Agent answers.
+	beforeProbe map[string]func()
 }
 
 func newStubProber() *stubProber {
 	return &stubProber{held: map[string]bool{}, probes: map[string]int{}, last: map[string]int{},
-		override: map[string]int{}, servedBy: map[string]string{}, foreign: map[string]bool{}}
+		override: map[string]int{}, servedBy: map[string]string{}, foreign: map[string]bool{},
+		above: map[string][]client.ObjectKey{}, beforeProbe: map[string]func(){}}
+}
+
+// refuseWhile makes every probe of agent answer 401 while the policy at key
+// exists, as a Gateway-level auth policy does (A74 case 7).
+func (s *stubProber) refuseWhile(agent string, key client.ObjectKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.above[agent] = append(s.above[agent], key)
+}
+
+// onNextProbe runs fn once, before the next probe of agent is answered.
+func (s *stubProber) onNextProbe(agent string, fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeProbe[agent] = fn
 }
 
 // foreignAnswers makes a foreign policy answer every probe of agent with 401.
@@ -122,6 +145,13 @@ func (s *stubProber) Probe(ctx context.Context, req controller.AuthProbeRequest)
 	if err != nil {
 		return controller.AuthProbeAnswer{}, err
 	}
+	s.mu.Lock()
+	hook := s.beforeProbe[name]
+	delete(s.beforeProbe, name)
+	s.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	code, digest, err := s.answer(ctx, name, ns, u.Path)
 	s.mu.Lock()
 	s.probes[name]++
@@ -146,9 +176,15 @@ func (s *stubProber) answer(ctx context.Context, name, ns, path string) (int, st
 	}
 	s.mu.Lock()
 	held, override, servedBy, foreign := s.held[name], s.override[name], s.servedBy[name], s.foreign[name]
+	above := append([]client.ObjectKey(nil), s.above[name]...)
 	s.mu.Unlock()
 	if foreign {
 		return 401, "", nil
+	}
+	for _, key := range above {
+		if err := k8s.Get(ctx, key, controller.NewAgentgatewayPolicy()); err == nil {
+			return 401, "", nil
+		}
 	}
 	stored := controller.NewAgentgatewayPolicy()
 	if err := k8s.Get(ctx, client.ObjectKeyFromObject(golden), stored); err == nil {

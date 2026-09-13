@@ -252,6 +252,54 @@ func TestTheNackReadIsARoleInTheGatewaysNamespace(t *testing.T) {
 	}
 }
 
+// Design 03 A75: the operator reads the assayd Gateway, its labels, listeners
+// and allowedListeners, before it credits a 401, so the chart grants `get` on
+// that one Gateway, by name, in its namespace, and nothing more. Nothing reads
+// a ListenerSet, so no role grants one.
+func TestTheGatewayLabelReadIsOneGatewayInItsNamespace(t *testing.T) {
+	const role = "assayd-agent-operator-gateway-labels"
+	if r := byName(render(t), "Role")[role]; r != nil {
+		t.Error("gateway.enabled is false and the chart still grants a read of the Gateway")
+	}
+	docs := render(t, "--set", "gateway.enabled=true", "--set", "gateway.servingUrl=http://gw.example:8080",
+		"--set", "gateway.namespace=gw-elsewhere", "--set", "gateway.name=edge")
+	r := byName(docs, "Role")[role]
+	if r == nil {
+		t.Fatalf("gateway.enabled is true and no Role %s is rendered, so a policy that selects the "+
+			"Gateway by label is reported as unreadable and holds every -auth transaction", role)
+	}
+	if got := toStr(dig(r, "metadata")["namespace"]); got != "gw-elsewhere" {
+		t.Errorf("the Role is in %q, want the Gateway's namespace", got)
+	}
+	want := []any{map[string]any{"apiGroups": []any{"gateway.networking.k8s.io"}, "resources": []any{"gateways"},
+		"resourceNames": []any{"edge"}, "verbs": []any{"get"}}}
+	if !reflect.DeepEqual(r["rules"], want) {
+		t.Errorf("the Role grants %v, want exactly get on the one Gateway the operator is told of", r["rules"])
+	}
+	b := byName(docs, "RoleBinding")[role]
+	if b == nil || toStr(dig(b, "roleRef")["name"]) != role || toStr(dig(b, "metadata")["namespace"]) != "gw-elsewhere" {
+		t.Fatalf("no RoleBinding of %s in the Gateway's namespace: %v", role, b)
+	}
+	verbs := map[string][]string{}
+	for _, cr := range kindsOf(docs, "ClusterRole") {
+		for _, x := range toList(cr["rules"]) {
+			rule, _ := x.(map[string]any)
+			for _, g := range toStrings(rule["apiGroups"]) {
+				for _, res := range toStrings(rule["resources"]) {
+					verbs[g+"/"+res] = append(verbs[g+"/"+res], toStrings(rule["verbs"])...)
+				}
+			}
+		}
+	}
+	if got, ok := verbs["gateway.networking.k8s.io/listenersets"]; ok {
+		t.Errorf("the ClusterRole grants %v on listenersets; A75 reads no ListenerSet, only the "+
+			"Gateway's allowedListeners", got)
+	}
+	if got, ok := verbs["gateway.networking.k8s.io/gateways"]; ok {
+		t.Errorf("the ClusterRole grants %v on gateways; the read is the one Gateway, in the Role", got)
+	}
+}
+
 // gateway.servingUrl reaches the operator as --gateway-serving-url, and only
 // when set: nothing requires it until the compiler runs (design 03 §3.3.3).
 func TestTheServingURLReachesTheOperatorOnlyWhenSet(t *testing.T) {

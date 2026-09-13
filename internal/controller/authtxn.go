@@ -82,6 +82,11 @@ const (
 	ReasonPolicyWriteFailed         = "PolicyWriteFailed"
 	ReasonAuthTargetUnrenderable    = "AuthTargetUnrenderable"
 	ReasonAuthRecordNotKept         = "AuthRecordNotKept"
+	// GatewayAuthPolicy: a Create or Lock holds at ProbingAfter while
+	// something on the assayd Gateway could answer the probe; and, on
+	// GovernanceSkipped and PolicyApplyIncomplete, a served API-key Agent
+	// beside a Gateway-level policy that could widen its route (A75, W1).
+	ReasonGatewayAuthPolicy = "GatewayAuthPolicy"
 	// Ready, while a `Create` is short of `Served` and before its deadline.
 	ReasonAuthEnforcementPending = "AuthEnforcementPending"
 	// GovernanceSkipped (§3.1).
@@ -285,8 +290,96 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 	}
 	if err == nil {
 		reportForeign(agent, runNS, status, conds, &out)
+		r.reportAboveServed(ctx, agent, status, conds, &out)
 	}
 	return out, err
+}
+
+// reportAboveServed is A75's report on an Agent already served, with no
+// transaction in the slot, while something on the Gateway would hold a new
+// -auth transaction. The Agent is not held and its route is never withdrawn:
+// its 401 was credited while nothing counted, and a re-creation of its route or
+// its policy is a `Create` or a `Lock`, which holds.
+//
+//   - W1, an API-key Agent beside a counting policy that could widen its route,
+//     because it sets traffic.authorization, whose rules merge with the route's
+//     (measured, A75), or strategy.inheritance: Override: GovernanceSkipped and
+//     PolicyApplyIncomplete, both reason GatewayAuthPolicy, and Ready withheld,
+//     Degraded, by §3.3.1's aggregation for a served Agent. It pages.
+//   - Any other cause: a note on GovernanceSkipped's message, which keeps its
+//     status and reason.
+//
+// One Gateway read and one policy list per pass of a served Agent (A75's scale
+// note).
+func (r *AgentReconciler) reportAboveServed(ctx context.Context, agent *assaydv1alpha1.Agent,
+	status *assaydv1alpha1.AgentStatus, conds *conditionSet, out *gatewayOutcome) {
+	auth := status.Auth
+	if !r.Gateway.Enabled || auth == nil || auth.Mode == "" || auth.Transaction != nil {
+		return
+	}
+	above := r.gatewayAuthPolicies(ctx, r.Gateway.Hostname(agent.Name, agent.Namespace))
+	if !above.stands() {
+		return
+	}
+	if auth.Mode == string(compiler.AuthModeAPIKey) && len(above.widening) > 0 {
+		msg := above.wideningMessage(r.Gateway)
+		if c, ok := conds.get(assaydv1alpha1.CondGovernanceSkipped); ok && c.Status == metav1.ConditionTrue &&
+			c.Reason == ReasonForeignTrafficPolicy {
+			conds.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, c.Reason,
+				c.Message+" | "+ReasonGatewayAuthPolicy+": "+msg)
+		} else {
+			conds.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonGatewayAuthPolicy, msg)
+		}
+		raiseIncomplete(conds, ReasonGatewayAuthPolicy, msg)
+		withholdInOrder(out, ReasonGatewayAuthPolicy, msg)
+		out.served = true
+		return
+	}
+	if c, ok := conds.get(assaydv1alpha1.CondGovernanceSkipped); ok {
+		conds.set(assaydv1alpha1.CondGovernanceSkipped, c.Status, c.Reason,
+			c.Message+" | "+above.servedNote(r.Gateway, auth.Mode))
+	}
+}
+
+// incompleteOrder is A75's order among PolicyApplyIncomplete's reasons that
+// can stand together: the first is the condition's reason, and the message
+// names every one. A reason not listed, a deadline's or a NACK's, keeps the
+// condition's reason, and the others are appended to it.
+var incompleteOrder = []string{ReasonAuthPolicyMissing, ReasonForeignTrafficPolicy, ReasonGatewayAuthPolicy}
+
+func incompleteRank(reason string) int {
+	for i, r := range incompleteOrder {
+		if r == reason {
+			return i
+		}
+	}
+	return -1
+}
+
+// raiseIncomplete sets PolicyApplyIncomplete=True for reason, in
+// incompleteOrder beside whatever this pass already raised.
+func raiseIncomplete(conds *conditionSet, reason, msg string) {
+	c, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete)
+	switch {
+	case !ok:
+		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, reason, msg)
+	case incompleteRank(reason) >= 0 && incompleteRank(c.Reason) > incompleteRank(reason):
+		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, reason,
+			msg+" | "+c.Reason+": "+c.Message)
+	default:
+		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, c.Reason,
+			c.Message+" | "+reason+": "+msg)
+	}
+}
+
+// withholdInOrder makes reason the withhold for Ready when nothing withholds
+// it yet, or when it outranks the one that does: Ready's reason follows
+// incompleteOrder too (A75).
+func withholdInOrder(out *gatewayOutcome, reason, msg string) {
+	w := out.withhold
+	if w == nil || (incompleteRank(reason) >= 0 && incompleteRank(w.reason) > incompleteRank(reason)) {
+		out.withhold = &failure{reason, msg}
+	}
 }
 
 // reportForeign is §3.2's report of a `traffic` policy on this Agent's route
@@ -317,19 +410,12 @@ func reportForeign(agent *assaydv1alpha1.Agent, runNS string, status *assaydv1al
 			"the operator then writes this Agent's own policy there, for a served Agent by the Lock "+
 			"of a missing policy", runNS, own)
 	}
-	if c, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); ok {
-		// One condition carries every failing path (§3.3.1).
-		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, c.Reason,
-			c.Message+" | "+ReasonForeignTrafficPolicy+": "+msg)
-	} else {
-		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, ReasonForeignTrafficPolicy, msg)
-	}
+	// One condition carries every failing path (§3.3.1), in A75's order.
+	raiseIncomplete(conds, ReasonForeignTrafficPolicy, msg)
 	if tx := authTransaction(status); tx == nil || tx.Kind != TxAdopt {
 		conds.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonForeignTrafficPolicy, msg)
 	}
-	if out.withhold == nil {
-		out.withhold = &failure{ReasonForeignTrafficPolicy, msg}
-	}
+	withholdInOrder(out, ReasonForeignTrafficPolicy, msg)
 	if auth := status.Auth; auth != nil && (auth.Mode != "" ||
 		(auth.Transaction != nil && (auth.Transaction.Kind == TxAdopt || auth.Transaction.Kind == TxLock))) {
 		out.served = true
@@ -855,8 +941,10 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 	now := time.Now()
 	deadlinePassed := tx.Deadline != nil && !now.Before(tx.Deadline.Time)
 	var unmet string
-	published := false
+	published, held := false, false
+	var above gatewayAuth
 	requeue := time.Duration(0)
+	policyName, _ := compiler.AuthPolicyName(agent.Name)
 
 	for step := 0; ; step++ {
 		if step == 12 {
@@ -948,12 +1036,22 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 				}
 				continue
 			}
+			// A75: the Gateway is read on every ProbingAfter pass, so the hold
+			// is reported, and cleared, from what stands now, whatever the probe
+			// answers; and it is read again after a 401, and only that second
+			// read can let the 401 through.
+			host := r.Gateway.Hostname(agent.Name, agent.Namespace)
+			above = r.gatewayAuthPolicies(ctx, host)
+			held = above.stands()
 			if len(out.foreign) > 0 {
 				// A foreign traffic policy could answer the 401 as well as
 				// this Agent's, at random: no answer is taken, and the route
 				// is not published while it stands (§3.2).
 				unmet = "a traffic policy the operator did not emit targets the route, so no probe " +
 					"answer is taken: " + strings.Join(out.foreign, ", ")
+				if held {
+					unmet += "; and " + above.holdMessage(r.Gateway, runNS, policyName, false)
+				}
 				requeue = AuthProbeInterval
 				break
 			}
@@ -964,8 +1062,19 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 				tx.Probe.After = &code
 			}
 			// A route with no backend answers 500, never 401, so a 401 here is
-			// the route's -auth, on the replica that answered (§3.3.3).
-			if perr == nil && answer.Code == 401 {
+			// the route's -auth, on the replica that answered (§3.3.3), unless
+			// something on the Gateway answered it (A75). The read that decides
+			// is made AFTER the answer: a policy that could have caused this 401
+			// was written before it, so the read sees it. What it misses is a
+			// policy written and deleted between the probe and the read, and one
+			// deleted whose removal the proxy has not applied yet, for a window
+			// nothing here measures.
+			got401 := perr == nil && answer.Code == 401
+			if got401 {
+				above = r.gatewayAuthPolicies(ctx, host)
+				held = above.stands()
+			}
+			if got401 && !held {
 				tx.Stage = StagePublishing
 				if err := r.persistStatus(ctx, agent, status); err != nil {
 					return out, err
@@ -976,6 +1085,12 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 				return out, err
 			}
 			unmet = describeProbe(agent, answer, perr)
+			switch {
+			case held && got401:
+				unmet = above.holdMessage(r.Gateway, runNS, policyName, true)
+			case held:
+				unmet += "; and " + above.holdMessage(r.Gateway, runNS, policyName, false)
+			}
 			requeue = AuthProbeInterval
 			if deadlinePassed {
 				requeue = CardRetryInterval
@@ -1106,6 +1221,13 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 		if out.withhold == nil {
 			out.withhold = &failure{ReasonAuthEnforcementUnverified, full}
 		}
+	} else if held {
+		// A75: raised at once, not at the deadline, because nothing but the
+		// policy's removal lets the Create go on.
+		full := msg + ". The route stays prepared and unpublished, and the Create holds in " +
+			"ProbingAfter until it goes (design 03 §3.3.3)"
+		raiseIncomplete(conds, ReasonGatewayAuthPolicy, full)
+		withholdInOrder(&out, ReasonGatewayAuthPolicy, full)
 	} else if !published && out.withhold == nil {
 		out.withhold = &failure{ReasonAuthEnforcementPending, msg + ". The route is not " +
 			"published until an anonymous request through it gets 401 (design 03 §3.3.3)"}
@@ -1366,7 +1488,10 @@ func (r *AgentReconciler) runLock(ctx context.Context, agent *assaydv1alpha1.Age
 	now := time.Now()
 	deadlinePassed := tx.Deadline != nil && !now.Before(tx.Deadline.Time)
 	var unmet string
+	held := false
+	var above gatewayAuth
 	requeue := time.Duration(0)
+	policyName, _ := compiler.AuthPolicyName(agent.Name)
 steps:
 	for step := 0; ; step++ {
 		if step == 12 {
@@ -1445,11 +1570,19 @@ steps:
 				}
 				continue
 			}
+			// A75: read on every ProbingAfter pass, and again after a 401 that
+			// would be credited, as Create reads it.
+			host := r.Gateway.Hostname(agent.Name, agent.Namespace)
+			above = r.gatewayAuthPolicies(ctx, host)
+			held = above.stands()
 			if len(out.foreign) > 0 {
 				// Two same-level traffic policies resolve at random, so a 401
 				// says nothing about which one answered (§3.2).
 				unmet = "a traffic policy the operator did not emit targets the route, so no probe " +
 					"answer is taken: " + strings.Join(out.foreign, ", ")
+				if held {
+					unmet += "; and " + above.holdMessage(r.Gateway, runNS, policyName, false)
+				}
 				requeue = AuthProbeInterval
 				break steps
 			}
@@ -1467,17 +1600,31 @@ steps:
 			// while status.cards records a digest for a revision it serves.
 			attributed, fetchedAt, why := cardAttributes(agent, status, rt)
 			observed, beforeRev := tx.BeforeObserved, tx.BeforeRevision
-			if perr == nil && answer.Code == 401 && (observed || attributed) {
-				return r.lockServed(ctx, agent, runNS, name, target, status, conds, out, reCreate,
-					observed, beforeRev, fetchedAt)
+			creditable := perr == nil && answer.Code == 401 && (observed || attributed)
+			if creditable {
+				// The read after the answer gates both attributions: the card
+				// digest, and an observed 200, whose transition may be the
+				// Gateway's rather than <agent>-auth's (A75).
+				above = r.gatewayAuthPolicies(ctx, host)
+				if held = above.stands(); !held {
+					return r.lockServed(ctx, agent, runNS, name, target, status, conds, out, reCreate,
+						observed, beforeRev, fetchedAt)
+				}
 			}
 			if err := r.persistStatus(ctx, agent, status); err != nil {
 				return out, err
 			}
-			unmet = describeProbe(agent, answer, perr)
-			if perr == nil && answer.Code == 401 {
+			switch {
+			case creditable:
+				unmet = above.holdMessage(r.Gateway, runNS, policyName, true)
+			case perr == nil && answer.Code == 401:
 				unmet = "the last anonymous probe got a 401 that cannot be attributed, so the " +
 					"transition is not observed: " + why
+			default:
+				unmet = describeProbe(agent, answer, perr)
+			}
+			if held && !creditable {
+				unmet += "; and " + above.holdMessage(r.Gateway, runNS, policyName, false)
 			}
 			requeue = AuthProbeInterval
 			if deadlinePassed {
@@ -1503,7 +1650,6 @@ steps:
 		deadlineNote = fmt.Sprintf(". Its deadline, %s, has passed, and the Lock keeps working",
 			tx.Deadline.UTC().Format(time.RFC3339))
 	}
-	policyName, _ := compiler.AuthPolicyName(agent.Name)
 	if reCreate {
 		msg := fmt.Sprintf("status.auth records this Agent as served under apikey, and its policy %s/%s "+
 			"was missing, so its route served with no key. It has been re-created from status.auth, "+
@@ -1511,6 +1657,10 @@ steps:
 			"attributed (design 03 §3.3.3, the Lock of a missing policy). The route is not withdrawn. "+
 			"The Lock is in stage %s: %s%s", runNS, policyName, tx.Stage, unmet, deadlineNote)
 		conds.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonAuthPolicyMissing, msg)
+		// A75's order puts AuthPolicyMissing first, before and at the deadline:
+		// the route is open with no policy, which outranks a 401 that cannot be
+		// credited. The message carries the hold, because the stage's unmet
+		// condition is it.
 		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, ReasonAuthPolicyMissing, msg)
 		if out.withhold == nil {
 			out.withhold = &failure{ReasonAuthPolicyMissing, msg}
@@ -1527,6 +1677,13 @@ steps:
 		if out.withhold == nil {
 			out.withhold = &failure{ReasonAuthLockUnverified, msg}
 		}
+	} else if held {
+		// A75: raised at once, and Ready withheld with it, Degraded, as
+		// §3.3.1's aggregation makes every PolicyApplyIncomplete on a served
+		// Agent. Unlike a J2 stall short of its deadline, this one ends only
+		// when someone removes or rescopes the policy, so it pages.
+		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, ReasonGatewayAuthPolicy, msg)
+		withholdInOrder(&out, ReasonGatewayAuthPolicy, msg)
 	}
 	return out, nil
 }

@@ -170,6 +170,28 @@ func TestMain(m *testing.M) {
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: operatorNamespace}})),
 		"create the operator namespace")
 
+	// The assayd Gateway every gateway-enabled reconciler here names. The
+	// operator reads it before it credits a 401 (design 03 A75), and a Gateway
+	// it cannot read holds every -auth transaction, so the suite creates the
+	// one hack/e2e.sh does: the serving listener and `tools`.
+	must(client.IgnoreAlreadyExists(k8s.Create(context.Background(),
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: suiteGatewayNamespace}})),
+		"create the Gateway's namespace")
+	// Two more listeners on the serving port, which A75's target rule reads:
+	// `edge`, whose hostname matches every Agent's here, and `elsewhere`,
+	// whose hostname matches none.
+	edge, elsewhere := gatewayv1.Hostname("*."+controller.DefaultGatewayHostnameSuffix), gatewayv1.Hostname("other.example.com")
+	must(client.IgnoreAlreadyExists(k8s.Create(context.Background(), &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: suiteGatewayName, Namespace: suiteGatewayNamespace,
+			Labels: map[string]string{suiteGatewayLabel: "suite"}},
+		Spec: gatewayv1.GatewaySpec{GatewayClassName: "agentgateway", Listeners: []gatewayv1.Listener{
+			{Name: gatewayv1.SectionName(controller.GatewayListenerName), Port: 8080, Protocol: gatewayv1.HTTPProtocolType},
+			{Name: "tools", Port: 8081, Protocol: gatewayv1.HTTPProtocolType},
+			{Name: "edge", Port: 8080, Protocol: gatewayv1.HTTPProtocolType, Hostname: &edge},
+			{Name: "elsewhere", Port: 8080, Protocol: gatewayv1.HTTPProtocolType, Hostname: &elsewhere},
+		}},
+	})), "create the assayd Gateway")
+
 	code := m.Run()
 	_ = os.RemoveAll(agentgatewayCRDs)
 
@@ -192,6 +214,16 @@ const operatorNamespace = "assayd-system"
 // runNS is the run namespace an Agent in ns gets its workload and material in
 // (design 02 A42). Tests that look for either look there.
 func runNS(ns string) string { return controller.RunNamespaceName(ns) }
+
+// The assayd Gateway TestMain creates, which every gateway-enabled
+// reconciler in this suite names (newGatewayReconciler's callers).
+const (
+	suiteGatewayNamespace = "assayd-gateway"
+	suiteGatewayName      = "assayd"
+	// suiteGatewayLabel is a label the suite Gateway carries, for a policy
+	// that selects it by targetSelectors (design 03 A75).
+	suiteGatewayLabel = "assayd.dev/test-gateway"
+)
 
 // labelAuthorityPresent is the envtest stand-in for the admission-policy check:
 // the chart is not installed here, so the reconciler is told the policies
