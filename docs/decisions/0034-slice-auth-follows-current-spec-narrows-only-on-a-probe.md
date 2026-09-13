@@ -92,8 +92,8 @@ Nothing in this amendment is implemented.
 **W1, a served Agent whose route a Gateway-level rule can widen stops reading `Governed`. The human decided it on 2026-09-13, on design 03 A75's measurement.** A Gateway-level `Allow` rule was measured admitting, on a route, a group its `<agent>-auth` refuses: `authorization` rules merge across attachment points. So, for an Agent already `Served`:
 
 - its route keeps serving and is never withdrawn;
-- if a counting Gateway-level policy sets any `authorization`, or `strategy.inheritance: Override`, the Agent reads `GovernanceSkipped=True` and `PolicyApplyIncomplete=True`, both reason `GatewayAuthPolicy`, and it pages, as intended. Both messages name the policy, and say the route admits whatever the Gateway-level authorization rule allows, beyond its own `<agent>-auth`, until the policy is removed, or rescoped off the Gateway or off its serving listener. `Ready` follows design 03 §3.3.1's aggregation for `PolicyApplyIncomplete` on a served Agent, which withholds it: `Degraded`;
-- a counting policy that sets only authentication, and no authorization, is replaced by the route's authentication, which is A74 case 7's measured shape. It stays a note on `GovernanceSkipped`'s message.
+- a counting Gateway-level policy stays a note on `GovernanceSkipped`'s message only when it sets authentication alone: every counting field it sets is `apiKeyAuthentication`, `basicAuthentication` or `jwtAuthentication`, its `phase` is unset or `PostRouting`, and it does not set `Override`. The route's authentication replaces it, which is A74 case 7's measured shape;
+- any other counting Gateway-level policy fails closed. The Agent reads `GovernanceSkipped=True` and `PolicyApplyIncomplete=True`, both reason `GatewayAuthPolicy`, and it pages, as intended. Both messages name the policy, and say it cannot be ruled out that the policy widens or bypasses the route's authentication, until it is removed, or rescoped off the Gateway or off its serving listener. For `authorization` and `Override` the widening is measured; for the rest, a transformation, a header modifier or an external processor that could hand the route a credential, it is unmeasured, and the message says so. `Ready` follows design 03 §3.3.1's aggregation for `PolicyApplyIncomplete` on a served Agent, which withholds it: `Degraded`.
 
 The merge is asserted, not assumed: `TestSliceAGatewayLevelAllowRuleWidensTheRoute` fails if a later agentgateway stops merging, and then this amendment is revisited.
 
@@ -101,6 +101,6 @@ The merge is asserted, not assumed: `TestSliceAGatewayLevelAllowRuleWidensTheRou
 
 - a held J2 or K2 `Lock` withholds `Ready` at once, so that design 03 §3.3.1's aggregation holds for it;
 - which `spec` fields count, in A75's table, with every field the table does not call harmless counting;
-- a Gateway read, or a policy list, that fails holds, like any other cause.
+- a Gateway read, or a policy list, that fails holds a transaction, like any other cause. On a served Agent a failed list raises `GovernanceSkipped=True`, reason `GatewayAuthPolicy`, and does not page; a failed `get` whose list succeeded is a note. The human asked for a recommendation here and took the reviewer's.
 
 Design 03 A75 implements this amendment (`internal/controller/authabove.go`, `authtxn.go`). The opt-out is not built.

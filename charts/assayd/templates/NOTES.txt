@@ -111,9 +111,9 @@ transformation and more: design 03 §3.2's field table), or
 `spec.allowedListeners.namespaces.from` is anything but `None`, no new Agent is
 published and no lock is recorded: `PolicyApplyIncomplete`, reason
 `GatewayAuthPolicy`, and each held Agent pages until you remove or rescope it.
-A served Agent keeps serving; one beside such a policy that sets
-`authorization` or `Override` reports `GatewayAuthPolicy` too, because its route
-then admits what the Gateway's rule allows. The operator reads the Gateway by
+A served Agent keeps serving; one beside such a policy that sets anything but
+authentication alone reports `GatewayAuthPolicy` too, because it cannot be ruled
+out that the policy widens or bypasses the route's own authentication. The operator reads the Gateway by
 name, which this chart's `-gateway-labels` Role grants.
 
 The Gateway object itself is yours to create — this chart ships no agentgateway

@@ -21,9 +21,13 @@ import (
 	"testing"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	"sigs.k8s.io/yaml"
+
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // The two agentgateway CRD charts A75's classification is pinned against:
@@ -141,7 +145,7 @@ func design03FieldTable(t *testing.T) map[string]tableRow {
 
 // TestTheFieldClassificationIsDesign03sTable pins three things together:
 // design 03 A75's field table, the code's harmlessPolicyFields and
-// wideningPolicyFields, and every field of every classified `spec` section of
+// authenticationFields, and every field of every classified `spec` section of
 // both vendored CRDs. A field a CRD adds, one it renames, a section it adds,
 // or a table row the code disagrees with, fails here until a person decides.
 func TestTheFieldClassificationIsDesign03sTable(t *testing.T) {
@@ -149,20 +153,21 @@ func TestTheFieldClassificationIsDesign03sTable(t *testing.T) {
 	for field, r := range table {
 		switch r.class {
 		case "harmless":
-			if !harmlessPolicyFields[field] || wideningPolicyFields[field] {
+			if !harmlessPolicyFields[field] || authenticationFields[field] {
 				t.Errorf("design 03 calls %s harmless, and the code does not", field)
 			}
 		case "counts":
-			if harmlessPolicyFields[field] || wideningPolicyFields[field] {
-				t.Errorf("design 03 says %s counts and does not widen, and the code disagrees", field)
+			if harmlessPolicyFields[field] || authenticationFields[field] {
+				t.Errorf("design 03 says %s counts and, on a served Agent, is W1's, and the code disagrees", field)
 			}
-		case "counts, widens":
-			if harmlessPolicyFields[field] || !wideningPolicyFields[field] {
-				t.Errorf("design 03 says %s counts and widens a served route, and the code disagrees", field)
+		case "counts, replaced":
+			if harmlessPolicyFields[field] || !authenticationFields[field] {
+				t.Errorf("design 03 says %s counts and is replaced by <agent>-auth's authentication, "+
+					"and the code disagrees", field)
 			}
 		case "by value":
-			if field != "strategy.inheritance" {
-				t.Errorf("design 03 classifies %s by value; only strategy.inheritance is read so", field)
+			if field != "strategy.inheritance" && field != "traffic.phase" {
+				t.Errorf("design 03 classifies %s by value; only strategy.inheritance and traffic.phase are", field)
 			}
 		default:
 			t.Errorf("design 03's field table gives %s the class %q", field, r.class)
@@ -173,9 +178,9 @@ func TestTheFieldClassificationIsDesign03sTable(t *testing.T) {
 			t.Errorf("the code calls %s harmless, and design 03's table has no row for it", f)
 		}
 	}
-	for f := range wideningPolicyFields {
+	for f := range authenticationFields {
 		if _, ok := table[f]; !ok {
-			t.Errorf("the code says %s widens, and design 03's table has no row for it", f)
+			t.Errorf("the code says %s is replaced by <agent>-auth, and design 03's table has no row for it", f)
 		}
 	}
 	seen := map[string]map[string]bool{}
@@ -276,11 +281,23 @@ func TestWhichPoliciesCountAndWhichWiden(t *testing.T) {
 		{"a harmless frontend field", set("frontend", "accessLog", map[string]any{}), false, false},
 		{"a harmless backend field", set("backend", "health", map[string]any{}), false, false},
 		{"API-key authentication", set("traffic", "apiKeyAuthentication", map[string]any{}), true, false},
+		{"every authentication field", map[string]any{"traffic": map[string]any{"apiKeyAuthentication": map[string]any{},
+			"basicAuthentication": map[string]any{}, "jwtAuthentication": map[string]any{}}}, true, false},
+		{"authentication, PostRouting", map[string]any{"traffic": map[string]any{"apiKeyAuthentication": map[string]any{},
+			"phase": "PostRouting"}}, true, false},
+		{"authentication, PreRouting", map[string]any{"traffic": map[string]any{"apiKeyAuthentication": map[string]any{},
+			"phase": "PreRouting"}}, true, true},
+		{"PreRouting beside harmless fields", map[string]any{"traffic": map[string]any{"timeouts": map[string]any{},
+			"phase": "PreRouting"}}, false, false},
 		{"authorization", set("traffic", "authorization", map[string]any{}), true, true},
-		{"transformation", set("traffic", "transformation", map[string]any{}), true, false},
-		{"backend.extAuth", set("backend", "extAuth", map[string]any{}), true, false},
-		{"a field nothing has classified", set("traffic", "neverClassified", true), true, false},
-		{"a section nothing has classified", set("sidecar", "anything", true), true, false},
+		{"authentication and authorization", map[string]any{"traffic": map[string]any{"apiKeyAuthentication": map[string]any{},
+			"authorization": map[string]any{}}}, true, true},
+		{"transformation", set("traffic", "transformation", map[string]any{}), true, true},
+		{"headerModifiers", set("traffic", "headerModifiers", map[string]any{}), true, true},
+		{"extProc", set("traffic", "extProc", map[string]any{}), true, true},
+		{"backend.extAuth", set("backend", "extAuth", map[string]any{}), true, true},
+		{"a field nothing has classified", set("traffic", "neverClassified", true), true, true},
+		{"a section nothing has classified", set("sidecar", "anything", true), true, true},
 		{"Override beside harmless fields", map[string]any{
 			"traffic": map[string]any{"timeouts": map[string]any{}}, "strategy": map[string]any{"inheritance": "Override"}},
 			true, true},
@@ -385,6 +402,46 @@ func TestAGatewayAdmitsListenerSetsUnlessFromIsNone(t *testing.T) {
 	} {
 		if got := admitsListenerSets(c.gw); got != c.want {
 			t.Errorf("%s: admits=%q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestTheRevisionServiceCarriesNoAppProtocol pins the premise design 03 A75
+// classifies backend.ai and backend.mcp as harmless on: they apply only to a
+// backend of their type, and the Service the serving route names is never
+// one. An appProtocol on its port is how a Service would say otherwise.
+func TestTheRevisionServiceCarriesNoAppProtocol(t *testing.T) {
+	r := &AgentReconciler{}
+	agent := &assaydv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "pricer", Namespace: "team-a", UID: types.UID("uid-1")},
+		Spec: assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{
+			Image: "ghcr.io/acme/a@sha256:" + strings.Repeat("0", 64)}},
+	}
+	svc := r.serviceFor(agent, RunNamespaceName("team-a"), "abc1234567")
+	for _, p := range svc.Spec.Ports {
+		if p.AppProtocol != nil {
+			t.Errorf("the revision Service's port %s carries appProtocol %q. Design 03 A75 calls backend.ai "+
+				"and backend.mcp harmless because the serving route's backend is never of their type: "+
+				"revisit their rows in its field table", p.Name, *p.AppProtocol)
+		}
+	}
+}
+
+// TestBackendAIAndMCPMayNotTargetAService pins, in both vendored CRDs, the
+// CEL rules design 03 A75's field table cites for backend.ai and backend.mcp.
+func TestBackendAIAndMCPMayNotTargetAService(t *testing.T) {
+	for _, version := range chartVersions() {
+		for _, v := range vendoredPolicyCRD(t, version).Spec.Versions {
+			found := map[string]bool{}
+			for _, rule := range v.Schema.OpenAPIV3Schema.Properties["spec"].XValidations {
+				found[rule.Message] = true
+			}
+			for _, want := range []string{"backend.ai may not be used with a Service target",
+				"backend.mcp may not be used with a Service target"} {
+				if !found[want] {
+					t.Errorf("%s %s: the CEL rule %q is gone; design 03 A75's field table cites it", version, v.Name, want)
+				}
+			}
 		}
 	}
 }

@@ -283,13 +283,38 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 	if had {
 		conds.unset(assaydv1alpha1.CondPolicyApplyIncomplete)
 	}
+	// A75's hold is raised by this step alone, and assessGovernance derives
+	// nothing for it, so the hold of the last pass is taken from stored status,
+	// to be put back on the same terms: a lost race must not clear it, nor
+	// Ready's reason with it, for a pass in which nothing was credited.
+	if !had {
+		if c := meta.FindStatusCondition(agent.Status.Conditions, string(assaydv1alpha1.CondPolicyApplyIncomplete)); c != nil &&
+			c.Status == metav1.ConditionTrue && c.Reason == ReasonGatewayAuthPolicy {
+			pre, had = *c, true
+		}
+	}
 	out, err := r.gatewayStep(ctx, agent, runNS, status, conds, desire)
-	stillLock := func() bool { tx := authTransaction(status); return tx != nil && tx.Kind == TxLock }
-	if _, set := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); err != nil && had && !set && stillLock() {
+	inFlight := func() bool {
+		tx := authTransaction(status)
+		if tx == nil {
+			return false
+		}
+		if pre.Reason == ReasonGatewayAuthPolicy {
+			// Only while the transaction is still where the hold keeps it: a
+			// pass that credited and then lost a race has left ProbingAfter.
+			return (tx.Kind == TxCreate || tx.Kind == TxLock) && tx.Stage == StageProbingAfter
+		}
+		return tx.Kind == TxLock
+	}
+	if _, set := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); err != nil && had && !set && inFlight() {
 		conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, pre.Status, pre.Reason, pre.Message)
 	}
 	if err == nil {
 		reportForeign(agent, runNS, status, conds, &out)
+	}
+	if err == nil || transientRouteWrite(err) {
+		// It only reads, so a lost race does not stop it: W1 must not clear
+		// for a pass (A75).
 		r.reportAboveServed(ctx, agent, status, conds, &out)
 	}
 	return out, err
@@ -301,11 +326,14 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 // its 401 was credited while nothing counted, and a re-creation of its route or
 // its policy is a `Create` or a `Lock`, which holds.
 //
-//   - W1, an API-key Agent beside a counting policy that could widen its route,
-//     because it sets traffic.authorization, whose rules merge with the route's
-//     (measured, A75), or strategy.inheritance: Override: GovernanceSkipped and
+//   - W1, an API-key Agent beside a counting policy that sets more than
+//     authentication alone, or a PreRouting phase, or Override, which could
+//     widen or bypass its route's <agent>-auth: GovernanceSkipped and
 //     PolicyApplyIncomplete, both reason GatewayAuthPolicy, and Ready withheld,
 //     Degraded, by §3.3.1's aggregation for a served Agent. It pages.
+//   - A policy list that failed, beside an API-key Agent: GovernanceSkipped,
+//     reason GatewayAuthPolicy, and nothing else, so a transient API error does
+//     not page.
 //   - Any other cause: a note on GovernanceSkipped's message, which keeps its
 //     status and reason.
 //
@@ -335,10 +363,22 @@ func (r *AgentReconciler) reportAboveServed(ctx context.Context, agent *assaydv1
 		out.served = true
 		return
 	}
+	if auth.Mode == string(compiler.AuthModeAPIKey) && above.unlisted {
+		conds.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonGatewayAuthPolicy,
+			above.unlistedMessage())
+		return
+	}
 	if c, ok := conds.get(assaydv1alpha1.CondGovernanceSkipped); ok {
 		conds.set(assaydv1alpha1.CondGovernanceSkipped, c.Status, c.Reason,
 			c.Message+" | "+above.servedNote(r.Gateway, auth.Mode))
 	}
+}
+
+// heldAbove reports whether this pass's PolicyApplyIncomplete is A75's
+// hold, as reconcileGateway leaves it on a lost race.
+func heldAbove(conds *conditionSet) bool {
+	c, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete)
+	return ok && c.Reason == ReasonGatewayAuthPolicy
 }
 
 // incompleteOrder is A75's order among PolicyApplyIncomplete's reasons that
@@ -1063,16 +1103,20 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 			}
 			// A route with no backend answers 500, never 401, so a 401 here is
 			// the route's -auth, on the replica that answered (§3.3.3), unless
-			// something on the Gateway answered it (A75). The read that decides
-			// is made AFTER the answer: a policy that could have caused this 401
-			// was written before it, so the read sees it. What it misses is a
-			// policy written and deleted between the probe and the read, and one
-			// deleted whose removal the proxy has not applied yet, for a window
-			// nothing here measures.
+			// something on the Gateway answered it (A75). It is credited only
+			// when both of this pass's reads are clean: the one before the
+			// probe, and one AFTER the answer, which sees any policy written
+			// before the 401 it could have caused. What both miss is a policy
+			// written after the first read and deleted before the second, and
+			// one deleted whose removal the proxy has not applied yet, for a
+			// window nothing here measures.
 			got401 := perr == nil && answer.Code == 401
 			if got401 {
-				above = r.gatewayAuthPolicies(ctx, host)
-				held = above.stands()
+				again := r.gatewayAuthPolicies(ctx, host)
+				if again.stands() || !held {
+					above = again
+				}
+				held = held || again.stands()
 			}
 			if got401 && !held {
 				tx.Stage = StagePublishing
@@ -1602,11 +1646,15 @@ steps:
 			observed, beforeRev := tx.BeforeObserved, tx.BeforeRevision
 			creditable := perr == nil && answer.Code == 401 && (observed || attributed)
 			if creditable {
-				// The read after the answer gates both attributions: the card
-				// digest, and an observed 200, whose transition may be the
-				// Gateway's rather than <agent>-auth's (A75).
-				above = r.gatewayAuthPolicies(ctx, host)
-				if held = above.stands(); !held {
+				// Both of this pass's reads must be clean, as for Create, and
+				// they gate both attributions: the card digest, and an observed
+				// 200, whose transition may be the Gateway's rather than
+				// <agent>-auth's (A75).
+				again := r.gatewayAuthPolicies(ctx, host)
+				if again.stands() || !held {
+					above = again
+				}
+				if held = held || again.stands(); !held {
 					return r.lockServed(ctx, agent, runNS, name, target, status, conds, out, reCreate,
 						observed, beforeRev, fetchedAt)
 				}

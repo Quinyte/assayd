@@ -68,14 +68,33 @@ type stubProber struct {
 	// ListenerSet refuses an anonymous request on a route with no -auth, as
 	// A74 case 7 measured (A75).
 	above map[string][]client.ObjectKey
-	// beforeProbe runs once, before the next probe of an Agent answers.
+	// beforeProbe runs once, before the next probe of an Agent answers, and
+	// afterProbe once, after its answer is decided and before it is returned.
 	beforeProbe map[string]func()
+	afterProbe  map[string]func()
+	// once is an answer the next probe of an Agent gets, whatever else holds.
+	once map[string]int
 }
 
 func newStubProber() *stubProber {
 	return &stubProber{held: map[string]bool{}, probes: map[string]int{}, last: map[string]int{},
 		override: map[string]int{}, servedBy: map[string]string{}, foreign: map[string]bool{},
-		above: map[string][]client.ObjectKey{}, beforeProbe: map[string]func(){}}
+		above: map[string][]client.ObjectKey{}, beforeProbe: map[string]func(){}, afterProbe: map[string]func(){},
+		once: map[string]int{}}
+}
+
+// answerOnce makes the next probe of agent answer code.
+func (s *stubProber) answerOnce(agent string, code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.once[agent] = code
+}
+
+// afterNextProbe runs fn once, after the next probe of agent has its answer.
+func (s *stubProber) afterNextProbe(agent string, fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.afterProbe[agent] = fn
 }
 
 // refuseWhile makes every probe of agent answer 401 while the policy at key
@@ -154,6 +173,13 @@ func (s *stubProber) Probe(ctx context.Context, req controller.AuthProbeRequest)
 	}
 	code, digest, err := s.answer(ctx, name, ns, u.Path)
 	s.mu.Lock()
+	after := s.afterProbe[name]
+	delete(s.afterProbe, name)
+	s.mu.Unlock()
+	if after != nil {
+		after()
+	}
+	s.mu.Lock()
 	s.probes[name]++
 	s.last[name] = code
 	s.mu.Unlock()
@@ -177,7 +203,12 @@ func (s *stubProber) answer(ctx context.Context, name, ns, path string) (int, st
 	s.mu.Lock()
 	held, override, servedBy, foreign := s.held[name], s.override[name], s.servedBy[name], s.foreign[name]
 	above := append([]client.ObjectKey(nil), s.above[name]...)
+	once, hasOnce := s.once[name]
+	delete(s.once, name)
 	s.mu.Unlock()
+	if hasOnce {
+		return once, "", nil
+	}
 	if foreign {
 		return 401, "", nil
 	}

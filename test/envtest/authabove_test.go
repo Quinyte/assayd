@@ -583,7 +583,7 @@ func TestAServedAgentIsReportedAndNotHeld(t *testing.T) {
 		reconcileOnce(t, r, a)
 		notHeld(t, a)
 		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
-		mustContain(t, g, "GovernanceSkipped", key.String(), "admits whatever the Gateway-level authorization rule allows")
+		mustContain(t, g, "GovernanceSkipped", key.String(), "cannot be ruled out that it widens or bypasses")
 		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
 		mustContain(t, c, "PolicyApplyIncomplete", key.String(), "not withdrawn")
 		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "GatewayAuthPolicy")
@@ -625,6 +625,45 @@ func TestAServedAgentIsReportedAndNotHeld(t *testing.T) {
 		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
 		mustContain(t, g, "GovernanceSkipped", key.String(), "may not read")
 		condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
+	})
+	t.Run("transformation widens", func(t *testing.T) {
+		widened(t, "abovetransformwidens", func(*assaydv1alpha1.Agent) map[string]any {
+			return map[string]any{"targetRefs": onGateway(suiteGatewayName, ""),
+				"traffic": map[string]any{"transformation": map[string]any{"request": map[string]any{
+					"set": []any{map[string]any{"name": "authorization", "value": "'Bearer a-key'"}}}}}}
+		})
+	})
+	t.Run("authentication in a PreRouting phase widens", func(t *testing.T) {
+		widened(t, "aboveprerouting", func(a *assaydv1alpha1.Agent) map[string]any {
+			tr := authenticationOnly(t, a)
+			tr["phase"] = "PreRouting"
+			return map[string]any{"targetRefs": onGateway(suiteGatewayName, ""), "traffic": tr}
+		})
+	})
+	t.Run("a Gateway that cannot be read, with its policies listed, is a note", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "aboveunreadnote")
+		key := gatewayPolicy(t, "gw-authn-"+a.Name, map[string]any{
+			"targetRefs": onGateway(suiteGatewayName, ""), "traffic": authenticationOnly(t, a)})
+		gr := schema.GroupResource{Group: gatewayv1.GroupName, Resource: "gateways"}
+		r.Reader = gatewayUnreadable{Reader: k8s, err: apierrors.NewForbidden(gr, suiteGatewayName, errors.New("no grant"))}
+		reconcileOnce(t, r, a)
+		noted(t, a, key, metav1.ConditionFalse, "AuthVerifiedOnOneReplica", "may not read")
+		if g := condition(liveAgent(t, a), assaydv1alpha1.CondGovernanceSkipped); g != nil &&
+			strings.Contains(g.Message, "cannot be ruled out") {
+			t.Errorf("the note says widening cannot be ruled out, when the policy list ruled it out: %s", g.Message)
+		}
+	})
+	t.Run("a policy list that fails is GovernanceSkipped, and does not page", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "aboveunlisted")
+		r.Reader = policiesUnlistable{Reader: k8s}
+		reconcileOnce(t, r, a)
+		notHeld(t, a)
+		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
+		mustContain(t, g, "GovernanceSkipped", "could not be listed", "cannot be ruled out")
+		if c := condition(liveAgent(t, a), assaydv1alpha1.CondPolicyApplyIncomplete); c != nil {
+			t.Errorf("a failed policy list raised PolicyApplyIncomplete, which pages: %+v", c)
+		}
+		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available")
 	})
 	t.Run("authentication only is a note", func(t *testing.T) {
 		a, r, _ := servedAPIKeyAgent(t, "aboveservedkey")
@@ -693,6 +732,157 @@ func TestAHoldIsReportedWhateverTheProbeAnswers(t *testing.T) {
 	}
 	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
 	mustContain(t, c, "GatewayAuthPolicy", key.String(), "no 401 is credited")
+}
+
+// statusConflictOnce loses the race on its first status write, as a stale
+// informer would, and writes every later one.
+type statusConflictOnce struct {
+	client.Client
+	fired bool
+}
+
+func (c *statusConflictOnce) Status() client.SubResourceWriter {
+	return &conflictOnceWriter{SubResourceWriter: c.Client.Status(), c: c}
+}
+
+type conflictOnceWriter struct {
+	client.SubResourceWriter
+	c *statusConflictOnce
+}
+
+func (w *conflictOnceWriter) Update(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+	if !w.c.fired {
+		w.c.fired = true
+		return apierrors.NewConflict(schema.GroupResource{Group: "assayd.dev", Resource: "agents"},
+			obj.GetName(), errors.New("raced"))
+	}
+	return w.SubResourceWriter.Update(ctx, obj, opts...)
+}
+
+// routeUpdateConflict loses the race on every route update.
+type routeUpdateConflict struct{ client.Client }
+
+func (c *routeUpdateConflict) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	if _, ok := obj.(*gatewayv1.HTTPRoute); ok {
+		return apierrors.NewConflict(schema.GroupResource{Group: gatewayv1.GroupName, Resource: "httproutes"},
+			obj.GetName(), errors.New("raced"))
+	}
+	return c.Client.Update(ctx, obj, opts...)
+}
+
+// A75, the review of PR #35's M1, shaped like the reviewer's experiment: a
+// pass that loses a race keeps the hold and W1, and Ready withheld with them.
+func TestALostRaceKeepsTheHoldAndW1(t *testing.T) {
+	t.Run("a held J2 Lock", func(t *testing.T) {
+		a, r, stub, key := heldJ2(t, "aboveracejtwo", 0, func(a *assaydv1alpha1.Agent, stub *stubProber) client.ObjectKey {
+			return gatewayAuthPolicy(t, a, stub)
+		})
+		condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
+		// One probe answers 500, so the pass has a status to write, and its
+		// first write loses the race.
+		stub.answerOnce(a.Name, 500)
+		r.Client = &statusConflictOnce{Client: k8s}
+		if err := reconcileErr(t, r, a); err == nil || !apierrors.IsConflict(err) {
+			t.Fatalf("the injected race did not reach the caller: %v", err)
+		}
+		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
+		mustContain(t, c, "GatewayAuthPolicy", key.String())
+		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "GatewayAuthPolicy")
+		if auth := authOf(t, a); auth.Mode != "none" {
+			t.Errorf("a lost race recorded the lock: %+v", auth)
+		}
+	})
+	t.Run("W1 on a served Agent", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "aboveracewone")
+		key := gatewayPolicy(t, "gw-"+a.Name, map[string]any{
+			"targetRefs": onGateway(suiteGatewayName, ""), "traffic": apiKeyTraffic(t, a)})
+		reconcileOnce(t, r, a)
+		condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
+		// Drift the route, so this pass updates it, and the update loses.
+		rt := servingRoute(t, a.Namespace, a.Name)
+		rt.Spec.Hostnames = append(rt.Spec.Hostnames, "drifted.example.com")
+		if err := k8s.Update(context.Background(), rt); err != nil {
+			t.Fatal(err)
+		}
+		r.Client = &routeUpdateConflict{Client: k8s}
+		if err := reconcileErr(t, r, a); err == nil || !apierrors.IsConflict(err) {
+			t.Fatalf("the injected race did not reach the caller: %v", err)
+		}
+		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
+		mustContain(t, g, "GovernanceSkipped", key.String())
+		condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
+		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "GatewayAuthPolicy")
+	})
+}
+
+// A75, the review's MINOR 1, shaped like its experiment: a policy that stood
+// at the pass's first read and answered the probe's 401, then was deleted
+// before the second read, blocks the credit: both reads must be clean.
+func TestAPolicyStandingAtTheFirstReadBlocksTheCredit(t *testing.T) {
+	a, r, stub := probingCreate(t, "abovefirstread", 0)
+	key := gatewayAuthPolicy(t, a, stub)
+	stub.afterNextProbe(a.Name, func() { removePolicy(t, key) })
+	reconcileOnce(t, r, a)
+	if routePublished(t, a.Namespace, a.Name) {
+		t.Fatal("a route was published on a 401 a policy standing at the first read answered")
+	}
+	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
+	mustContain(t, c, "GatewayAuthPolicy", key.String())
+}
+
+// A75, the review's MINOR 1, for a Lock: a policy standing at the pass's
+// first read, deleted after the probe's 401 and before the second read,
+// blocks a J2 Lock's credit too.
+func TestAPolicyStandingAtTheFirstReadBlocksALockCredit(t *testing.T) {
+	a, _, _, key := heldJ2(t, "abovefirstlock", 0, func(a *assaydv1alpha1.Agent, stub *stubProber) client.ObjectKey {
+		key := gatewayAuthPolicy(t, a, stub)
+		stub.afterNextProbe(a.Name, func() { removePolicy(t, key) })
+		return key
+	})
+	if auth := authOf(t, a); auth.Mode != "none" || auth.Transaction == nil ||
+		auth.Transaction.Stage != "ProbingAfter" {
+		t.Fatalf("a J2 Lock was credited on a 401 a policy standing at the first read answered: %+v", auth)
+	}
+	_ = key
+}
+
+// A75, the review's MINOR 4: a J2 Lock whose before-state was observed and
+// whose serving revision has no card digest credits only on its observed
+// 200, and that branch is gated by the read after the 401 too.
+func TestAnObservedOnlyLockCreditIsGatedToo(t *testing.T) {
+	a, _, _, key := heldJ2(t, "aboveobserved", 0, func(a *assaydv1alpha1.Agent, stub *stubProber) client.ObjectKey {
+		forgetCards(t, a)
+		key := client.ObjectKey{Namespace: suiteGatewayNamespace, Name: "gw-auth-" + a.Name}
+		stub.refuseWhile(a.Name, key)
+		stub.onNextProbe(a.Name, func() { gatewayAuthPolicy(t, a, stub) })
+		return key
+	})
+	auth := authOf(t, a)
+	if auth.Mode != "none" || auth.Transaction == nil || auth.Transaction.Stage != "ProbingAfter" ||
+		!auth.Transaction.BeforeObserved {
+		t.Fatalf("an observed-only J2 credit was taken on a 401 a Gateway-level policy answered: %+v", auth)
+	}
+	if len(liveAgent(t, a).Status.Cards) != 0 {
+		t.Fatal("a card digest is recorded, so the observed-only branch is not the one exercised")
+	}
+	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
+	mustContain(t, c, "GatewayAuthPolicy", key.String())
+}
+
+// A75, the review's MINOR 5: W1 clears when its policy goes.
+func TestW1ClearsWhenThePolicyGoes(t *testing.T) {
+	a, r, _ := servedAPIKeyAgent(t, "abovewoneclear")
+	key := gatewayPolicy(t, "gw-"+a.Name, map[string]any{
+		"targetRefs": onGateway(suiteGatewayName, ""), "traffic": apiKeyTraffic(t, a)})
+	reconcileOnce(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
+	removePolicy(t, key)
+	reconcileOnce(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionFalse, "AuthVerifiedOnOneReplica")
+	if c := condition(liveAgent(t, a), assaydv1alpha1.CondPolicyApplyIncomplete); c != nil {
+		t.Errorf("W1's PolicyApplyIncomplete did not clear once its policy went: %+v", c)
+	}
+	condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available")
 }
 
 // The deadline outcome applies under the hold, replaces GatewayAuthPolicy,

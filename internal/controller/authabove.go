@@ -62,12 +62,17 @@ var harmlessPolicyFields = map[string]bool{
 	"frontend.tracing":              true,
 }
 
-// wideningPolicyFields are the counting fields that could widen a served
-// route beside its <agent>-auth (W1); strategy.inheritance: Override widens
-// too, and classifyPolicy reads it by value. An authentication-only policy is
-// not here: for A74 case 7's shape the route's authentication replaces it.
-var wideningPolicyFields = map[string]bool{
-	"traffic.authorization": true,
+// authenticationFields are the counting fields that a served Agent's own
+// <agent>-auth replaces on its route: for A74 case 7's measured shape, the
+// route's authentication replaces the Gateway's. A counting policy is only a
+// note on a served Agent when every counting field it sets is one of these,
+// its traffic.phase is unset or PostRouting, and it does not set Override.
+// Every other counting policy could widen or bypass the route's
+// authentication, and is W1's (ADR-0034 Amendment 5).
+var authenticationFields = map[string]bool{
+	"traffic.apiKeyAuthentication": true,
+	"traffic.basicAuthentication":  true,
+	"traffic.jwtAuthentication":    true,
 }
 
 // gatewayAuth is what one read of the Gateway found that makes a 401 on an
@@ -76,11 +81,13 @@ type gatewayAuth struct {
 	// policies are the counting AgentgatewayPolicies on the Gateway, as
 	// `<namespace>/<name>`.
 	policies []string
-	// widening are those of them that could widen a served route beside its
-	// <agent>-auth (W1): they set traffic.authorization, whose rules merge
-	// across attachment points, or strategy.inheritance: Override, which
-	// takes the route from its own traffic policy (both measured, A75).
+	// widening are those of them that could widen or bypass a served route's
+	// <agent>-auth (W1): every counting policy but one that sets
+	// authentication alone (authenticationFields).
 	widening []string
+	// unlisted says that the policy list failed: nothing on the Gateway is
+	// ruled out, and on a served Agent GovernanceSkipped says so.
+	unlisted bool
 	// listeners says which ListenerSets the Gateway admits, when it admits
 	// any.
 	listeners string
@@ -138,14 +145,26 @@ func (g gatewayAuth) wideningMessage(gw GatewayConfig) string {
 		where = "on a listener that may take this Agent's traffic (" + g.unreadable + ", so no sectionName " +
 			"or selector is taken as keeping it off this route)"
 	}
-	return fmt.Sprintf("the AgentgatewayPolicy %s targets Gateway %s/%s %s, and sets traffic.authorization, "+
-		"whose rules merge with this route's <agent>-auth "+
-		"(measured: a Gateway-level Allow rule admitted on a route a group its <agent>-auth refuses), or "+
-		"strategy.inheritance: Override, which was measured taking the route from <agent>-auth. "+
-		"So this route admits whatever the Gateway-level authorization rule allows, beyond its own "+
-		"<agent>-auth, until the policy is removed, or rescoped off the Gateway or off its serving "+
-		"listener %q. The route keeps serving and is not withdrawn (design 03 A75)",
+	return fmt.Sprintf("the AgentgatewayPolicy %s targets Gateway %s/%s %s, and sets more than "+
+		"authentication alone, so it cannot be ruled out that it widens or bypasses this route's "+
+		"<agent>-auth. Measured: a Gateway-level authorization rule merges with the route's and admitted a "+
+		"group its <agent>-auth refuses, and strategy.inheritance: Override takes the route from "+
+		"<agent>-auth. Unmeasured: any other field, a transformation, a header modifier, an external "+
+		"processor or authorizer, or a PreRouting phase, could add a credential or answer for the route. "+
+		"So this route may admit whatever the Gateway-level policy allows, beyond its own <agent>-auth, "+
+		"until the policy is removed, or rescoped off the Gateway or off its serving listener %q. The "+
+		"route keeps serving and is not withdrawn (design 03 A75)",
 		strings.Join(g.widening, ", "), gw.Namespace, gw.Name, where, GatewayListenerName)
+}
+
+// unlistedMessage is GovernanceSkipped=GatewayAuthPolicy's message on an
+// API-key Agent already served when the Gateway's policies could not be
+// listed. PolicyApplyIncomplete is not raised, so a transient API error does
+// not page (A75).
+func (g gatewayAuth) unlistedMessage() string {
+	return g.unreadable + ". So it cannot be ruled out that a policy on the Gateway widens or bypasses " +
+		"this route's <agent>-auth. The route keeps serving; PolicyApplyIncomplete is not raised for this, " +
+		"so a transient error does not page (design 03 A75)"
 }
 
 // servedNote is what an Agent already served says on GovernanceSkipped's
@@ -159,12 +178,9 @@ func (g gatewayAuth) servedNote(gw GatewayConfig, mode string) string {
 			"A74 case 7 measured one refusing an anonymous request with 401 on a route with no -auth, so " +
 			"callers may be refused although status says auth: none"
 	}
-	if g.unreadable != "" {
-		return head + ". Whether a policy on the Gateway sets authorization or Override, which would widen " +
-			"this route beside its <agent>-auth, cannot be ruled out while that cannot be read"
-	}
-	return head + ". No policy on the Gateway sets authorization or Override: for A74 case 7's measured " +
-		"shape, under inheritance Default, <agent>-auth's authentication replaces the Gateway's on this route"
+	return head + ". No policy on the Gateway sets more than authentication alone: for A74 case 7's " +
+		"measured shape, under inheritance Default and a PostRouting phase, <agent>-auth's authentication " +
+		"replaces the Gateway's on this route"
 }
 
 // gatewayAuthPolicies is A75's read: the assayd Gateway, live, and every
@@ -197,7 +213,7 @@ func (r *AgentReconciler) gatewayAuthPolicies(ctx context.Context, host string) 
 			why = fmt.Sprintf("the operator may not read Gateway %s/%s (%v); grant get on it, as the chart's "+
 				"gateway-labels Role in %s does", gw.Namespace, gw.Name, err, gw.Namespace)
 		}
-		out.unreadable = why + ", so nothing on it can be ruled out"
+		out.unreadable = why + ", so its listeners, labels and allowedListeners are unknown"
 	} else {
 		out.listeners = admitsListenerSets(&g)
 	}
@@ -205,6 +221,7 @@ func (r *AgentReconciler) gatewayAuthPolicies(ctx context.Context, host string) 
 	if err != nil {
 		out.unreadable = joinCauses(out.unreadable, fmt.Sprintf("the AgentgatewayPolicies in %s could not be "+
 			"listed (%v), so none on the Gateway can be ruled out", gw.Namespace, err))
+		out.unlisted = true
 		return out
 	}
 	var capture map[string]bool
@@ -249,37 +266,44 @@ func admitsListenerSets(g *gatewayv1.Gateway) string {
 }
 
 // classifyPolicy says whether a policy counts under A75, and whether it could
-// widen a served route (W1). It counts when any field in any section of its
-// spec is not harmless, or when it sets strategy.inheritance: Override,
-// whatever else it sets. It widens when it sets a field in
-// wideningPolicyFields, or Override.
+// widen or bypass a served route's authentication (W1). It counts when any
+// field in any section of its spec is not harmless, or when it sets
+// strategy.inheritance: Override, whatever else it sets. It widens unless
+// every counting field it sets is in authenticationFields, its traffic.phase
+// is unset or PostRouting, and it does not set Override.
 func classifyPolicy(p *unstructured.Unstructured) (counts, widens bool) {
 	spec, _, _ := unstructured.NestedMap(p.Object, "spec")
+	preRouting := false
 	for section, v := range spec {
 		if section == "targetRefs" || section == "targetSelectors" {
 			continue
 		}
 		fields, ok := v.(map[string]any)
 		if !ok {
-			counts = true
+			counts, widens = true, true
 			continue
 		}
 		for f, fv := range fields {
-			if section == "strategy" && f == "inheritance" {
-				if s, _ := fv.(string); s == "Override" {
+			key := section + "." + f
+			switch {
+			case key == "strategy.inheritance":
+				if s, _ := fv.(string); s != "Default" && s != "" {
 					counts, widens = true, true
-				} else if s != "Default" && s != "" {
-					counts = true
 				}
-				continue
-			}
-			if !harmlessPolicyFields[section+"."+f] {
+			case key == "traffic.phase":
+				if s, _ := fv.(string); s != "PostRouting" && s != "" {
+					preRouting = true
+				}
+			case !harmlessPolicyFields[key]:
 				counts = true
-			}
-			if wideningPolicyFields[section+"."+f] {
-				widens = true
+				if !authenticationFields[key] {
+					widens = true
+				}
 			}
 		}
+	}
+	if counts && preRouting {
+		widens = true
 	}
 	return counts, widens
 }
