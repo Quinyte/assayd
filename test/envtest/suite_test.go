@@ -24,6 +24,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -249,10 +250,10 @@ func provisionRunNamespace(t *testing.T, ns string) string {
 }
 
 // newNamespace gives each test its own namespace so the shared control plane
-// never leaks state between tests.
+// never leaks state between tests, or between runs of one test.
 func newNamespace(t *testing.T) string {
 	t.Helper()
-	name := nsName(t.Name())
+	name := nsName(t, "")
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	if err := k8s.Create(context.Background(), ns); err != nil && !apierrors.IsAlreadyExists(err) {
 		t.Fatalf("create namespace %s: %v", name, err)
@@ -260,12 +261,50 @@ func newNamespace(t *testing.T) string {
 	return name
 }
 
-// nsName turns a Go test name into a DNS-1123 label.
+var (
+	runsMu    sync.Mutex
+	runs      = map[*testing.T]int{}
+	runCounts = map[string]int{}
+)
+
+// runOf numbers the runs of one test in this process: 0 for the first, 1 for
+// the second. `go test -count=N` runs every test N times, in one process,
+// against the one control plane TestMain starts, and nothing deletes a test's
+// namespace (envtest runs no namespace controller, so a delete would not
+// cascade anyway). A name derived from t.Name() alone was the same on every
+// run, and the second run met the first run's namespace and every object in
+// it: "already exists" from a test that passes on its own.
+//
+// The number is fixed per *testing.T, so every name one run derives agrees
+// with every other it derives, and a subtest, which has a *testing.T of its
+// own, is numbered on its own.
+func runOf(t *testing.T) int {
+	runsMu.Lock()
+	defer runsMu.Unlock()
+	if n, ok := runs[t]; ok {
+		return n
+	}
+	n := runCounts[t.Name()]
+	runCounts[t.Name()]++
+	runs[t] = n
+	t.Cleanup(func() {
+		runsMu.Lock()
+		defer runsMu.Unlock()
+		delete(runs, t)
+	})
+	return n
+}
+
+// nsName turns this run of a Go test, and a suffix saying which of its
+// namespaces is meant, into a DNS-1123 label.
 //
 // A hash suffix, not plain truncation: subtest names share long prefixes, and
 // two that differ only past the cut produced the same namespace — which showed
 // up as "already exists" from an unrelated test rather than as a collision.
-func nsName(testName string) string {
+// The hash covers the run (runOf), so a rerun under -count gets names of its
+// own.
+func nsName(t *testing.T, suffix string) string {
+	testName := t.Name() + suffix
 	s := strings.ToLower(testName)
 	s = strings.Map(func(r rune) rune {
 		switch {
@@ -276,10 +315,10 @@ func nsName(testName string) string {
 		}
 	}, s)
 	s = strings.Trim(s, "-")
-	sum := sha256.Sum256([]byte(testName))
-	suffix := hex.EncodeToString(sum[:])[:6]
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s#%d", testName, runOf(t))))
+	hash := hex.EncodeToString(sum[:])[:6]
 	if len(s) > 48 {
 		s = strings.Trim(s[:48], "-")
 	}
-	return "t-" + s + "-" + suffix
+	return "t-" + s + "-" + hash
 }

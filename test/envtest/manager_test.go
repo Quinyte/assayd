@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -33,6 +34,24 @@ import (
 // This test runs an actual manager. It is the only place SetupWithManager is
 // exercised at all.
 
+// testCache scopes a manager's cache to this run's namespace (newNamespace),
+// its run namespace, and the operator's.
+//
+// The control plane is shared, by every test and by every run of it under
+// -count, and nothing deletes the Agents a test leaves behind. A manager that
+// watched all of them reconciled each one on its one worker, and the Agent
+// under test waited behind them. Under -count=3 the second run met twice as
+// many as the first, and TestManagerReconcilesAnAgentEndToEnd timed out
+// waiting for a finalizer that one reconcile adds. Scoping takes nothing from
+// what these managers are for, which is the wiring: the watches, the requeue,
+// and what an Agent's own objects do to it.
+func testCache(t *testing.T) cache.Options {
+	ns := nsName(t, "")
+	return cache.Options{DefaultNamespaces: map[string]cache.Config{
+		ns: {}, runNS(ns): {}, operatorNamespace: {},
+	}}
+}
+
 func startManager(t *testing.T) manager.Manager {
 	t.Helper()
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
@@ -45,6 +64,7 @@ func startManager(t *testing.T) manager.Manager {
 		// uniqueness check exists to stop two controllers reporting one metric,
 		// which is a production concern rather than a test one.
 		Controller: ctrlconfig.Controller{SkipNameValidation: ptrTo(true)},
+		Cache:      testCache(t),
 	})
 	if err != nil {
 		t.Fatalf("build manager: %v", err)
@@ -241,6 +261,7 @@ func TestReconcilerIsSafeUnderGenerationChangedPredicate(t *testing.T) {
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: "0",
 		Controller:             ctrlconfig.Controller{SkipNameValidation: ptrTo(true)},
+		Cache:                  testCache(t),
 	})
 	if err != nil {
 		t.Fatalf("build manager: %v", err)

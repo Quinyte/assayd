@@ -6,6 +6,8 @@ package envtest
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,7 +18,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -558,6 +563,113 @@ func TestTheGatewayWatchCacheHoldsOnlyPoliciesItCanMap(t *testing.T) {
 	}
 }
 
+// policyCollectionReads records every LIST and WATCH of agentgatewaypolicies
+// that passes through one HTTP transport: a GET of the collection, in a
+// namespace or cluster-wide, as opposed to a GET of one named policy.
+type policyCollectionReads struct {
+	mu   sync.Mutex
+	seen []policyCollectionRead
+}
+
+type policyCollectionRead struct {
+	watch    bool
+	selector string
+	url      string
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func (p *policyCollectionReads) wrap(rt http.RoundTripper) http.RoundTripper {
+	return roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method == http.MethodGet && path.Base(req.URL.Path) == "agentgatewaypolicies" {
+			q := req.URL.Query()
+			p.mu.Lock()
+			p.seen = append(p.seen, policyCollectionRead{watch: q.Get("watch") == "true",
+				selector: q.Get("labelSelector"), url: req.URL.String()})
+			p.mu.Unlock()
+		}
+		return rt.RoundTrip(req)
+	})
+}
+
+func (p *policyCollectionReads) all() []policyCollectionRead {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]policyCollectionRead(nil), p.seen...)
+}
+
+// selectsAgentLabelled reports whether a labelSelector requires that
+// assayd.dev/agent exist, which is the gateway watch cache's filter
+// (GatewayWatchCacheOptions). Parsed, not matched as a substring, because
+// assayd.dev/agent-namespace contains that key's text.
+func selectsAgentLabelled(selector string) bool {
+	sel, err := labels.Parse(selector)
+	if err != nil {
+		return false
+	}
+	reqs, _ := sel.Requirements()
+	for _, r := range reqs {
+		if r.Key() == compiler.LabelAgent && r.Operator() == selection.Exists {
+			return true
+		}
+	}
+	return false
+}
+
+// A70's owed test: SetupWithManager registers the policy watch on the gateway
+// watch cache, not on the manager's. The filter itself is pinned by
+// TestTheGatewayWatchCacheHoldsOnlyPoliciesItCanMap, which builds the cache
+// from its options directly; nothing there sees where the watch is
+// registered. Registered on the manager's cache instead, it would start an
+// informer on every AgentgatewayPolicy the manager can see, and every test
+// that observes the watch would still pass, because the policies they plant
+// carry the label.
+//
+// So this measures the wire: every LIST and WATCH of the kind that the
+// manager's HTTP client makes must select assayd.dev/agent. The reconciler's
+// live reads go through a client of their own, outside the recording, because
+// §3.2's foreign-policy detection lists a run namespace's policies live and
+// unfiltered on purpose (authforeign.go): a foreign policy is exactly one the
+// filtered cache may not hold.
+func TestThePolicyWatchIsRegisteredOnTheFilteredGatewayCache(t *testing.T) {
+	rec := &policyCollectionReads{}
+	recorded := rest.CopyConfig(cfg)
+	recorded.WrapTransport = rec.wrap
+	live, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatalf("build the live reader: %v", err)
+	}
+	ns := newNamespace(t)
+	reads := startGatewayManagerWith(t, ns, recorded, live)
+	a := externalAgent(t, ns, "filtered")
+	// A controller starts its workers only once every source it registered
+	// has synced, so a reconcile means every informer on the kind has already
+	// made its LIST or WATCH.
+	key := client.ObjectKeyFromObject(a)
+	eventually(t, "the Agent to be reconciled", func() bool { return reads.count(key) > 0 })
+
+	seen := rec.all()
+	watches := 0
+	for _, r := range seen {
+		if r.watch {
+			watches++
+		}
+		if !selectsAgentLabelled(r.selector) {
+			t.Errorf("a %s of agentgatewaypolicies selects %q, not assayd.dev/agent: %s\n"+
+				"Some informer on the kind is not the gateway watch cache, so it holds every "+
+				"AgentgatewayPolicy it can see, cluster-wide in a real install.",
+				map[bool]string{true: "WATCH", false: "LIST"}[r.watch], r.selector, r.url)
+		}
+	}
+	if watches == 0 {
+		t.Fatalf("no WATCH of agentgatewaypolicies passed through the manager's client (%d LISTs), "+
+			"so nothing here measured the watch", len(seen))
+	}
+	t.Logf("measured %d collection reads of agentgatewaypolicies, %d of them WATCHes", len(seen), watches)
+}
+
 // --- the watches -----------------------------------------------------------
 
 // agentReads counts the reconciler's reads of each Agent. Every reconcile
@@ -598,19 +710,27 @@ func (c *agentReads) count(key types.NamespacedName) int {
 // gateway watch cache is built from its own options and is not narrowed.
 func startGatewayManager(t *testing.T, gwNS string) *agentReads {
 	t.Helper()
-	agentNS := nsName(t.Name())
-	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+	return startGatewayManagerWith(t, gwNS, cfg, nil)
+}
+
+// startGatewayManagerWith is startGatewayManager with the manager built from
+// config, and the reconciler's uncached reads made through live, when it is
+// not nil, rather than through the manager's API reader.
+func startGatewayManagerWith(t *testing.T, gwNS string, config *rest.Config, live client.Reader) *agentReads {
+	t.Helper()
+	mgr, err := ctrl.NewManager(config, ctrl.Options{
 		Scheme: scheme, Metrics: metricsserver.Options{BindAddress: "0"}, HealthProbeBindAddress: "0",
 		Controller: ctrlconfig.Controller{SkipNameValidation: ptrTo(true)},
-		Cache: cache.Options{DefaultNamespaces: map[string]cache.Config{
-			agentNS: {}, runNS(agentNS): {}, operatorNamespace: {},
-		}},
+		Cache:      testCache(t),
 	})
 	if err != nil {
 		t.Fatalf("build manager: %v", err)
 	}
 	reads := &agentReads{Client: mgr.GetClient(), reads: map[types.NamespacedName]int{}}
-	r, err := controller.NewAgentReconciler(reads, mgr.GetAPIReader(), mgr.GetScheme(),
+	if live == nil {
+		live = mgr.GetAPIReader()
+	}
+	r, err := controller.NewAgentReconciler(reads, live, mgr.GetScheme(),
 		operatorNamespace, func() bool { return false }, labelAuthorityPresent, controller.InjectedEnvConfig{},
 		controller.GatewayConfig{Enabled: true, Name: "assayd", Namespace: gwNS,
 			HostnameSuffix: controller.DefaultGatewayHostnameSuffix, ServingURL: testServingURL})
@@ -735,8 +855,8 @@ func nackEvent(ns, name, reason, policyNS, policy, route string) *corev1.Event {
 // namespace: the same Event anywhere else, or another Warning there, is not one.
 func TestANackInTheGatewaysNamespaceRequeuesTheAgentWhosePolicyItNames(t *testing.T) {
 	ctx := context.Background()
-	gwNS := nsName(t.Name() + "-gateway")
-	elsewhere := nsName(t.Name() + "-elsewhere")
+	gwNS := nsName(t, "-gateway")
+	elsewhere := nsName(t, "-elsewhere")
 	for _, n := range []string{gwNS, elsewhere} {
 		if err := k8s.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: n}}); err != nil &&
 			!apierrors.IsAlreadyExists(err) {

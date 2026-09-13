@@ -203,9 +203,9 @@ func keySet(ns, name, value string) *corev1.ConfigMap {
 
 func TestOnlyTheOperatorAndAnAdministratorWriteAKeySet(t *testing.T) {
 	ctx := context.Background()
-	scope := nsName(t.Name())
-	run := scopedNamespace(t, nsName(t.Name()+"-run"), scope, true)
-	plain := scopedNamespace(t, nsName(t.Name()+"-plain"), scope, false)
+	scope := nsName(t, "")
+	run := scopedNamespace(t, nsName(t, "-run"), scope, true)
+	plain := scopedNamespace(t, nsName(t, "-plain"), scope, false)
 	policy := installReservation(t, "assayd-api-keys", scope)
 	grantWriters(t, scope, []string{run, plain}, renderedOperator, intruder, gcUser)
 	asIntruder := as(t, intruder)
@@ -335,9 +335,9 @@ func TestOnlyTheOperatorAndAnAdministratorWriteAKeySet(t *testing.T) {
 
 func TestOnlyTheOperatorAuthorsAPolicyInARunNamespace(t *testing.T) {
 	ctx := context.Background()
-	scope := nsName(t.Name())
-	run := scopedNamespace(t, nsName(t.Name()+"-run"), scope, true)
-	plain := scopedNamespace(t, nsName(t.Name()+"-plain"), scope, false)
+	scope := nsName(t, "")
+	run := scopedNamespace(t, nsName(t, "-run"), scope, true)
+	plain := scopedNamespace(t, nsName(t, "-plain"), scope, false)
 	policy := installReservation(t, "assayd-gateway-policies", scope)
 	grantWriters(t, scope, []string{run, plain}, renderedOperator, intruder, gcUser)
 	asIntruder := as(t, intruder)
