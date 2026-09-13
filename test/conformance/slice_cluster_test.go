@@ -627,8 +627,6 @@ func startStream(t *testing.T, gw, host, tag string, bound time.Duration) *codeS
 		s.run = 0
 	}
 	go func() {
-		defer close(s.done)
-		defer close(s.codes)
 		sc := bufio.NewScanner(out)
 		for sc.Scan() {
 			// "<http_code> <num_connects>". A line that is not both is an
@@ -671,10 +669,27 @@ func startStream(t *testing.T, gw, host, tag string, bound time.Duration) *codeS
 		endRun()
 		s.readErr = sc.Err()
 		s.mu.Unlock()
+		// The stream ends here for its readers. If the scanner stopped on an
+		// error, the rest of the pipe is still read and thrown away, so
+		// kubectl never blocks on a full pipe and stop can wait for it; check
+		// reports the error. An earlier version stopped reading, and stop
+		// then waited on kubectl forever (an independent review of this
+		// change).
+		close(s.codes)
+		buf := make([]byte, 32<<10)
+		for {
+			if _, err := out.Read(buf); err != nil {
+				break
+			}
+		}
+		close(s.done)
 	}()
 	s.stop = func() {
 		s.stopMu.Do(func() {
-			_, _ = kubectl(t, "exec", sliceCurlPod, "-n", sliceNS, "--", "touch", stopFile)
+			if got, err := kubectl(t, "exec", sliceCurlPod, "-n", sliceNS, "--", "touch", stopFile); err != nil {
+				t.Errorf("stop the request loop: touch %s failed, so the loop in the traffic Pod may "+
+					"run on and load the gateway for later cases: %s", stopFile, got)
+			}
 			// The reader first, then the process: os/exec's Wait closes the
 			// pipe, and waiting before the reader is done can drop the
 			// stream's tail. The loop stops within one batch of the stop
@@ -698,7 +713,8 @@ func startStream(t *testing.T, gw, host, tag string, bound time.Duration) *codeS
 	return s
 }
 
-// next returns the next answer, or false when none arrives within timeout.
+// next returns the next answer, or false when none arrives within timeout or
+// the stream has ended.
 func (s *codeStream) next(timeout time.Duration) (stamped, bool) {
 	select {
 	case a, ok := <-s.codes:
@@ -708,14 +724,27 @@ func (s *codeStream) next(timeout time.Duration) (stamped, bool) {
 	}
 }
 
-// drain discards answers already received, so what is read next was answered
-// after this call.
-func (s *codeStream) drain() {
+// takeOK reads every answer already received, requires each to be the
+// backend's 200, and returns the last one's arrival, or the zero time if there
+// were none. It replaces a drain that threw those answers away unread (an
+// independent review of this change): an answer before the policy write that
+// is anything but 200 means the route was not open when the clock started.
+func (s *codeStream) takeOK(t *testing.T, what string) time.Time {
+	t.Helper()
+	var last time.Time
 	for {
 		select {
-		case <-s.codes:
+		case a, ok := <-s.codes:
+			if !ok {
+				return last
+			}
+			if a.code != 200 {
+				t.Fatalf("%s: before the policy write an anonymous request got HTTP %d; the route "+
+					"must be open, answered by the backend, when the clock starts", what, a.code)
+			}
+			last = a.at
 		default:
-			return
+			return last
 		}
 	}
 }
@@ -773,6 +802,7 @@ func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 		for run := 0; run < 3; {
 			a, ok := s.next(30 * time.Second)
 			if !ok {
+				s.check(t, fmt.Sprintf("trial %d", i))
 				t.Fatalf("trial %d: the request loop produced nothing", i)
 			}
 			if a.code == 200 {
@@ -787,7 +817,8 @@ func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 		// loop: straight after an answer arrived, the next one was always one
 		// interval away, and that interval was what an earlier version measured.
 		randomPause(250 * time.Millisecond)
-		s.drain()
+		// Every answer from the pause is read, and must be the backend's.
+		lastOK := s.takeOK(t, fmt.Sprintf("trial %d", i))
 		begin := time.Now()
 		if _, err := pc.Create(context.Background(), p, metav1.CreateOptions{}); err != nil {
 			t.Fatalf("trial %d: write the policy: %v", i, err)
@@ -796,10 +827,11 @@ func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 		deleteLater(t, "agentgatewaypolicy", sliceNS, p.GetName())
 
 		var after int
-		var first, lastOK time.Time
+		var first time.Time
 		for first.IsZero() {
 			a, ok := s.next(controller.AuthTransactionDeadline - time.Since(begin))
 			if !ok {
+				s.check(t, fmt.Sprintf("trial %d", i))
 				t.Fatalf("trial %d: no anonymous 401 within §3.3.3's %s deadline after the policy "+
 					"write (%d answers after it, all 200): `Lock` would report AuthLockUnverified "+
 					"here", i, controller.AuthTransactionDeadline, after)
@@ -826,19 +858,40 @@ func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 					"appear", i, a.code)
 			}
 		}
-		// Once refused, refused: the next twenty answers are all 401.
-		for n := 0; n < 20; n++ {
-			a, ok := s.next(10 * time.Second)
+		// Once refused, refused: for lockHold after the first 401, every
+		// answer is 401, and so is every answer still buffered when the loop
+		// stops. An earlier version read twenty answers, which at this loop's
+		// rate is about 5 ms, so a gateway that enforced and then briefly lost
+		// the policy again would have passed (an independent review of this
+		// change).
+		const lockHold = time.Second
+		var held int
+		lastAt := first
+		for until := first.Add(lockHold); !lastAt.After(until); {
+			a, ok := s.next(time.Until(until) + time.Second)
 			if !ok {
-				t.Fatalf("trial %d: the request loop stopped after the first 401", i)
+				s.check(t, fmt.Sprintf("trial %d", i))
+				t.Fatalf("trial %d: the request loop stopped %s after the first 401", i,
+					time.Since(first).Round(time.Millisecond))
 			}
 			if a.code != 401 {
-				t.Fatalf("trial %d: after the first 401, answer %d was HTTP %d; a lock that "+
-					"flaps would let the probe pass while callers still get through", i, n+1, a.code)
+				t.Fatalf("trial %d: %s after the first 401 an anonymous request got HTTP %d. A lock "+
+					"that flaps would let the probe pass while callers still get through", i,
+					a.at.Sub(first).Round(time.Microsecond), a.code)
 			}
+			held, lastAt = held+1, a.at
 		}
 		s.stop()
+		for a := range s.codes {
+			if a.code != 401 {
+				t.Fatalf("trial %d: after the loop stopped, a buffered anonymous answer was HTTP %d, "+
+					"%s after the first 401", i, a.code, a.at.Sub(first).Round(time.Microsecond))
+			}
+			held, lastAt = held+1, a.at
+		}
 		s.check(t, fmt.Sprintf("trial %d", i))
+		t.Logf("LOCK-HELD trial=%d anonymous_401s_after_the_first=%d over_ms=%.0f",
+			i, held, ms(lastAt.Sub(first)))
 		expectCode(t, gw, servingPort, host, cardPath, keyTeam, 200,
 			fmt.Sprintf("trial %d: a key in the Agent's namespace group after the lock", i))
 
@@ -995,6 +1048,7 @@ func TestSliceOnePerAgentPolicyCoversAPromotion(t *testing.T) {
 		tallied <- r
 	}()
 	promote(t, agent, route)
+	promoted := time.Now()
 
 	deadline := time.Now().Add(2 * time.Minute)
 	served := ""
@@ -1020,20 +1074,44 @@ func TestSliceOnePerAgentPolicyCoversAPromotion(t *testing.T) {
 		t.Fatalf("anonymous request %d during the promotion got HTTP %d: a revision was "+
 			"reachable without a key while the route moved to it", r.badAt, r.badCode)
 	}
-	var afterSwitch int
+	// Three phases: before the patch returned, between it and the new
+	// revision first being seen, and after. The switch happens in the middle
+	// one, so answers must keep arriving through it with no long pause. An
+	// earlier version required answers only after the switch was seen, and a
+	// stream that stalled across the switch itself would have passed (an
+	// independent review of this change).
+	var during, afterSwitch int
+	var pause time.Duration
+	prev := promoted
 	for _, at := range r.at {
-		if at.After(rev2Seen) {
+		switch {
+		case at.After(rev2Seen):
 			afterSwitch++
+		case at.After(promoted):
+			during++
+			if g := at.Sub(prev); g > pause {
+				pause = g
+			}
+			prev = at
 		}
 	}
+	if g := rev2Seen.Sub(prev); g > pause {
+		pause = g
+	}
+	if during < 50 || pause > 20*time.Millisecond {
+		t.Fatalf("between the promotion and the new revision first being seen, %d anonymous "+
+			"requests were answered and the longest pause was %s. The switch happens there, and "+
+			"the stream must cover it", during, pause.Round(time.Microsecond))
+	}
 	// Enough answers after the switch was seen that "all refused" covers it,
-	// and a loop that stalled or stopped early fails here.
+	// and a loop that stopped early fails here.
 	if afterSwitch < 1000 {
 		t.Fatalf("only %d anonymous requests were answered after the new revision was first "+
 			"seen, of %d in all; the window must cover the switch on both sides", afterSwitch, len(r.at))
 	}
-	t.Logf("promotion: %d anonymous requests across it, %d of them after the new revision was "+
-		"first seen, every one refused with 401", len(r.at), afterSwitch)
+	t.Logf("promotion: %d anonymous requests across it, %d between the promotion and the new "+
+		"revision first being seen (longest pause %s), %d after, every one refused with 401",
+		len(r.at), during, pause.Round(time.Microsecond), afterSwitch)
 	expectCode(t, gw, servingPort, host, cardPath, "", 401, "an anonymous request after the promotion")
 }
 

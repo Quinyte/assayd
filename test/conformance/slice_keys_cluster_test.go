@@ -296,14 +296,17 @@ func TestSliceARoutePolicyOverridesAGatewayLevelOne(t *testing.T) {
 	}
 	deleteLater(t, "httproute", sliceNS, route)
 	// The Gateway's own key reaching the missing backend (500) is the sign the
-	// route is programmed under the Gateway's policy. A 404 is a route not yet
-	// attached, and settle waits past it.
+	// route is programmed under the Gateway's policy. Two answers mean only
+	// "not yet", and the wait goes on past them: a 404 is a route not yet
+	// attached, and no answer at all (code 0) is a new Gateway's proxy not yet
+	// listening on the port. An earlier version waited past the 404 alone,
+	// and failed on a fresh cluster whose proxy took a moment longer.
 	for deadline := time.Now().Add(2 * time.Minute); ; {
 		got := settle(t, gw, servingPort, host, keyGw, 3, 2*time.Minute)
 		if got[0] == 500 {
 			break
 		}
-		if got[0] != 404 || time.Now().After(deadline) {
+		if (got[0] != 404 && got[0] != 0) || time.Now().After(deadline) {
 			t.Fatalf("the Gateway's own key on the prepared route got %v; want 500, authorised by "+
 				"the Gateway's policy and then no backend. Without it nothing below says the route "+
 				"is under that policy", got)
