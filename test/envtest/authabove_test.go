@@ -816,6 +816,112 @@ func TestALostRaceKeepsTheHoldAndW1(t *testing.T) {
 	})
 }
 
+// A75, the check of d8bef3f's MINOR 1, measured by it: a missing-policy
+// Lock held by a Gateway-level policy that loses its status write keeps
+// AuthPolicyMissing first, its route serving with no policy, and names the
+// Gateway-level cause in the message.
+func TestAMissingPolicyLockKeepsAuthPolicyMissingFirstOnALostRace(t *testing.T) {
+	a, r, stub := servedAPIKeyAgent(t, "abovemissrace")
+	recordCardFor(t, a, a.Status.ActiveRevision, a.Status.ActiveRevisionDigest)
+	key := refusingPolicy(t, a, stub, "gw-authn-"+a.Name, map[string]any{
+		"targetRefs": onGateway(suiteGatewayName, ""), "traffic": authenticationOnly(t, a)})
+	stub.hold(a.Name, true)
+	if err := k8s.Delete(context.Background(), policyExists(t, runNS(a.Namespace), policyNameOf(a))); err != nil {
+		t.Fatal(err)
+	}
+	reconcileOnce(t, r, a)
+	acceptPolicy(t, a.Namespace, a.Name)
+	reconcileOnce(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyMissing")
+	stub.answerOnce(a.Name, 500)
+	r.Client = &statusConflictOnce{Client: k8s}
+	if err := reconcileErr(t, r, a); err == nil || !apierrors.IsConflict(err) {
+		t.Fatalf("the injected race did not reach the caller: %v", err)
+	}
+	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyMissing")
+	mustContain(t, c, "PolicyApplyIncomplete", key.String(), "GatewayAuthPolicy")
+}
+
+// A75, the check of d8bef3f's MINOR 2: TestReviewStaleHoldAfterRemoval for a
+// Create. Its policy removed, the next pass reads the Gateway clean, its probe
+// answers 500 on the prepared route, and its status write loses the race; the
+// last pass's hold does not come back.
+func TestReviewStaleHoldAfterRemovalOfACreate(t *testing.T) {
+	a, r, stub := probingCreate(t, "abovestalecreate", 0)
+	key := gatewayAuthPolicy(t, a, stub)
+	reconcileOnce(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
+	removePolicy(t, key)
+	r.Client = &statusConflictOnce{Client: k8s}
+	if err := reconcileErr(t, r, a); err == nil || !apierrors.IsConflict(err) {
+		t.Fatalf("the injected race did not reach the caller: %v", err)
+	}
+	live := liveAgent(t, a)
+	if c := condition(live, assaydv1alpha1.CondPolicyApplyIncomplete); c != nil && c.Reason == "GatewayAuthPolicy" {
+		t.Errorf("a stale hold came back on a Create after its policy was removed and a clean read: %s", c.Message)
+	}
+	if c := condition(live, assaydv1alpha1.CondReady); c != nil && c.Reason == "GatewayAuthPolicy" {
+		t.Errorf("Ready carries a stale GatewayAuthPolicy: %+v", c)
+	}
+}
+
+// A75, the check of d8bef3f's MINOR 3, measured by it: what an early return
+// carries keeps the ObservedGeneration and LastTransitionTime it was stored
+// with, and says it is carried, because nothing was re-read on that pass.
+func TestAnEarlyReturnMarksWhatItCarries(t *testing.T) {
+	noAuthority := func(context.Context) (bool, error) { return false, nil }
+	carriedAsStored := func(t *testing.T, a *assaydv1alpha1.Agent, typ assaydv1alpha1.ConditionType,
+		before *metav1.Condition) {
+		t.Helper()
+		live := liveAgent(t, a)
+		if live.Generation == before.ObservedGeneration {
+			t.Fatalf("the spec edit did not move the generation past %d", before.ObservedGeneration)
+		}
+		c := condition(live, typ)
+		if c == nil || c.Reason != "GatewayAuthPolicy" {
+			t.Fatalf("%s was not carried: %+v", typ, c)
+		}
+		if c.ObservedGeneration != before.ObservedGeneration {
+			t.Errorf("%s was stamped at generation %d; it was observed at %d and not re-read",
+				typ, c.ObservedGeneration, before.ObservedGeneration)
+		}
+		if !c.LastTransitionTime.Equal(&before.LastTransitionTime) {
+			t.Errorf("%s's LastTransitionTime moved from %v to %v", typ, before.LastTransitionTime, c.LastTransitionTime)
+		}
+		if !strings.Contains(c.Message, "carried as the last pass that read the Gateway stored it") {
+			t.Errorf("%s does not say it is carried: %s", typ, c.Message)
+		}
+	}
+	bump := func(x *assaydv1alpha1.Agent) { x.Spec.Card.Path = "/carried-card.json" }
+	t.Run("a held Create", func(t *testing.T) {
+		a, r, stub := probingCreate(t, "abovecarried", 0)
+		gatewayAuthPolicy(t, a, stub)
+		reconcileOnce(t, r, a)
+		before := condition(liveAgent(t, a), assaydv1alpha1.CondPolicyApplyIncomplete)
+		if before == nil || before.Reason != "GatewayAuthPolicy" {
+			t.Fatalf("want the hold first: %+v", before)
+		}
+		mustEdit(t, a, bump)
+		r.LabelAuthorityPresent = noAuthority
+		reconcileOnce(t, r, a)
+		carriedAsStored(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, before)
+	})
+	t.Run("W1's GovernanceSkipped", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "abovecarriedwone")
+		gatewayPolicy(t, "gw-"+a.Name, map[string]any{
+			"targetRefs": onGateway(suiteGatewayName, ""), "traffic": apiKeyTraffic(t, a)})
+		reconcileOnce(t, r, a)
+		before := condition(liveAgent(t, a), assaydv1alpha1.CondGovernanceSkipped)
+		if before == nil || before.Reason != "GatewayAuthPolicy" {
+			t.Fatalf("want W1 first: %+v", before)
+		}
+		mustEdit(t, a, bump)
+		r.LabelAuthorityPresent = noAuthority
+		reconcileOnce(t, r, a)
+		carriedAsStored(t, a, assaydv1alpha1.CondGovernanceSkipped, before)
+	})
+}
+
 // A75, the check of f6ceea1's MINOR 1, shaped like its probe: a J2 Lock
 // held by a Gateway-level policy; the policy removed; the next pass reads the
 // Gateway clean, its probe answers 500, and its status write loses the race.

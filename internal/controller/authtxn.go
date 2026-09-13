@@ -304,18 +304,21 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 	out, err := r.gatewayStep(ctx, agent, runNS, status, conds, desire)
 	stillLock := func() bool { tx := authTransaction(status); return tx != nil && tx.Kind == TxLock }
 	if _, set := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); err != nil && !set {
+		// A Lock's own reason first, then the hold beside it, in A75's order:
+		// a missing-policy Lock keeps AuthPolicyMissing, its route serving with
+		// no policy, and the hold is named in the message.
+		if had && stillLock() {
+			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, pre.Status, pre.Reason, pre.Message)
+		}
 		switch {
 		case out.aboveHold != "":
 			// This pass read the Gateway, found a hold, and then lost a race.
-			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, ReasonGatewayAuthPolicy,
-				out.aboveHold)
+			raiseIncomplete(conds, ReasonGatewayAuthPolicy, out.aboveHold)
 		case hasStored && !out.aboveRead:
 			// No read ran this pass, so the last pass's hold is all there is. A
 			// pass that read the Gateway and found nothing says so by leaving it
 			// cleared, whatever it lost afterwards.
-			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, stored.Status, stored.Reason, stored.Message)
-		case had && stillLock():
-			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, pre.Status, pre.Reason, pre.Message)
+			raiseIncomplete(conds, ReasonGatewayAuthPolicy, strings.TrimSuffix(stored.Message, carriedNote))
 		}
 	}
 	if err == nil {
@@ -403,9 +406,11 @@ func storedHold(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus)
 // set, right after the assessors: the hold of a transaction still at
 // ProbingAfter (storedHold), and W1 on a served Agent with no transaction. A
 // pass that returns before the -auth step, on a run namespace or material it
-// cannot use, writes them as they were, rather than clearing them for a pass
-// in which nothing was read. The -auth step withdraws the seed and derives
-// both afresh (reconcileGateway).
+// cannot use, writes them as they were stored, keeping their
+// ObservedGeneration and LastTransitionTime and marking them carried
+// (carriedNote), rather than clearing them for a pass in which nothing was
+// read. The -auth step withdraws the seed and derives both afresh
+// (reconcileGateway).
 func (r *AgentReconciler) seedStoredAbove(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus,
 	conds *conditionSet) {
 	if !r.Gateway.Enabled {
@@ -413,7 +418,7 @@ func (r *AgentReconciler) seedStoredAbove(agent *assaydv1alpha1.Agent, status *a
 	}
 	if _, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); !ok {
 		if c, ok := storedHold(agent, status); ok {
-			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, c.Status, c.Reason, c.Message)
+			conds.carry(carried(c))
 		}
 	}
 	if auth := status.Auth; auth == nil || auth.Mode != string(compiler.AuthModeAPIKey) || auth.Transaction != nil {
@@ -423,13 +428,27 @@ func (r *AgentReconciler) seedStoredAbove(agent *assaydv1alpha1.Agent, status *a
 	if gs == nil || gs.Status != metav1.ConditionTrue || gs.Reason != ReasonGatewayAuthPolicy {
 		return
 	}
-	conds.set(assaydv1alpha1.CondGovernanceSkipped, gs.Status, gs.Reason, gs.Message)
+	conds.carry(carried(*gs))
 	if c := meta.FindStatusCondition(agent.Status.Conditions, string(assaydv1alpha1.CondPolicyApplyIncomplete)); c != nil &&
 		c.Status == metav1.ConditionTrue && c.Reason == ReasonGatewayAuthPolicy {
 		if _, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); !ok {
-			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, c.Status, c.Reason, c.Message)
+			conds.carry(carried(*c))
 		}
 	}
+}
+
+// carriedNote marks a condition seedStoredAbove carries. A pass that returns
+// before the -auth step re-reads nothing, so what it carries can outlive its
+// policy until a pass reaches that step, and the condition says so.
+const carriedNote = " | carried as the last pass that read the Gateway stored it, at the generation it " +
+	"names; this pass returned before the -auth step and did not read the Gateway again (design 03 A75)"
+
+// carried is c, as the last pass stored it, marked once as carried.
+func carried(c metav1.Condition) metav1.Condition {
+	if !strings.HasSuffix(c.Message, carriedNote) {
+		c.Message += carriedNote
+	}
+	return c
 }
 
 // heldAbove reports whether this pass's PolicyApplyIncomplete is A75's
