@@ -26,10 +26,14 @@ func defaultOf(t *testing.T, script, name string) string {
 }
 
 // TestTheSliceCasesRunTheE2EsAgentgatewayRelease holds the first slice's
-// cluster cases to the agentgateway release the operator's e2e runs. Design
-// 03 A74 says they are re-measured at every upgrade; this is what makes that
-// true, because an upgrade of hack/e2e.sh alone now fails `make test` until
-// hack/conformance-cluster.sh moves with it, and the slice cases run again.
+// cluster cases to the agentgateway release the operator's e2e runs, as far as
+// a check without a cluster can: an upgrade of hack/e2e.sh alone fails
+// `make test` until hack/conformance-cluster.sh's default moves with it.
+//
+// It does NOT run the slice cases. Nothing does automatically: `make
+// conformance-cluster` is in neither `make test` nor CI, so whoever moves both
+// defaults must run it. What this makes impossible is moving the e2e without
+// touching the line that names the release the cases are measured at.
 func TestTheSliceCasesRunTheE2EsAgentgatewayRelease(t *testing.T) {
 	slice := defaultOf(t, "conformance-cluster.sh", "SLICE_AGW_VERSION")
 	e2e := defaultOf(t, "e2e.sh", "AGW_VERSION")

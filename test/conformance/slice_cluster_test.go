@@ -75,6 +75,12 @@ const (
 	// release a cluster runs (requireSliceAgentgateway).
 	sliceAGWImage = "cr.agentgateway.dev/controller"
 	sliceCurlPod  = "conf-slice-curl"
+	// sliceCurlImage is curlimages/curl:8.11.1's multi-arch index (`docker
+	// buildx imagetools inspect curlimages/curl:8.11.1`), so the traffic Pod
+	// runs natively on the node. curlImage, which the rest of this suite
+	// uses, pins the linux/386 manifest alone, which an arm64 node runs under
+	// emulation, and that would be inside every timing the slice cases take.
+	sliceCurlImage = "curlimages/curl@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69"
 )
 
 // The keys in the slice's key set. Raw keys are literals in a test file, not
@@ -217,7 +223,7 @@ spec:
 		sliceNS, sliceGatewayNS, gatewayYAML(sliceGateway),
 		keySet(sliceNS, "conf-slice-keys", sliceKeyGroups),
 		backend("conf-rev1"), backend("conf-rev2"),
-		sliceCurlPod, sliceNS, curlImage)); err != nil {
+		sliceCurlPod, sliceNS, sliceCurlImage)); err != nil {
 		t.Fatal(err)
 	}
 	return gatewayAddress(t, sliceGateway)
@@ -490,16 +496,70 @@ type codeStream struct {
 	mu          sync.Mutex
 	n           int
 	first, last time.Time
+	// run counts the answers so far that reached the test within burstGap of
+	// the one before, back to back: delivered in the same write, not one at a
+	// time. maxRun is the longest such run.
+	run, maxRun int
+	// reused counts requests that opened no connection of their own.
+	reused int
 }
 
-// interval is the mean time between answers so far: the loop's resolution.
+// burstGap: two answers closer than this reached the test in one write.
+const burstGap = 50 * time.Microsecond
+
+// maxHold is the longest an answer may have waited in a batch before the
+// stream's timings stop being the gateway's. Measured with the loop's own
+// curl: written to stdout, musl's buffer delivered runs of 256 answers, which
+// hold the first of them for tens of milliseconds. Written to stderr through
+// `kubectl exec`, the stream still coalesces a few lines when curl answers
+// faster than it forwards them, a hold well under a millisecond. A first
+// version of this guard failed on the SHARE of close arrivals, and so failed
+// the second kind too.
+const maxHold = 5 * time.Millisecond
+
+// interval is the mean time between answers so far.
 func (s *codeStream) interval() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.intervalLocked()
+}
+
+func (s *codeStream) intervalLocked() time.Duration {
 	if s.n < 2 {
 		return 0
 	}
 	return s.last.Sub(s.first) / time.Duration(s.n-1)
+}
+
+// hold is how long the first answer of the longest batch can have waited: the
+// batch's length times the loop's interval. With the interval, it is the
+// stream's resolution.
+func (s *codeStream) hold() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return time.Duration(s.maxRun) * s.intervalLocked()
+}
+
+// check fails the test unless every request so far opened a connection of its
+// own and no batch of answers could have held one past maxHold. Either failure
+// would make the stream's timings a property of the loop rather than of the
+// gateway.
+func (s *codeStream) check(t *testing.T, what string) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.n < 2 {
+		t.Fatalf("%s: the request loop answered %d times, too few to measure anything", what, s.n)
+	}
+	if s.reused > 0 {
+		t.Fatalf("%s: %d of %d requests reused a connection, so a policy the proxy applies per "+
+			"connection could hide behind it", what, s.reused, s.n)
+	}
+	if h := time.Duration(s.maxRun) * s.intervalLocked(); h > maxHold {
+		t.Fatalf("%s: up to %d answers reached the test in one write, so the first of them may "+
+			"have waited %s, more than %s: the timings measure the batching, not the gateway",
+			what, s.maxRun+1, h, maxHold)
+	}
 }
 
 type stamped struct {
@@ -517,16 +577,22 @@ const streamBatch = 500
 //
 // One `curl` process sends a batch of requests through a URL glob, each on a
 // NEW connection (`Connection: close`), so a policy the proxy applies per
-// connection still shows on the next request. An earlier version started one
-// `curl` per request, and its ~65 ms of process start was the resolution of
-// every latency this measured (the second review of A74).
+// connection still shows on the next request. `%{num_connects}` reports each
+// request's connections, and check fails on one that opened none.
+//
+// Each answer is written to curl's STDERR, which is unbuffered, and merged
+// into the stream. Written to stdout, musl's 1 KiB buffer held 256 answers at
+// a time, and their arrival times measured its flushes, not the gateway.
+// Before that, one `curl` per request set the resolution at its ~65 ms of
+// process start. Independent reviews of this change found both.
 func startStream(t *testing.T, gw, host, tag string, bound time.Duration) *codeStream {
 	t.Helper()
 	stopFile := "/tmp/stop-" + tag
 	script := fmt.Sprintf(`rm -f %[1]s; end=$(( $(date +%%s) + %[2]d )); `+
 		`while [ ! -f %[1]s ] && [ "$(date +%%s)" -lt "$end" ]; do `+
-		`curl -s -H 'Connection: close' -H 'Host: %[3]s' -o /dev/null -w '%%{http_code}\n' --max-time 2 `+
-		`'http://%[4]s:%[5]d%[6]s?n=[1-%[7]d]'; done`,
+		`curl -s -H 'Connection: close' -H 'Host: %[3]s' -o /dev/null `+
+		`-w '%%{stderr}%%{http_code} %%{num_connects}\n' --max-time 2 `+
+		`'http://%[4]s:%[5]d%[6]s?n=[1-%[7]d]' 2>&1; done`,
 		stopFile, int(bound.Seconds()), host, gw, servingPort, cardPath, streamBatch)
 	cmd := exec.Command("kubectl", "exec", sliceCurlPod, "-n", sliceNS, "--", "sh", "-c", script)
 	out, err := cmd.StdoutPipe()
@@ -540,11 +606,29 @@ func startStream(t *testing.T, gw, host, tag string, bound time.Duration) *codeS
 	go func() {
 		sc := bufio.NewScanner(out)
 		for sc.Scan() {
-			code, _ := strconv.Atoi(strings.TrimSpace(sc.Text()))
+			// "<http_code> <num_connects>". A line that is not both is an
+			// answer with code 0 and no connection of its own, so it fails a
+			// trial rather than passing unread.
+			var code, conns int
+			if f := strings.Fields(sc.Text()); len(f) == 2 {
+				code, _ = strconv.Atoi(f[0])
+				conns, _ = strconv.Atoi(f[1])
+			}
 			now := time.Now()
 			s.mu.Lock()
-			if s.n == 0 {
+			switch {
+			case s.n == 0:
 				s.first = now
+			case now.Sub(s.last) < burstGap:
+				s.run++
+				if s.run > s.maxRun {
+					s.maxRun = s.run
+				}
+			default:
+				s.run = 0
+			}
+			if conns == 0 {
+				s.reused++
 			}
 			s.n, s.last = s.n+1, now
 			s.mu.Unlock()
@@ -613,13 +697,15 @@ const lockTrials = 10
 // An earlier version wrote with `kubectl apply` straight after an answer
 // arrived, from a loop that started one `curl` per request. Its figures were
 // that loop's rhythm, and a gateway faster than `kubectl` would have failed
-// the trial (the second review of A74). Now the write is one client-go
-// request after a random pause, the loop sends a request every few
-// milliseconds, and a 401 is accepted whenever it arrives.
+// the trial. The next version's loop wrote its codes to a buffered stdout, so
+// answers reached the test 256 at a time. Independent reviews of this change
+// found both. Now the write is one client-go request after a random pause, a
+// 401 is accepted whenever it arrives, and each trial fails unless its
+// answers arrived one by one on connections of their own (codeStream.check).
 func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 	gw := sliceFixture(t)
 	pc := policyClient(t)
-	var fromStart, fromReturn, writes, intervals []time.Duration
+	var fromStart, fromReturn, writes, intervals, holds []time.Duration
 	for i := 1; i <= lockTrials; i++ {
 		agent := agentName(fmt.Sprintf("lock%d", i))
 		route, _ := compiler.ServingRouteName(agent)
@@ -697,6 +783,7 @@ func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 			}
 		}
 		s.stop()
+		s.check(t, fmt.Sprintf("trial %d", i))
 		expectCode(t, gw, servingPort, host, cardPath, keyTeam, 200,
 			fmt.Sprintf("trial %d: a key in the Agent's namespace group after the lock", i))
 
@@ -704,21 +791,23 @@ func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 		fromReturn = append(fromReturn, first.Sub(written))
 		writes = append(writes, written.Sub(begin))
 		intervals = append(intervals, s.interval())
+		holds = append(holds, s.hold())
 		t.Logf("LOCK-LATENCY trial=%d from_write_start_ms=%.1f from_write_return_ms=%.1f "+
-			"write_ms=%.1f probe_interval_ms=%.2f anonymous_200s_after_write=%d",
-			i, ms(first.Sub(begin)), ms(first.Sub(written)), ms(written.Sub(begin)), ms(s.interval()), after)
+			"write_ms=%.1f probe_interval_ms=%.2f hold_ms=%.2f anonymous_200s_after_write=%d",
+			i, ms(first.Sub(begin)), ms(first.Sub(written)), ms(written.Sub(begin)), ms(s.interval()),
+			ms(s.hold()), after)
 	}
 
-	for _, d := range [][]time.Duration{fromStart, fromReturn, writes, intervals} {
+	for _, d := range [][]time.Duration{fromStart, fromReturn, writes, intervals, holds} {
 		sortDurations(d)
 	}
 	last := len(fromStart) - 1
 	t.Logf("LOCK-LATENCY n=%d from_write_start: min_ms=%.1f median_ms=%.1f max_ms=%.1f; "+
 		"from_write_return: min_ms=%.1f median_ms=%.1f max_ms=%.1f; write: median_ms=%.1f; "+
-		"probe_interval: median_ms=%.2f; deadline=%s",
+		"probe_interval: median_ms=%.2f; hold: median_ms=%.2f max_ms=%.2f; deadline=%s",
 		len(fromStart), ms(fromStart[0]), ms(median(fromStart)), ms(fromStart[last]),
 		ms(fromReturn[0]), ms(median(fromReturn)), ms(fromReturn[last]), ms(median(writes)),
-		ms(median(intervals)), controller.AuthTransactionDeadline)
+		ms(median(intervals)), ms(median(holds)), ms(holds[last]), controller.AuthTransactionDeadline)
 }
 
 func sortDurations(d []time.Duration) { sort.Slice(d, func(a, b int) bool { return d[a] < d[b] }) }
@@ -835,6 +924,7 @@ func TestSliceOnePerAgentPolicyCoversAPromotion(t *testing.T) {
 	// first seen, so the window covers the proxy's switch on both sides.
 	time.Sleep(5 * time.Second)
 	s.stop()
+	s.check(t, "the promotion")
 	var anon int
 	for a := range s.codes {
 		anon++

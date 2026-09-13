@@ -107,6 +107,22 @@ metadata: {name: %s}
 		t.Fatalf("a key in the policy's own namespace, in its group, got %v; the control must be "+
 			"admitted, or this case measures a policy that refuses everyone", got)
 	}
+	// A canary in the policy's own namespace, written AFTER the other
+	// namespace's key set. Once the gateway admits it, the key sets have been
+	// read at least up to that write, so a selector that reached the other
+	// namespace would have its key by now. Without it, five quick 401s could be
+	// a key set not yet read. That rests on the controller reading ConfigMap
+	// events in order, which one cluster-wide watch delivers; it is not
+	// measured separately.
+	canary := "conf-xns-canary-" + runID
+	if err := apply(t, keySet(sliceNS, "conf-xns-canary", map[string]string{canary: sliceTeam})); err != nil {
+		t.Fatal(err)
+	}
+	deleteLater(t, "configmap", sliceNS, "conf-xns-canary")
+	if got := settle(t, gw, servingPort, host, canary, 3, 2*time.Minute); got[0] != 200 {
+		t.Fatalf("the canary written after the other namespace's key set got %v, so the key sets "+
+			"were never read and nothing below measures the other namespace's", got)
+	}
 	if got := codes(t, 5, gw, servingPort, host, keyElsewhere); !all(got, 401) {
 		t.Errorf("a key in the admitted group, stored only in namespace %s, got %v; want 401 every "+
 			"time. Anything else means configMapSelector reaches another namespace, and §3.4.4's "+
@@ -136,7 +152,7 @@ const dupAnswers = 30
 // every write, in the admitted group. The write is taken as landed only once
 // both canaries are admitted. The first version of this case slept ten
 // seconds instead, and its answers could come from a write that had not
-// landed (the second review of A74).
+// landed. An independent review of this change found it.
 //
 // Asserted: the duplicate is not refused, and the key never gets 401; once a
 // write has landed, every one of dupAnswers answers is the same, admitted as

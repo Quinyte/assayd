@@ -62,8 +62,9 @@ const (
 // the run namespace)", as `status.auth.keySource` records it. With one
 // constant label there is nothing to sort; the namespace is included because
 // a selector reads the policy's own namespace: measured at agentgateway 1.5.0
-// for one other namespace, and re-measured at every upgrade by
-// `make conformance-cluster` (§3.4.4, TestSliceAKeySetInAnotherNamespaceDoesNotAdmit).
+// for two other namespaces (§3.4.4, TestSliceAKeySetInAnotherNamespaceDoesNotAdmit).
+// It is re-measured only when someone runs `make conformance-cluster`, which
+// no gate runs.
 // Only this function writes the form, and only this form is compared.
 func KeySource(runNamespace string) string {
 	return runNamespace + "/" + APIKeySourceLabel + "=" + APIKeySourceValue
