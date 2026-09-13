@@ -6,6 +6,11 @@ GOBIN := $(shell go env GOPATH)/bin
 CONTROLLER_GEN := $(GOBIN)/controller-gen
 SETUP_ENVTEST  := $(GOBIN)/setup-envtest
 ENVTEST_K8S    ?= 1.36.x
+# `make envtest` runs the suite once. A scheduled workflow reruns it with
+# ENVTEST_COUNT=3 so that a test which cannot run twice in one process is caught,
+# which a single run never shows (#32). The default timeout is go test's own.
+ENVTEST_COUNT   ?= 1
+ENVTEST_TIMEOUT ?= 10m
 CLUSTER        ?= assayd-local
 
 # Tool versions are pinned here, not floated with @latest. A build whose output
@@ -49,7 +54,7 @@ unit: ## pure logic, no cluster
 race: ## unit tests under the race detector (required evidence for review)
 	go test -race ./internal/... ./api/... -count=1
 envtest: $(SETUP_ENVTEST) ## reconcile behaviour against a real API server
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S) -p path)" go test ./test/envtest/... -count=1
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S) -p path)" go test ./test/envtest/... -count=$(ENVTEST_COUNT) -timeout=$(ENVTEST_TIMEOUT)
 cover: ## coverage over changed packages
 	go test ./internal/... ./api/... -coverprofile=cover.out -count=1 && go tool cover -func=cover.out | tail -1
 docs: ## a superseded guarantee must not survive in the text implementers build from
