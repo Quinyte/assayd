@@ -4,14 +4,14 @@ assayd's admission rejects agent images that are not cosign-signed (ADR-0019), a
 
 ## What is published, and where
 
-| Artifact | Location | State at v0.2.1 |
+| Artifact | Location | State at v0.3.0 |
 |---|---|---|
 | Operator image | `ghcr.io/quinyte/assayd-operator` (amd64, arm64) | published, cosign-signed, SBOM attested, SLSA provenance attached |
 | Helm chart | `oci://ghcr.io/quinyte/charts/assayd` | published, cosign-signed, pinned to the image by digest |
 
 Both are published only by `.github/workflows/release.yml`, on a `v*` tag, and the workflow verifies its own signatures from outside before it finishes.
 
-**GHCR creates a new package private, whatever the repository's visibility,** and GitHub offers no API to change it. Each package is made public by hand in its package settings. **Both existing packages were made public on 2026-09-11.** Without any credentials, `ghcr.io/quinyte/assayd-operator:0.2.1` and `ghcr.io/quinyte/charts/assayd:0.2.1` pull (HTTP 200), `helm show chart oci://ghcr.io/quinyte/charts/assayd --version 0.2.1` answers, and `cosign verify` of the image signature succeeds. Any **new** package a future release creates will still start private, and needs the same manual change before anyone outside the organization can pull it.
+**GHCR creates a new package private, whatever the repository's visibility,** and GitHub offers no API to change it. Each package is made public by hand in its package settings. **Both existing packages were made public on 2026-09-11.** Without any credentials, `ghcr.io/quinyte/assayd-operator:0.2.1` and `ghcr.io/quinyte/charts/assayd:0.2.1` pull (HTTP 200), `helm show chart oci://ghcr.io/quinyte/charts/assayd --version 0.2.1` answers, and `cosign verify` of the image signature succeeds. The same holds for `0.3.0`, checked on 2026-09-14 with no credentials: the image and the chart manifests answer HTTP 200. Any **new** package a future release creates will still start private, and needs the same manual change before anyone outside the organization can pull it.
 
 **Use v0.2.1, not v0.2.0.** On 2026-09-11 a history scrub re-pointed the `v0.2.0` tag, and that re-ran its release. The re-run moved the image tag `ghcr.io/quinyte/assayd-operator:0.2.0` to a newly built image. It signed that image, then failed before attaching an SBOM or provenance: the SBOM action tried to upload to the already-existing GitHub Release without write permission, and `release.yml` no longer does that. So:
 
@@ -19,6 +19,8 @@ Both are published only by `.github/workflows/release.yml`, on a `v*` tag, and t
 - **The `0.2.0` image tag is not.** Pulled by tag, it gets the unattested image, and `cosign verify-attestation` against that tag fails.
 
 v0.2.1 is a clean re-release. It was verified from outside: signature, SBOM attestation (verified by the release run's own step), SLSA provenance, and a chart pinned to exactly the image's digest.
+
+**The current release is v0.3.0.** It was verified from outside on 2026-09-14. The image `sha256:30449f7ea1348ec393158997439bb2a6fddc78cb0fbf149b04614251add8643d` passes `cosign verify` and both `verify-attestation` types, and the chart `0.3.0` pins exactly that digest and passes its own `cosign verify`.
 
 **v0.1.x were published under the project's old name,** as `plume-operator` and `charts/plume`. v0.1.0 came from the repository's earlier home, and v0.1.1 from the Quinyte organization. Those packages were **deleted on 2026-09-11**, when the rename was finished, because nothing will be published under the old name again. Their tags remain, and so do their signatures' Rekor entries, which are immutable. The artifacts do not, so neither release can be installed or verified today. v0.2.0 is the first release under the assayd name.
 
@@ -58,7 +60,7 @@ cosign verify-attestation --type slsaprovenance1 "${IMAGE}@${DIGEST}" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-`gh attestation verify oci://ghcr.io/quinyte/assayd-operator:0.2.1 --owner Quinyte` reads the same provenance, and needs no credentials now that the package is public. Checked on 2026-09-12: it verified one `https://slsa.dev/provenance/v1` attestation, signed by `.github/workflows/release.yml@refs/tags/v0.2.1`.
+`gh attestation verify oci://ghcr.io/quinyte/assayd-operator:0.3.0 --owner Quinyte` reads the same provenance, and needs no credentials now that the package is public. Checked on 2026-09-14: it verified one `https://slsa.dev/provenance/v1` attestation, signed by `.github/workflows/release.yml@refs/tags/v0.3.0`.
 
 ## Digests, not tags
 
@@ -67,7 +69,7 @@ The chart takes `operator.image.digest`, and **the digest wins over the tag when
 A tag can be repointed at other content after it was signed. A digest names the content. The release workflow pins the published chart to the digest it just published and verified, so installing the published chart at defaults runs the artifact that was signed:
 
 ```bash
-helm install assayd oci://ghcr.io/quinyte/charts/assayd --version 0.2.1
+helm install assayd oci://ghcr.io/quinyte/charts/assayd --version 0.3.0
 ```
 
 The chart **in the repository** carries an empty `digest`, because only a release knows it. Installing from a checkout therefore resolves by tag, unless you pass `--set operator.image.digest=sha256:...`.
