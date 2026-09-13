@@ -254,7 +254,21 @@ func gatewayAddress(t *testing.T, gw string) string {
 	if err != nil || strings.TrimSpace(out) == "" {
 		t.Fatalf("Gateway %s/%s has no Service: %s", sliceGatewayNS, gw, out)
 	}
-	return strings.TrimSpace(out) + "." + sliceGatewayNS + ".svc.cluster.local"
+	addr := strings.TrimSpace(out) + "." + sliceGatewayNS + ".svc.cluster.local"
+	// A proxy that has just rolled out can still refuse connections for a
+	// moment. Measured: a fresh Gateway, after exactly the waits above, got no
+	// answer at all to its first probe, and answered 404 three seconds later
+	// (an independent review of this change). So wait here until it answers
+	// anything, with a host no route names, and no case has to tolerate a
+	// missing answer.
+	for deadline := time.Now().Add(2 * time.Minute); send(t, addr, servingPort, "listener-probe.invalid", "/", "").code == 0; {
+		if time.Now().After(deadline) {
+			t.Fatalf("Gateway %s/%s never answered on port %d: every probe got no answer at all",
+				sliceGatewayNS, gw, servingPort)
+		}
+		time.Sleep(time.Second)
+	}
+	return addr
 }
 
 func tail(s string, n int) string {
@@ -695,10 +709,16 @@ func startStream(t *testing.T, gw, host, tag string, bound time.Duration) *codeS
 			// stream's tail. The loop stops within one batch of the stop
 			// file, which the channel holds. If it does not, or nothing is
 			// reading and the channel is full, kill the loop and drain what
-			// is left, so the reader reaches the end.
+			// is left, so the reader reaches the end. The drained answers are
+			// lost to anyone still reading them, so the case fails: a check
+			// after the stop that saw an empty channel would otherwise pass
+			// (an independent review of this change).
 			select {
 			case <-s.done:
 			case <-time.After(15 * time.Second):
+				t.Errorf("the request loop did not stop within 15 s of its stop file, so it was " +
+					"killed and the answers still buffered were discarded unread; nothing measured " +
+					"after the stop can be trusted")
 				_ = cmd.Process.Kill()
 				go func() {
 					for range s.codes {
@@ -805,11 +825,15 @@ func TestSliceAPublishedRouteLocksFrom200To401(t *testing.T) {
 				s.check(t, fmt.Sprintf("trial %d", i))
 				t.Fatalf("trial %d: the request loop produced nothing", i)
 			}
-			if a.code == 200 {
-				run++
-			} else {
-				run = 0
+			// The route answered 200 in awaitCode a moment ago, so anything
+			// else now is a route that is not open when the clock starts. An
+			// earlier version reset its count and waited on (an independent
+			// review of this change).
+			if a.code != 200 {
+				t.Fatalf("trial %d: before the policy write an anonymous request got HTTP %d; the "+
+					"route answered 200 a moment ago and must still be open", i, a.code)
 			}
+			run++
 		}
 		p := authPolicy(t, agent)
 		warm(t, pc)
@@ -1047,8 +1071,11 @@ func TestSliceOnePerAgentPolicyCoversAPromotion(t *testing.T) {
 		}
 		tallied <- r
 	}()
-	promote(t, agent, route)
+	// Before the patch, not after: the API server commits inside it, and the
+	// switch could land before a clock started on its return (an independent
+	// review of this change).
 	promoted := time.Now()
+	promote(t, agent, route)
 
 	deadline := time.Now().Add(2 * time.Minute)
 	served := ""
@@ -1098,6 +1125,11 @@ func TestSliceOnePerAgentPolicyCoversAPromotion(t *testing.T) {
 	if g := rev2Seen.Sub(prev); g > pause {
 		pause = g
 	}
+	// The two thresholds, from the runs the research note quotes: 50 answers
+	// is about 10 ms of the loop at its interval of about 0.2 ms, where 299
+	// and 407 arrived in this window; and 20 ms is more than twice the
+	// longest gap any of those runs' streams showed, 7.97 ms under -race. A
+	// stream that stalled across the switch fails both.
 	if during < 50 || pause > 20*time.Millisecond {
 		t.Fatalf("between the promotion and the new revision first being seen, %d anonymous "+
 			"requests were answered and the longest pause was %s. The switch happens there, and "+
