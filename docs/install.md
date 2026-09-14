@@ -21,6 +21,19 @@ The e2e runs its gateway tests on k3d only. The kind lane skips them and reports
 
 The chart prints its notes only after a successful install, and three things must exist before that install can succeed. With `gateway.enabled: true` and the Gateway API or agentgateway CRDs absent, **the operator refuses to start** and its last log line names the missing kind. `helm install --wait` then times out. And the chart renders a Role into the Gateway's namespace, so `helm install` fails if that namespace is missing.
 
+### 1.0 A cluster, with a registry it can pull from
+
+Section 5 deploys an agent image you build, and the operator pulls it by digest from a registry at every Pod start. So the cluster needs a registry its nodes can pull from. On k3d, that registry is wired in when the cluster is created and cannot be added afterwards. This is what the harness does:
+
+```bash
+k3d registry create assayd-registry --port 5111
+k3d cluster create assayd --agents 0 --wait --registry-use k3d-assayd-registry:5111
+```
+
+k3d names the registry `k3d-assayd-registry`. The host pushes to it as `localhost:5111`, and the cluster's nodes pull from it as `k3d-assayd-registry:5111`. Section 5.1 uses both names.
+
+On any other cluster, use a registry its nodes can already pull from.
+
 ### 1.1 Gateway API CRDs
 
 ```bash
@@ -47,9 +60,19 @@ The Gateway gets its own namespace. It **cannot** share `assayd-system`, which t
 Four things about it are fixed by the operator, not by your preference:
 
 - **The name** is the chart's `gateway.name`, `assayd` by default. The operator reads the Gateway by that name.
-- **The listener is named `http`.** Every emitted route attaches to the listener named `http`, and there is no value to change it. Name it anything else and every route reports `NoMatchingParent` and every request gets `404`. The operator does not read route status, so an `auth: none` Agent still says `Ready`. An API-key Agent's anonymous probe cannot get its `401`, so its route stays unpublished.
-- **The listener admits the run namespaces.** The operator puts each Agent's route in an operator-owned run namespace (section 3), labelled `assayd.dev/run-namespace: "true"`. A listener that does not admit them rejects every route, and every request gets `404` with no other signal.
+- **The listener is named `http`.** Every emitted route attaches to the listener named `http`, and there is no value to change it. Name it anything else and every route reports `NoMatchingParent: sectionName "http" not found`, and anonymous requests get `404`.
+- **The listener admits the run namespaces.** The operator puts each Agent's route in an operator-owned run namespace (section 3), labelled `assayd.dev/run-namespace: "true"`. A listener whose selector matches none of them rejects every route with `NotAllowedByListeners`.
 - **The Gateway admits no ListenerSets.** Leave `spec.allowedListeners` unset. The API server defaults it to `from: None`. Set it to `Same`, `All` or any `Selector` and no new Agent is published and no lock is recorded: each held Agent reports `PolicyApplyIncomplete`, reason `GatewayAuthPolicy`, and pages until you change it.
+
+**A wrong listener is reported for a new Agent, and not for a served one.** The operator reads a route's `Accepted` and `ResolvedRefs` status while it brings the route up, and not afterwards. This was measured on k3d with agentgateway 1.5.0, during review of this page, with the listener renamed to `web`:
+
+| Agent | What it reports |
+|---|---|
+| New, `auth: none` | `Ready=True` for about four minutes. Then `Ready=False` and `PolicyApplyIncomplete`, reason `AuthEnforcementUnverified`, naming `NoMatchingParent: sectionName "http" not found`. |
+| New, API-key | Stops at stage `Converging` from the first pass: `Ready=False`, reason `AuthEnforcementPending`, naming `NoMatchingParent`. `AuthEnforcementUnverified` at four minutes. |
+| Already served | `Ready=True`, indefinitely, while its route is `Accepted=False`. **Nothing reports it.** |
+
+With a listener selector that matches nothing, a new Agent of either mode reports `Ready=False` naming `NotAllowedByListeners`, and an Agent already served again stays silent. Once the Gateway was corrected, every held Agent recovered to `Ready` within 90 seconds, without being recreated.
 
 ```bash
 kubectl apply -f - <<'EOF'
@@ -127,7 +150,7 @@ helm install assayd oci://ghcr.io/quinyte/charts/assayd --version 0.3.0 \
 
 - **Install the release into the default namespace, as above.** The chart creates `assayd-system` itself and runs the operator there. The harness installs the release into `default` too.
 - **`gateway.namespace` is load-bearing.** An admission policy reserves route authorship by comparing a route's `parentRef` namespace to this value. Point it at the wrong namespace and that reservation matches nothing, so any identity can attach a route to the Gateway.
-- **On a single-node cluster**, add `--set profile=local`. It forces one operator replica. The default `prod` profile runs two, with a disruption budget. The harness installs with the chart's `values-local.yaml`, which sets it.
+- **`--set profile=local` is optional**, even on a single node. It forces one operator replica. The default `prod` profile runs two, with a disruption budget, and keeps them apart with a preferred anti-affinity, not a required one, so both still fit on one node. The harness installs with the chart's `values-local.yaml`, which sets it.
 - The first install creates the Agent CRD from the chart's `crds/` directory. Upgrades do not (section 4).
 
 Check that the operator is running:
@@ -192,17 +215,28 @@ This follows `TestTheGatewayRefusesADisallowedPrincipal`, which measures the sam
 
 Nothing publishes an agent image. Build the e2e's own agent, `test/responder`, from a checkout of this repository. It serves an A2A card and answers A2A `SendMessage` by echoing the text back. It is a test fixture, and `docs/agent-contract.md` says what any container must do instead.
 
-The image must be pushed to a registry your nodes can pull from, and referenced by digest. The Agent CRD refuses a reference without `@sha256:`, and the operator sets `imagePullPolicy: Always`, so a locally imported image does not work. On k3d, the harness creates a registry and wires it in with `k3d cluster create --registry-use`, which is only possible at cluster creation.
+The image must be in a registry your nodes can pull from, referenced by digest. The Agent CRD refuses a reference without `@sha256:`. The operator sets `imagePullPolicy: Always`, so an image imported straight into the nodes is not used.
+
+On k3d, with the registry from section 1.0, the host and the nodes know the registry by different names. So push to one repository and reference the other:
 
 ```bash
-REPO=<registry-your-nodes-can-pull-from>/assayd-responder
-docker build -t "$REPO:demo" -f test/responder/Dockerfile .
-docker push "$REPO:demo"
-IMAGE="$REPO@$(docker inspect --format '{{index .RepoDigests 0}}' "$REPO:demo" | cut -d@ -f2)"
-echo "$IMAGE"
+PUSH_REPO=localhost:5111/assayd-responder            # the host's name for the registry
+PULL_REPO=k3d-assayd-registry:5111/assayd-responder  # the nodes' name for it
+docker build -t "$PUSH_REPO:demo" -f test/responder/Dockerfile .
+DIGEST=$(docker push "$PUSH_REPO:demo" | awk '/digest: sha256:/ {print $3}')
+if [ -z "$DIGEST" ]; then
+  echo "the push failed or printed no digest: stop here" >&2
+else
+  IMAGE="$PULL_REPO@$DIGEST"
+  echo "$IMAGE"
+fi
 ```
 
-The reference must be lowercase and match `<registry>[:port]/<repo>[:tag]@sha256:<64 hex>`.
+- **Do not push to `k3d-assayd-registry:5111` from the host.** That name resolves only inside the cluster's network, and the push fails with `no such host`.
+- **Take the digest from `docker push`, not from `docker inspect`.** With Docker's containerd image store, `{{index .RepoDigests 0}}` can name a local index digest the registry does not serve, and the Pod's pull then gets `404`. The harness reads `RepoDigests`, which works with Docker's classic image store.
+- **Stop if `IMAGE` is empty.** An Agent with an empty image is refused by the CRD.
+
+On any other cluster, push to a name your nodes can pull from, and use the digest the registry reports: the `digest:` line `docker push` prints, or `docker buildx imagetools inspect <image>`. The reference must be lowercase and match `<registry>[:port]/<repo>[:tag]@sha256:<64 hex>`.
 
 ### 5.2 Create the Agent
 
@@ -231,8 +265,11 @@ The operator writes the route with no backend first. It writes `hello-auth`, sen
 
 ```bash
 kubectl -n demo wait agent/hello --for=jsonpath='{.status.auth.mode}'=apikey --timeout=10m
+kubectl -n demo wait agent/hello --for=condition=Registered --timeout=2m
 kubectl -n demo get agent hello -o jsonpath='{.status.auth}{"\n"}{.status.conditions}{"\n"}'
 ```
+
+The second wait is needed. The card is fetched separately, once the Pod is available, and retried every 15 seconds. The auth wait can return first, while `Registered` is still `False`, reason `CardUnreachable`. In review it matched the table below about 30 seconds later.
 
 While it is not yet served, `Ready` is `False`, reason `AuthEnforcementPending`. Once it is, expect:
 
@@ -315,7 +352,7 @@ This shortcut passes each key on the `kubectl run` command line, so it is readab
 | The operator Pod exits at start, and its last log line names a kind | The Gateway API or agentgateway CRDs are missing (sections 1.1, 1.2). |
 | `helm install` fails naming the Gateway's namespace | The namespace does not exist yet (section 1.3). |
 | The chart refuses to render: `gateway.servingUrl is empty` | Set `gateway.servingUrl` (section 1.5). |
-| Every request gets `404`; an `auth: none` Agent says `Ready`, an API-key Agent stays unpublished | The listener is not named `http`, or it does not admit `assayd.dev/run-namespace: "true"` (section 1.4). |
+| Anonymous requests get `404`, and a new Agent names `NoMatchingParent` or `NotAllowedByListeners` | The listener is not named `http`, or its selector does not admit `assayd.dev/run-namespace: "true"` (section 1.4). An Agent served before the Gateway changed still says `Ready`: nothing reports it. |
 | `PolicyApplyIncomplete`, reason `AuthEnforcementUnverified` | `gateway.servingUrl` reaches no listener. |
 | `PolicyApplyIncomplete`, reason `GatewayAuthPolicy` | The Gateway admits ListenerSets, or a policy of yours targets it (section 1.4). |
 | `PolicyApplyIncomplete`, reason `AuthRecordNotKept` | The Agent CRD predates `status.auth`: apply the chart's CRDs (section 4). |
