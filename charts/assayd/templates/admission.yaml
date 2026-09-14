@@ -198,7 +198,11 @@ measured (§3.4.4).
 # delete a policy is an RBAC question, as it is for routes (design 07 A6.10), and
 # reserving it would also refuse the namespace controller's own deletes when a
 # run namespace is torn down. A policy deleted out of band is §3.3.3's
-# `AuthPolicyMissing`, which the compiler re-creates; no compiler exists yet.
+# `AuthPolicyMissing` while the route stays published: the operator re-creates
+# a served API-key Agent's `<agent>-auth` from `status.auth` by a `Lock`. When
+# the route went too, the `Create` that re-creates the route writes it, and a
+# `Create` or `Lock` still in flight writes it again
+# (internal/controller/authtxn.go).
 # The `status` subresource is not matched: the gateway's controller writes it,
 # and a custom resource's /status ignores every change outside `status`.
 apiVersion: admissionregistration.k8s.io/v1

@@ -116,9 +116,9 @@ gateway:
   # a Gateway and there is no value to read one from. Name your listener
   # something else and every route reports `NoMatchingParent`, and anonymous
   # requests 404. The operator reads route status (Accepted, ResolvedRefs) only
-  # while it brings a route up, so a NEW Agent says so: an API-key Agent at
-  # once, Ready=False with reason AuthEnforcementPending, and an auth: none
-  # Agent after about four minutes of Ready=True. Both then report
+  # while a Create or Lock is in flight, so a NEW Agent says so: an API-key
+  # Agent at once, Ready=False with reason AuthEnforcementPending, and an
+  # auth: none Agent after about four minutes of Ready=True. Both then report
   # PolicyApplyIncomplete, reason AuthEnforcementUnverified, naming
   # NoMatchingParent. An Agent ALREADY SERVED keeps saying Ready while its route
   # is not Accepted, and nothing reports it. Measured on agentgateway 1.5.0.
