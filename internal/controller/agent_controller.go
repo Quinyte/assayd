@@ -102,7 +102,8 @@ type AgentReconciler struct {
 	// envtest sets it short because there is no cluster network there to wait for.
 	CardFetchTimeout time.Duration
 	// CardClient fetches the agent card (§3.4). Injected so a test can supply a
-	// transport; nil means a plain client.
+	// transport; nil means cardHTTPClient, which follows no redirect and takes
+	// no proxy from the environment.
 	CardClient interface {
 		Do(*http.Request) (*http.Response, error)
 	}

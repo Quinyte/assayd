@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -27,7 +28,8 @@ type AuthProber interface {
 // AuthProbeRequest is one anonymous request. It carries no key: `Create`'s
 // probe never mints one (§3.3.3).
 type AuthProbeRequest struct {
-	// URL is --gateway-serving-url followed by the Agent's card path.
+	// URL is --gateway-serving-url's scheme and host with the Agent's card
+	// path after them (probeURL).
 	URL string
 	// Host is the Agent's hostname, which is what the serving route matches.
 	Host string
@@ -44,15 +46,43 @@ type AuthProbeAnswer struct {
 	CardDigest string
 }
 
-// probeTransport is http.DefaultTransport with NO proxy. The probe must reach
-// the Gateway's serving listener itself: a proxy taken from HTTP_PROXY in the
-// operator's environment would answer in its place, and a proxy that answers
-// 401 would pass for the Agent's -auth.
-var probeTransport = func() *http.Transport {
+// directTransport is http.DefaultTransport with NO proxy, for the two requests
+// the operator sends to an address it derived itself: this probe, to the
+// Gateway's serving listener, and the card fetch, to a revision's Service. A
+// proxy taken from HTTP_PROXY in the operator's environment would answer in
+// the target's place — a proxy that answers 401 would pass for the Agent's
+// -auth, and a proxy's card would be registered as the revision's.
+var directTransport = func() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.Proxy = nil
 	return t
 }()
+
+// refuseRedirects is the redirect policy of the same two requests. A 3xx comes
+// back as the answer and is never followed, because following it sends the
+// operator to an address the other side chose.
+func refuseRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// cardURL is how both of those requests build their URL: the scheme and host
+// are the operator's, and the Agent's spec.card.path is only ever a PATH.
+// Concatenated onto the host as a string, a path of `@elsewhere/...` turned the
+// derived address into userinfo and named the host itself, which is the
+// redirect with no redirect in it. url.URL puts a path that does not begin with
+// "/" after one, so no path can reach the authority.
+func cardURL(scheme, host, path string) string {
+	return (&url.URL{Scheme: scheme, Host: host, Path: path}).String()
+}
+
+// probeURL is the probe's cardURL, on --gateway-serving-url's scheme and host.
+// ValidateGatewayServingURL has already refused a path, query, fragment or
+// userinfo on it, so those two are all it contributes.
+func probeURL(servingURL, path string) (string, error) {
+	u, err := url.Parse(servingURL)
+	if err != nil {
+		return "", fmt.Errorf("--gateway-serving-url %q: %w", servingURL, err)
+	}
+	return cardURL(u.Scheme, u.Host, path), nil
+}
 
 // httpAuthProber is the probe on a real cluster.
 //
@@ -74,9 +104,7 @@ func (p httpAuthProber) Probe(ctx context.Context, req AuthProbeRequest) (AuthPr
 		return AuthProbeAnswer{}, fmt.Errorf("build the probe of %s: %w", req.URL, err)
 	}
 	r.Host = req.Host
-	c := &http.Client{Transport: probeTransport, CheckRedirect: func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}}
+	c := &http.Client{Transport: directTransport, CheckRedirect: refuseRedirects}
 	resp, err := c.Do(r)
 	if err != nil {
 		return AuthProbeAnswer{}, err

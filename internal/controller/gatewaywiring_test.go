@@ -89,8 +89,9 @@ func TestANackReadsABoundedNumberOfPolicies(t *testing.T) {
 	}
 }
 
-// --gateway-serving-url names a listener, and design 03 §3.3.3's probe appends
-// the Agent's card path to it. So anything past host and port is refused, and
+// --gateway-serving-url names a listener: design 03 §3.3.3's probe keeps only
+// its scheme and host and puts the Agent's card path after them. So anything
+// past host and port is refused, and
 // so is anything that is not an http(s) URL at all.
 func TestTheServingURLNamesAListenerAndNothingElse(t *testing.T) {
 	for _, ok := range []string{
@@ -112,8 +113,8 @@ func TestTheServingURLNamesAListenerAndNothingElse(t *testing.T) {
 		{"http://:8080", "no host"},
 		{"http://probe:secret@gw.example:8080", "user information"},
 		{"http://gw.example:8080/prefix", "has a path"},
-		// The probe appends a card path that starts with "/", so even a bare
-		// trailing slash would make it "//.well-known/…".
+		// The probe uses only the scheme and host, so even a bare trailing
+		// slash would be dropped in silence.
 		{"http://gw.example:8080/", "has a path"},
 		{"http://gw.example:99999", "not a port from 1 to 65535"},
 		{"http://gw.example:0", "not a port from 1 to 65535"},

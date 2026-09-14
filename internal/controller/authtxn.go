@@ -2130,8 +2130,15 @@ func (r *AgentReconciler) probeAgent(ctx context.Context, agent *assaydv1alpha1.
 		}
 		prober = httpAuthProber{timeout: DefaultCardFetchTimeout}
 	}
+	// Built from its parts, never concatenated: the card path is the Agent
+	// author's, and appended to the listener it could name the host that
+	// answers this probe — and so forge the 401 a route is published on.
+	target, err := probeURL(r.Gateway.ServingURL, cardPath(agent))
+	if err != nil {
+		return AuthProbeAnswer{}, err
+	}
 	return prober.Probe(ctx, AuthProbeRequest{
-		URL:  r.Gateway.ServingURL + cardPath(agent),
+		URL:  target,
 		Host: r.Gateway.Hostname(agent.Name, agent.Namespace),
 	})
 }

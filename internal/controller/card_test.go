@@ -5,9 +5,15 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,8 +42,8 @@ func cardFixture(t *testing.T, body string, status int) (*AgentReconciler, *assa
 	}
 	// The fetch reads the revision's Service to get its ClusterIP, so the fake
 	// client must hold one. redirectTo then sends the request to the test server
-	// whatever address was built — the address CONSTRUCTION is exercised by the
-	// e2e, where a wrong one simply fails to connect.
+	// whatever address was built; the address CONSTRUCTION is exercised by
+	// directFixture's tests below and by the e2e.
 	r := &AgentReconciler{
 		CardClient: redirectTo{srv.URL},
 		Client: fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(&corev1.Service{
@@ -49,8 +55,9 @@ func cardFixture(t *testing.T, body string, status int) (*AgentReconciler, *assa
 }
 
 // redirectTo sends every request to the test server, whatever in-cluster URL
-// the operator built. The URL construction is exercised separately by the e2e,
-// where a wrong one simply fails to connect.
+// the operator built, through the production client's policy: no redirect
+// followed, no proxy taken. The URL construction is exercised by directFixture
+// below and by the e2e.
 type redirectTo struct{ base string }
 
 func (d redirectTo) Do(req *http.Request) (*http.Response, error) {
@@ -59,7 +66,7 @@ func (d redirectTo) Do(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return http.DefaultClient.Do(out)
+	return cardHTTPClient.Do(out)
 }
 
 // A real A2A v1.0 card. protocolVersion lives inside supportedInterfaces[];
@@ -296,5 +303,244 @@ func TestACardWhoseInterfacesAreAllUnsupportedIsRefused(t *testing.T) {
 	ce, ok := err.(*cardError)
 	if !ok || ce.reason != "CardProtocolUnsupported" {
 		t.Errorf("a card offering only 0.3 and 0.2 was not refused as unsupported: %v", err)
+	}
+}
+
+// directFixture points the PRODUCTION card client at srv: the revision's
+// Service carries srv's loopback address as its ClusterIP and the Agent's port
+// is srv's, so nothing is injected and the URL fetchAndValidateCard builds is
+// the one it dials. The other fixtures inject redirectTo, which replaces the
+// URL the operator built, so they prove nothing about its construction.
+func directFixture(t *testing.T, srv *httptest.Server) (*AgentReconciler, *assaydv1alpha1.Agent) {
+	t.Helper()
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directFixtureAt(u.Hostname()), &assaydv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "pa-reviewer", Namespace: "team"},
+		Spec:       assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{Port: int32(p)}},
+	}
+}
+
+// directFixtureAt is a reconciler with no injected CardClient, whose revision
+// Service has the given ClusterIP.
+func directFixtureAt(clusterIP string) *AgentReconciler {
+	return &AgentReconciler{
+		CardFetchTimeout: time.Second,
+		Client: fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "assayd-run-team", Name: "pa-reviewer-abc123"},
+			Spec:       corev1.ServiceSpec{ClusterIP: clusterIP},
+		}).Build(),
+	}
+}
+
+// The operator dials the address it derived from its own Service, and nothing
+// else. A candidate that answers the card path with a redirect is choosing a
+// second address for the operator to GET — another in-cluster Service, a cloud
+// metadata endpoint, anything the operator's Pod can reach — which is
+// server-side request forgery from the operator's network position. So the
+// redirect is not followed, whatever its code, and it is a registration
+// failure that names itself rather than a card from somewhere else.
+func TestACardPathThatRedirectsIsNotFollowed(t *testing.T) {
+	var hits atomic.Int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(goodCard))
+	}))
+	defer elsewhere.Close()
+	for _, code := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+		http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			hits.Store(0)
+			agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, elsewhere.URL+"/.well-known/agent-card.json", code)
+			}))
+			defer agent.Close()
+			r, a := directFixture(t, agent)
+			card, err := r.fetchAndValidateCard(context.Background(), a, "assayd-run-team", "abc123")
+			if n := hits.Load(); n != 0 {
+				t.Errorf("the operator followed the agent's %d to an address the agent chose "+
+					"(%d request(s) reached it)", code, n)
+			}
+			if card != nil {
+				t.Errorf("a card served from the redirect's target was accepted as this revision's: %+v", card)
+			}
+			ce, ok := err.(*cardError)
+			if !ok {
+				t.Fatalf("a %d was not refused as a card error: %v", code, err)
+			}
+			if ce.reason != "CardRedirected" {
+				t.Errorf("refused as %q, want CardRedirected: a redirect is an answer, not an "+
+					"unreachable agent, and the owner has to know which to fix", ce.reason)
+			}
+			for _, want := range []string{"redirect", "not followed", strconv.Itoa(code)} {
+				if !strings.Contains(ce.msg, want) {
+					t.Errorf("the message does not say %q: %s", want, ce.msg)
+				}
+			}
+			// Location is the agent's choice of address, and status is no place
+			// to echo it.
+			if strings.Contains(ce.msg, strings.TrimPrefix(elsewhere.URL, "http://")) {
+				t.Errorf("the message quotes the redirect's target: %s", ce.msg)
+			}
+		})
+	}
+}
+
+// The card fetch, as it is sent, never goes through a proxy from the
+// operator's environment: a proxy answers in the revision's place, and the card
+// it returns would be registered as the one the container serves.
+//
+// Run in a child process for the reason TestTheProbeNeverTakesAProxyFromTheEnvironment
+// gives: net/http reads HTTP_PROXY once per process and never proxies a
+// loopback host. The child fetches from a ClusterIP in TEST-NET-1 (RFC 5737),
+// which is not loopback and routes nowhere, with HTTP_PROXY set to a proxy
+// that serves a valid card: sent directly the fetch fails, through the proxy
+// it registers. A control request through the default client, in the same
+// child, must get the proxy's 200, or the test would prove nothing.
+func TestTheCardFetchNeverTakesAProxyFromTheEnvironment(t *testing.T) {
+	const clusterIP = "192.0.2.1"
+	if os.Getenv("ASSAYD_CARD_PROXY_CHILD") == "1" {
+		a := &assaydv1alpha1.Agent{
+			ObjectMeta: metav1.ObjectMeta{Name: "pa-reviewer", Namespace: "team"},
+			Spec:       assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{Port: 8080}},
+		}
+		card, err := directFixtureAt(clusterIP).fetchAndValidateCard(context.Background(), a,
+			"assayd-run-team", "abc123")
+		fmt.Printf("FETCH registered=%v\n", card != nil && err == nil)
+		if ce, ok := err.(*cardError); ok {
+			fmt.Printf("FETCH reason=%s msg=%s\n", ce.reason, ce.msg)
+		}
+		control := 0
+		if resp, err := http.Get("http://" + clusterIP + ":8080/.well-known/agent-card.json"); err == nil {
+			control = resp.StatusCode
+			_ = resp.Body.Close()
+		}
+		fmt.Printf("CONTROL code=%d\n", control)
+		return
+	}
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(goodCard))
+	}))
+	defer proxy.Close()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestTheCardFetchNeverTakesAProxyFromTheEnvironment$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "ASSAYD_CARD_PROXY_CHILD=1",
+		"HTTP_PROXY="+proxy.URL, "http_proxy="+proxy.URL, "NO_PROXY=", "no_proxy=")
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "CONTROL code=200") {
+		t.Fatalf("the control request did not go through the environment's proxy, so this test "+
+			"cannot show the card fetch avoids it:\n%s", out)
+	}
+	if !strings.Contains(string(out), "FETCH registered=false") {
+		t.Errorf("the card fetch went through HTTP_PROXY and registered the proxy's card as the "+
+			"revision's:\n%s", out)
+	}
+	// And it failed for the one reason a direct request can: dialling the
+	// derived address. "Not registered" alone passed with the proxy restored,
+	// once the child's fetch broke for anything else first — a Service lookup
+	// in the wrong namespace, say.
+	want := "FETCH reason=CardUnreachable msg=could not fetch the agent card from http://" + clusterIP + ":8080/"
+	if !strings.Contains(string(out), want) {
+		t.Errorf("the card fetch did not fail at the dial to %s, so this run shows nothing about "+
+			"the proxy:\n%s", clusterIP, out)
+	}
+}
+
+// A 3xx that is not one of the five codes net/http follows names nowhere to
+// go, and the message must not call it a redirect.
+func TestA3xxThatIsNotARedirectIsNotCalledOne(t *testing.T) {
+	for _, code := range []int{http.StatusMultipleChoices, http.StatusNotModified} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(code)
+			}))
+			defer srv.Close()
+			r, a := directFixture(t, srv)
+			_, err := r.fetchAndValidateCard(context.Background(), a, "assayd-run-team", "abc123")
+			ce, ok := err.(*cardError)
+			if !ok || ce.reason != "CardUnreachable" || strings.Contains(ce.msg, "redirect") {
+				t.Errorf("a %d was reported as %v; it is a plain failure, not a redirect", code, err)
+			}
+		})
+	}
+}
+
+// spec.card.path is the Agent author's, and it is a PATH. Appended to the
+// derived host as a string, `@elsewhere/...` turned the ClusterIP and port
+// into userinfo and named the host itself: the redirect, with no redirect.
+func TestTheCardPathCannotNameTheHost(t *testing.T) {
+	var hits atomic.Int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(goodCard))
+	}))
+	defer elsewhere.Close()
+	var gotPath atomic.Value
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath.Store(r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer agent.Close()
+	r, a := directFixture(t, agent)
+	a.Spec.Card.Path = "@" + strings.TrimPrefix(elsewhere.URL, "http://") + "/.well-known/agent-card.json"
+
+	card, err := r.fetchAndValidateCard(context.Background(), a, "assayd-run-team", "abc123")
+	if n := hits.Load(); n != 0 {
+		t.Errorf("a card path of %q sent the operator to %s (%d request(s))", a.Spec.Card.Path, elsewhere.URL, n)
+	}
+	if card != nil || err == nil {
+		t.Errorf("a card from an address the path named was registered: %+v", card)
+	}
+	if got, want := gotPath.Load(), "/"+a.Spec.Card.Path; got != want {
+		t.Errorf("the revision's Service was asked for %v, want the path itself, %q", got, want)
+	}
+}
+
+// The same hole in the auth probe, where it is worse: the host a card path
+// names answers the anonymous request whose 401 publishes a route, so an
+// author could forge the evidence that their route is authenticated.
+func TestTheProbesCardPathCannotNameTheHost(t *testing.T) {
+	var hits atomic.Int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer elsewhere.Close()
+	var gotPath atomic.Value
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath.Store(r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer gateway.Close()
+	r := &AgentReconciler{Gateway: GatewayConfig{ServingURL: gateway.URL, HostnameSuffix: "assayd.internal"}}
+	a := &assaydv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "pricer", Namespace: "payments"},
+		Spec: assaydv1alpha1.AgentSpec{Card: assaydv1alpha1.CardSpec{
+			Path: "@" + strings.TrimPrefix(elsewhere.URL, "http://") + "/.well-known/agent-card.json"}},
+	}
+
+	ans, err := r.probeAgent(context.Background(), a)
+	if n := hits.Load(); n != 0 {
+		t.Errorf("a card path of %q sent the probe to %s, whose 401 would publish the route "+
+			"(%d request(s))", a.Spec.Card.Path, elsewhere.URL, n)
+	}
+	if err != nil || ans.Code != http.StatusOK {
+		t.Errorf("the probe did not get the serving listener's answer: %+v, %v", ans, err)
+	}
+	if got, want := gotPath.Load(), "/"+a.Spec.Card.Path; got != want {
+		t.Errorf("the serving listener was asked for %v, want the path itself, %q", got, want)
+	}
+}
+
+// probeURL's one failure. ValidateGatewayServingURL runs first in production,
+// so this is reached only by a reconciler built around NewAgentReconciler.
+func TestProbeURLRefusesAServingURLItCannotParse(t *testing.T) {
+	if got, err := probeURL("http://[::1", "/.well-known/agent-card.json"); err == nil {
+		t.Errorf("an unparseable --gateway-serving-url produced %q", got)
 	}
 }

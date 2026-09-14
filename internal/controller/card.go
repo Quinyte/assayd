@@ -162,10 +162,7 @@ func (e *cardError) Error() string { return e.msg }
 // something other than what serves traffic.
 func (r *AgentReconciler) fetchAndValidateCard(ctx context.Context, agent *assaydv1alpha1.Agent,
 	runNS, rev string) (*assaydv1alpha1.CardStatus, error) {
-	path := agent.Spec.Card.Path
-	if path == "" {
-		path = "/.well-known/agent-card.json"
-	}
+	path := cardPath(agent)
 	// Addressed by the Service's ClusterIP, not by its DNS name.
 	//
 	// The operator created this Service and can read it, so resolving it through
@@ -189,10 +186,14 @@ func (r *AgentReconciler) fetchAndValidateCard(ctx context.Context, agent *assay
 		return nil, &cardError{reason: "CardUnreachable", msg: fmt.Sprintf(
 			"the revision's Service %s/%s has no ClusterIP", runNS, svcName)}
 	}
-	url := fmt.Sprintf("http://%s%s",
-		net.JoinHostPort(svc.Spec.ClusterIP, fmt.Sprint(port(agent.Spec.Runtime))), path)
+	// Built from its parts, never concatenated: path is the Agent author's (see
+	// cardURL).
+	url := cardURL("http", net.JoinHostPort(svc.Spec.ClusterIP, fmt.Sprint(port(agent.Spec.Runtime))), path)
 
 	body, err := r.fetchOnce(ctx, url)
+	if ce, ok := err.(*cardError); ok {
+		return nil, ce // an answer that names itself, such as CardRedirected
+	}
 	if err != nil {
 		return nil, &cardError{reason: "CardUnreachable", msg: fmt.Sprintf(
 			"could not fetch the agent card from %s: %v. Retrying every %s; this does not "+
@@ -251,12 +252,24 @@ func (r *AgentReconciler) fetchAndValidateCard(ctx context.Context, agent *assay
 	}, nil
 }
 
+// cardHTTPClient is the card fetch on a real cluster. It dials the address
+// fetchAndValidateCard derived from the revision's Service, and nothing else.
+//
+// It follows no redirect. The fetch is an anonymous GET to a candidate's own
+// code, so a 3xx is the candidate naming a second address for the operator to
+// request — another in-cluster Service, a cloud metadata endpoint, anything the
+// operator's Pod can reach. A plain http.Client followed up to ten of them and
+// registered whatever card was at the end; that is server-side request forgery
+// from the operator's network position. And it takes no proxy from the
+// environment, for the reason directTransport gives.
+var cardHTTPClient = &http.Client{Transport: directTransport, CheckRedirect: refuseRedirects}
+
 // fetchOnce makes exactly one attempt. It was called getWithRetries when it
 // looped; the loop moved between reconciles and the name did not follow it.
 func (r *AgentReconciler) fetchOnce(ctx context.Context, url string) ([]byte, error) {
 	client := r.CardClient
 	if client == nil {
-		client = &http.Client{}
+		client = cardHTTPClient
 	}
 	{
 		timeout := r.CardFetchTimeout
@@ -279,6 +292,20 @@ func (r *AgentReconciler) fetchOnce(ctx context.Context, url string) ([]byte, er
 		resp.Body.Close()
 		if rerr != nil {
 			return nil, rerr
+		}
+		// Named, not "status 302": the agent answered, so CardUnreachable would
+		// send its owner looking for a network fault. Location is not quoted —
+		// it is the agent's choice of address, and status is no place to echo it.
+		// These are the five codes net/http would follow; a 300 or a 304 names
+		// nowhere to go, so it stays a plain failure below.
+		switch resp.StatusCode {
+		case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+			http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+			return nil, &cardError{reason: "CardRedirected", msg: fmt.Sprintf(
+				"the card path %s answered %d, a redirect, and redirects are not followed: the "+
+					"operator reads the card only from the revision's own Service, never from an "+
+					"address the agent names. Serve the card at the path itself. Retrying every %s; "+
+					"this does not withhold traffic", url, resp.StatusCode, CardRetryInterval)}
 		}
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("status %d", resp.StatusCode)

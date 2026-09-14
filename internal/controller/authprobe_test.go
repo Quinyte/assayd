@@ -109,7 +109,7 @@ func TestTheHTTPProbeAsksTheListenerItselfAndNothingElse(t *testing.T) {
 	// No proxy: HTTP_PROXY in the operator's environment must not put another
 	// hop between the probe and the Gateway, whose 401 would pass for the
 	// Agent's -auth.
-	if probeTransport.Proxy != nil {
+	if directTransport.Proxy != nil {
 		t.Error("the probe's transport takes a proxy; it must reach the serving listener directly")
 	}
 }
