@@ -6,7 +6,7 @@ An *assay* is the test that establishes whether metal is what it claims before i
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-> **Pre-1.0, and not yet published.** Read *What is true today* before assuming a capability. This project keeps an honest account of what it does and does not enforce, because it has already been burned once by a summary that claimed more than the code did.
+> **Pre-1.0.** Releases are published and signed (`docs/supply-chain.md`), but read *What is true today* before assuming a capability. This project keeps an honest account of what it does and does not enforce, because it has already been burned once by a summary that claimed more than the code did.
 
 ## The idea
 
@@ -20,7 +20,7 @@ Measured on a real cluster (k3d) by `make e2e`, not asserted:
 
 - **An agent runs and answers.** The operator deploys it from a registry digest, mints a per-revision Service, and a request gets an answer back.
 - **Traffic traverses a real gateway.** Gateway API + agentgateway; a request reaches the agent through the Gateway's own Service, carried by a route.
-- **A disallowed principal is refused, by identity.** A caller with a valid credential for the wrong group gets `403` while a permitted one gets `200` on the same route — authentication and authorization are separate controls and are measured separately.
+- **A disallowed principal is refused, by identity, under the policy the operator emits.** Each new API-key Agent's route is published only after an anonymous request through it gets `401`. A caller with a valid key for the wrong group gets `403` while a permitted one gets `200` on the same route — authentication and authorization are separate controls and are measured separately.
 - **The gateway can be made the only way in.** Under a hand-authored ingress rule an ordinary namespace cannot reach an agent directly, while the gateway and the operator's card fetch still can.
 - **An MCP tool call goes through the gateway**, with an allowlist that removes disallowed tools from discovery entirely.
 - **The operator fetches and digests the A2A card the container serves** — the container is the source of truth, not a fixture handed to the operator.
@@ -29,7 +29,7 @@ Measured on a real cluster (k3d) by `make e2e`, not asserted:
 
 Stated plainly, because a promise nothing enforces is worse than an absent feature:
 
-- **The policy compiler does not exist.** Nothing emits a gateway policy, so **no budget, rate limit, gateway authentication or tool filter is enforced for any agent.** The gateway behaviours above are proven with resources authored **by hand**, which establishes the path — not the product.
+- **The policy compiler is one slice deep.** With `gateway.enabled`, the operator emits one policy per API-key Agent: API-key authentication and one rule admitting the group named for the Agent's namespace. That is all it compiles. No `AgentgatewayBackend` is emitted, so **no budget, rate limit or tool filter is enforced for any agent.** The MCP allowlist above is authored **by hand**. API keys are shared bearer secrets that an administrator writes and rotates by hand; nothing in assayd issues or expires one.
 - **The chart ships no gateway.** `gateway.enabled` defaults to `false`, and on install the chart tells you your agents are ungoverned.
 - **No NetworkPolicy is materialized**, so an agent Pod is directly reachable and gateway controls are bypassable by default.
 - **Card signatures are not verified**, skills are not cross-checked against grants, and the registration deadline is not counted.
@@ -46,10 +46,14 @@ make e2e     # k3d: a real cluster, a real gateway, real agents
 
 `make e2e` creates the cluster, builds and pushes the fixtures, installs Gateway API and agentgateway, and runs the suite. Needs Docker and k3d. Some tests **skip and report an axis unverified** rather than pass — NetworkPolicy enforcement belongs to the CNI, and on one that does not implement it a policy is accepted and silently does nothing.
 
+**To install on your own cluster**, follow `docs/install.md`: the prerequisites the chart needs before it installs, the published chart, API keys, and one A2A task through the gateway, answered `200`, `401` or `403` by key. What a container must do to run as an Agent is `docs/agent-contract.md`.
+
 ## Orientation
 
 | Doc | What |
 |---|---|
+| `docs/install.md` | Installing with a gateway, API keys, CRD upgrades, and one A2A task end to end |
+| `docs/agent-contract.md` | What a container must do to run as an Agent, and what the operator injects |
 | `docs/architecture.md` | The full architecture (canonical) |
 | `docs/designs/README.md` | Per-component designs **and their real status** — start here |
 | `docs/decisions/` | ADRs — every settled decision, with its context |
