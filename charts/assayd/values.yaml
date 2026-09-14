@@ -34,6 +34,12 @@ operator:
   # Two at the prod profile: the operator is leader-elected, so a standby takes
   # over on node failure rather than waiting for a reschedule. The local profile
   # forces this to 1 regardless.
+  #
+  # The standby is never Ready, by design: readiness means "this process is
+  # reconciling" (cmd/operator's "reconciling" readyz check waits for the
+  # lease). With 2, `helm install --wait` and `kubectl rollout status` never
+  # complete, because the Deployment stays at 1/2 available. Use profile
+  # local, or wait for one Ready operator Pod instead.
   replicas: 2
 
   # Leader election is on by default. The chart grants the leases permission it

@@ -141,6 +141,7 @@ Install the published, signed chart. It pins the operator image by digest; `docs
 
 ```bash
 helm install assayd oci://ghcr.io/quinyte/charts/assayd --version 0.3.0 \
+  --set profile=local \
   --set gateway.enabled=true \
   --set gateway.name=assayd \
   --set gateway.namespace=assayd-gateway \
@@ -150,7 +151,17 @@ helm install assayd oci://ghcr.io/quinyte/charts/assayd --version 0.3.0 \
 
 - **Install the release into the default namespace, as above.** The chart creates `assayd-system` itself and runs the operator there. The harness installs the release into `default` too.
 - **`gateway.namespace` is load-bearing.** An admission policy reserves route authorship by comparing a route's `parentRef` namespace to this value. Point it at the wrong namespace and that reservation matches nothing, so any identity can attach a route to the Gateway.
-- **`--set profile=local` is optional**, even on a single node. It forces one operator replica. The default `prod` profile runs two, with a disruption budget, and keeps them apart with a preferred anti-affinity, not a required one, so both still fit on one node. The harness installs with the chart's `values-local.yaml`, which sets it.
+- **`--set profile=local` is what lets `--wait` finish.** It runs one operator replica. The default `prod` profile runs two, and only one of them is ever `Ready`. The operator is leader-elected, and its readiness check means "this process is reconciling", which passes only for the replica holding the lease. The other is a standby, never `Ready` by design, so that an operator that cannot get its lease never reports itself healthy. Under `prod`, `helm install --wait` therefore never completes: it was measured stopping at `Available: 1/2` with `context deadline exceeded`, and the release ends `failed`. `kubectl rollout status` on the operator Deployment never completes either. The cluster's size makes no difference. The `prod` anti-affinity is preferred, not required, so both replicas do fit on one node. The harness installs with the chart's `values-local.yaml`, which sets `profile: local`.
+- **To run the `prod` profile**, leave out `--set profile=local` and `--wait`, and wait for one `Ready` operator Pod instead. `kubectl wait pod -l …` does not do this, because it waits for every matching Pod, the standby included.
+
+  ```bash
+  until kubectl -n assayd-system get pods \
+      -l app.kubernetes.io/component=agent-operator,app.kubernetes.io/instance=assayd \
+      -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' \
+      | grep -qx True; do
+    sleep 5
+  done
+  ```
 - The first install creates the Agent CRD from the chart's `crds/` directory. Upgrades do not (section 4).
 
 Check that the operator is running:
@@ -200,8 +211,10 @@ What the key set costs you:
 helm pull oci://ghcr.io/quinyte/charts/assayd --version <version> --untar --untardir assayd-chart
 kubectl apply --server-side --force-conflicts -f assayd-chart/assayd/crds/
 helm upgrade assayd oci://ghcr.io/quinyte/charts/assayd --version <version> \
-  <the same --set flags as your install> --wait --timeout 5m
+  <the same --set flags as your install, profile included> --wait --timeout 5m
 ```
+
+Keep `--wait` only under `profile=local`. Under `prod` it never completes, for the reason in section 2: drop it, and wait for one `Ready` operator Pod as shown there.
 
 `--server-side --force-conflicts` lets the apply take over fields the first `helm install` set. It is the command the harness runs before each install (`hack/e2e.sh`). An upgrade from one published chart version to another is not exercised by any test.
 
@@ -352,6 +365,7 @@ This shortcut passes each key on the `kubectl run` command line, so it is readab
 | The operator Pod exits at start, and its last log line names a kind | The Gateway API or agentgateway CRDs are missing (sections 1.1, 1.2). |
 | `helm install` fails naming the Gateway's namespace | The namespace does not exist yet (section 1.3). |
 | The chart refuses to render: `gateway.servingUrl is empty` | Set `gateway.servingUrl` (section 1.5). |
+| `helm install --wait` times out, the operator Deployment shows `Available: 1/2`, and the release is `failed` | The default `prod` profile runs two operator replicas, and only the lease holder is ever `Ready`: the standby is not `Ready` by design. The operator is working. Uninstall, then install again with `--set profile=local`, or under `prod` without `--wait` (section 2). |
 | Anonymous requests get `404`, and a new Agent names `NoMatchingParent` or `NotAllowedByListeners` | The listener is not named `http`, or its selector does not admit `assayd.dev/run-namespace: "true"` (section 1.4). An Agent served before the Gateway changed still says `Ready`: nothing reports it. |
 | `PolicyApplyIncomplete`, reason `AuthEnforcementUnverified` | `gateway.servingUrl` reaches no listener. |
 | `PolicyApplyIncomplete`, reason `GatewayAuthPolicy` | The Gateway admits ListenerSets, or a policy of yours targets it (section 1.4). |
