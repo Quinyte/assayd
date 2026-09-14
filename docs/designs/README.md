@@ -21,7 +21,7 @@ Design-first: every component gets a design doc (per `TEMPLATE.md`) approved **b
 | 13 | Graphiti provider adapter | P2 | M | **HYPOTHESIS (ADR-0030)** · r2 — critique **PASS** (`13-…`, `reviews/13-review.md`; awaiting user approval, ADR-0023) |
 | 14 | Ingestion pipeline + extraction QA | P2 | L | **HYPOTHESIS (ADR-0030)** · r2 — critique **PASS** (`14-…`, `reviews/14-review.md`; awaiting user approval, ADR-0023) |
 | 15 | Probe engine | P2 | M | r2 — critique **PASS** (`15-…`, `reviews/15-review.md`; awaiting user approval, ADR-0023) |
-| 16 | EvalSuite + gate controller | P3 | L | r2 — critique **PASS** (`16-…`, `reviews/16-review.md`; awaiting user approval, ADR-0024) |
+| 16 | EvalSuite + gate controller | P3 | L | r2 — critique **PASS** (`16-…`, `reviews/16-review.md`; awaiting user approval, ADR-0024) — **not approved**. **A first-slice draft exists (§1.1, A3, 2026-09-14), awaiting critique**: ADR-0030 step 4's narrow gate, blue/green only, one EvalSuite per Agent, whose cases the operator sends as A2A tasks to the candidate's Service before it takes any traffic. Eight questions in §1.1 are the human's. The slice is approved only when the human approves it after a passing critique. Until A3 the design's own Status line said "approved", which this row never did |
 | 17 | Session replay engine | P3 | M | r2 — critique **PASS** (`17-…`, `reviews/17-review.md`; awaiting user approval, ADR-0024) |
 | 18 | Pack format + installer | P3 | M | **HYPOTHESIS (ADR-0030)** · r2 — critique **PASS** (`18-…`, `reviews/18-review.md`; awaiting user approval, ADR-0024) |
 | 19 | Knowledge pattern packs | P2–P3 | M | **HYPOTHESIS (ADR-0030)** · r2 — critique **PASS** (`19-…`, `reviews/19-review.md`; awaiting user approval, ADR-0023) |
