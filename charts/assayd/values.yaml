@@ -262,7 +262,8 @@ admission:
   # operator's ServiceAccount and extraOperators, on any listener. Never list a
   # group every identity carries, such as `system:authenticated` or
   # `system:serviceaccounts`: any identity could then attach a tool route on any
-  # listener but `http`, limited only by the hostname rule above and by RBAC.
+  # listener but `http` whose `allowedRoutes` admits its namespace, limited only
+  # by the hostname rule above and by RBAC.
   # `http` would stay the operators'.
   toolRouteWriters:
     users: []
