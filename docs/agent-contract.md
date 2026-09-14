@@ -86,7 +86,7 @@ Only one MCP client has been measured through the gateway: the responder's `call
 | Headers | `Content-Type: application/json` and `Accept: application/json, text/event-stream` on every request. `MCP-Protocol-Version` on every request after `initialize`. `Mcp-Session-Id`, echoed from the `initialize` response, when the server issued one. |
 | Sequence | `initialize` with `protocolVersion: "2025-06-18"`, then `notifications/initialized`, then `tools/call`. |
 | Response | Either JSON or Server-Sent Events, and the client cannot choose. agentgateway answers a successful exchange as SSE, even when the server answered JSON, and answers its own errors as plain JSON. On SSE, take the `data:` event whose `id` matches the request, not the first one. |
-| A tool the gateway's allowlist refuses | JSON-RPC error `Unknown tool: <name>`. It is the same answer as for a tool the server does not have. The tool is also missing from `tools/list`. |
+| A tool the gateway's allowlist refuses | JSON-RPC error `Unknown tool: <name>`, which does not say that an allowlist refused it. The tool is also missing from `tools/list`. |
 | Credentials | None. No identity is attached to the call, because design 06 has no implementation. |
 
 **`ASSAYD_GATEWAY_URL` unset means no tool calls.** The responder fails the task rather than calling anything else, and a real agent should too: it has no other address the gateway governs. Nothing enforces that, since no egress NetworkPolicy is created.
@@ -104,4 +104,5 @@ Only one MCP client has been measured through the gateway: the responder's `call
 | Injected variables | `internal/controller/injectedenv.go` |
 | The responder's binding | `test/responder/main.go`; A2A 1.0 shapes in `docs/research/a2a-v1.0-card-and-transport-2026-09.md` |
 | The MCP call: endpoint, headers, sequence, SSE handling | `callTool` in `test/responder/main.go`; measured through agentgateway 1.5.0 in `test/e2e/mcp_test.go` |
-| `Unknown tool` for a refused tool, and its removal from `tools/list` | `TestAnAgentCallsAnMCPToolThroughTheGateway` in `test/e2e/mcp_test.go` |
+| `Unknown tool: <name>` for a refused tool | `TestAnAgentCompletesATaskByCallingAToolThroughTheGateway` in `test/e2e/mcp_test.go` |
+| A refused tool's removal from `tools/list` | `TestAnAgentCallsAnMCPToolThroughTheGateway` in `test/e2e/mcp_test.go` |

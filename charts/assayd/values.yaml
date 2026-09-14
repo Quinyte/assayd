@@ -222,8 +222,8 @@ admission:
     groups: ["system:masters"]
   # Design 07 A6.15: who besides the operator may attach an HTTPRoute or a
   # GRPCRoute to the assayd Gateway, on any listener BUT the serving listener
-  # `http`. An MCP
-  # tool route on a `tools` listener is what this is for (docs/install.md, section 6).
+  # `http`. An MCP tool route on a `tools` listener is what this is for
+  # (docs/install.md, section 6).
   # Nothing in assayd emits tool routes, and assayd-gateway-routes refuses
   # every other author, so with this empty no one can publish a tool through
   # the Gateway without impersonating the operator.
@@ -241,15 +241,16 @@ admission:
   #     traffic, and could answer the policy compiler's 401 probe for it.
   #
   # It grants NO RBAC. It only lifts the admission refusal: each identity still
-  # needs its own `create` and `update` on the routes it writes, and
+  # needs its own RBAC on the routes it writes -- `create` and `update`, and
+  # `patch` for `kubectl apply` -- and
   # the listener's allowedRoutes must admit that namespace. It does not look at
   # where a route sends traffic: an AgentgatewayBackend can name any address,
   # an Agent's Service included, and design 07 A6.15 records that as open.
   #
   # Unlike extraOperators, an identity here gains nothing else: it cannot write
   # the reserved namespace labels, an AgentgatewayPolicy in a run namespace, or
-  # a key set. Empty -- the default -- admits no one but the operator on any
-  # listener.
+  # a key set. Empty -- the default -- admits no one but the operators, the
+  # operator's ServiceAccount and extraOperators, on any listener.
   toolRouteWriters:
     users: []
     groups: []

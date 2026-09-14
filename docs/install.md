@@ -12,7 +12,7 @@ These are the versions the e2e suite runs against. They are what has been measur
 |---|---|---|
 | Gateway API CRDs | `v1.6.0`, standard channel | `hack/e2e.sh` (`GWAPI_VERSION`) |
 | agentgateway (CRDs and controller) | `1.5.0` | `hack/e2e.sh` (`AGW_VERSION`) |
-| assayd chart | `0.3.0`, `oci://ghcr.io/quinyte/charts/assayd` | `docs/supply-chain.md` |
+| assayd chart | `0.3.0`, `oci://ghcr.io/quinyte/charts/assayd`. Section 6 needs this repository's chart, which is ahead of `0.3.0` (section 6.2). | `docs/supply-chain.md` |
 | Kubernetes | k3d (k3s). The chart requires `>=1.30.0` | `charts/assayd/Chart.yaml` |
 
 The e2e runs its gateway tests on k3d only. The kind lane skips them and reports the gateway path as unverified.
@@ -428,10 +428,13 @@ helm upgrade assayd charts/assayd \
   --set gateway.servingUrl="http://$GW_SVC.assayd-gateway.svc.cluster.local:8080" \
   --set gateway.url="http://$GW_SVC.assayd-gateway.svc.cluster.local:8081" \
   --set 'admission.toolRouteWriters.users={tool-publisher}' \
+  --set operator.image.digest=sha256:30449f7ea1348ec393158997439bb2a6fddc78cb0fbf149b04614251add8643d \
   --wait --timeout 5m
 ```
 
-A chart from a checkout pins no operator image digest the way the published one does. `charts/assayd/values.yaml` gives the tag it runs.
+**Keep the `operator.image.digest` line.** The published chart pins the operator image by digest, and a checkout's chart does not: it names the tag `0.1.0`, which is not published. Without the digest, the upgrade removes the running operator first and replaces it with an image that cannot be pulled, and `--wait` fails. The digest is the published `0.3.0` operator (`docs/supply-chain.md`). Nothing the operator runs has changed since `v0.3.0`: this chart differs from it in the admission policy, values and notes.
+
+**No test takes this path.** The harness installs from a checkout, as here, with an operator image it builds itself. An upgrade from the published chart to a checkout is not exercised.
 
 **`admission.toolRouteWriters` grants no RBAC.** It only lifts the admission refusal. Grant each identity the routes it writes, where it writes them, as the e2e grants its own (`routeWriterClient` in `test/e2e/toolroute_test.go`):
 
@@ -443,7 +446,7 @@ metadata: {name: tool-publisher, namespace: demo-tools}
 rules:
 - apiGroups: [gateway.networking.k8s.io]
   resources: [httproutes]
-  verbs: [get, list, watch, create, update, delete]
+  verbs: [get, list, watch, create, update, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -453,6 +456,8 @@ subjects:
 - {apiGroup: rbac.authorization.k8s.io, kind: User, name: tool-publisher}
 EOF
 ```
+
+`patch` is for `kubectl apply`, which patches a route that already exists. The e2e creates its route and needs no `patch`. A new RoleBinding can take a few seconds to take effect, and until it does the write is refused by RBAC, not by admission; the e2e waits for it with a `SelfSubjectAccessReview`.
 
 The e2e writes the server, the backend and the allowlist below as its cluster administrator. RBAC for a tool team to write `agentgatewaybackends` and `agentgatewaypolicies` is yours to grant. An `AgentgatewayPolicy` is reserved to the operator only in run namespaces (design 03 §6), and `demo-tools` is not one.
 
@@ -571,7 +576,7 @@ EOF
 This is design 03's `toolAllowlist`, written by hand. Two behaviours were measured:
 
 - **A tool it does not allow is removed from `tools/list`**, so an agent never learns it exists.
-- **A call to it fails with the JSON-RPC error `Unknown tool: delete_everything`**, not "forbidden". That is the answer for a tool the server never had, so when an agent cannot call a tool the server offers, check the allowlist first.
+- **A call to it fails with the JSON-RPC error `Unknown tool: delete_everything`**, not "forbidden", and nothing in the answer says an allowlist refused it. When an agent cannot call a tool the server offers, check the allowlist first.
 
 `Accepted=True` on the policy is not enforcement. The e2e waits until the refused call is refused, for up to two minutes.
 
@@ -619,7 +624,7 @@ tool delete_everything x
 | `delete_everything`, under section 6.6's allowlist | `TASK_STATE_FAILED`, with a status message carrying `Unknown tool: delete_everything` |
 | `delete_everything`, before the allowlist | `TASK_STATE_COMPLETED`, with the artifact `tool delete_everything: deleted nothing, as promised` |
 
-The refusal is the gateway's: the MCP server answers `delete_everything` normally when a call reaches it. The first task can fail while the backend resolves its target; the e2e retries for up to two minutes.
+The last row needs no allowlist in place, so it cannot be seen after section 6.6 as written. To see it, delete the allowlist (`kubectl -n demo-tools delete agentgatewaypolicy mcp-allowlist`) and allow up to two minutes. The e2e asks for it before it applies the allowlist, which is what makes the refusal the gateway's: the MCP server answers `delete_everything` normally when a call reaches it. The first task can fail while the backend resolves its target; the e2e retries for up to two minutes.
 
 ## When it does not work
 

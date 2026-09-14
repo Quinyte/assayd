@@ -180,15 +180,16 @@ written to the gateway for it until the CRDs are applied.
 
 In every namespace, admission reserves HTTPRoutes and GRPCRoutes that name the
 assayd Gateway (design 07 A5.9, A6.15). Its serving listener `http` is the
-operator's alone. On any other listener, `admission.toolRouteWriters` may also
-write one.
+operators' alone: the operator's and admission.extraOperators'. On any other
+listener, `admission.toolRouteWriters` may also write one.
 {{- if $tw.users }} Users: {{ $tw.users | join ", " }}.{{ end }}
 {{- if $tw.groups }} Groups: {{ $tw.groups | join ", " }}.{{ end }}
-{{- if not (or $tw.users $tw.groups) }} It is empty, so no one but the operator
-can publish an MCP tool through the Gateway.
+{{- if not (or $tw.users $tw.groups) }}
+It is empty, so only those operators can publish an MCP tool through the
+Gateway.
 {{- end }}
 Such a route must name its listener by `sectionName` and list hostnames that
-are not an Agent's. The value grants no RBAC: each identity also needs `create`
-and `update` on the routes it writes, where it writes them. Nothing checks
-where a tool route sends traffic. Section 6 of
+are not an Agent's. The value grants no RBAC: each identity also needs its own
+`create` and `update` on the routes it writes, and `patch` for `kubectl apply`.
+Nothing checks where a tool route sends traffic. Section 6 of
 https://github.com/Quinyte/assayd/blob/main/docs/install.md is the recipe.

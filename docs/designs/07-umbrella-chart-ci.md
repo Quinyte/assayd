@@ -664,6 +664,12 @@ The chart cannot read the Gateway's listeners. It renders no Gateway (A1), and a
 - **The e2e wrote as a freshly bound identity with no wait for RBAC to take effect.** `routeWriterClient` now waits until a SelfSubjectAccessReview allows the write.
 - **Design 03's Status line and README row did not name A76**, and `NOTES.txt` printed an empty `groups:` when only users were set. Both are fixed.
 
+**A second independent review, of the recipe as moved into `docs/install.md` section 6 and `docs/agent-contract.md`, returned REVISE**, with one BLOCKER and five MINORs, each fixed:
+
+- **BLOCKER.** The recipe's upgrade from a checkout would have replaced the running operator with the checkout's default image, `ghcr.io/quinyte/assayd-operator:0.1.0`, a tag that is not published. The command now pins the published `0.3.0` operator by digest, and says that no test takes this path: the harness installs from a checkout with an image it builds.
+- **An unmeasured claim.** The docs said `Unknown tool: <name>` is also the answer for a tool the server does not have. No test sends one through the gateway, and the fixture answers an unknown tool with `isError` and `no such tool`. The claim is gone.
+- The Sources row cited the test that does not assert the literal `Unknown tool`; the recipe's Role lacked the `patch` that `kubectl apply` needs; one expected result could not be seen in the order the recipe runs; and "no one but the operator" left out `admission.extraOperators`. All fixed.
+
 **What stays open.**
 
 - **Where a tool route sends traffic is not checked.** An `AgentgatewayBackend` can name a static host, an Agent's revision Service included. A tool route writer who may also write one in its namespace can publish an Agent on a tool listener with no `<agent>-auth`. A cross-namespace `backendRef` into a run namespace needs a `ReferenceGrant` there, which is RBAC's; a static backend needs none. Within the cluster this adds no reach, because nothing stops a Pod reaching the same Service directly (A5.4). From outside the cluster it can, wherever the Gateway is exposed. No reservation of Backends exists.
