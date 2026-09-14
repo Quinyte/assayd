@@ -133,7 +133,7 @@ The chart takes two URLs, and they name different listeners:
 
 `gateway.servingUrl` must be an absolute `http(s)` URL naming only a host and port. The operator checks that shape and nothing else. A URL that reaches no listener leaves every new Agent unpublished, with `PolicyApplyIncomplete`, reason `AuthEnforcementUnverified`, four minutes after it was created. A URL that reaches something else that answers `401` on its own, such as a proxy, can pass for the Agent's policy, and nothing detects it.
 
-`gateway.url` must name a listener that carries tool routes. The harness adds a second listener, `tools` on port `8081`, for that. How to author the tool route behind it is not documented yet, so this page leaves `gateway.url` unset. The A2A task below does not need it.
+`gateway.url` must name a listener that carries tool routes. The harness adds a second listener, `tools` on port `8081`, for that. Section 6 adds it and sets `gateway.url`. The A2A task in section 5 does not need it, so leave it unset until then.
 
 ## 2. Install the chart
 
@@ -358,6 +358,269 @@ The permitted key can get `401` for a short while after you write the key set, b
 
 This shortcut passes each key on the `kubectl run` command line, so it is readable in the Pod spec by anyone who can read Pods in `demo`. Do not do that with a key you intend to keep.
 
+## 6. An MCP tool through the gateway
+
+This follows `TestAnAgentCallsAnMCPToolThroughTheGateway` and `TestAnAgentCompletesATaskByCallingAToolThroughTheGateway` (`test/e2e/mcp_test.go`), which measure it on k3d. An agent calls a tool on an MCP server, through the gateway, and an allowlist at the gateway decides which tools it may call.
+
+**Every resource in this section is yours to write.** Nothing in assayd emits a tool route, an `AgentgatewayBackend` or a tool allowlist. And what the gateway does here is route and filter, not authenticate:
+
+- **The tool call is unauthenticated.** No identity is attached to an agent's outbound traffic, because design 06 has no implementation.
+- **Nothing makes the gateway the agent's only way out.** `ASSAYD_GATEWAY_URL` is an address, not a restriction, and no egress NetworkPolicy is created.
+- **Nothing checks where a tool route sends traffic.** An `AgentgatewayBackend` can name any address, an Agent's Service included (design 07 A6.15).
+
+### 6.1 A `tools` listener
+
+Re-apply the Gateway from section 1.4 with a second listener, and create the namespace the tool server will run in:
+
+```bash
+kubectl create namespace demo-tools
+kubectl apply -f - <<'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: assayd
+  namespace: assayd-gateway
+spec:
+  gatewayClassName: agentgateway
+  listeners:
+  - name: http
+    port: 8080
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            assayd.dev/run-namespace: "true"
+  - name: tools
+    port: 8081
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            kubernetes.io/metadata.name: demo-tools
+EOF
+```
+
+- **`tools` has its own port**, as in the harness. See section 6.4 for why the port matters.
+- **Select the tool namespace by `kubernetes.io/metadata.name`, or a label of your own, never an `assayd.dev/*` label.** Admission reserves those to the operator, and the refusal names `assayd-namespace-labels`.
+
+### 6.2 Point agents at it, and name who may publish tools
+
+Two chart values:
+
+| Value | Set it to | What it does |
+|---|---|---|
+| `gateway.url` | `http://$GW_SVC.assayd-gateway.svc.cluster.local:8081` | The operator injects it into every agent as `ASSAYD_GATEWAY_URL`. |
+| `admission.toolRouteWriters` | `users` and `groups` who publish tools | Lets them attach a route to the Gateway on any listener but `http` (design 07 A6.15). Empty by default, which admits no one but the operator. |
+
+**`admission.toolRouteWriters` is not in chart `0.3.0`.** It is in this repository's chart, which is what the harness installs, and will be in the next release. Helm ignores a value a chart does not declare, without an error, so on `0.3.0` the setting does nothing and every tool route is refused. Upgrade from a checkout:
+
+```bash
+kubectl apply --server-side --force-conflicts -f charts/assayd/crds/
+helm upgrade assayd charts/assayd \
+  --set profile=local \
+  --set gateway.enabled=true \
+  --set gateway.name=assayd \
+  --set gateway.namespace=assayd-gateway \
+  --set gateway.servingUrl="http://$GW_SVC.assayd-gateway.svc.cluster.local:8080" \
+  --set gateway.url="http://$GW_SVC.assayd-gateway.svc.cluster.local:8081" \
+  --set 'admission.toolRouteWriters.users={tool-publisher}' \
+  --wait --timeout 5m
+```
+
+A chart from a checkout pins no operator image digest the way the published one does. `charts/assayd/values.yaml` gives the tag it runs.
+
+**`admission.toolRouteWriters` grants no RBAC.** It only lifts the admission refusal. Grant each identity the routes it writes, where it writes them, as the e2e grants its own (`routeWriterClient` in `test/e2e/toolroute_test.go`):
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: tool-publisher, namespace: demo-tools}
+rules:
+- apiGroups: [gateway.networking.k8s.io]
+  resources: [httproutes]
+  verbs: [get, list, watch, create, update, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: tool-publisher, namespace: demo-tools}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: tool-publisher}
+subjects:
+- {apiGroup: rbac.authorization.k8s.io, kind: User, name: tool-publisher}
+EOF
+```
+
+The e2e writes the server, the backend and the allowlist below as its cluster administrator. RBAC for a tool team to write `agentgatewaybackends` and `agentgatewaypolicies` is yours to grant. An `AgentgatewayPolicy` is reserved to the operator only in run namespaces (design 03 §6), and `demo-tools` is not one.
+
+### 6.3 The MCP server, with `appProtocol` on its Service
+
+Build and push `test/mcpserver`, the e2e's two-tool MCP server, as section 5.1 builds the responder: `-f test/mcpserver/Dockerfile`, into a repository such as `assayd-mcpserver`, and set `MCP_IMAGE` to the digest reference. It serves Streamable HTTP on port `8080` with two tools, `echo_text` and `delete_everything`.
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: mcpserver, namespace: demo-tools}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: mcpserver}}
+  template:
+    metadata: {labels: {app: mcpserver}}
+    spec:
+      containers:
+      - name: mcpserver
+        image: $MCP_IMAGE
+        ports: [{containerPort: 8080}]
+        readinessProbe: {httpGet: {path: /healthz, port: 8080}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mcpserver, namespace: demo-tools, labels: {app: mcpserver}}
+spec:
+  selector: {app: mcpserver}
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    appProtocol: agentgateway.dev/mcp
+EOF
+```
+
+**`appProtocol: agentgateway.dev/mcp` is required, and nothing reports it missing.** Without it the backend below reaches `Accepted=True`, the route resolves, and every request gets `503 mcp: no backends configured` (design 07 A6.8). The CRD schema does not describe it.
+
+### 6.4 The backend, and the route written as a tool route writer
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata: {name: mcp-tools, namespace: demo-tools}
+spec:
+  mcp:
+    sessionRouting: Stateless
+    targets:
+    - name: fixture
+      selector:
+        services:
+          matchLabels: {app: mcpserver}
+EOF
+
+kubectl --as tool-publisher apply -f - <<'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: mcp-tools, namespace: demo-tools}
+spec:
+  parentRefs:
+  - name: assayd
+    namespace: assayd-gateway
+    sectionName: tools
+  hostnames: [mcp.demo-tools.example]
+  rules:
+  - backendRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: mcp-tools
+EOF
+```
+
+`kubectl --as` impersonates the identity you named in `admission.toolRouteWriters`. A cluster administrator may do that. The identity itself would apply the route with its own credentials.
+
+- **`sessionRouting: Stateless`** pins no MCP session to a Pod. agentgateway defaults to `Stateful`, and assayd has not decided which an MCP backend should be (`applyMCPBackend` in `test/e2e/mcp_test.go`).
+- **The route must name `sectionName`.** A `parentRef` to the Gateway with no `sectionName` attaches to every listener, `http` included, and is refused, with or without a `port`. So is `sectionName: http`, and an update that moves a route onto `http` or removes its `sectionName`.
+- **The route must list `hostnames`, and none may be an Agent's.** The serving hosts are `<agent>.<agent-namespace>.<gateway.hostnameSuffix>`. The suffix itself, a name under it, and a wildcard at or above it, such as `*.internal`, are refused, and so is a route with no hostnames. A request goes to the listener its port and host match, and only then to that listener's routes. So a tool listener that shared the serving port, with a hostname matching an Agent's, could hand that Agent's traffic to a tool route.
+
+Each refusal names `assayd-gateway-routes` and says which rule refused it. `TestTheInstalledRouteReservationKeepsToolRouteWritersOffTheServingListener` measures three of them on k3d, and `test/envtest/admission_toolroutes_test.go` measures every case.
+
+### 6.5 Check the path
+
+```bash
+TOOLS_URL="http://$GW_SVC.assayd-gateway.svc.cluster.local:8081/mcp"
+kubectl -n demo-tools run "mcp-$RANDOM" --rm -i --restart=Never --quiet \
+  --image=curlimages/curl:8.11.1 --command -- \
+  curl -sS -X POST "$TOOLS_URL" -H 'Host: mcp.demo-tools.example' \
+    -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"0"}}}'
+```
+
+Expect a Server-Sent Events stream whose `data:` line carries a result naming `serverInfo.name` `assayd-e2e-mcpserver`. agentgateway answers a successful MCP exchange as SSE even when the server answered plain JSON, and answers its own errors as plain JSON. A `503 mcp: no backends configured` is section 6.3's `appProtocol`, or a backend that has not yet resolved a target: the e2e retries for up to two minutes.
+
+### 6.6 The allowlist
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: {name: mcp-allowlist, namespace: demo-tools}
+spec:
+  targetRefs:
+  - {group: agentgateway.dev, kind: AgentgatewayBackend, name: mcp-tools}
+  backend:
+    mcp:
+      authorization:
+        action: Allow
+        policy:
+          matchExpressions:
+          - 'mcp.tool.name == "echo_text"'
+EOF
+```
+
+This is design 03's `toolAllowlist`, written by hand. Two behaviours were measured:
+
+- **A tool it does not allow is removed from `tools/list`**, so an agent never learns it exists.
+- **A call to it fails with the JSON-RPC error `Unknown tool: delete_everything`**, not "forbidden". That is the answer for a tool the server never had, so when an agent cannot call a tool the server offers, check the allowlist first.
+
+`Accepted=True` on the policy is not enforcement. The e2e waits until the refused call is refused, for up to two minutes.
+
+### 6.7 An agent that calls the tool
+
+An agent reaches the tool at `<ASSAYD_GATEWAY_URL>/mcp`, with the tool route's hostname as its `Host` header. The operator injects the URL and nothing else, so the agent must be told the hostname some other way. The responder reads it from `MCP_TOOL_HOST`, a name of the fixture's, not of assayd's. `docs/agent-contract.md` gives the request shapes.
+
+The e2e creates its Agent after the chart has `gateway.url`, and checks the variable on the Deployment the operator rendered. Whether an Agent created before the upgrade receives it is not tested, so create a new one:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: assayd.dev/v1alpha1
+kind: Agent
+metadata: {name: toolcaller, namespace: demo}
+spec:
+  runtime:
+    image: $IMAGE
+    env:
+    - {name: AGENT_NAME, value: toolcaller}
+    - {name: MCP_TOOL_HOST, value: mcp.demo-tools.example}
+EOF
+kubectl -n demo wait agent/toolcaller --for=jsonpath='{.status.auth.mode}'=apikey --timeout=10m
+```
+
+It is in namespace `demo`, so section 5.4's `$PERMITTED` key admits it. The responder's `call_tool` skill runs when the message's `metadata.tool` names a tool. It sends the message text as the tool's `text` argument, and the tool's answer becomes the task's artifact:
+
+```bash
+tool() {  # tool name, then text
+  kubectl -n demo run "tool-$RANDOM" --rm -i --restart=Never --quiet \
+    --image=curlimages/curl:8.11.1 --command -- \
+    curl -sS -X POST "$GW_URL/message:send" \
+      -H 'Host: toolcaller.demo.assayd.internal' \
+      -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' \
+      -H "Authorization: Bearer $PERMITTED" \
+      -d "{\"message\":{\"messageId\":\"demo-$RANDOM\",\"role\":\"ROLE_USER\",\"parts\":[{\"text\":\"$2\"}],\"metadata\":{\"tool\":\"$1\"}}}"
+}
+
+tool echo_text "from the agent"
+tool delete_everything x
+```
+
+| Task | Expect |
+|---|---|
+| `echo_text` | `TASK_STATE_COMPLETED`, with the artifact `tool echo_text: echo: from the agent` |
+| `delete_everything`, under section 6.6's allowlist | `TASK_STATE_FAILED`, with a status message carrying `Unknown tool: delete_everything` |
+| `delete_everything`, before the allowlist | `TASK_STATE_COMPLETED`, with the artifact `tool delete_everything: deleted nothing, as promised` |
+
+The refusal is the gateway's: the MCP server answers `delete_everything` normally when a call reaches it. The first task can fail while the backend resolves its target; the e2e retries for up to two minutes.
+
 ## When it does not work
 
 | Symptom | Cause |
@@ -373,8 +636,11 @@ This shortcut passes each key on the `kubectl run` command line, so it is readab
 | The key set is refused, naming `assayd-api-keys` | You are not in `admission.apiKeyWriters` (section 3). |
 | `Registered=False`, reason `CardNameMismatch` | The card's `name` is not the Agent's name. `docs/agent-contract.md` lists the other card reasons. |
 | Every keyed request gets `401` | No key set in the run namespace, the wrong label, or the wrong hash. Hash the key's bytes with no trailing newline. |
+| A tool route is refused, naming `assayd-gateway-routes` | The writer is not in `admission.toolRouteWriters`, the route names `http` or no `sectionName`, or a hostname is missing or an Agent's. The message says which (section 6.4). On chart `0.3.0`, the value does not exist (section 6.2). |
+| Every tool request gets `503 mcp: no backends configured` | The MCP Service's port has no `appProtocol: agentgateway.dev/mcp` (section 6.3). |
+| A tool task fails with `ASSAYD_GATEWAY_URL is not set` | `gateway.url` is unset, or the Agent predates it (section 6.7). |
+| A tool task fails with `Unknown tool: <name>` | The allowlist does not admit that tool (section 6.6). |
 
 ## Not covered here
 
-- **Routing an agent's tool calls to an MCP server** through the gateway. The e2e does it with a route it authors by hand. How a user should author that route is waiting on a decision, and this page will not guess it.
 - **Anything beyond authentication.** No budget, rate limit or tool filter is compiled, and no NetworkPolicy is created. The `401` and `403` above hold on the gateway path only; a Pod that can reach the agent's Service directly bypasses them.

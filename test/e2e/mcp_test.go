@@ -18,7 +18,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
@@ -35,8 +34,10 @@ import (
 // does not own looks like.
 //
 // **Hand-authored, and the allowlist is design 03's `toolAllowlist` measured
-// rather than specified.** Nothing in assayd emits an AgentgatewayBackend or an
-// AgentgatewayPolicy, before or after; no RBAC for either kind is granted. What
+// rather than specified.** Nothing in assayd emits an AgentgatewayBackend, an
+// AgentgatewayPolicy for a tool, or a tool route; the operator holds no RBAC on
+// AgentgatewayBackends. The route is written by the chart's
+// admission.toolRouteWriters identity, as a user's would be (design 07 A6.15). What
 // this establishes is the shape a compiler would have to produce, and two
 // behaviours of it that a schema reading would not have revealed — see the
 // filtering assertion and the "Unknown tool" one below.
@@ -462,9 +463,14 @@ func applyMCPBackend(t *testing.T, ctx context.Context, ns string) *unstructured
 	return b
 }
 
-// attachMCPRoute authors the route as the OPERATOR. A5.9's policy reserves every
-// route naming the assayd Gateway to that identity, whichever listener it
-// attaches to — the `tools` listener is not a way around the reservation.
+// attachMCPRoute authors the route as the chart's admission.toolRouteWriters
+// identity, with RBAC on httproutes in the tools namespace and nothing else —
+// what an administrator would give the team that runs a tool (design 07
+// A6.15). It is NOT the operator: until A6.15 this impersonated the operator,
+// because A5.9's policy reserved every route naming the assayd Gateway to it,
+// and so no real user could publish a tool at all. The route names the `tools`
+// listener, and a hostname that is not an Agent's; the same identity is refused
+// on `http` (TestTheInstalledRouteReservationKeepsToolRouteWritersOffTheServingListener).
 func attachMCPRoute(t *testing.T, ctx context.Context, ns, gwNS, gwName string) *unstructured.Unstructured {
 	t.Helper()
 	build := func() *unstructured.Unstructured {
@@ -487,19 +493,14 @@ func attachMCPRoute(t *testing.T, ctx context.Context, ns, gwNS, gwName string) 
 			},
 		}}
 	}
-	cfg := rest.CopyConfig(restCfg)
-	cfg.Impersonate = rest.ImpersonationConfig{
-		UserName: "system:serviceaccount:assayd-system:assayd-agent-operator"}
-	asOperator, err := client.New(cfg, client.Options{Scheme: k8s.Scheme()})
-	if err != nil {
-		t.Fatalf("impersonating the operator: %v", err)
-	}
+	writer := toolRouteWriter(t)
+	asWriter := routeWriterClient(t, ctx, writer, ns)
 	r := build()
-	_ = asOperator.Delete(ctx, build())
-	if err := asOperator.Create(ctx, r); err != nil {
-		t.Fatalf("author the MCP route as the operator: %v", err)
+	_ = k8s.Delete(ctx, build())
+	if err := asWriter.Create(ctx, r); err != nil {
+		t.Fatalf("author the MCP route as %s, the chart's admission.toolRouteWriters: %v", writer, err)
 	}
-	t.Cleanup(func() { _ = asOperator.Delete(context.Background(), build()) })
+	t.Cleanup(func() { _ = k8s.Delete(context.Background(), build()) })
 	return r
 }
 

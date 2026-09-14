@@ -1,6 +1,6 @@
 # Design 07: Umbrella chart, profiles, e2e CI
 
-- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A6 below; A5 (2026-09-03), A6 (2026-09-09), A6.10 (2026-09-10), A6.11, A6.12 and A6.13 (2026-09-11), and A6.14 (2026-09-12) not yet critiqued
+- **Status**: **approved** — critique PASS at r2 (reviews/07-review.md) · ADR-0022 · amendments A1–A6 below; A5 (2026-09-03), A6 (2026-09-09), A6.10 (2026-09-10), A6.11, A6.12 and A6.13 (2026-09-11), A6.14 (2026-09-12), and A6.15 (2026-09-14) not yet critiqued
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0002 (rules 5/6), 0012 (ambient profile), NFR-1/3/7/8 · interfaces: every P1 design (it packages them)
 
@@ -160,7 +160,7 @@ allowedRoutes:
 
 Gateway API v1.6.1: `from` is one of `All | Selector | Same` (default `Same`), and `selector` is required with `Selector`. A route in a namespace the listener does not admit is rejected, which is how design 03 A44 found that leaving the default would wedge every moved route. A route's `parentRef` to a Gateway in the chart's namespace **needs no `ReferenceGrant`** — the specification exempts Gateway–route attachment; only `backendRef`s and Secret references need one — so this selector is the whole of the cross-namespace consent the move needs. The gateway-scoped tracing policy stays in the Gateway's own namespace (design 03 §3.2).
 
-An admitted namespace is not a route-authoring grant: A5.9's second policy admits an `HTTPRoute` whose `parentRefs` name the assayd Gateway only from the operator's identity, so a principal who somehow held rights in a run namespace still could not attach an ungoverned route.
+An admitted namespace is not a route-authoring grant: A5.9's second policy admits an `HTTPRoute` whose `parentRefs` name the assayd Gateway only from the operator's identity, so a principal who somehow held rights in a run namespace still could not attach an ungoverned route. *(Narrowed by A6.15 to the serving listener `http`: on the Gateway's other listeners, `admission.toolRouteWriters` may also write a route, with hostnames no Agent's serving host can match.)*
 
 **Today**: `gateway.enabled` is `false` and there is no Gateway (A1). Nothing is rendered.
 
@@ -229,7 +229,7 @@ spec:
       message: "assayd.dev namespace labels and the binding nonce are reserved to the assayd operators"
 ```
 
-The permitted identities are rendered **into** the expression from values — the operator's own ServiceAccount always, plus `admission.extraOperators`, which is where the tenant-operator goes when the enterprise module is installed (the only hard-mode writer of `run-namespace` and `tenant-sync` on a sync namespace, design 26 A1). Not a params ConfigMap: the first draft read them from one with `parameterNotFoundAction: Deny`, and the code review showed that deleting it — `kubectl delete ns assayd-system` with the policies still bound — denied every namespace create and update in the cluster. The second policy matches `HTTPRoute` creates and updates and denies any whose `parentRefs` name the assayd Gateway unless the requester is a permitted identity, so a namespace the listener admits is not a grant to author routes into it; a `parentRef` without a namespace refers to the **route's** namespace (Gateway API), so the expression resolves it as `request.namespace` rather than skipping it.
+The permitted identities are rendered **into** the expression from values — the operator's own ServiceAccount always, plus `admission.extraOperators`, which is where the tenant-operator goes when the enterprise module is installed (the only hard-mode writer of `run-namespace` and `tenant-sync` on a sync namespace, design 26 A1). Not a params ConfigMap: the first draft read them from one with `parameterNotFoundAction: Deny`, and the code review showed that deleting it — `kubectl delete ns assayd-system` with the policies still bound — denied every namespace create and update in the cluster. The second policy matches `HTTPRoute` creates and updates and denies any whose `parentRefs` name the assayd Gateway unless the requester is a permitted identity, so a namespace the listener admits is not a grant to author routes into it; a `parentRef` without a namespace refers to the **route's** namespace (Gateway API), so the expression resolves it as `request.namespace` rather than skipping it. *(A6.15 amends the second policy: the operator's alone on the serving listener `http`; on any other listener, `admission.toolRouteWriters` too. A no-op `UPDATE` is no longer a write, so the garbage collector can finish a foreground delete, and the old object is judged as well as the new one.)*
 
 **The operator fail-closes on their absence, by name.** At startup it logs their absence, and on every reconcile it checks that both policies and bindings exist; if not, `RunNamespaceUnavailable=LabelAuthorityAbsent` on the Agent and no namespace is created, clearing when they appear. Presence is what is checked — a policy of the right name that validated nothing would pass — so the content is this chart's responsibility and the chart test pins it. `failurePolicy: Fail` means an unavailable admission chain denies the write rather than admitting it.
 
@@ -254,6 +254,8 @@ The table gains one row:
 | Grant | Why | What bounds it |
 |---|---|---|
 | `httproutes` (`gateway.networking.k8s.io`): `get`, `list`, `watch`, `create`, `update`, `patch`, `delete`; `httproutes/status`: `get` | a route in the run namespace is what puts an agent behind the Gateway | routes are authored into `assayd-run-` namespaces only, and A5.9's policy independently refuses any author but the operator. `AgentgatewayBackend` and `AgentgatewayPolicy` are **not** granted: they land with the compiler that emits them, and a verb granted ahead of its code is rule 7 in RBAC form |
+
+*(The "What bounds it" cell is narrowed by A6.15: A5.9's policy refuses any author but the operator on the serving listener `http`, and admits `admission.toolRouteWriters` on the Gateway's other listeners.)*
 
 **This gap was invisible from either side.** A5.9's policy names the operator's ServiceAccount and therefore *permitted* it to author routes; the API server then refused the same request for want of RBAC. Neither half was wrong on its own and the path did not work — the admission reservation and the RBAC grant had simply never both existed at once. It surfaced only because a test finally sent traffic.
 
@@ -325,7 +327,7 @@ Two operational notes for whoever writes the compiler. `Accepted=True` on an `Ag
 
 `TestAnAgentCallsAnMCPToolThroughTheGateway` closes ADR-0030's last unmet clause. It could not be written before because there was no MCP server anywhere in the repository to call; `test/mcpserver` is one — Streamable HTTP, two tools, built and pushed by `hack/e2e.sh` beside the responder.
 
-**Where the tool server lives, and why not in a run namespace.** A tool is not an agent. It sits in its own namespace behind a **second Gateway listener** (`tools`, port 8081) whose `allowedRoutes` selects on `kubernetes.io/metadata.name` rather than on an `assayd.dev/*` label — those keys are reserved to the operator by A5.9, and a test that minted one would be forging the authority that policy exists to hold. The route is still authored by the operator identity: `assayd-gateway-routes` reserves every route naming this Gateway, and a second listener is not a way around it.
+**Where the tool server lives, and why not in a run namespace.** A tool is not an agent. It sits in its own namespace behind a **second Gateway listener** (`tools`, port 8081) whose `allowedRoutes` selects on `kubernetes.io/metadata.name` rather than on an `assayd.dev/*` label — those keys are reserved to the operator by A5.9, and a test that minted one would be forging the authority that policy exists to hold. The route is still authored by the operator identity: `assayd-gateway-routes` reserves every route naming this Gateway, and a second listener is not a way around it. *(Superseded by A6.15: that reservation is why no real user could publish a tool. `admission.toolRouteWriters` may now write a route on the `tools` listener, and the e2e authors its tool route as one instead of impersonating the operator.)*
 
 **The allowlist is design 03's `toolAllowlist`, and it is stronger than the design describes.** `AgentgatewayPolicy.backend.mcp.authorization` with `mcp.tool.name == "echo_text"` does not merely refuse the call — **it removes the tool from `tools/list`**. An agent behind the allowlist never learns the other tool exists. Measured both ways: with the rule flipped to the other tool, the listing and both call outcomes inverted.
 
@@ -573,3 +575,100 @@ An `UPDATE` that changes none of the reserved content is admitted. The garbage c
 **Measured.** In envtest, against the chart's own rendered policies (`test/envtest/admission_reservation_test.go`). And on k3d (`test/e2e/reservation_test.go`), which also checks both grants by SubjectAccessReview: that `events` cannot be read outside the Gateway's namespace, and that `agentgatewaypolicies` cannot be written.
 
 **Not done.** The chart still ships no Gateway (A1), so `gateway.namespace` names one the harness creates.
+
+### A6.15 (2026-09-14) — tool routes: `admission.toolRouteWriters` may attach off the serving listener (the human's T1)
+
+**Why.** ADR-0030's slice needs one agent to complete an MCP tool call through the gateway. An audit found that no real user could publish the tool. A5.9's `assayd-gateway-routes` reserved every HTTPRoute naming the assayd Gateway to the operator and `admission.extraOperators`, whichever listener it attached to, and nothing in assayd emits a tool route. The e2e got its tool route only by impersonating the operator's ServiceAccount (A6.8, A6.13). `admission.extraOperators` is not a fix: an identity in it can also write the reserved namespace labels (A5.9) and author `AgentgatewayPolicies` in run namespaces (A6.14).
+
+**The decision, the human's (T1, 2026-09-14).** A chart value, `admission.toolRouteWriters`, with `users` and `groups` in the shape of `admission.apiKeyWriters`. The identities it names may create and update HTTPRoutes that name the assayd Gateway, on listeners other than the serving listener `http`. The serving listener stays the operator's. The default is empty, which admits no one but the operator on any listener.
+
+**The rule, exactly** (`charts/assayd/templates/admission.yaml`). The policy matches `CREATE` and `UPDATE` of `httproutes` and, since this amendment, `grpcroutes`. A GRPCRoute attaches to an HTTP listener as an HTTPRoute does, with the same `parentRefs` and `hostnames`, so leaving it out left the serving listener open to anyone who could write one, for every author, before and after T1. The independent review of this amendment found that. A route *names the assayd Gateway* through a `parentRef` whose `name` is `gateway.name` and whose namespace is `gateway.namespace`; a `parentRef` with no namespace means the route's own, as before (A6.2). A *write* is a `CREATE`, or an `UPDATE` that changes the route's `spec`, labels or annotations, or adds a finalizer or an `ownerReference`. Three validations apply, and each refuses with its own message, so a refusal names its fix:
+
+| # | Refuses a write to a route | Unless the author is |
+|---|---|---|
+| 1 | that names the assayd Gateway, before or after the write | an operator, or in `admission.toolRouteWriters` |
+| 2 | with a `parentRef` to the Gateway that names `sectionName: http`, or names no `sectionName`, before or after the write | an operator |
+| 3 | naming the Gateway, with no `hostnames`, or with any hostname an Agent's serving host could match | an operator |
+
+"An operator" is the operator's ServiceAccount and `admission.extraOperators`, unchanged. What each `parentRef` shape means for a tool route writer:
+
+| `parentRefs` | Tool route writer |
+|---|---|
+| `sectionName: tools` | admitted |
+| `sectionName: tools`, `port: 8081` | admitted: a port only narrows a named listener |
+| no `sectionName` | refused: it attaches to every listener, the serving one included |
+| a `port` and no `sectionName` | refused: it attaches to every listener on that port |
+| `tools` and `http` | refused |
+| `tools`, and another Gateway's `http` | admitted: the other Gateway is not assayd's |
+| a bare name, from the Gateway's namespace, on `http` | refused, as with the namespace written out |
+| an `UPDATE` from `tools` to `http`, or removing `sectionName` | refused |
+| an `UPDATE` moving the operator's serving route to `tools`, or off the Gateway | refused: the old object names `http` |
+
+**The serving listener is a constant, not a value.** It is `http`, the operator's `GatewayListenerName`, because the chart renders no Gateway to read a listener from (A1, and `values.yaml` beside `gateway.name`). The chart test holds the chart's `http` equal to the operator's constant.
+
+**Hostname and port, and why rule 3 exists.** Gateway API hands a request to a listener by port, then by the most specific listener hostname that matches, and only then to the routes attached to that listener. The harness's listeners are on separate ports, `http` on 8080 and `tools` on 8081, so there a tool route cannot receive a request sent to the serving port. A Gateway can, though, carry a second listener on the serving port with a hostname such as `*.assayd.internal`. A request for `pricer.payments.assayd.internal` would then go to that listener, and a tool route there matching the host would take the Agent's traffic, with every caller's API key. It could also answer the policy compiler's anonymous probe with a `401` that is not `<agent>-auth`'s (design 03 §3.3.3). This is the capture set design 03 A75's `capturingListeners` reasons about for policies: a listener on the serving port whose hostname is unset or matches the host.
+
+The chart cannot read the Gateway's listeners. It renders no Gateway (A1), and a `paramRef` to the Gateway would, while the Gateway is absent, deny every HTTPRoute write in the cluster or skip the policy (A5.9's reason for rendering identities inline). So rule 3 refuses by host instead. The serving hosts are `<agent>.<namespace>.<suffix>`, where the suffix is `gateway.hostnameSuffix`, lower-cased, or the operator's default `assayd.internal` when the value is empty, as `operator.yaml` falls back. A tool route writer's hostnames must all be clear of it. These are refused:
+
+- the suffix itself;
+- any name ending in `.<suffix>`, which includes a wildcard below it such as `*.payments.assayd.internal`;
+- a wildcard at or above it, such as `*.assayd.internal` or `*.internal`;
+- no hostnames at all, which matches every host.
+
+**A defect fixed on the way, for every author.** A5.9's policy judged every `UPDATE` by a non-operator to a route naming the Gateway as a write, including the garbage collector's removal of the `foregroundDeletion` finalizer. So a foreground-deleted route stayed Terminating forever, and with it the teardown of the Agent that waits for it (design 03 A70). This was measured: mutation M13 below restores that shape, and the envtest's garbage-collector case fails. The route reservation now uses the rule the other two reservations already use (A6.14): an `UPDATE` that changes nothing reserved is admitted. What a Terminating route says stays reserved.
+
+**A tightening, for every author.** The old object is judged as well as the new one. Before, only the new object was, so anyone with `update` on httproutes in a run namespace could detach an Agent's serving route from the Gateway, and the operator put it back on its next reconcile (A6.10's drift correction). Now that `UPDATE` is a write to a route that names the Gateway (rule 1), and one on its serving listener (rule 2).
+
+**RBAC is not granted.** The value only lifts the admission refusal. Each identity still needs its own `create` and `update` on httproutes where it writes them, and the listener's `allowedRoutes` must admit that namespace. `values.yaml` and `NOTES.txt` say so. The e2e grants its identity a Role on httproutes in the tools namespace, as an administrator would.
+
+**Measured.**
+
+- envtest (`test/envtest/admission_toolroutes_test.go`), against the chart's own rendered policy, narrowed only by a label on the test's namespaces. `TestAToolRouteWriterAttachesOnlyOffTheServingListener` runs 23 HTTPRoute creates, 4 GRPCRoute creates, 10 updates of a tool route, 4 updates of the operator's routes, and a foreground delete finished by the garbage collector. The identities are a listed user, a member of a listed group, an unlisted identity, a `system:masters` member who is not listed, the operator and the garbage collector. Every refusal is checked against the message of the validation that must make it. `TestWithNoToolRouteWritersOnlyTheOperatorAttachesARoute` renders the default and refuses the same user and group on `tools`.
+- chart (`test/chart/toolroutes_test.go`). With the value empty, the rendered writer expression admits nobody, and the operator list is unchanged. With the value set, users land in the user list and groups in the group list, of this policy and no other. The serving listener is the operator's constant, and the suffix follows `gateway.hostnameSuffix`. The policy stays cluster-wide.
+- e2e (k3d). `hack/e2e.sh` installs the chart with `admission.toolRouteWriters.users={assayd-e2e-tool-author}`. Both MCP tests author their tool route as that identity, with RBAC on httproutes only (`attachMCPRoute`). `TestTheInstalledRouteReservationKeepsToolRouteWritersOffTheServingListener` refuses the identity on `http`, with no `sectionName`, and with an Agent's host, refuses an unlisted identity on `tools`, and admits the listed one there.
+
+**Measured by mutation.** Every mutation below renders and compiles. Each was backed up outside `charts/`, which A6.13 found necessary, and restored by copy.
+
+| Mutation (`admission.yaml`) | Killed by |
+|---|---|
+| M1 `toolWriter` admits everyone | envtest: an unlisted identity's route on `tools` is admitted, so both tests' enforcement probes fail; chart: the exact writer expression |
+| M2 groups not consulted | envtest: the group member on `tools`; chart |
+| M3 users not consulted | envtest: every listed-user case; chart |
+| M4 no `sectionName` is not serving | envtest: no `sectionName`, a port and no `sectionName`, another Gateway plus none, the `UPDATE` removing `sectionName` |
+| M5 the old object is not judged for rule 2 | envtest: moving the operator's serving route to `tools`, and off the Gateway |
+| M6 the new object is not judged for rule 2 | envtest: every create on `http` or without `sectionName` |
+| M7 rule 3 always passes | envtest: all six hostname cases |
+| M8 no hostnames admitted | envtest: the no-hostnames case |
+| M9 a wildcard above the suffix admitted | envtest: `*.internal` |
+| M10 a name under the suffix admitted | envtest: the serving host, `*.payments.assayd.internal`, a clear host beside a serving one, the `UPDATE` adding a serving host |
+| M11 the suffix itself admitted | envtest: `assayd.internal` |
+| M12 `all` becomes `exists` | envtest: a clear host beside a serving one, and the `UPDATE` adding one |
+| M13 every `UPDATE` is a write, the rule before A6.15 | envtest: the garbage collector could not finish the foreground delete |
+| M14–M17 labels, annotations, an added finalizer, an added `ownerReference` not reserved | envtest: exactly the one matching non-writer `UPDATE` case, each |
+| M18 `spec` not reserved | envtest: eight `UPDATE` cases |
+| M19 rule 1 ignores the old object | envtest: a non-writer moving a tool route off the Gateway |
+| M20 a bare-name `parentRef` not resolved to the route's namespace | envtest: the bare name on `http`; chart |
+| M21, M22 the operator not exempt from rule 2, from rule 3 | envtest: the operator's cases |
+| M23 the serving listener rendered as `https` | envtest: every `http` case; chart: the constant, and the message |
+| M24 `gateway.hostnameSuffix` ignored | chart only: envtest renders the default suffix, so it cannot see this |
+| M25 `admission.toolRouteWriters` not rendered | envtest: every listed-identity case; chart |
+| M26 rule 3 applied to a route not naming the Gateway | envtest: the control, an unlisted identity's route to another Gateway |
+| M27 rule 2 ignores an old `parentRef` with no `sectionName` | envtest: a tool route writer narrowing a route with no `sectionName` onto `tools` |
+| M28 `grpcroutes` not matched | envtest: the GRPCRoute cases on `http`, with an Agent's host, and from an unlisted identity; chart |
+
+**The independent review of this amendment returned REVISE**, with no blocker, one MAJOR and five MINORs. Each is fixed rather than recorded:
+
+- **MAJOR.** The recipe's first draft, `docs/mcp-tools.md`, gave the Gateway's Service as `assayd-gateway.<ns>`. agentgateway names it after the Gateway, `assayd.<ns>`, so a reader copying it would have injected an address that does not resolve into every Agent. The recipe is now `docs/install.md` section 6, which takes the name from the Service's `gateway.networking.k8s.io/gateway-name` label, as `hack/e2e.sh` does.
+- **Rule 2's old-object half was untested for a `parentRef` with no `sectionName`.** The reviewer's mutation, M27, survived both envtests. A case narrowing such a route onto `tools` now kills it.
+- **GRPCRoutes were not reserved**, as above.
+- **The e2e wrote as a freshly bound identity with no wait for RBAC to take effect.** `routeWriterClient` now waits until a SelfSubjectAccessReview allows the write.
+- **Design 03's Status line and README row did not name A76**, and `NOTES.txt` printed an empty `groups:` when only users were set. Both are fixed.
+
+**What stays open.**
+
+- **Where a tool route sends traffic is not checked.** An `AgentgatewayBackend` can name a static host, an Agent's revision Service included. A tool route writer who may also write one in its namespace can publish an Agent on a tool listener with no `<agent>-auth`. A cross-namespace `backendRef` into a run namespace needs a `ReferenceGrant` there, which is RBAC's; a static backend needs none. Within the cluster this adds no reach, because nothing stops a Pod reaching the same Service directly (A5.4). From outside the cluster it can, wherever the Gateway is exposed. No reservation of Backends exists.
+- **`TLSRoute`, `TCPRoute` and `UDPRoute` are not reserved.** Each attaches only to a listener of its own protocol, so none can attach to the HTTP serving listener. A listener of one of those protocols on the serving port would be an administrator's choice, and is not measured here. Whether agentgateway 1.5.0 serves a GRPCRoute on an HTTP listener at all is also unmeasured; it is reserved because it could.
+- **A route attached through a ListenerSet does not name the Gateway**, so this policy does not see it. Design 03 A75 holds every `-auth` transaction while the Gateway admits ListenerSets; the reservation itself does not. This predates A6.15.
+- **Rule 3 trusts that the chart and the operator read the same suffix.** They do, from `gateway.hostnameSuffix`. An operator given a different `--gateway-hostname-suffix` outside the chart is not covered.
+- **The rule does not restrict the namespace.** Which namespaces a tool listener admits is the Gateway's `allowedRoutes`, and who may write routes there is RBAC's.
+- **`DELETE` is still RBAC's** (A6.10).

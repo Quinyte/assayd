@@ -354,8 +354,9 @@ func routePublished(rt *gatewayv1.HTTPRoute) bool {
 // and an earlier version of this function did not compare them — so a request
 // mirror or a URL rewrite planted on a converged route by anyone with
 // `httproutes` update in a run namespace would have been invisible here
-// forever. `assayd-gateway-routes` refuses an author who names the assayd
-// Gateway, but it constrains CREATE and UPDATE on the object being written and
+// forever. `assayd-gateway-routes` refuses any author but the operator on the
+// assayd Gateway's serving listener (design 07 A6.15), but it constrains CREATE
+// and UPDATE on the object being written and
 // is the chart's, not this reconciler's: a control the operator relies on and
 // does not itself perform is exactly what rule 5 says not to leave implied.
 func equalRoute(a, b *gatewayv1.HTTPRoute) bool {

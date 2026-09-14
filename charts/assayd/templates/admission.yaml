@@ -74,12 +74,42 @@ The GATEWAY's namespace, which is not the operator's. This read
 ordinary identity then attached a route: the CEL compared against the operator's
 namespace, `targetsAssayd` went false, and the reservation matched nothing.
 Fail-open, and silent -- the route is simply accepted.
+
+The serving listener is the operator's constant GatewayListenerName
+(internal/controller/httproute.go), not a value: nothing in this chart renders a
+Gateway, so there is nothing to read it from (values.yaml, beside gateway.name).
+The chart test holds the two equal. The hostname suffix is the one the operator
+is given, with the operator's own default when the value is empty, as
+operator.yaml and NOTES.txt fall back to it.
 */ -}}
 {{- $gwNS := .Values.gateway.namespace | default .Values.namespace -}}
+{{- $serving := "http" -}}
+{{- $suffix := .Values.gateway.hostnameSuffix | default "assayd.internal" | lower -}}
+{{- $toolWriters := .Values.admission.toolRouteWriters | default dict -}}
+{{- $toolUsers := $toolWriters.users | default list -}}
+{{- $toolGroups := $toolWriters.groups | default list -}}
+{{- $gatewayRef := printf "p.name == %s && (has(p.namespace) ? p.namespace : request.namespace) == %s" (.Values.gateway.name | toJson) ($gwNS | toJson) -}}
 # A namespace the Gateway listener admits is not a grant to author routes into
-# it: an HTTPRoute whose parentRefs name the assayd Gateway is admitted only
-# from the operator identity (design 07 A5.3/A5.9). Matches nothing until the
-# Gateway API CRDs are installed, which at P1 they are not.
+# it (design 07 A5.3/A5.9). An HTTPRoute or GRPCRoute whose parentRefs name the
+# assayd Gateway publishes a path to a workload, so writing one is reserved:
+#
+#   * on the SERVING listener `http`, and through a parentRef that names no
+#     sectionName and so attaches to every listener, to the operator and
+#     admission.extraOperators only;
+#   * on any other listener, also to admission.toolRouteWriters (design 07
+#     A6.15), whose routes must list their hostnames, none of them one an
+#     Agent's serving host could match: on a listener that shares the serving
+#     port, a route matching `<agent>.<namespace>.<suffix>` would take that
+#     Agent's traffic.
+#
+# The old object is judged as well as the new one, so an UPDATE cannot take a
+# route off the serving listener either. What is reserved is what the route
+# SAYS -- its spec, labels and annotations -- and additions to the metadata
+# that decides when it goes, as for assayd-gateway-policies: the garbage
+# collector finishes a foreground delete by an UPDATE that removes a finalizer,
+# and refusing it would leave the route, and its Agent's teardown, Terminating
+# forever. DELETE is RBAC's (design 07 A6.10). Matches nothing until the
+# Gateway API CRDs are installed.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -93,18 +123,48 @@ spec:
       - apiGroups: ["gateway.networking.k8s.io"]
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
-        resources: ["httproutes"]
+        # A GRPCRoute attaches to an HTTP listener as an HTTPRoute does, with
+        # the same parentRefs and hostnames, so it is the same capability.
+        resources: ["httproutes", "grpcroutes"]
   variables:
-    # A parentRef without a namespace refers to the ROUTE's namespace (Gateway
-    # API), so a bare-name ref from inside the Gateway's namespace targets it
-    # too; request.namespace is the route's.
+    # The parentRefs that name the assayd Gateway. A parentRef without a
+    # namespace refers to the ROUTE's namespace (Gateway API), so a bare-name
+    # ref from inside the Gateway's namespace targets it too; request.namespace
+    # is the route's.
+    - name: attached
+      expression: {{ printf "has(object.spec.parentRefs) ? object.spec.parentRefs.filter(p, %s) : []" $gatewayRef | quote }}
+    - name: wasAttached
+      expression: {{ printf "oldObject != null && has(oldObject.spec.parentRefs) ? oldObject.spec.parentRefs.filter(p, %s) : []" $gatewayRef | quote }}
     - name: targetsAssayd
-      expression: {{ printf "has(object.spec.parentRefs) && object.spec.parentRefs.exists(p, p.name == %s && (has(p.namespace) ? p.namespace : request.namespace) == %s)" (.Values.gateway.name | toJson) ($gwNS | toJson) | quote }}
+      expression: "size(variables.attached) > 0 || size(variables.wasAttached) > 0"
+    # A parentRef with no sectionName attaches to every listener it can, the
+    # serving one included, whatever port it names.
+    - name: serving
+      expression: {{ printf "variables.attached.exists(p, !has(p.sectionName) || p.sectionName == %s) || variables.wasAttached.exists(p, !has(p.sectionName) || p.sectionName == %s)" ($serving | toJson) ($serving | toJson) | quote }}
+    # Every hostname is clear of the serving hosts `<agent>.<namespace>.<suffix>`:
+    # not the suffix, not under it, and not a wildcard at or above it. No
+    # hostnames at all matches every host.
+    - name: hostsClear
+      expression: {{ printf "has(object.spec.hostnames) && size(object.spec.hostnames) > 0 && object.spec.hostnames.all(h, !(h == %s || h.endsWith('.' + %s) || (h.startsWith('*.') && ('.' + %s).endsWith(h.substring(1)))))" ($suffix | toJson) ($suffix | toJson) ($suffix | toJson) | quote }}
     - name: operator
       expression: {{ printf "request.userInfo.username in %s" (toJson $operators) | quote }}
+    - name: toolWriter
+      expression: {{ printf "request.userInfo.username in %s || (has(request.userInfo.groups) && request.userInfo.groups.exists(g, g in %s))" (toJson $toolUsers) (toJson $toolGroups) | quote }}
+    - name: addedFinalizer
+      expression: "has(object.metadata.finalizers) && object.metadata.finalizers.exists(f, oldObject == null || !has(oldObject.metadata.finalizers) || !(f in oldObject.metadata.finalizers))"
+    - name: addedOwner
+      expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, oldObject == null || !has(oldObject.metadata.ownerReferences) || !oldObject.metadata.ownerReferences.exists(p, p.uid == o.uid && p.apiVersion == o.apiVersion && p.kind == o.kind && p.name == o.name))"
+    - name: touched
+      expression: "oldObject == null || object.spec != oldObject.spec || (has(object.metadata.labels) ? object.metadata.labels : {}) != (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}) || (has(object.metadata.annotations) ? object.metadata.annotations : {}) != (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}) || variables.addedFinalizer || variables.addedOwner"
   validations:
-    - expression: "!variables.targetsAssayd || variables.operator"
-      message: "routes attaching to the assayd Gateway are authored by the assayd operator only (design 07 A5.9)"
+    - expression: "!variables.touched || !variables.targetsAssayd || variables.operator || variables.toolWriter"
+      message: "routes attaching to the assayd Gateway are authored by the assayd operator, and on listeners other than `{{ $serving }}` by the identities in admission.toolRouteWriters (design 07 A5.9, A6.15)"
+      reason: Forbidden
+    - expression: "!variables.touched || variables.operator || !variables.serving"
+      message: "the assayd Gateway's serving listener `{{ $serving }}` is the assayd operator's alone: a route naming it, or naming the Gateway with no sectionName and so attaching to every listener, before or after this write, is refused; give a tool route the sectionName of another listener (design 07 A6.15)"
+      reason: Forbidden
+    - expression: "!variables.touched || variables.operator || size(variables.attached) == 0 || variables.hostsClear"
+      message: "a tool route on the assayd Gateway must list its hostnames, and none may match an Agent's serving host `<agent>.<namespace>.{{ $suffix }}`: on a listener that shares the serving port it would take that Agent's traffic (design 07 A6.15)"
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1

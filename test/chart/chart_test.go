@@ -585,12 +585,11 @@ func TestChartShipsTheLabelReservingAdmissionPolicies(t *testing.T) {
 	}
 	// A parentRef without a namespace refers to the route's own namespace, so
 	// the route policy must resolve it that way or a bare-name ref from inside
-	// the Gateway's namespace bypasses it.
-	rspec, _ := policies["assayd-gateway-routes"]["spec"].(map[string]any)
-	for _, v := range toList(rspec["variables"]) {
-		vm, _ := v.(map[string]any)
-		if vm["name"] == "targetsAssayd" && !strings.Contains(toStr(vm["expression"]), "request.namespace") {
-			t.Errorf("targetsAssayd does not resolve a bare-name parentRef to the route's namespace: %s", vm["expression"])
+	// the Gateway's namespace bypasses it. `variable` fails when the variable
+	// is gone, so a rename cannot turn this into a loop that matches nothing.
+	for _, v := range []string{"attached", "wasAttached"} {
+		if got := variable(t, policies["assayd-gateway-routes"], v); !strings.Contains(got, "request.namespace") {
+			t.Errorf("%s does not resolve a bare-name parentRef to the route's namespace: %s", v, got)
 		}
 	}
 }
