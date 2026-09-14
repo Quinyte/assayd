@@ -46,7 +46,7 @@ Every design decision passes six rules. This is the product: competitors ship pl
 
 ## 02 · System overview
 
-> **Designed, not shipped — and three sentences below are false today.** One operator exists, `agent-operator`; there is no workflow-, model- or tenant-operator. No policy is compiled from the Agent CR: the policy compiler does not exist. Registration today reads the card only — directory publish and identity issuance are not implemented — and when `gateway.enabled` is set the operator emits the Agent's serving `HTTPRoute` — a route only, with no policy attached to it — and nothing else. The chart deploys neither NATS nor Postgres.
+> **Designed, not shipped — and three sentences below are false today.** One operator exists, `agent-operator`; there is no workflow-, model- or tenant-operator. **The policy compiler is one slice deep: it compiles an Agent's authentication and nothing else** — no `AgentgatewayBackend` is emitted, so no budget, rate limit or tool allowlist is enforced. Registration today reads the card only — directory publish and identity issuance are not implemented — and when `gateway.enabled` is set the operator emits the Agent's serving `HTTPRoute` and, for an API-key Agent, a per-Agent `<agent>-auth` `AgentgatewayPolicy`, publishing the route only after an anonymous request through it gets `401`. The chart deploys neither NATS nor Postgres, and ships no Gateway.
 
 Three planes:
 
@@ -184,7 +184,7 @@ Symmetry rule: consume open standards **and publish over the same ones**. A decl
 
 ## 06 · Security plane — zero-trust, no mesh
 
-> **Designed, not shipped.** None of these bindings runs today: no SPIRE, Zitadel or OpenFGA is deployed; no policy is compiled; the sandbox CRD is not bound, so every sandboxed agent downgrades (`SandboxDowngraded`); no NetworkPolicy is materialized; and no image or card signature is verified — the chart's two admission policies reserve namespace labels and gateway routes, nothing else.
+> **Designed, not shipped.** None of these bindings runs today: no SPIRE, Zitadel or OpenFGA is deployed; the only policy compiled is an Agent's API-key authentication, and no budget, rate limit or tool allowlist is; the sandbox CRD is not bound, so every sandboxed agent downgrades (`SandboxDowngraded`); no NetworkPolicy is materialized; and no image or card signature is verified — the chart's two admission policies reserve namespace labels and gateway routes, nothing else.
 
 **Guarantees live outside the agent.**
 
@@ -465,7 +465,7 @@ Discipline: the differentiation only exists once P2/P3 ship — never polish the
 
 **The build order above is superseded by ADR-0030 and is kept for context, not as a plan.** The delivery commitment is now **one end-to-end slice**, not five phases: a single-team managed-container Agent, one pinned gateway release, one identity mechanism, carried until one agent completes one A2A task and one MCP tool call through the gateway with a disallowed principal failing against a permitted control. Designs **21, 23, 25, 26, 27** and the unimplemented parts of **11–14** and **18–19** are **hypotheses** — research retained, not prerequisites and not supported promises.
 
-**What actually runs today** is narrower than any section above implies: the agent-operator, its CRD, the chart, an agent that answers through a real gateway, an MCP tool call through it, and a principal refused by identity at it. **The policy compiler does not exist**, so no budget, rate limit, gateway authentication or tool filter is enforced for any agent, and the chart ships no gateway. `CLAUDE.md` and `AGENTS.md` carry the current position in a paragraph maintained for exactly this purpose; `docs/designs/02-agent-crd-operator.md` §5 is the authoritative list of what is stated and not enforced.
+**What actually runs today** is narrower than any section above implies: the agent-operator, its CRD, the chart, an agent that answers through a real gateway, an MCP tool call through it, and a principal refused by identity at it. **The policy compiler is one slice deep.** With `gateway.enabled`, an Agent whose auth compiles to API keys — every Agent with no `expose` block — gets a per-Agent `<agent>-auth` `AgentgatewayPolicy` (API-key authentication plus one CEL rule admitting the group named for the Agent's namespace), and its route is published only after an anonymous request through it gets `401`; `auth: none` compiles to no policy and a marker label, and `oauth` or a stored `spec.budget` is `PolicyCompileFailed`. **That is all it enforces**: no `AgentgatewayBackend` is emitted, so no budget, rate limit or tool allowlist is enforced for any agent. A route published before the compiler stays unauthenticated (`GovernanceSkipped=CompilerUpgradeUnsupported`) until its owner edits it to `apikey`; a `Create` or `Lock` holds at `ProbingAfter`, reason `GatewayAuthPolicy`, while a policy on the assayd Gateway could have answered its probe; and one probe proves one gateway replica (`AuthVerifiedOnOneReplica`). The chart ships no gateway. `CLAUDE.md` and `AGENTS.md` carry the current position in a paragraph maintained for exactly this purpose; `docs/designs/02-agent-crd-operator.md` §5 is the authoritative list of what is stated and not enforced.
 
 ## 19 · Risks held honestly
 
