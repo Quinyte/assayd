@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -173,6 +174,13 @@ func NewAgentReconciler(c client.Client, reader client.Reader, scheme *runtime.S
 		return nil, fmt.Errorf("agent reconciler: --gateway-enabled is set and --gateway-hostname-suffix " +
 			"is empty; a route with no hostname matches every request on the listener, so every Agent " +
 			"would answer for every other")
+	case gateway.Enabled && len(utilvalidation.IsDNS1123Subdomain(gateway.HostnameSuffix)) > 0:
+		return nil, fmt.Errorf("agent reconciler: --gateway-hostname-suffix %q is not a lowercase DNS "+
+			"subdomain (%s). Every emitted route's hostname ends in it, and the HTTPRoute CRD refuses a "+
+			"hostname that is not lowercase, so every route write would fail while the operator reported "+
+			"itself started. Use lowercase letters, digits, '-' and '.', such as %q",
+			gateway.HostnameSuffix, strings.Join(utilvalidation.IsDNS1123Subdomain(gateway.HostnameSuffix), "; "),
+			strings.ToLower(strings.Trim(gateway.HostnameSuffix, ".-")))
 	}
 	// Required whenever the compiler runs (design 03 §3.3.3), and it runs
 	// whenever the gateway is enabled: every new Agent's route is published only

@@ -88,15 +88,15 @@ func TestTheToolRouteWritersReachTheRouteReservation(t *testing.T) {
 	}
 
 	// The serving hosts are the ones the operator emits: its default suffix
-	// when the value is empty, the value when set, lower-cased as a hostname
-	// must be.
+	// when the value is empty, and the value when set. A suffix that is not a
+	// lowercase DNS name does not render at all (hostname_suffix_test.go).
 	for _, c := range []struct {
 		args []string
 		want string
 	}{
 		{nil, controller.DefaultGatewayHostnameSuffix},
 		{[]string{"--set", "gateway.hostnameSuffix="}, controller.DefaultGatewayHostnameSuffix},
-		{[]string{"--set", "gateway.hostnameSuffix=Agents.Example"}, "agents.example"},
+		{[]string{"--set", "gateway.hostnameSuffix=agents.example"}, "agents.example"},
 	} {
 		hosts := variable(t, routePolicy(t, c.args...), "hostsClear")
 		if n := strings.Count(hosts, `"`+c.want+`"`); n != 3 {

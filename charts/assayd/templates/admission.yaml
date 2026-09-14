@@ -80,11 +80,12 @@ The serving listener is the operator's constant GatewayListenerName
 Gateway, so there is nothing to read it from (values.yaml, beside gateway.name).
 The chart test holds the two equal. The hostname suffix is the one the operator
 is given, with the operator's own default when the value is empty, as
-operator.yaml and NOTES.txt fall back to it.
+operator.yaml and NOTES.txt fall back to it. assayd.validate refuses a suffix
+that is not a lowercase DNS name, as the operator does, so it is used as given.
 */ -}}
 {{- $gwNS := .Values.gateway.namespace | default .Values.namespace -}}
 {{- $serving := "http" -}}
-{{- $suffix := .Values.gateway.hostnameSuffix | default "assayd.internal" | lower -}}
+{{- $suffix := .Values.gateway.hostnameSuffix | default "assayd.internal" -}}
 {{- $toolWriters := .Values.admission.toolRouteWriters | default dict -}}
 {{- $toolUsers := $toolWriters.users | default list -}}
 {{- $toolGroups := $toolWriters.groups | default list -}}

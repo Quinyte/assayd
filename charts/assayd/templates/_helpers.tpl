@@ -18,6 +18,16 @@ Guard rails, evaluated at render time rather than discovered at runtime.
 {{- if eq .Values.operator.image.tag "latest" -}}
 {{- fail "operator.image.tag: latest is refused. Pin a version, or a digest where it matters." -}}
 {{- end -}}
+{{- /*
+Every emitted route's hostname ends in gateway.hostnameSuffix, and the HTTPRoute
+CRD refuses a hostname that is not a lowercase DNS name. The operator refuses such
+a suffix at startup; refused here, the install fails with the value named instead
+of crash-looping. assayd-gateway-routes compares hostnames against the same string.
+*/ -}}
+{{- $suffix := (.Values.gateway | default dict).hostnameSuffix | default "" -}}
+{{- if and $suffix (or (gt (len $suffix) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $suffix))) -}}
+{{- fail (printf "gateway.hostnameSuffix %q is not a lowercase DNS name. Every emitted route's hostname ends in it, the HTTPRoute CRD refuses one that is not lowercase, and the operator refuses it at startup. Use lowercase letters, digits, '-' and '.', such as %q" $suffix (lower (trimAll ".-" $suffix))) -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "assayd.name" -}}assayd{{- end -}}

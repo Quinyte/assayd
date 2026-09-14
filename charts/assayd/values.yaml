@@ -217,6 +217,10 @@ admission:
   # kubeadm (and so kind) puts its admin kubeconfig in `kubeadm:cluster-admins`,
   # not `system:masters`. Each identity added can mint a principal for any
   # Agent's group.
+  #
+  # Never list a group every identity carries, such as `system:authenticated`
+  # or `system:serviceaccounts`: that turns this reservation off, and only RBAC
+  # is left.
   apiKeyWriters:
     users: []
     groups: ["system:masters"]
@@ -242,15 +246,22 @@ admission:
   #
   # It grants NO RBAC. It only lifts the admission refusal: each identity still
   # needs its own RBAC on the routes it writes -- `create` and `update`, and
-  # `patch` for `kubectl apply` -- and
-  # the listener's allowedRoutes must admit that namespace. It does not look at
+  # `patch` for `kubectl apply` -- and the listener's allowedRoutes must admit
+  # that namespace. It does not look at
   # where a route sends traffic: an AgentgatewayBackend can name any address,
   # an Agent's Service included, and design 07 A6.15 records that as open.
+  #
+  # Never grant an identity here route RBAC in a run namespace, and never let a
+  # tool listener's allowedRoutes select one: a route there can name an
+  # Agent's revision Service directly and reach it with no `<agent>-auth`.
   #
   # Unlike extraOperators, an identity here gains nothing else: it cannot write
   # the reserved namespace labels, an AgentgatewayPolicy in a run namespace, or
   # a key set. Empty -- the default -- admits no one but the operators, the
-  # operator's ServiceAccount and extraOperators, on any listener.
+  # operator's ServiceAccount and extraOperators, on any listener. Never list a
+  # group every identity carries, such as `system:authenticated` or
+  # `system:serviceaccounts`: that turns this reservation off for every
+  # listener but `http`, and only RBAC is left.
   toolRouteWriters:
     users: []
     groups: []

@@ -366,7 +366,7 @@ This follows `TestAnAgentCallsAnMCPToolThroughTheGateway` and `TestAnAgentComple
 
 - **The tool call is unauthenticated.** No identity is attached to an agent's outbound traffic, because design 06 has no implementation.
 - **Nothing makes the gateway the agent's only way out.** `ASSAYD_GATEWAY_URL` is an address, not a restriction, and no egress NetworkPolicy is created.
-- **Nothing checks where a tool route sends traffic.** An `AgentgatewayBackend` can name any address, an Agent's Service included (design 07 A6.15).
+- **Nothing checks where a tool route sends traffic.** An `AgentgatewayBackend` can name any address, an Agent's Service included, and a tool route in a run namespace can name an Agent's revision Service directly (section 6.2, design 07 A6.15).
 
 ### 6.1 A `tools` listener
 
@@ -406,6 +406,8 @@ EOF
 
 - **`tools` has its own port**, as in the harness. See section 6.4 for why the port matters.
 - **Select the tool namespace by `kubernetes.io/metadata.name`, or a label of your own, never an `assayd.dev/*` label.** Admission reserves those to the operator, and the refusal names `assayd-namespace-labels`.
+- **Never let a tool listener's `allowedRoutes` select a run namespace**, by `from: All` or by a selector that matches one. A route in a run namespace, on a tool listener that admits it, can name an Agent's revision Service directly and reach the Agent with no `<agent>-auth` (section 6.2).
+- **Do not set `spec.allowedListeners`**, here or anywhere else on this Gateway. A ListenerSet can add a listener on the serving port with the hostname `*.<gateway.hostnameSuffix>`, and a route attached through a ListenerSet names the ListenerSet, not the Gateway, so `assayd-gateway-routes` does not see it. The review of this recipe measured an identity in no list admitted with a `parentRef` of kind `ListenerSet`. Section 1.4 gives the other reason: no new Agent is published while the Gateway admits ListenerSets.
 
 ### 6.2 Point agents at it, and name who may publish tools
 
@@ -414,7 +416,7 @@ Two chart values:
 | Value | Set it to | What it does |
 |---|---|---|
 | `gateway.url` | `http://$GW_SVC.assayd-gateway.svc.cluster.local:8081` | The operator injects it into every agent as `ASSAYD_GATEWAY_URL`. |
-| `admission.toolRouteWriters` | `users` and `groups` who publish tools | Lets them attach a route to the Gateway on any listener but `http` (design 07 A6.15). Empty by default, which admits no one but the operator. |
+| `admission.toolRouteWriters` | `users` and `groups` who publish tools | Lets them attach a route to the Gateway on any listener but `http` (design 07 A6.15). Empty by default, which admits no one but the operators: the operator and `admission.extraOperators`. Never list a group every identity carries, such as `system:authenticated` or `system:serviceaccounts`: that turns the reservation off. |
 
 **`admission.toolRouteWriters` is not in chart `0.3.0`.** It is in this repository's chart, which is what the harness installs, and will be in the next release. Helm ignores a value a chart does not declare, without an error, so on `0.3.0` the setting does nothing and every tool route is refused. Upgrade from a checkout:
 
@@ -456,6 +458,8 @@ subjects:
 - {apiGroup: rbac.authorization.k8s.io, kind: User, name: tool-publisher}
 EOF
 ```
+
+**Never grant a tool route writer route RBAC in a run namespace** (`assayd-run-<agent-namespace>`). Admission checks a tool route's listener and hostnames, not its namespace or its `backendRefs`. So a tool route writer who can write routes in a run namespace, where a tool listener admits that namespace, can create a route with a harmless hostname whose `backendRefs` name an Agent's revision Service there. No Backend and no `ReferenceGrant` is needed, and the Agent is reached with no `<agent>-auth` in front of it (design 07 A6.15).
 
 `patch` is for `kubectl apply`, which patches a route that already exists. The e2e creates its route and needs no `patch`. A new RoleBinding can take a few seconds to take effect, and until it does the write is refused by RBAC, not by admission; the e2e waits for it with a `SelfSubjectAccessReview`.
 

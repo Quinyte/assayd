@@ -319,18 +319,33 @@ func TestAnEnabledGatewayWithNoGatewayNamedIsRefused(t *testing.T) {
 		{"no name", controller.GatewayConfig{Enabled: true, Namespace: "gw", HostnameSuffix: "x"}, "--gateway-name"},
 		{"no namespace", controller.GatewayConfig{Enabled: true, Name: "assayd", HostnameSuffix: "x"}, "--gateway-namespace"},
 		{"no hostname suffix", controller.GatewayConfig{Enabled: true, Name: "assayd", Namespace: "gw"}, "--gateway-hostname-suffix"},
+		// Every emitted route's hostname ends in the suffix, and the HTTPRoute
+		// CRD refuses a hostname that is not lowercase, so an uppercase suffix
+		// fails every route write while the operator reports it started.
+		{"an uppercase hostname suffix", controller.GatewayConfig{Enabled: true, Name: "assayd", Namespace: "gw",
+			HostnameSuffix: "Agents.Example", ServingURL: testServingURL}, "--gateway-hostname-suffix"},
+		{"a hostname suffix with a trailing dot", controller.GatewayConfig{Enabled: true, Name: "assayd",
+			Namespace: "gw", HostnameSuffix: "assayd.internal.", ServingURL: testServingURL}, "--gateway-hostname-suffix"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := controller.NewAgentReconciler(k8s, k8s, scheme, operatorNamespace,
 				func() bool { return false }, labelAuthorityPresent,
 				controller.InjectedEnvConfig{}, tc.cfg)
 			if err == nil {
-				t.Fatalf("a reconciler was built with %s unset", tc.want)
+				t.Fatalf("a reconciler was built with %s; want a refusal naming %s", tc.name, tc.want)
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("the refusal does not name the missing flag: %v", err)
 			}
 		})
+	}
+	// CONTROL: a lowercase suffix other than the default builds, so the
+	// refusals above are about the suffix's form and not about the suffix.
+	if _, err := controller.NewAgentReconciler(k8s, k8s, scheme, operatorNamespace,
+		func() bool { return false }, labelAuthorityPresent, controller.InjectedEnvConfig{},
+		controller.GatewayConfig{Enabled: true, Name: "assayd", Namespace: "gw",
+			HostnameSuffix: "agents.example", ServingURL: testServingURL}); err != nil {
+		t.Errorf("a lowercase hostname suffix was refused: %v", err)
 	}
 }
 
