@@ -32,7 +32,7 @@ The operator, its CRDs, the admission policies and the Helm chart in this reposi
 
 assayd is pre-1.0 and a number of things it is *designed* to do are not implemented. Reporting one of these as a vulnerability is welcome but will be answered with "known, and here is the record":
 
-- **The policy compiler does not exist.** No `AgentgatewayPolicy` or `AgentgatewayBackend` is emitted by anything, so token budgets, rate limits, gateway authentication and tool filtering are **not enforced** for any agent.
+- **The policy compiler is one slice deep.** With `gateway.enabled`, the operator emits one `AgentgatewayPolicy` per API-key Agent, `<agent>-auth`: API-key authentication and one authorization rule admitting the group named for the Agent's namespace. It emits no `AgentgatewayBackend`, so token budgets, rate limits and tool filtering are **not enforced** for any agent. API keys are shared bearer secrets: an administrator writes and rotates them by hand, and nothing binds one to a workload or expires it (design 03 §3.4.4).
 - **The chart ships no gateway.** `gateway.enabled` defaults to `false`; agents run ungoverned and the chart's `NOTES.txt` says so on install.
 - **No NetworkPolicy is materialized**, in any namespace, so an agent Pod is reachable directly and any control a gateway would apply is bypassable.
 - **Agent Card signatures are not verified**, advertised skills are not cross-checked against the CR's grants, and the registration deadline is not counted.

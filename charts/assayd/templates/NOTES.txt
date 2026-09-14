@@ -157,3 +157,22 @@ labelled `assayd.dev/api-keys` only by the operator and the identities in
 operator writes each API-key Agent's `<agent>-auth`. It writes no key set: the
 keys are yours to add, as `sha256:` hashes with a `group` naming the Agent's
 namespace, and until one exists every caller of an API-key Agent gets 401.
+
+Each entry in a key set is one key. Name the entry anything but the key
+itself, and give it the value
+  {"keyHash":"sha256:<hex>","metadata":{"group":"<agent-namespace>"}}
+where <hex> is the lowercase hex SHA-256 of the key. Label the ConfigMap
+`assayd.dev/api-keys: "true"` and write it in the Agent's run namespace:
+`assayd-run-<agent-namespace>` for a short name, or find it with
+  kubectl get ns -l assayd.dev/agent-namespace=<agent-namespace>
+Callers send the key as `Authorization: Bearer <key>`. A worked example is in
+https://github.com/Quinyte/assayd/blob/main/docs/install.md
+
+`helm upgrade` never updates this chart's crds/. Before every upgrade, apply
+the CRDs of the version you are upgrading to:
+  helm pull oci://ghcr.io/quinyte/charts/assayd --version <version> --untar
+  kubectl apply --server-side --force-conflicts -f assayd/crds/
+Skip it, and an Agent CRD older than `status.auth` drops that field without an
+error. With the gateway enabled, an Agent the operator tries to publish then
+stops with `PolicyApplyIncomplete`, reason `AuthRecordNotKept`, and nothing is
+written to the gateway for it until the CRDs are applied.

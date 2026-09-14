@@ -34,6 +34,12 @@ operator:
   # Two at the prod profile: the operator is leader-elected, so a standby takes
   # over on node failure rather than waiting for a reschedule. The local profile
   # forces this to 1 regardless.
+  #
+  # The standby is never Ready, by design: readiness means "this process is
+  # reconciling" (cmd/operator's "reconciling" readyz check waits for the
+  # lease). With 2, `helm install --wait` and `kubectl rollout status` never
+  # complete, because the Deployment stays at 1/2 available. Use profile
+  # local, or wait for one Ready operator Pod instead.
   replicas: 2
 
   # Leader election is on by default. The chart grants the leases permission it
@@ -108,9 +114,14 @@ gateway:
   # The LISTENER is not configurable: an emitted route always attaches to the
   # listener named `http` (design 07 A5.3), because nothing in this chart renders
   # a Gateway and there is no value to read one from. Name your listener
-  # something else and every route reports `NoMatchingParent`, every request
-  # 404s, and the Agent still says Ready -- the operator does not read route
-  # status. Said here because nothing else would say it.
+  # something else and every route reports `NoMatchingParent`, and anonymous
+  # requests 404. The operator reads route status (Accepted, ResolvedRefs) only
+  # while it brings a route up, so a NEW Agent says so: an API-key Agent at
+  # once, Ready=False with reason AuthEnforcementPending, and an auth: none
+  # Agent after about four minutes of Ready=True. Both then report
+  # PolicyApplyIncomplete, reason AuthEnforcementUnverified, naming
+  # NoMatchingParent. An Agent ALREADY SERVED keeps saying Ready while its route
+  # is not Accepted, and nothing reports it. Measured on agentgateway 1.5.0.
   name: assayd
   # The base URL an agent's EGRESS traverses -- where it sends MCP tool calls.
   # The operator injects it into every agent as ASSAYD_GATEWAY_URL (design 02
