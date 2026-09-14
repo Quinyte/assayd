@@ -180,7 +180,7 @@ func NewAgentReconciler(c client.Client, reader client.Reader, scheme *runtime.S
 			"hostname that is not lowercase, so every route write would fail while the operator reported "+
 			"itself started. Use lowercase letters, digits, '-' and '.', such as %q",
 			gateway.HostnameSuffix, strings.Join(utilvalidation.IsDNS1123Subdomain(gateway.HostnameSuffix), "; "),
-			strings.ToLower(strings.Trim(gateway.HostnameSuffix, ".-")))
+			suffixHint(gateway.HostnameSuffix))
 	}
 	// Required whenever the compiler runs (design 03 §3.3.3), and it runs
 	// whenever the gateway is enabled: every new Agent's route is published only

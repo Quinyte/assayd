@@ -638,7 +638,7 @@ The chart cannot read the Gateway's listeners. It renders no Gateway (A1), and a
 | M5 the old object is not judged for rule 2 | envtest: moving the operator's serving route to `tools`, and off the Gateway |
 | M6 the new object is not judged for rule 2 | envtest: every create on `http` or without `sectionName` |
 | M7 rule 3 always passes | envtest: all six hostname cases |
-| M8 no hostnames admitted | envtest: the no-hostnames case |
+| M8 no hostnames admitted | envtest: the no-hostnames case, with the field absent |
 | M9 a wildcard above the suffix admitted | envtest: `*.internal` |
 | M10 a name under the suffix admitted | envtest: the serving host, `*.payments.assayd.internal`, a clear host beside a serving one, the `UPDATE` adding a serving host |
 | M11 the suffix itself admitted | envtest: `assayd.internal` |
@@ -655,6 +655,7 @@ The chart cannot read the Gateway's listeners. It renders no Gateway (A1), and a
 | M26 rule 3 applied to a route not naming the Gateway | envtest: the control, an unlisted identity's route to another Gateway |
 | M27 rule 2 ignores an old `parentRef` with no `sectionName` | envtest: a tool route writer narrowing a route with no `sectionName` onto `tools` |
 | M28 `grpcroutes` not matched | envtest: the GRPCRoute cases on `http`, with an Agent's host, and from an unlisted identity; chart |
+| M29 an empty `hostnames` list admitted (the `size(...) > 0` clause dropped) | envtest: the case with `hostnames: []` |
 
 **The independent review of this amendment returned REVISE**, with no blocker, one MAJOR and five MINORs. Each is fixed rather than recorded:
 
@@ -687,9 +688,31 @@ The chart cannot read the Gateway's listeners. It renders no Gateway (A1), and a
 
 M1–M28 were re-run against the changed template, and every one is still killed. M24 is still killed by the chart alone, now through a lowercase suffix.
 
+**A delta review of PR #39 at `1c527df` returned REQUEST CHANGES**, with one MAJOR and four MINORs, each fixed:
+
+- **MAJOR.** `docs/install.md` §6.2 said nothing the operator runs had changed since `v0.3.0`. That was false: #38 changed the card fetch and the auth probe, and this amendment added the startup suffix refusal. The paragraph now says the pinned `0.3.0` digest predates both, and names them. No unreleased build is pinned.
+- **The refusals' "such as" hint could repeat the refused value**, for `agents..example` or `Agents_Example`. The chart and the operator now suggest the value trimmed and lower-cased only when that is valid, and `assayd.internal` otherwise.
+- **`values.yaml` and `docs/install.md` said a broad group turns the tool route reservation off**, leaving only RBAC. Rules 2 and 3 still apply to every identity, and the text now says so. For `apiKeyWriters` the reservation is the writer check alone, and the text says that.
+- **`--set gateway.hostnameSuffix=123` failed the render with `len of type int64`.** The chart now reads the value as its string, in `assayd.validate` and in rule 3, as `operator.yaml` renders it.
+- **The chart's refusal said the operator refuses the suffix at startup.** It does only with `gateway.enabled`, and the message now says so. Rule 2's message now names `admission.extraOperators`.
+
+The reviewer's tool raised two items it had not verified. Both were real:
+
+- **`hostnames: []` was pinned by no test.** M8 drops the whole guard and was killed by the case with the field absent. A mutation dropping only `size(...) > 0`, M29, would have survived, because no case set an empty list. One does now.
+- **A static `AgentgatewayBackend` can name an Agent's Service.** agentgateway 1.5.0's CRD schema has `spec.static.host`. This is recorded, unmeasured, under *What stays open*, and `docs/install.md` §6.2 tells administrators how to grant it.
+
+| Mutation | Killed by |
+|---|---|
+| MD the chart's hint never falls back to the default | `TestANonLowercaseHostnameSuffixDoesNotRender`: the two fallback cases (`hostname_suffix_test.go:47`) |
+| ME the chart's hint repeats the refused value | the same test: the four other hint cases |
+| MF the operator's hint never falls back | `TestAnEnabledGatewayWithNoGatewayNamedIsRefused`: the two fallback cases (`httproute_test.go:366`) |
+| MG `assayd.validate` reads the suffix without `toString` | `TestANumericHostnameSuffixRendersAsItsString`: `123` fails the render (`hostname_suffix_test.go:63`) |
+| MH rule 3 reads the suffix without `toString` | the same test: rule 3 renders `h == 123` (`hostname_suffix_test.go:65`) |
+| M29 | the empty-list case (`admission_toolroutes_test.go:246`) |
+
 **What stays open.**
 
-- **Where a tool route sends traffic is not checked.** An `AgentgatewayBackend` can name a static host, an Agent's revision Service included. A tool route writer who may also write one in its namespace can publish an Agent on a tool listener with no `<agent>-auth`. A cross-namespace `backendRef` into a run namespace needs a `ReferenceGrant` there, which is RBAC's; a static backend needs none. Within the cluster this adds no reach, because nothing stops a Pod reaching the same Service directly (A5.4). From outside the cluster it can, wherever the Gateway is exposed. No reservation of Backends exists.
+- **Where a tool route sends traffic is not checked.** An `AgentgatewayBackend` can name a static host, an Agent's revision Service included. A tool route writer who may also write one in its namespace can publish an Agent on a tool listener with no `<agent>-auth`. A cross-namespace `backendRef` into a run namespace needs a `ReferenceGrant` there, which is RBAC's; a static backend needs none. Within the cluster this adds no reach, because nothing stops a Pod reaching the same Service directly (A5.4). From outside the cluster it can, wherever the Gateway is exposed. No reservation of Backends exists. The static host is `spec.static.host` in agentgateway 1.5.0's `AgentgatewayBackend` CRD, pinned in `test/conformance/testdata`. That a static backend reaches an Agent's Service is read off that schema, not measured. `docs/install.md` §6.2 tells administrators to grant `agentgatewaybackends` only to identities they would trust with direct access to every Agent.
 - **`TLSRoute`, `TCPRoute` and `UDPRoute` are not reserved.** Each attaches only to a listener of its own protocol, so none can attach to the HTTP serving listener. A listener of one of those protocols on the serving port would be an administrator's choice, and is not measured here. Whether agentgateway 1.5.0 serves a GRPCRoute on an HTTP listener at all is also unmeasured; it is reserved because it could.
 - **A route attached through a ListenerSet does not name the Gateway**, so this policy does not see it. A ListenerSet can add a listener on the serving port with the hostname `*.<suffix>`, and the review of PR #39 measured an identity in no list admitted with a `parentRef` of kind `ListenerSet`. Design 03 A75 holds every `-auth` transaction while the Gateway admits ListenerSets; the reservation itself does not. `docs/install.md` §6.1 says not to set `spec.allowedListeners`. This predates A6.15.
 - **Rule 3 trusts that the chart and the operator read the same suffix.** They do, from `gateway.hostnameSuffix`. An operator given a different `--gateway-hostname-suffix` outside the chart is not covered.

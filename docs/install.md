@@ -416,7 +416,7 @@ Two chart values:
 | Value | Set it to | What it does |
 |---|---|---|
 | `gateway.url` | `http://$GW_SVC.assayd-gateway.svc.cluster.local:8081` | The operator injects it into every agent as `ASSAYD_GATEWAY_URL`. |
-| `admission.toolRouteWriters` | `users` and `groups` who publish tools | Lets them attach a route to the Gateway on any listener but `http` (design 07 A6.15). Empty by default, which admits no one but the operators: the operator and `admission.extraOperators`. Never list a group every identity carries, such as `system:authenticated` or `system:serviceaccounts`: that turns the reservation off. |
+| `admission.toolRouteWriters` | `users` and `groups` who publish tools | Lets them attach a route to the Gateway on any listener but `http` (design 07 A6.15). Empty by default, which admits no one but the operators: the operator and `admission.extraOperators`. Never list a group every identity carries, such as `system:authenticated` or `system:serviceaccounts`: any identity could then attach a tool route on any listener but `http`, limited only by the hostname rule (section 6.4) and by RBAC. |
 
 **`admission.toolRouteWriters` is not in chart `0.3.0`.** It is in this repository's chart, which is what the harness installs, and will be in the next release. Helm ignores a value a chart does not declare, without an error, so on `0.3.0` the setting does nothing and every tool route is refused. Upgrade from a checkout:
 
@@ -434,7 +434,7 @@ helm upgrade assayd charts/assayd \
   --wait --timeout 5m
 ```
 
-**Keep the `operator.image.digest` line.** The published chart pins the operator image by digest, and a checkout's chart does not: it names the tag `0.1.0`, which is not published. Without the digest, the upgrade removes the running operator first and replaces it with an image that cannot be pulled, and `--wait` fails. The digest is the published `0.3.0` operator (`docs/supply-chain.md`). Nothing the operator runs has changed since `v0.3.0`: this chart differs from it in the admission policy, values and notes.
+**Keep the `operator.image.digest` line.** The published chart pins the operator image by digest, and a checkout's chart does not: it names the tag `0.1.0`, which is not published. Without the digest, the upgrade removes the running operator first and replaces it with an image that cannot be pulled, and `--wait` fails. The digest is the published `0.3.0` operator (`docs/supply-chain.md`), and **it predates two operator changes in this checkout**: #38, which sends the card fetch and the anonymous auth probe only to the revision's Service (`internal/controller/card.go`, `authprobe.go`), and the startup refusal of a `gateway.hostnameSuffix` that is not a lowercase DNS name (design 07 A6.15). So this upgrade runs a `0.3.0` operator, without either change, under this checkout's chart. No published release carries them yet; publishing one is a release decision, not a step in this recipe.
 
 **No test takes this path.** The harness installs from a checkout, as here, with an operator image it builds itself. An upgrade from the published chart to a checkout is not exercised.
 
@@ -464,6 +464,8 @@ EOF
 `patch` is for `kubectl apply`, which patches a route that already exists. The e2e creates its route and needs no `patch`. A new RoleBinding can take a few seconds to take effect, and until it does the write is refused by RBAC, not by admission; the e2e waits for it with a `SelfSubjectAccessReview`.
 
 The e2e writes the server, the backend and the allowlist below as its cluster administrator. RBAC for a tool team to write `agentgatewaybackends` and `agentgatewaypolicies` is yours to grant. An `AgentgatewayPolicy` is reserved to the operator only in run namespaces (design 03 §6), and `demo-tools` is not one.
+
+**Grant `agentgatewaybackends` as carefully as route RBAC in a run namespace.** An `AgentgatewayBackend` can name a static host (`spec.static.host` in agentgateway 1.5.0's CRD), and nothing checks that the host is not an Agent's revision Service. So a tool team that can write a backend and a tool route can publish an Agent on the tool listener with no `<agent>-auth` in front of it. Grant it only to identities you would trust with direct access to every Agent. This is read off the CRD schema, not measured (design 07 A6.15).
 
 ### 6.3 The MCP server, with `appProtocol` on its Service
 

@@ -347,6 +347,25 @@ func TestAnEnabledGatewayWithNoGatewayNamedIsRefused(t *testing.T) {
 			HostnameSuffix: "agents.example", ServingURL: testServingURL}); err != nil {
 		t.Errorf("a lowercase hostname suffix was refused: %v", err)
 	}
+	// The refusal suggests a suffix that would be accepted: the value
+	// lower-cased and trimmed when that is valid, and the default otherwise. It
+	// never repeats the refused value.
+	for suffix, hint := range map[string]string{
+		"Agents.Example":   "agents.example",
+		"agents.example.":  "agents.example",
+		"agents.example\n": "agents.example",
+		" agents.example":  "agents.example",
+		"agents..example":  controller.DefaultGatewayHostnameSuffix,
+		"Agents_Example":   controller.DefaultGatewayHostnameSuffix,
+	} {
+		_, err := controller.NewAgentReconciler(k8s, k8s, scheme, operatorNamespace,
+			func() bool { return false }, labelAuthorityPresent, controller.InjectedEnvConfig{},
+			controller.GatewayConfig{Enabled: true, Name: "assayd", Namespace: "gw",
+				HostnameSuffix: suffix, ServingURL: testServingURL})
+		if err == nil || !strings.Contains(err.Error(), `such as "`+hint+`"`) {
+			t.Errorf("--gateway-hostname-suffix %q: want a refusal suggesting %q, got %v", suffix, hint, err)
+		}
+	}
 }
 
 // Design 03 §3.1 says EVERY Agent carries the tier condition, and the status

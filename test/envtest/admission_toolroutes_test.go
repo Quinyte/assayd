@@ -37,7 +37,7 @@ const (
 	// Fragments of the three validations' messages, so that each refusal
 	// below is evidence about the rule that made it and not only the policy.
 	notAWriter   = "are authored by the assayd operator"
-	servingOnly  = "serving listener `http` is the assayd operator's alone"
+	servingOnly  = "serving listener `http` is the assayd operators' alone"
 	hostsCollide = "must list its hostnames"
 )
 
@@ -222,6 +222,8 @@ func TestAToolRouteWriterAttachesOnlyOffTheServingListener(t *testing.T) {
 			[]string{"*.internal"}, []map[string]any{onTools}, hostsCollide},
 		{"a tool route writer on `tools` with no hostnames, which matches every host", asAuthor, tools,
 			nil, []map[string]any{onTools}, hostsCollide},
+		{"a tool route writer on `tools` with an empty hostnames list, which matches every host", asAuthor, tools,
+			[]string{}, []map[string]any{onTools}, hostsCollide},
 		{"a tool route writer on `tools` with one clear host and one serving host", asAuthor, tools,
 			[]string{toolHost, servingHost}, []map[string]any{onTools}, hostsCollide},
 

@@ -219,8 +219,9 @@ admission:
   # Agent's group.
   #
   # Never list a group every identity carries, such as `system:authenticated`
-  # or `system:serviceaccounts`: that turns this reservation off, and only RBAC
-  # is left.
+  # or `system:serviceaccounts`: this reservation is only the writer check, so
+  # it would then refuse no one, and any identity with ConfigMap RBAC in a run
+  # namespace could mint a principal.
   apiKeyWriters:
     users: []
     groups: ["system:masters"]
@@ -260,8 +261,9 @@ admission:
   # a key set. Empty -- the default -- admits no one but the operators, the
   # operator's ServiceAccount and extraOperators, on any listener. Never list a
   # group every identity carries, such as `system:authenticated` or
-  # `system:serviceaccounts`: that turns this reservation off for every
-  # listener but `http`, and only RBAC is left.
+  # `system:serviceaccounts`: any identity could then attach a tool route on any
+  # listener but `http`, limited only by the hostname rule above and by RBAC.
+  # `http` would stay the operators'.
   toolRouteWriters:
     users: []
     groups: []

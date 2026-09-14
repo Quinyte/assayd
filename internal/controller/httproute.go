@@ -7,11 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -78,6 +80,17 @@ type GatewayConfig struct {
 // reaching an agent by this name needs DNS an administrator provides. Nothing
 // here creates that DNS, and this comment is the only place that says so.
 const DefaultGatewayHostnameSuffix = "assayd.internal"
+
+// suffixHint is the hostname suffix a refusal suggests: the refused value
+// trimmed and lower-cased when that is a valid suffix, and the default
+// otherwise, so the hint never repeats a value that would be refused again.
+func suffixHint(s string) string {
+	h := strings.ToLower(strings.Trim(strings.TrimSpace(s), ".-"))
+	if len(utilvalidation.IsDNS1123Subdomain(h)) > 0 {
+		return DefaultGatewayHostnameSuffix
+	}
+	return h
+}
 
 // Hostname is the host an agent answers on through the Gateway. Per AGENT, not
 // per revision: the route is one object whose backendRef moves between
