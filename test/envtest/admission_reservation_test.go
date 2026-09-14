@@ -46,9 +46,10 @@ const (
 	scopeLabel       = "assayd-envtest/reservation"
 )
 
-func renderedAdmission(t *testing.T) map[string]*unstructured.Unstructured {
+func renderedAdmission(t *testing.T, helmArgs ...string) map[string]*unstructured.Unstructured {
 	t.Helper()
-	out, err := exec.Command("helm", "template", "assayd", filepath.Join("..", "..", "charts", "assayd")).Output()
+	args := append([]string{"template", "assayd", filepath.Join("..", "..", "charts", "assayd")}, helmArgs...)
+	out, err := exec.Command("helm", args...).Output()
 	if err != nil {
 		t.Fatalf("helm template: %v", err)
 	}
@@ -120,9 +121,9 @@ func scopedNamespace(t *testing.T, name, scope string, run bool) string {
 	return name
 }
 
-// grantWriters gives each user every verb on ConfigMaps and
-// AgentgatewayPolicies in each namespace, so a refusal below is admission's,
-// not RBAC's.
+// grantWriters gives each user every verb on ConfigMaps, AgentgatewayPolicies,
+// HTTPRoutes and GRPCRoutes in each namespace, so a refusal below is admission's, not
+// RBAC's.
 func grantWriters(t *testing.T, scope string, namespaces []string, users ...string) {
 	t.Helper()
 	ctx := context.Background()
@@ -130,6 +131,7 @@ func grantWriters(t *testing.T, scope string, namespaces []string, users ...stri
 		Rules: []rbacv1.PolicyRule{
 			{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"*"}},
 			{APIGroups: []string{"agentgateway.dev"}, Resources: []string{"agentgatewaypolicies"}, Verbs: []string{"*"}},
+			{APIGroups: []string{"gateway.networking.k8s.io"}, Resources: []string{"httproutes", "grpcroutes"}, Verbs: []string{"*"}},
 		}}
 	if err := k8s.Create(ctx, role); err != nil {
 		t.Fatalf("create role: %v", err)

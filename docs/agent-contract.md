@@ -4,7 +4,7 @@ What a container must do to run as an assayd Agent, and what the operator gives 
 
 The reference implementation is `test/responder`, the e2e's agent. It is a test fixture, not design 09's SDK template. It is the only agent any test here runs, so it is the only one this contract has been measured against.
 
-**Calling MCP tools through the gateway is not covered here.** `ASSAYD_GATEWAY_URL` is described below, but how a tool route is authored is waiting on a decision, and a later document will cover it.
+How an agent calls an MCP tool through the gateway is below, in *Calling an MCP tool*. How the tool is published behind the gateway is `docs/install.md` section 6.
 
 ## The container
 
@@ -75,6 +75,22 @@ Through the gateway, a caller reaches the agent with the `Host` header `<agent>.
 
 Design 02 §11 names two more variables, `ASSAYD_KG_ENDPOINTS` and `ASSAYD_NATS_URL`. Neither is injected: nothing exists yet to produce a value for either. An agent should treat them as absent.
 
+## Calling an MCP tool
+
+Only one MCP client has been measured through the gateway: the responder's `callTool` (`test/responder/main.go`), in `TestAnAgentCompletesATaskByCallingAToolThroughTheGateway`. What follows is what it does and what the gateway answered.
+
+| | |
+|---|---|
+| Endpoint | `POST <ASSAYD_GATEWAY_URL>/mcp`, MCP Streamable HTTP |
+| `Host` header | The tool route's hostname, such as `mcp.demo-tools.example`. The gateway routes on it, and **the operator does not inject it**: tell the agent some other way. The responder reads `MCP_TOOL_HOST`, which is the fixture's name, not assayd's. |
+| Headers | `Content-Type: application/json` and `Accept: application/json, text/event-stream` on every request. `MCP-Protocol-Version` on every request after `initialize`. `Mcp-Session-Id`, echoed from the `initialize` response, when the server issued one. |
+| Sequence | `initialize` with `protocolVersion: "2025-06-18"`, then `notifications/initialized`, then `tools/call`. |
+| Response | Either JSON or Server-Sent Events, and the client cannot choose. agentgateway answers a successful exchange as SSE, even when the server answered JSON, and answers its own errors as plain JSON. On SSE, take the `data:` event whose `id` matches the request, not the first one. |
+| A tool the gateway's allowlist refuses | JSON-RPC error `Unknown tool: <name>`, which does not say that an allowlist refused it. The tool is also missing from `tools/list`. |
+| Credentials | None. No identity is attached to the call, because design 06 has no implementation. |
+
+**`ASSAYD_GATEWAY_URL` unset means no tool calls.** The responder fails the task rather than calling anything else, and a real agent should too: it has no other address the gateway governs. Nothing enforces that, since no egress NetworkPolicy is created.
+
 ## Sources
 
 | Statement | Where it is enforced |
@@ -87,3 +103,6 @@ Design 02 §11 names two more variables, `ASSAYD_KG_ENDPOINTS` and `ASSAYD_NATS_
 | Anonymous probe of the card path | `internal/controller/authprobe.go` |
 | Injected variables | `internal/controller/injectedenv.go` |
 | The responder's binding | `test/responder/main.go`; A2A 1.0 shapes in `docs/research/a2a-v1.0-card-and-transport-2026-09.md` |
+| The MCP call: endpoint, headers, sequence, SSE handling | `callTool` in `test/responder/main.go`; measured through agentgateway 1.5.0 in `test/e2e/mcp_test.go` |
+| `Unknown tool: <name>` for a refused tool | `TestAnAgentCompletesATaskByCallingAToolThroughTheGateway` in `test/e2e/mcp_test.go` |
+| A refused tool's removal from `tools/list` | `TestAnAgentCallsAnMCPToolThroughTheGateway` in `test/e2e/mcp_test.go` |

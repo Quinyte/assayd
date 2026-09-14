@@ -18,6 +18,26 @@ Guard rails, evaluated at render time rather than discovered at runtime.
 {{- if eq .Values.operator.image.tag "latest" -}}
 {{- fail "operator.image.tag: latest is refused. Pin a version, or a digest where it matters." -}}
 {{- end -}}
+{{- /*
+Every emitted route's hostname ends in gateway.hostnameSuffix, and the HTTPRoute
+CRD refuses a hostname that is not a lowercase DNS name. With gateway.enabled the
+operator refuses such a suffix at startup; refused here, the install fails with
+the value named instead of crash-looping. assayd-gateway-routes compares hostnames
+against the same string. `--set` types a bare number or boolean, so the value is
+read as its string, as operator.yaml renders it.
+
+The suggestion is the value trimmed and lower-cased when that is valid, and the
+operator's default otherwise, so it never repeats a value that would be refused.
+*/ -}}
+{{- $dns := "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" -}}
+{{- $suffix := (.Values.gateway | default dict).hostnameSuffix | default "" | toString -}}
+{{- if and $suffix (or (gt (len $suffix) 253) (not (regexMatch $dns $suffix))) -}}
+{{- $hint := trim $suffix | trimAll ".-" | lower -}}
+{{- if or (gt (len $hint) 253) (not (regexMatch $dns $hint)) -}}
+{{- $hint = "assayd.internal" -}}
+{{- end -}}
+{{- fail (printf "gateway.hostnameSuffix %q is not a lowercase DNS name. Every emitted route's hostname ends in it, and the HTTPRoute CRD refuses one that is not lowercase; with gateway.enabled, the operator also refuses it at startup. Use lowercase letters, digits, '-' and '.', such as %q" $suffix $hint) -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "assayd.name" -}}assayd{{- end -}}

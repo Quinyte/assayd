@@ -45,6 +45,12 @@ GWAPI_VERSION="${GWAPI_VERSION:-v1.6.0}"
 AGW_VERSION="${AGW_VERSION:-1.5.0}"
 GATEWAY_NS="${GATEWAY_NS:-assayd-gateway}"
 TOOLS_NS="${TOOLS_NS:-assayd-e2e-tools}"
+# The identity the chart is given as admission.toolRouteWriters (design 07
+# A6.15), and the one the MCP tests author their tool route as. A plain
+# username with no RBAC of its own: the value lifts the admission refusal and
+# grants nothing, so the tests grant it httproutes in the tools namespace, as
+# an administrator would.
+TOOL_ROUTE_WRITER="${TOOL_ROUTE_WRITER:-assayd-e2e-tool-author}"
 
 case "${DISTRO}" in
 k3d)
@@ -277,9 +283,11 @@ spec:
   # namespace's own kubernetes.io/metadata.name rather than by an assayd.dev
   # label: those keys are reserved to the operator by A5.9's admission policy,
   # and a test that minted one would be forging the very authority that policy
-  # exists to hold. Routes here are still authored by the operator identity --
-  # assayd-gateway-routes reserves every route naming this Gateway, whichever
-  # listener it attaches to.
+  # exists to hold. Routes here are authored by TOOL_ROUTE_WRITER, the chart's
+  # admission.toolRouteWriters: assayd-gateway-routes admits it on this
+  # listener and refuses it on `http`, which stays the operator's (design 07
+  # A6.15). Until A6.15 the tests impersonated the operator to write one,
+  # because the policy reserved every route naming this Gateway to it.
   - name: tools
     port: 8081
     protocol: HTTP
@@ -361,18 +369,22 @@ echo "==> installing the chart"
 # Render it wrong and the reservation matches nothing and admits any author,
 # silently. It is set on every distro so the rendered policy names the namespace
 # the Gateway would occupy, rather than defaulting to the operator's.
+# admission.toolRouteWriters is set on every distro too, because the policy it
+# widens renders on every install.
 helm upgrade --install assayd charts/assayd \
   -f charts/assayd/values-local.yaml \
   --set operator.image.repository=assayd-operator \
   --set operator.image.tag="${IMAGE_TAG}" \
   --set operator.image.pullPolicy=Never \
   --set gateway.namespace="${GATEWAY_NS}" \
+  --set "admission.toolRouteWriters.users={${TOOL_ROUTE_WRITER}}" \
   ${GATEWAY_SETTINGS[@]+"${GATEWAY_SETTINGS[@]}"} \
   --wait --timeout 5m
 
 # The suite asserts it is talking to THIS build, so a stale pod can never again
 # look like a passing run.
 export ASSAYD_E2E_IMAGE="${IMAGE}"
+export ASSAYD_E2E_TOOL_ROUTE_WRITER="${TOOL_ROUTE_WRITER}"
 
 echo "==> running e2e suite"
 ASSAYD_E2E=1 go test ./test/e2e/... -count=1 -timeout 20m -v ${E2E_RUN:+-run "${E2E_RUN}"}

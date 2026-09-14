@@ -98,7 +98,9 @@ func run() error {
 	flag.StringVar(&gateway.HostnameSuffix, "gateway-hostname-suffix", controller.DefaultGatewayHostnameSuffix,
 		"appended to <agent>.<agent-namespace> to form the hostname an emitted route matches. No "+
 			"design settles this, so it is assayd's choice and configurable. It is a ROUTING KEY "+
-			"matched against the Host header, not an address: nothing here creates DNS for it")
+			"matched against the Host header, not an address: nothing here creates DNS for it. It must be a "+
+			"lowercase DNS name, because every route's hostname ends in it and the HTTPRoute CRD refuses "+
+			"any other; the operator refuses one at startup")
 	flag.StringVar(&gateway.ServingURL, "gateway-serving-url", "",
 		"base URL of the Gateway's SERVING listener, the one each Agent's <agent>-serving route "+
 			"attaches to -- not --gateway-url, which names the egress listener. Design 03 §3.3.3 "+

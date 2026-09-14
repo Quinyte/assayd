@@ -52,8 +52,8 @@ make e2e     # k3d: a real cluster, a real gateway, real agents
 
 | Doc | What |
 |---|---|
-| `docs/install.md` | Installing with a gateway, API keys, CRD upgrades, and one A2A task end to end |
-| `docs/agent-contract.md` | What a container must do to run as an Agent, and what the operator injects |
+| `docs/install.md` | Installing with a gateway, API keys, CRD upgrades, one A2A task end to end, and an MCP tool behind the gateway |
+| `docs/agent-contract.md` | What a container must do to run as an Agent, what the operator injects, and how it calls an MCP tool |
 | `docs/architecture.md` | The full architecture (canonical) |
 | `docs/designs/README.md` | Per-component designs **and their real status** — start here |
 | `docs/decisions/` | ADRs — every settled decision, with its context |

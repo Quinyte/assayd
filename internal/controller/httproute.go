@@ -7,11 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -78,6 +80,17 @@ type GatewayConfig struct {
 // reaching an agent by this name needs DNS an administrator provides. Nothing
 // here creates that DNS, and this comment is the only place that says so.
 const DefaultGatewayHostnameSuffix = "assayd.internal"
+
+// suffixHint is the hostname suffix a refusal suggests: the refused value
+// trimmed and lower-cased when that is a valid suffix, and the default
+// otherwise, so the hint never repeats a value that would be refused again.
+func suffixHint(s string) string {
+	h := strings.ToLower(strings.Trim(strings.TrimSpace(s), ".-"))
+	if len(utilvalidation.IsDNS1123Subdomain(h)) > 0 {
+		return DefaultGatewayHostnameSuffix
+	}
+	return h
+}
 
 // Hostname is the host an agent answers on through the Gateway. Per AGENT, not
 // per revision: the route is one object whose backendRef moves between
@@ -354,8 +367,9 @@ func routePublished(rt *gatewayv1.HTTPRoute) bool {
 // and an earlier version of this function did not compare them — so a request
 // mirror or a URL rewrite planted on a converged route by anyone with
 // `httproutes` update in a run namespace would have been invisible here
-// forever. `assayd-gateway-routes` refuses an author who names the assayd
-// Gateway, but it constrains CREATE and UPDATE on the object being written and
+// forever. `assayd-gateway-routes` refuses any author but the operator on the
+// assayd Gateway's serving listener (design 07 A6.15), but it constrains CREATE
+// and UPDATE on the object being written and
 // is the chart's, not this reconciler's: a control the operator relies on and
 // does not itself perform is exactly what rule 5 says not to leave implied.
 func equalRoute(a, b *gatewayv1.HTTPRoute) bool {
