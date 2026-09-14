@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -218,7 +219,8 @@ func cond(c *metav1.Condition) string {
 }
 
 // redirect sends the operator's request to the test server whatever in-cluster
-// address it built. The address construction is exercised by the e2e.
+// address it built. The address construction is exercised by the unit tests
+// and the e2e.
 type redirect struct{ base string }
 
 func (d redirect) Do(req *http.Request) (*http.Response, error) {
@@ -226,5 +228,53 @@ func (d redirect) Do(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return http.DefaultClient.Do(out)
+	return noFollow.Do(out)
+}
+
+// noFollow is the production card client's policy, restated because envtest
+// cannot reach it: no redirect followed, no proxy taken from the environment.
+// http.DefaultClient did both, so a redirect here would have been followed.
+var noFollow = &http.Client{
+	Transport:     &http.Transport{},
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+// A redirect on the card path reaches the Agent's status under its own name.
+// The unit tests prove the production client does not follow one; this proves
+// Reconcile carries CardRedirected to Registered rather than flattening it into
+// CardUnreachable, and that the refusal does not withhold traffic.
+func TestARedirectingCardPathIsNamedInStatus(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "redirector", nil)
+	var hits atomic.Int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+	}))
+	defer elsewhere.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/.well-known/agent-card.json", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	r := newReconciler(false)
+	r.CardClient = redirect{srv.URL}
+	rev := revision.MustHash(a.Spec)
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("redirector", rev), 1)
+	got := settle(t, r, a)
+
+	c := meta.FindStatusCondition(got.Status.Conditions, string(assaydv1alpha1.CondRegistered))
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != "CardRedirected" {
+		t.Errorf("Registered is %+v; a card path that redirects is CardRedirected", c)
+	}
+	// A fixture check, not a production one: CardClient here is the test's own
+	// noFollow, and the unit tests pin the production client.
+	if n := hits.Load(); n != 0 {
+		t.Errorf("fixture fault: the test's client followed the redirect (%d request(s) reached "+
+			"its target), so this run shows nothing about Reconcile", n)
+	}
+	if !meta.IsStatusConditionTrue(got.Status.Conditions, string(assaydv1alpha1.CondReady)) {
+		t.Errorf("a refused card withheld traffic, which §3.4 does not describe; conditions %+v",
+			got.Status.Conditions)
+	}
 }

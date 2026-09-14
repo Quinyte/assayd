@@ -21,7 +21,8 @@ The reference implementation is `test/responder`, the e2e's agent. It is a test 
 
 The operator reads the card from the container. The container is the source of truth, not anything written in the Agent's spec (ADR-0019).
 
-- **Path**: `GET /.well-known/agent-card.json` on the serving port, or the path in `spec.card.path`.
+- **Path**: `GET /.well-known/agent-card.json` on the serving port, or the path in `spec.card.path`. It is only ever a path: a `?`, `#` or `%` in it is sent percent-encoded as part of the path, never as a query or a fragment.
+- **Answer directly, with `200`.** Serve the card at the card path itself. The operator does not follow a redirect (`301`, `302`, `303`, `307` or `308`), and it takes no proxy from its environment. A redirect counts as a failed fetch: `Registered=False`, reason `CardRedirected`, with the message `the card path <url> answered <code>, a redirect, and redirects are not followed: the operator reads the card only from the revision's own Service, never from an address the agent names. Serve the card at the path itself. Retrying every 15s; this does not withhold traffic`. It is retried like any other failed fetch.
 - **When**: after the revision is available. The operator fetches through the revision's Service, one attempt per reconcile with a 5-second timeout, and retries every 15 seconds until it succeeds.
 - **Credentials**: none. Serve the card to anonymous requests. The operator verifies an API-key policy by sending an anonymous `GET` of this path through the gateway and requiring `401`. When it locks a served `auth: none` Agent to `apikey`, it first sends one such request and compares a `200` answer with the card's recorded digest.
 
@@ -29,6 +30,7 @@ The card is A2A **1.0**. The operator checks the following, and reports the outc
 
 | Check | `Registered=False` reason |
 |---|---|
+| The card path answers without a redirect | `CardRedirected` |
 | The fetch succeeds | `CardUnreachable` |
 | The body is valid JSON | `CardUnparseable` |
 | `name` equals the Agent's `metadata.name` | `CardNameMismatch` |

@@ -336,7 +336,8 @@ func NackedPolicies(message string) (policies []types.NamespacedName, dropped in
 // its anonymous probe with the Agent's Host header, to the Agent's card path.
 // So it must name a listener and nothing else: an absolute http or https URL
 // with a host and, if it has a port, one from 1 to 65535. No path, not even
-// "/", because the probe appends a card path that already starts with one. No
+// "/": the probe keeps only this URL's scheme and host (probeURL) and puts the
+// Agent's card path after them, so a path here would be dropped in silence. No
 // query or fragment. No user information either, because a credential in a
 // flag is printed by `ps` and by every log that echoes the operator's
 // arguments.
@@ -357,7 +358,7 @@ func ValidateGatewayServingURL(raw string) error {
 			"and by every log that echoes the operator's arguments", raw)
 	case u.Path != "":
 		return fmt.Errorf("%q has a path, even if only \"/\"; it must name the listener only, "+
-			"because the probe appends the Agent's card path to it", raw)
+			"because the probe uses only its scheme and host, so a path would be dropped in silence", raw)
 	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "":
 		return fmt.Errorf("%q has a query or a fragment; it must name the listener only", raw)
 	}
