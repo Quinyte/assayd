@@ -26,16 +26,16 @@ The chart prints its notes only after a successful install, and three things mus
 Section 5 deploys an agent image you build, and the operator pulls it by digest from a registry at every Pod start. So the cluster needs a registry its nodes can pull from. On k3d, that registry is wired in when the cluster is created and cannot be added afterwards. This is what the harness does, under different names:
 
 ```bash
-CLUSTER=assayd
+DEMO_CLUSTER=assayd
 REG_NAME=assayd-registry
 REG_PORT=5120   # any free port on the host
 k3d registry create "$REG_NAME" --port "$REG_PORT"
-k3d cluster create "$CLUSTER" --agents 0 --wait --registry-use "k3d-$REG_NAME:$REG_PORT"
+k3d cluster create "$DEMO_CLUSTER" --agents 0 --wait --registry-use "k3d-$REG_NAME:$REG_PORT"
 ```
 
-- **Any free port works.** `5120` is chosen because the harness does not use it. `hack/e2e.sh` creates its own registry on `5111`, and keeps it between runs, so on a machine that has run `make e2e` a registry on `5111` fails to start: the port is taken. The harness's cluster is `assayd-local`, so `CLUSTER=assayd` does not collide with it either.
+- **Any free port works.** `5120` is chosen because the harness does not use it. `hack/e2e.sh` creates its own registry on `5111`, and keeps it between runs, so on a machine that has run `make e2e` a registry on `5111` fails to start: the port is taken. The harness's cluster is `assayd-local`, so `assayd` does not collide with it either. The variable is `DEMO_CLUSTER`, not `CLUSTER`, because the `Makefile` and `hack/e2e.sh` both read `CLUSTER` from the environment.
 - **k3d prefixes the registry's name.** It names the registry `k3d-$REG_NAME`. The host pushes to it as `localhost:$REG_PORT`, and the cluster's nodes pull from it as `k3d-$REG_NAME:$REG_PORT`. Section 5.1 uses both names.
-- **Section 5.1 reads these variables.** Run it in the same shell, or set them again first.
+- **Sections 5.1 and 6.3 read these variables.** Run them in the same shell, or set the variables again first.
 
 On any other cluster, use a registry its nodes can already pull from.
 
@@ -595,10 +595,20 @@ This is design 03's `toolAllowlist`, written by hand. Two behaviours were measur
 
 An agent reaches the tool at `<ASSAYD_GATEWAY_URL>/mcp`, with the tool route's hostname as its `Host` header. The operator injects the URL and nothing else, so the agent must be told the hostname some other way. The responder reads it from `MCP_TOOL_HOST`, a name of the fixture's, not of assayd's. `docs/agent-contract.md` gives the request shapes.
 
-**An Agent created before the section 6.2 upgrade receives the variable too.** The operator renders `ASSAYD_GATEWAY_URL` into an Agent's Deployment on every reconcile, from its `--gateway-url` flag, which the chart sets from `gateway.url` (`internal/controller/injectedenv.go`). It compares the rendered Pod spec exactly against the running one, so a changed URL updates the existing Deployment in place and its Pods roll. The variable is not revision material, so no new revision is minted and no gate runs. The upgrade changes the operator's flags, so the operator restarts and reconciles every Agent.
+**An Agent created before the section 6.2 upgrade receives the variable too, when its current spec's revision is the one serving.** On every reconcile, the operator renders `ASSAYD_GATEWAY_URL` from its `--gateway-url` flag, which the chart sets from `gateway.url`, into the Deployment of the revision the Agent's current spec names (`internal/controller/injectedenv.go`). It compares that exactly against the existing Deployment's Pod template, so a changed URL updates the Deployment in place and its Pods roll. The variable is not revision material, so no new revision is minted and no gate runs. The upgrade changes the operator's flags, so the operator restarts and reconciles every Agent.
 
 - **Pinned by a test, without a kubelet.** `TestChangingTheInjectedGatewayURLDoesNotMintARevision` (`test/envtest/injectedenv_test.go`) repoints the operator and requires the existing Deployment to carry the new URL. envtest runs no Pods, so it does not show the Pods rolling. The e2e creates its Agent after the chart has `gateway.url`, so it does not take this path. The walkthrough of this page saw `hello` receive the variable after the upgrade, once, on the `0.3.0` operator.
-- **One exception: a pinned Agent.** While `spec.release.targetRevisionDigest` pins an Agent to a revision, the operator leaves that revision's Deployment as it was rendered, and does not converge it (`internal/controller/agent_controller.go`). If it was rendered before the upgrade, it has no `ASSAYD_GATEWAY_URL`.
+- **The serving revision is not always the current spec's.** The route sends traffic to the Agent's active revision, and the operator rewrites only the Deployment of the revision the current spec names. It does not re-render any other revision, because every renderer reads the current spec: a re-rendered older revision would run the current spec's Pod template under the older revision's name (`internal/controller/agent_controller.go`). So in each state below, the serving revision keeps the environment it was rendered with, and if that was before the upgrade, it has no `ASSAYD_GATEWAY_URL`. No test pins any of them for this variable.
+
+| State | What the Agent reports | When it ends |
+|---|---|---|
+| A newer revision is in flight and not yet available | `Progressing=True`, reason `CandidateNotAvailable` | When the newer revision is promoted. If it never becomes available, for example because it crashloops, never. |
+| A newer revision is held because its `-auth` input does not compile | `Progressing=True`, reason `AuthInputUncompilable` | When the spec compiles and the newer revision is promoted. |
+| A newer revision is held pending its eval gates | `Progressing=True`, reason `AwaitingGates` | When the gates pass and the newer revision is promoted. |
+| `spec.release.targetRevisionDigest` pins a retained revision | The pinned revision serves | When the pin is removed. |
+| `spec.release.targetRevisionDigest` names no retained revision | `Degraded=True`, reason `ReleasePinUnresolvable` | When the pin is corrected or removed. |
+
+A newer revision rendered after the upgrade carries the variable, so promoting it ends the gap.
 
 Create a second Agent. It needs `MCP_TOOL_HOST`, which `hello` does not set:
 
@@ -618,7 +628,7 @@ kubectl -n demo wait agent/toolcaller --for=jsonpath='{.status.auth.mode}'=apike
 kubectl -n demo wait agent/toolcaller --for=condition=Registered --timeout=2m
 ```
 
-The second wait is needed, for the reason in section 5.3: the card is fetched separately, and the auth wait can return while `Registered` is still `False`, reason `CardUnreachable`. The walkthrough of this page saw `toolcaller` read exactly that one second after it was created.
+The second wait is needed, for the reason in section 5.3: the card is fetched separately, once the Pod is available, and the auth wait can return while `Registered` is still `False`, reason `CardUnreachable`.
 
 It is in namespace `demo`, so section 5.4's `$PERMITTED` key admits it. The responder's `call_tool` skill runs when the message's `metadata.tool` names a tool. It sends the message text as the tool's `text` argument, and the tool's answer becomes the task's artifact:
 
@@ -662,7 +672,7 @@ The last row needs no allowlist in place, so it cannot be seen after section 6.6
 | Every keyed request gets `401` | No key set in the run namespace, the wrong label, or the wrong hash. Hash the key's bytes with no trailing newline. |
 | A tool route is refused, naming `assayd-gateway-routes` | The writer is not in `admission.toolRouteWriters`, the route names `http` or no `sectionName`, or a hostname is missing or an Agent's. The message says which (section 6.4). On chart `0.3.0`, the value does not exist (section 6.2). |
 | Every tool request gets `503 mcp: no backends configured` | The MCP Service's port has no `appProtocol: agentgateway.dev/mcp` (section 6.3). |
-| A tool task fails with `ASSAYD_GATEWAY_URL is not set` | `gateway.url` is unset (section 6.2), the Agent's Pods have not yet rolled since it was set, or the Agent is pinned by `spec.release.targetRevisionDigest` to a revision rendered before it was set (section 6.7). |
+| A tool task fails with `ASSAYD_GATEWAY_URL is not set` | `gateway.url` is unset (section 6.2), or the Agent's Pods have not yet rolled since it was set. Or the serving revision was rendered before it was set, and is not the revision the Agent's current spec names: a newer revision is in flight (`Progressing=True`), and the serving revision keeps the environment it was rendered with until the new one is promoted; or `spec.release.targetRevisionDigest` pins an older revision, or names none (section 6.7). |
 | A tool task fails with `Unknown tool: <name>` | The allowlist does not admit that tool (section 6.6). |
 
 ## Not covered here
