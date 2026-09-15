@@ -155,20 +155,42 @@ type ExternalAgent struct {
 }
 
 type CardSpec struct {
-	// Path is the absolute path the agent serves its Agent Card on. The
-	// operator fetches it from the revision's own Service: it is a path and
-	// never a URL, so the fetch cannot be steered at another host.
+	// Path is the absolute path the agent serves its Agent Card on, on the
+	// revision's own Service. It must start with "/", use only the unreserved
+	// characters, the sub-delimiters, ":" and "@", and be at most 1024
+	// characters. Anything else is refused at apply time, an empty string
+	// included (design 02 A76). Omitting the field takes the default.
 	//
-	// Bounded at 1024 characters because the path is quoted back in status
-	// conditions when a fetch fails. A path of etcd-value size would make every
-	// status write fail, and an Agent that cannot write status reports nothing
-	// at all. The pattern is RFC 3986's path characters, so a scheme, a query or
-	// a fragment is refused at apply time rather than 404ing at the first fetch.
-	// Validation ratcheting keeps an Agent stored before these rules updatable.
+	// That class is RFC 3986 section 3.3's `pchar` MINUS `pct-encoded`, and the
+	// omission is the point rather than an oversight: the operator treats this
+	// value as a DECODED path and percent-encodes it into the request URL. So a
+	// "%" is re-encoded — /card%20.json goes out as /card%2520.json — and a "?"
+	// or a "#" goes out as %3F or %23, inside the path, never as a query or a
+	// fragment. All three would 404 at the first fetch, so they are refused at
+	// write time instead.
+	//
+	// What the class does NOT exclude: dot segments, so /../../card.json is
+	// admitted and sent literally, and a host-shaped path, so
+	// //elsewhere.example.com/card.json is admitted. Neither moves the fetch —
+	// cardURL writes the revision's own authority first and url.URL keeps a path
+	// a path (internal/controller/authprobe.go). It is that construction, not
+	// this schema, that stops a path naming a host.
+	//
+	// 1024 is a choice with headroom, not a limit anything imposes: describeProbe
+	// quotes this value raw into a condition message, and metav1.Condition's
+	// message caps at 32768 characters. It is a maxLength rather than a CEL
+	// size() check, and the cost of that is measured: TooLong is BLOCKING, so
+	// when it fires the API server evaluates no CEL rule on the object and an
+	// over-long path reads the API server's own wording, never the message
+	// below (A76).
+	//
+	// Validation ratcheting keeps an Agent stored before these rules updatable:
+	// its status is writable and an unrelated spec field can be edited, while a
+	// newly invalid path is still refused (TestAStoredCardPathStaysEditable,
+	// measured at Kubernetes 1.36.2).
 	// +kubebuilder:default=/.well-known/agent-card.json
 	// +kubebuilder:validation:MaxLength=1024
-	// +kubebuilder:validation:Pattern=`^/[A-Za-z0-9._~!$&'()*+,;=:@/-]*$`
-	// +kubebuilder:validation:XValidation:rule="self.startsWith('/')",message="spec.card.path is a path on the agent's own Service, not a URL: start it with '/', as in /.well-known/agent-card.json"
+	// +kubebuilder:validation:XValidation:rule=`self.matches("^/[A-Za-z0-9._~!$&'()*+,;=:@/-]*$")`,message="spec.card.path is a path on the agent's own Service, not a URL: start it with '/' and use only letters, digits, '-._~', the sub-delimiters, ':' and '@'. A '?' or a '#' is refused because the operator percent-encodes this value into the path, so it would never be read as a query or a fragment — drop it, or take the default /.well-known/agent-card.json"
 	// +optional
 	Path string `json:"path,omitempty"`
 }

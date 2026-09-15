@@ -470,9 +470,28 @@ func TestA3xxThatIsNotARedirectIsNotCalledOne(t *testing.T) {
 	}
 }
 
-// spec.card.path is the Agent author's, and it is a PATH. Appended to the
-// derived host as a string, `@elsewhere/...` turned the ClusterIP and port
-// into userinfo and named the host itself: the redirect, with no redirect.
+// hostNamingPaths are the two shapes of spec.card.path that read as an
+// authority, and the path each must arrive as at the address the OPERATOR
+// derived. The guard is `cardURL`, not the CRD schema: it writes the derived
+// authority first and url.URL keeps a path a path, so neither shape moves the
+// dial host. Design 02 A76 made the schema refuse `@host`, and the schema
+// admits `//host` — so this list must carry `//host`, or it would be guarding
+// only a shape no cluster can produce.
+func hostNamingPaths(elsewhereURL string) []struct{ name, path, wantPath string } {
+	host := strings.TrimPrefix(elsewhereURL, "http://")
+	return []struct{ name, path, wantPath string }{
+		// The reported hole: appended to the derived host as a string,
+		// `@elsewhere/...` turned the ClusterIP and port into userinfo and
+		// named the host itself. Refused at admission since A76; kept here
+		// because the code, not the schema, is what makes it harmless.
+		{"userinfo", "@" + host + "/.well-known/agent-card.json", "/@" + host + "/.well-known/agent-card.json"},
+		// A network-path reference. The schema ADMITS this one, so the code is
+		// the only thing standing between it and a fetch at another host.
+		{"network-path reference", "//" + host + "/.well-known/agent-card.json", "//" + host + "/.well-known/agent-card.json"},
+	}
+}
+
+// spec.card.path is the Agent author's, and it is a PATH.
 func TestTheCardPathCannotNameTheHost(t *testing.T) {
 	var hits atomic.Int32
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -480,28 +499,34 @@ func TestTheCardPathCannotNameTheHost(t *testing.T) {
 		_, _ = w.Write([]byte(goodCard))
 	}))
 	defer elsewhere.Close()
-	var gotPath atomic.Value
-	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath.Store(r.URL.Path)
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer agent.Close()
-	r, a := directFixture(t, agent)
-	a.Spec.Card.Path = "@" + strings.TrimPrefix(elsewhere.URL, "http://") + "/.well-known/agent-card.json"
 
-	card, err := r.fetchAndValidateCard(context.Background(), a, "assayd-run-team", "abc123")
-	if n := hits.Load(); n != 0 {
-		t.Errorf("a card path of %q sent the operator to %s (%d request(s))", a.Spec.Card.Path, elsewhere.URL, n)
-	}
-	if card != nil || err == nil {
-		t.Errorf("a card from an address the path named was registered: %+v", card)
-	}
-	if got, want := gotPath.Load(), "/"+a.Spec.Card.Path; got != want {
-		t.Errorf("the revision's Service was asked for %v, want the path itself, %q", got, want)
+	for _, tc := range hostNamingPaths(elsewhere.URL) {
+		t.Run(tc.name, func(t *testing.T) {
+			before := hits.Load()
+			var gotPath atomic.Value
+			agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath.Store(r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer agent.Close()
+			r, a := directFixture(t, agent)
+			a.Spec.Card.Path = tc.path
+
+			card, err := r.fetchAndValidateCard(context.Background(), a, "assayd-run-team", "abc123")
+			if n := hits.Load() - before; n != 0 {
+				t.Errorf("a card path of %q sent the operator to %s (%d request(s))", tc.path, elsewhere.URL, n)
+			}
+			if card != nil || err == nil {
+				t.Errorf("a card from an address the path named was registered: %+v", card)
+			}
+			if got := gotPath.Load(); got != tc.wantPath {
+				t.Errorf("the revision's Service was asked for %v, want the path itself, %q", got, tc.wantPath)
+			}
+		})
 	}
 }
 
-// The same hole in the auth probe, where it is worse: the host a card path
+// The same shapes in the auth probe, where they are worse: the host a card path
 // names answers the anonymous request whose 401 publishes a route, so an
 // author could forge the evidence that their route is authenticated.
 func TestTheProbesCardPathCannotNameTheHost(t *testing.T) {
@@ -511,29 +536,34 @@ func TestTheProbesCardPathCannotNameTheHost(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer elsewhere.Close()
-	var gotPath atomic.Value
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath.Store(r.URL.Path)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer gateway.Close()
-	r := &AgentReconciler{Gateway: GatewayConfig{ServingURL: gateway.URL, HostnameSuffix: "assayd.internal"}}
-	a := &assaydv1alpha1.Agent{
-		ObjectMeta: metav1.ObjectMeta{Name: "pricer", Namespace: "payments"},
-		Spec: assaydv1alpha1.AgentSpec{Card: assaydv1alpha1.CardSpec{
-			Path: "@" + strings.TrimPrefix(elsewhere.URL, "http://") + "/.well-known/agent-card.json"}},
-	}
 
-	ans, err := r.probeAgent(context.Background(), a)
-	if n := hits.Load(); n != 0 {
-		t.Errorf("a card path of %q sent the probe to %s, whose 401 would publish the route "+
-			"(%d request(s))", a.Spec.Card.Path, elsewhere.URL, n)
-	}
-	if err != nil || ans.Code != http.StatusOK {
-		t.Errorf("the probe did not get the serving listener's answer: %+v, %v", ans, err)
-	}
-	if got, want := gotPath.Load(), "/"+a.Spec.Card.Path; got != want {
-		t.Errorf("the serving listener was asked for %v, want the path itself, %q", got, want)
+	for _, tc := range hostNamingPaths(elsewhere.URL) {
+		t.Run(tc.name, func(t *testing.T) {
+			before := hits.Load()
+			var gotPath atomic.Value
+			gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath.Store(r.URL.Path)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer gateway.Close()
+			r := &AgentReconciler{Gateway: GatewayConfig{ServingURL: gateway.URL, HostnameSuffix: "assayd.internal"}}
+			a := &assaydv1alpha1.Agent{
+				ObjectMeta: metav1.ObjectMeta{Name: "pricer", Namespace: "payments"},
+				Spec:       assaydv1alpha1.AgentSpec{Card: assaydv1alpha1.CardSpec{Path: tc.path}},
+			}
+
+			ans, err := r.probeAgent(context.Background(), a)
+			if n := hits.Load() - before; n != 0 {
+				t.Errorf("a card path of %q sent the probe to %s, whose 401 would publish the route "+
+					"(%d request(s))", tc.path, elsewhere.URL, n)
+			}
+			if err != nil || ans.Code != http.StatusOK {
+				t.Errorf("the probe did not get the serving listener's answer: %+v, %v", ans, err)
+			}
+			if got := gotPath.Load(); got != tc.wantPath {
+				t.Errorf("the serving listener was asked for %v, want the path itself, %q", got, tc.wantPath)
+			}
+		})
 	}
 }
 

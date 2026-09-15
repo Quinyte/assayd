@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
@@ -158,6 +159,10 @@ spec:
 			expect: "not a URL",
 		},
 		{
+			// The grammar and the leading slash are ONE CEL rule, so this
+			// reads the same prose the URL case does — and the assertion is on
+			// the prose, not on "spec.card.path", which the pattern, the CEL
+			// rule and the length error all carry alike.
 			name: "card path carries a query",
 			doc: `
 apiVersion: assayd.dev/v1alpha1
@@ -167,10 +172,17 @@ spec:
   runtime: {image: ghcr.io/acme/a@sha256:3bda1c750240ee09000000000000000000000000000000000000000000000000}
   card: {path: "/card.json?whose=theirs"}
 `,
-			expect: "spec.card.path",
+			expect: "never be read as a query or a fragment",
 		},
 		{
-			name: "card path longer than a condition message can carry",
+			// maxLength's TooLong is BLOCKING in apiextensions: when it fires
+			// the API server reports "some validation rules were not checked
+			// because the object was invalid" and skips every CEL rule, so
+			// this case can never read the grammar rule's prose. The bound
+			// stays a maxLength anyway (CardSpec says why), so the assertion
+			// is on the API server's own wording — which names the number, and
+			// therefore dies with the number.
+			name: "card path longer than the bound",
 			doc: `
 apiVersion: assayd.dev/v1alpha1
 kind: Agent
@@ -179,7 +191,7 @@ spec:
   runtime: {image: ghcr.io/acme/a@sha256:3bda1c750240ee09000000000000000000000000000000000000000000000000}
   card: {path: "/` + strings.Repeat("a", 1024) + `"}
 `,
-			expect: "spec.card.path",
+			expect: "may not be more than 1024",
 		},
 		{
 			name: "name too long for a derived workload name",
@@ -215,6 +227,75 @@ spec:
 					err, tc.expect)
 			}
 		})
+	}
+}
+
+// A rule that only ever refuses is pinned from one side. Narrowing the card
+// path's character class to `^/[A-Za-z0-9._~/-]*$`, and tightening its bound to
+// 64, each survived a full envtest run of the branch that added them: nothing
+// asked what the rule ADMITS. These cases ask (design 02 A76).
+func TestTheCardPathGrammarAndBoundAdmitWhatTheySay(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+	}{
+		// Every character the grammar claims beyond the alphanumerics: the
+		// unreserved set, the sub-delimiters, ':' and '@'. A narrower class
+		// refuses this path.
+		{"the sub-delimiters, ':' and '@'", "/cards/v1:2@site/a!$&'()*+,;=-._~.json"},
+		// The bound itself, exactly: 1024 characters including the slash.
+		{"a path of exactly 1024 characters", "/" + strings.Repeat("a", 1023)},
+		// Stated in the field's own documentation, so it is measured here
+		// rather than asserted in prose alone: dot segments are NOT excluded.
+		// internal/controller's TestTheCardPathCannotNameTheHost measures
+		// where such a path actually goes.
+		{"dot segments, which the grammar does not exclude", "/../../card.json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := newNamespace(t)
+			a := &assaydv1alpha1.Agent{
+				ObjectMeta: metav1.ObjectMeta{Name: "carded", Namespace: ns},
+				Spec: assaydv1alpha1.AgentSpec{
+					Runtime: &assaydv1alpha1.AgentRuntime{Image: admissionImage},
+					Card:    assaydv1alpha1.CardSpec{Path: tc.path},
+				},
+			}
+			if err := k8s.Create(context.Background(), a); err != nil {
+				t.Fatalf("the card path %q must be admitted — the grammar and the bound say so, "+
+					"and an author reading the field's documentation will write one:\n%v", tc.path, err)
+			}
+			var got assaydv1alpha1.Agent
+			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
+				t.Fatalf("read back: %v", err)
+			}
+			if got.Spec.Card.Path != tc.path {
+				t.Errorf("the stored path is %q, not the one written, %q", got.Spec.Card.Path, tc.path)
+			}
+		})
+	}
+}
+
+// `path: ""` was accepted before design 02 A76 and is refused by it. A field
+// present and empty is not a field absent, so defaulting never reaches it and
+// the grammar rule sees "". It is written UNSTRUCTURED because the typed field
+// is omitempty: a typed create drops it, the API server then applies the
+// default, and the case would silently test nothing.
+func TestAnEmptyCardPathIsRefused(t *testing.T) {
+	ns := newNamespace(t)
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "assayd.dev/v1alpha1",
+		"kind":       "Agent",
+		"metadata":   map[string]any{"name": "empty-path", "namespace": ns},
+		"spec": map[string]any{
+			"runtime": map[string]any{"image": admissionImage},
+			"card":    map[string]any{"path": ""},
+		},
+	}}
+	err := k8s.Create(context.Background(), u)
+	if err == nil {
+		t.Fatal(`path: "" must be refused: it is not the default, and the operator would fetch "/"`)
+	}
+	if !strings.Contains(err.Error(), "not a URL") {
+		t.Errorf("the error does not tell the developer what to do.\n got: %v", err)
 	}
 }
 
