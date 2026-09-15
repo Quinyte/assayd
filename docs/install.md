@@ -12,7 +12,7 @@ These are the versions the e2e suite runs against. They are what has been measur
 |---|---|---|
 | Gateway API CRDs | `v1.6.0`, standard channel | `hack/e2e.sh` (`GWAPI_VERSION`) |
 | agentgateway (CRDs and controller) | `1.5.0` | `hack/e2e.sh` (`AGW_VERSION`) |
-| assayd chart | `0.3.0`, `oci://ghcr.io/quinyte/charts/assayd`. Section 6 needs this repository's chart, which is ahead of `0.3.0` (section 6.2). | `docs/supply-chain.md` |
+| assayd chart | `0.4.0`, `oci://ghcr.io/quinyte/charts/assayd`. Section 6's `admission.toolRouteWriters` arrived in it (section 6.2). | `docs/supply-chain.md` |
 | Kubernetes | k3d (k3s). The chart requires `>=1.30.0` | `charts/assayd/Chart.yaml` |
 
 The e2e runs its gateway tests on k3d only. The kind lane skips them and reports the gateway path as unverified.
@@ -145,7 +145,7 @@ The chart takes two URLs, and they name different listeners:
 Install the published, signed chart. It pins the operator image by digest; `docs/supply-chain.md` shows how to verify both.
 
 ```bash
-helm install assayd oci://ghcr.io/quinyte/charts/assayd --version 0.3.0 \
+helm install assayd oci://ghcr.io/quinyte/charts/assayd --version 0.4.0 \
   --set profile=local \
   --set gateway.enabled=true \
   --set gateway.name=assayd \
@@ -423,7 +423,7 @@ Two chart values:
 | `gateway.url` | `http://$GW_SVC.assayd-gateway.svc.cluster.local:8081` | The operator injects it into every agent as `ASSAYD_GATEWAY_URL`. |
 | `admission.toolRouteWriters` | `users` and `groups` who publish tools | Lets them attach a route to the Gateway on any listener but `http` (design 07 A6.15). Empty by default, which admits no one but the operators: the operator and `admission.extraOperators`. Never list a group every identity carries, such as `system:authenticated` or `system:serviceaccounts`: any identity could then attach a tool route on any listener but `http` whose `allowedRoutes` admits its namespace, limited only by the hostname rule (section 6.4) and by RBAC. |
 
-**`admission.toolRouteWriters` is not in chart `0.3.0`.** It is in this repository's chart, which is what the harness installs, and will be in the next release. Helm ignores a value a chart does not declare, without an error, so on `0.3.0` the setting does nothing and every tool route is refused. Upgrade from a checkout:
+**`admission.toolRouteWriters` arrived in chart `0.4.0`.** It is in this repository's chart too, which is what the harness installs. On chart `0.3.0` the value does not exist. Helm ignores a value a chart does not declare, without an error, so on `0.3.0` the setting does nothing and every tool route is refused. Upgrade from a checkout:
 
 ```bash
 kubectl apply --server-side --force-conflicts -f charts/assayd/crds/
@@ -435,11 +435,11 @@ helm upgrade assayd charts/assayd \
   --set gateway.servingUrl="http://$GW_SVC.assayd-gateway.svc.cluster.local:8080" \
   --set gateway.url="http://$GW_SVC.assayd-gateway.svc.cluster.local:8081" \
   --set 'admission.toolRouteWriters.users={tool-publisher}' \
-  --set operator.image.digest=sha256:30449f7ea1348ec393158997439bb2a6fddc78cb0fbf149b04614251add8643d \
+  --set operator.image.digest=sha256:232673c6ecbc0a497a6076cd0914e56286ae6f960ecc35ebffacb7bcf0241823 \
   --wait --timeout 5m
 ```
 
-**Keep the `operator.image.digest` line.** The published chart pins the operator image by digest, and a checkout's chart does not: it names the tag `0.1.0`, which is not published. Without the digest, the upgrade removes the running operator first and replaces it with an image that cannot be pulled, and `--wait` fails. The digest is the published `0.3.0` operator (`docs/supply-chain.md`), and **it predates two operator changes in this checkout**: #38, which stops the card fetch (sent to the revision's Service) and the anonymous auth probe (sent to the Gateway's serving listener) from following a redirect or taking a proxy, and builds both URLs so that `spec.card.path` is only ever a path (`internal/controller/card.go`, `authprobe.go`), and the startup refusal of a `gateway.hostnameSuffix` that is not a lowercase DNS name (design 07 A6.15). So this upgrade runs a `0.3.0` operator, without either change, under this checkout's chart. No published release carries them yet; publishing one is a release decision, not a step in this recipe.
+**Keep the `operator.image.digest` line.** The published chart pins the operator image by digest, and a checkout's chart does not: it names the tag `0.1.0`, which is not published. Without the digest, the upgrade removes the running operator first and replaces it with an image that cannot be pulled, and `--wait` fails. The digest is the published `0.4.0` operator (`docs/supply-chain.md`), built from the commit that release was cut from. So this upgrade runs the `0.4.0` operator under this checkout's chart, and the two differ only by whatever has landed since the tag.
 
 **No test takes this path.** The harness installs from a checkout, as here, with an operator image it builds itself. An upgrade from the published chart to a checkout is not exercised.
 
@@ -673,7 +673,7 @@ The last row needs no allowlist in place, so it cannot be seen after section 6.6
 | The key set is refused, naming `assayd-api-keys` | You are not in `admission.apiKeyWriters` (section 3). |
 | `Registered=False`, reason `CardNameMismatch` | The card's `name` is not the Agent's name. `docs/agent-contract.md` lists the other card reasons. |
 | Every keyed request gets `401` | No key set in the run namespace, the wrong label, or the wrong hash. Hash the key's bytes with no trailing newline. |
-| A tool route is refused, naming `assayd-gateway-routes` | The writer is not in `admission.toolRouteWriters`, the route names `http` or no `sectionName`, or a hostname is missing or an Agent's. The message says which (section 6.4). On chart `0.3.0`, the value does not exist (section 6.2). |
+| A tool route is refused, naming `assayd-gateway-routes` | The writer is not in `admission.toolRouteWriters`, the route names `http` or no `sectionName`, or a hostname is missing or an Agent's. The message says which (section 6.4). On chart `0.3.0` and earlier, the value does not exist (section 6.2). |
 | Every tool request gets `503 mcp: no backends configured` | The MCP Service's port has no `appProtocol: agentgateway.dev/mcp` (section 6.3). |
 | A tool task fails with `ASSAYD_GATEWAY_URL is not set` | `gateway.url` is unset (section 6.2), or the Pods of the revision taking traffic were rendered before it was set. Read which revision serves and what it carries, with the two commands in section 6.7. |
 | A tool task fails with `Unknown tool: <name>` | The allowlist does not admit that tool (section 6.6). |
