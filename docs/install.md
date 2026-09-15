@@ -595,20 +595,23 @@ This is design 03's `toolAllowlist`, written by hand. Two behaviours were measur
 
 An agent reaches the tool at `<ASSAYD_GATEWAY_URL>/mcp`, with the tool route's hostname as its `Host` header. The operator injects the URL and nothing else, so the agent must be told the hostname some other way. The responder reads it from `MCP_TOOL_HOST`, a name of the fixture's, not of assayd's. `docs/agent-contract.md` gives the request shapes.
 
-**An Agent created before the section 6.2 upgrade receives the variable too, when its current spec's revision is the one serving.** On every reconcile, the operator renders `ASSAYD_GATEWAY_URL` from its `--gateway-url` flag, which the chart sets from `gateway.url`, into the Deployment of the revision the Agent's current spec names (`internal/controller/injectedenv.go`). It compares that exactly against the existing Deployment's Pod template, so a changed URL updates the Deployment in place and its Pods roll. The variable is not revision material, so no new revision is minted and no gate runs. The upgrade changes the operator's flags, so the operator restarts and reconciles every Agent.
+**An Agent created before the section 6.2 upgrade receives the variable too, but only into one revision's Deployment.** The rule, as the operator applies it: on a reconcile that reaches the render, and only while `spec.release.targetRevisionDigest` is unset, it renders `ASSAYD_GATEWAY_URL` from its `--gateway-url` flag — the chart sets that from `gateway.url` — into the Deployment of the revision the Agent's **current spec** names (`internal/controller/injectedenv.go`, `ensureWorkload`). It compares the rendered pod spec and replica count against the existing Deployment's, so a changed URL rewrites that Deployment in place and its Pods roll. The variable is not revision material, so no new revision is minted and no gate runs. The upgrade changes the operator's flags, so the operator restarts and reconciles every Agent.
 
-- **Pinned by a test, without a kubelet.** `TestChangingTheInjectedGatewayURLDoesNotMintARevision` (`test/envtest/injectedenv_test.go`) repoints the operator and requires the existing Deployment to carry the new URL. envtest runs no Pods, so it does not show the Pods rolling. The e2e creates its Agent after the chart has `gateway.url`, so it does not take this path. The walkthrough of this page saw `hello` receive the variable after the upgrade, once, on the `0.3.0` operator.
-- **The serving revision is not always the current spec's.** The route sends traffic to the Agent's active revision, and the operator rewrites only the Deployment of the revision the current spec names. It does not re-render any other revision, because every renderer reads the current spec: a re-rendered older revision would run the current spec's Pod template under the older revision's name (`internal/controller/agent_controller.go`). So in each state below, the serving revision keeps the environment it was rendered with, and if that was before the upgrade, it has no `ASSAYD_GATEWAY_URL`. No test pins any of them for this variable.
+Every other Deployment keeps the environment it was rendered with. The operator re-renders no other revision, because every renderer reads the current spec: a re-rendered older revision would run the current spec's Pod template under the older revision's name (`internal/controller/agent_controller.go`). So the variable does not reach the Pods taking traffic whenever the serving revision is not the current spec's — a rollout in flight, or a promotion held — nor under any pin, nor when a reconcile stops before the render, in which case the Agent reports `Ready=False` with the reason. `TestChangingTheInjectedGatewayURLDoesNotMintARevision` (`test/envtest/injectedenv_test.go`) pins the in-place rewrite. envtest runs no Pods, so nothing pins the Pods rolling, and nothing pins the cases above.
 
-| State | What the Agent reports | When it ends |
-|---|---|---|
-| A newer revision is in flight and not yet available | `Progressing=True`, reason `CandidateNotAvailable` | When the newer revision is promoted. If it never becomes available, for example because it crashloops, never. |
-| A newer revision is held because its `-auth` input does not compile | `Progressing=True`, reason `AuthInputUncompilable` | When the spec compiles and the newer revision is promoted. |
-| A newer revision is held pending its eval gates | `Progressing=True`, reason `AwaitingGates` | When the gates pass and the newer revision is promoted. |
-| `spec.release.targetRevisionDigest` pins a retained revision | The pinned revision serves | When the pin is removed. |
-| `spec.release.targetRevisionDigest` names no retained revision | `Degraded=True`, reason `ReleasePinUnresolvable` | When the pin is corrected or removed. |
+Read what is serving, and what it carries:
 
-A newer revision rendered after the upgrade carries the variable, so promoting it ends the gap.
+```bash
+kubectl -n "$RUN_NS" get httproute toolcaller-serving \
+  -o jsonpath='{.spec.rules[0].backendRefs[*].name}{"\n"}'
+
+kubectl -n "$RUN_NS" get deploy -l assayd.dev/agent=toolcaller \
+  -o custom-columns='DEPLOY:.metadata.name,REVISION:.metadata.labels.assayd\.dev/revision,URL:.spec.template.spec.containers[0].env[?(@.name=="ASSAYD_GATEWAY_URL")].value'
+```
+
+The first prints the revision Service the route sends to; the second prints each revision's Deployment and the URL it carries. If the serving one carries none, the ways out are: let the current spec's revision become the one serving, by promoting it or by reverting the spec to it; remove the pin; fix whatever stopped the reconcile; or create a new Agent.
+
+**No gate passes yet.** An Agent held at `AwaitingGates` stays held until `spec.gates` is emptied or the EvalSuite CRD is removed — `gatesSatisfied` is true only in those two cases, and nothing evaluates a gate (`internal/controller/agent_controller.go`).
 
 Create a second Agent. It needs `MCP_TOOL_HOST`, which `hello` does not set:
 
@@ -672,7 +675,7 @@ The last row needs no allowlist in place, so it cannot be seen after section 6.6
 | Every keyed request gets `401` | No key set in the run namespace, the wrong label, or the wrong hash. Hash the key's bytes with no trailing newline. |
 | A tool route is refused, naming `assayd-gateway-routes` | The writer is not in `admission.toolRouteWriters`, the route names `http` or no `sectionName`, or a hostname is missing or an Agent's. The message says which (section 6.4). On chart `0.3.0`, the value does not exist (section 6.2). |
 | Every tool request gets `503 mcp: no backends configured` | The MCP Service's port has no `appProtocol: agentgateway.dev/mcp` (section 6.3). |
-| A tool task fails with `ASSAYD_GATEWAY_URL is not set` | `gateway.url` is unset (section 6.2), or the Agent's Pods have not yet rolled since it was set. Or the serving revision was rendered before it was set, and is not the revision the Agent's current spec names: a newer revision is in flight (`Progressing=True`), and the serving revision keeps the environment it was rendered with until the new one is promoted; or `spec.release.targetRevisionDigest` pins an older revision, or names none (section 6.7). |
+| A tool task fails with `ASSAYD_GATEWAY_URL is not set` | `gateway.url` is unset (section 6.2), or the Pods of the revision taking traffic were rendered before it was set. Read which revision serves and what it carries, with the two commands in section 6.7. |
 | A tool task fails with `Unknown tool: <name>` | The allowlist does not admit that tool (section 6.6). |
 
 ## Not covered here
