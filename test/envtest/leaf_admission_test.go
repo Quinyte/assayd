@@ -111,8 +111,12 @@ func TestEveryAPIReachableLeafIsClassifiedCorrectly(t *testing.T) {
 		// a specimen the API would reject.
 		"spec.Release.TargetRevisionDigest": {strings.Repeat("a", 64), strings.Repeat("b", 64)},
 		"spec.External.Endpoint":            {"https://a.example.com", "https://b.example.com"},
-		"spec.Expose.A2A.Visibility":        {"cluster", "org"},
-		"spec.Expose.A2A.Auth":              {"none", "oauth"},
+		// A path, never a URL, bounded and character-constrained since the card
+		// path rule. "leaf-a" has no leading slash, so the generic pair is
+		// inadmissible.
+		"spec.Card.Path":             {"/.well-known/agent-card.json", "/card.json"},
+		"spec.Expose.A2A.Visibility": {"cluster", "org"},
+		"spec.Expose.A2A.Auth":       {"none", "oauth"},
 		// The arm is an enum, and switching it must keep the instance block valid
 		// — so the pair is the two arms that carry no instance block at all.
 		"spec.LLM.Providers[].Arm":       {"anthropic", "openai"},

@@ -146,6 +146,42 @@ spec:
 			expect: "stateful singleton",
 		},
 		{
+			name: "card path is a URL, not a path",
+			doc: `
+apiVersion: assayd.dev/v1alpha1
+kind: Agent
+metadata: {name: card-url}
+spec:
+  runtime: {image: ghcr.io/acme/a@sha256:3bda1c750240ee09000000000000000000000000000000000000000000000000}
+  card: {path: "https://elsewhere.example.com/card.json"}
+`,
+			expect: "not a URL",
+		},
+		{
+			name: "card path carries a query",
+			doc: `
+apiVersion: assayd.dev/v1alpha1
+kind: Agent
+metadata: {name: card-query}
+spec:
+  runtime: {image: ghcr.io/acme/a@sha256:3bda1c750240ee09000000000000000000000000000000000000000000000000}
+  card: {path: "/card.json?whose=theirs"}
+`,
+			expect: "spec.card.path",
+		},
+		{
+			name: "card path longer than a condition message can carry",
+			doc: `
+apiVersion: assayd.dev/v1alpha1
+kind: Agent
+metadata: {name: card-long}
+spec:
+  runtime: {image: ghcr.io/acme/a@sha256:3bda1c750240ee09000000000000000000000000000000000000000000000000}
+  card: {path: "/` + strings.Repeat("a", 1024) + `"}
+`,
+			expect: "spec.card.path",
+		},
+		{
 			name: "name too long for a derived workload name",
 			doc: `
 apiVersion: assayd.dev/v1alpha1

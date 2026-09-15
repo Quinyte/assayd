@@ -155,7 +155,20 @@ type ExternalAgent struct {
 }
 
 type CardSpec struct {
+	// Path is the absolute path the agent serves its Agent Card on. The
+	// operator fetches it from the revision's own Service: it is a path and
+	// never a URL, so the fetch cannot be steered at another host.
+	//
+	// Bounded at 1024 characters because the path is quoted back in status
+	// conditions when a fetch fails. A path of etcd-value size would make every
+	// status write fail, and an Agent that cannot write status reports nothing
+	// at all. The pattern is RFC 3986's path characters, so a scheme, a query or
+	// a fragment is refused at apply time rather than 404ing at the first fetch.
+	// Validation ratcheting keeps an Agent stored before these rules updatable.
 	// +kubebuilder:default=/.well-known/agent-card.json
+	// +kubebuilder:validation:MaxLength=1024
+	// +kubebuilder:validation:Pattern=`^/[A-Za-z0-9._~!$&'()*+,;=:@/-]*$`
+	// +kubebuilder:validation:XValidation:rule="self.startsWith('/')",message="spec.card.path is a path on the agent's own Service, not a URL: start it with '/', as in /.well-known/agent-card.json"
 	// +optional
 	Path string `json:"path,omitempty"`
 }
