@@ -40,8 +40,16 @@ const (
 	// the only Gateways that exist are the e2e harness's and whatever an
 	// operator wrote by hand, and both name the agent-serving listener `http`
 	// (design 07 A5.3). A Gateway whose listener is named otherwise will report
-	// `NoMatchingParent` on the route rather than serving it — said here because
-	// the operator does not read route status, so nothing else would say it.
+	// `NoMatchingParent` on the route rather than serving it. The operator reads
+	// route status only while a `Create` or `Lock` is in flight: routeConverged,
+	// in authtxn.go, wants §3.3.2's `Accepted=True` and `ResolvedRefs=True` from
+	// the assayd Gateway at the route's generation, so a NEW Agent's `Create`
+	// holds and reports PolicyApplyIncomplete, reason AuthEnforcementUnverified,
+	// naming the cause once its deadline passes. An Agent already served has its
+	// route read on every pass but not the route's status, unless a `Lock` or a
+	// route re-create (`recreateRoute`, API-key only) runs for it, so for it
+	// nothing else would say it — hence this comment, and the one beside
+	// `gateway.name` in charts/assayd/values.yaml.
 	GatewayListenerName = "http"
 )
 
@@ -480,8 +488,9 @@ func equalMatches(a, b []gatewayv1.HTTPRouteMatch) bool {
 // equalParentRef compares every field of a ParentReference, Port included. A
 // first version compared five of the six: a `port` planted on the parentRef
 // must match the listener as well as `sectionName`, so the route attaches to no
-// listener, the agent is off the air, and it keeps reporting Ready because
-// route status is not read. The third review found it.
+// listener, the agent is off the air, and an Agent already served keeps
+// reporting Ready, because its route's status is read only while a `Create` or
+// `Lock` is in flight. The third review found it.
 func equalParentRef(a, b gatewayv1.ParentReference) bool {
 	return a.Name == b.Name && eqPtr(a.Namespace, b.Namespace) &&
 		eqPtr(a.SectionName, b.SectionName) && eqPtr(a.Kind, b.Kind) && eqPtr(a.Group, b.Group) &&

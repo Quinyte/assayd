@@ -733,9 +733,16 @@ func TestALostRaceOnTheRouteDoesNotFlipReady(t *testing.T) {
 // whose revision never came up — a bad image, a crashloop — rewrote the healthy
 // revision's route to `<agent>-R1:9090`, a port R1's Service does not publish.
 // Every request through the gateway failed from that moment, indefinitely, and
-// nothing reported it: the operator does not read route status. That is an edit
-// that was NOT promoted taking down the revision that is serving, which is the
-// failure the per-revision Service exists to prevent.
+// nothing reported it: the operator did not read route status then. It reads it
+// now only while a `Create` or `Lock` is in flight (routeConverged, in
+// authtxn.go), and on a cluster a port edit to a served Agent runs neither, so
+// nothing would report it there today either. This fixture is not that Agent:
+// nothing here writes route status (acceptRoute does, and this test does not
+// call it), so its `Create` stays in Publishing and the route's status is read,
+// and found empty, on every pass once a revision serves. What the test pins is
+// the route's backendRef, whoever reads the status. That is an edit that was
+// NOT promoted taking down the revision that is serving, which is the failure
+// the per-revision Service exists to prevent.
 func TestAPortChangeThatNeverComesUpDoesNotMoveTheServingRoute(t *testing.T) {
 	ns := newNamespace(t)
 	a := noneAgent(t, ns, "ported")
@@ -784,8 +791,9 @@ func TestAPortChangeThatNeverComesUpDoesNotMoveTheServingRoute(t *testing.T) {
 	if name, p := backendOf(); name != controller.WorkloadName("ported", first) || p != published {
 		t.Errorf("while the port edit's revision is not serving, the route names %s:%d; want "+
 			"%s:%d, the port the serving revision's Service actually publishes. A route naming a "+
-			"port its Service does not publish resolves to nothing, and the operator does not "+
-			"read route status, so nothing would say so.",
+			"port its Service does not publish resolves to nothing, and on a cluster the operator "+
+			"reads a served Agent's route status only while a Create or Lock is in flight, which a "+
+			"port edit starts neither of, so nothing would say so.",
 			name, p, controller.WorkloadName("ported", first), published)
 	}
 

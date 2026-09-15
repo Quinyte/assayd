@@ -237,7 +237,10 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 // through the cache, create, update, delete. A verb granted ahead of the code
 // that calls it is standing privilege with no consumer, and the same rule
 // removed `patch` and `httproutes/status: get` here (design 07 A6.11), which
-// were granted with A6 and never called: route status is not read.
+// were granted with A6 and never called. The operator now reads route status
+// while a `Create` or `Lock` is in flight (routeConverged, in authtxn.go), but
+// status comes back on the route's own `get`, so the /status subresource still
+// needs no grant.
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;delete
 // The per-Agent `<agent>-auth` AgentgatewayPolicy (design 03 §1.1), by the same
 // rule: listed and watched through the cache, read live by the transaction,

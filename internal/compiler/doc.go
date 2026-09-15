@@ -12,11 +12,23 @@
 //     and its digest (§3.3's `targetDigest` and `appliedDigest`);
 //   - the `auth: none` route marker of §3.3.1.
 //
-// **The agent-operator emits what this renders**, through the `Create`
-// transaction in internal/controller/authtxn.go: a new Agent's route is
-// published only after its `<agent>-auth` enforces (§3.3.3). J2's `Lock`, the
-// abandonment of an unfinished transaction, and K2 are still owed (§1.1), and a
-// route this operator did not publish is refused as `Adopt`, not governed.
+// **The agent-operator emits what this renders**, through the `-auth`
+// transactions in internal/controller/authtxn.go (§3.3.3). A new API-key
+// Agent's route is published only after its `<agent>-auth` enforces, and a new
+// `auth: none` Agent's at once, with its marker (`Create`). A served
+// `auth: none` Agent edited to `apikey` is locked in place by J2's `Lock`, and
+// an `Adopt`ed Agent whose owner edits it to `apikey` by K2's (`enterLock`,
+// `runLock`). A served API-key Agent's deleted policy is re-created by a
+// `Lock` while its route stays published (`lockMissingPolicy`), and by the
+// `Create` that re-creates a deleted or stripped route when it does not
+// (`recreateRoute`). An unfinished spec-driven `Create`, or J2/K2 `Lock`,
+// whose target mode no longer equals the desired mode is abandoned, and the
+// only policy it deletes is the one it wrote (`abandon`). A route this
+// operator did not publish is refused as `Adopt`, not governed, until that K2
+// edit. Everything outside the first slice is specified, not approved, and
+// absent: `Narrow`, `Loosen`, `Withdraw`, and every concern but `-auth`, so
+// nothing here renders a rate limit, a tool filter or an AgentgatewayBackend
+// (§1.1).
 //
 // **One dependency is load-bearing here: cel.dev/cel-go** (Apache-2.0; the
 // module was github.com/google/cel-go until v0.32.0 moved it). §3.4.2 requires
