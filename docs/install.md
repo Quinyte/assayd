@@ -23,14 +23,19 @@ The chart prints its notes only after a successful install, and three things mus
 
 ### 1.0 A cluster, with a registry it can pull from
 
-Section 5 deploys an agent image you build, and the operator pulls it by digest from a registry at every Pod start. So the cluster needs a registry its nodes can pull from. On k3d, that registry is wired in when the cluster is created and cannot be added afterwards. This is what the harness does:
+Section 5 deploys an agent image you build, and the operator pulls it by digest from a registry at every Pod start. So the cluster needs a registry its nodes can pull from. On k3d, that registry is wired in when the cluster is created and cannot be added afterwards. This is what the harness does, under different names:
 
 ```bash
-k3d registry create assayd-registry --port 5111
-k3d cluster create assayd --agents 0 --wait --registry-use k3d-assayd-registry:5111
+DEMO_CLUSTER=assayd
+REG_NAME=assayd-registry
+REG_PORT=5120   # any free port on the host
+k3d registry create "$REG_NAME" --port "$REG_PORT"
+k3d cluster create "$DEMO_CLUSTER" --agents 0 --wait --registry-use "k3d-$REG_NAME:$REG_PORT"
 ```
 
-k3d names the registry `k3d-assayd-registry`. The host pushes to it as `localhost:5111`, and the cluster's nodes pull from it as `k3d-assayd-registry:5111`. Section 5.1 uses both names.
+- **Any free port works.** `5120` is chosen because the harness does not use it. `hack/e2e.sh` creates its own registry on `5111`, and keeps it between runs, so on a machine that has run `make e2e` a registry on `5111` fails to start: the port is taken. The harness's cluster is `assayd-local`, so `assayd` does not collide with it either. The variable is `DEMO_CLUSTER`, not `CLUSTER`, because the `Makefile` and `hack/e2e.sh` both read `CLUSTER` from the environment.
+- **k3d prefixes the registry's name.** It names the registry `k3d-$REG_NAME`. The host pushes to it as `localhost:$REG_PORT`, and the cluster's nodes pull from it as `k3d-$REG_NAME:$REG_PORT`. Section 5.1 uses both names.
+- **Sections 5.1 and 6.3 read these variables.** Run them in the same shell, or set the variables again first.
 
 On any other cluster, use a registry its nodes can already pull from.
 
@@ -233,8 +238,8 @@ The image must be in a registry your nodes can pull from, referenced by digest. 
 On k3d, with the registry from section 1.0, the host and the nodes know the registry by different names. So push to one repository and reference the other:
 
 ```bash
-PUSH_REPO=localhost:5111/assayd-responder            # the host's name for the registry
-PULL_REPO=k3d-assayd-registry:5111/assayd-responder  # the nodes' name for it
+PUSH_REPO="localhost:$REG_PORT/assayd-responder"      # the host's name for the registry
+PULL_REPO="k3d-$REG_NAME:$REG_PORT/assayd-responder"  # the nodes' name for it
 docker build -t "$PUSH_REPO:demo" -f test/responder/Dockerfile .
 DIGEST=$(docker push "$PUSH_REPO:demo" | awk '/digest: sha256:/ {print $3}')
 if [ -z "$DIGEST" ]; then
@@ -245,7 +250,7 @@ else
 fi
 ```
 
-- **Do not push to `k3d-assayd-registry:5111` from the host.** That name resolves only inside the cluster's network, and the push fails with `no such host`.
+- **Do not push to `k3d-$REG_NAME:$REG_PORT` from the host.** That name resolves only inside the cluster's network, and the push fails with `no such host`.
 - **Take the digest from `docker push`, not from `docker inspect`.** With Docker's containerd image store, `{{index .RepoDigests 0}}` can name a local index digest the registry does not serve, and the Pod's pull then gets `404`. The harness reads `RepoDigests`, which works with Docker's classic image store.
 - **Stop if `IMAGE` is empty.** An Agent with an empty image is refused by the CRD.
 
@@ -590,7 +595,25 @@ This is design 03's `toolAllowlist`, written by hand. Two behaviours were measur
 
 An agent reaches the tool at `<ASSAYD_GATEWAY_URL>/mcp`, with the tool route's hostname as its `Host` header. The operator injects the URL and nothing else, so the agent must be told the hostname some other way. The responder reads it from `MCP_TOOL_HOST`, a name of the fixture's, not of assayd's. `docs/agent-contract.md` gives the request shapes.
 
-The e2e creates its Agent after the chart has `gateway.url`, and checks the variable on the Deployment the operator rendered. Whether an Agent created before the upgrade receives it is not tested, so create a new one:
+**An Agent created before the section 6.2 upgrade receives the variable too, but only into one revision's Deployment.** The rule, as the operator applies it: on a reconcile that reaches the render, and only while `spec.release.targetRevisionDigest` is unset, it renders `ASSAYD_GATEWAY_URL` from its `--gateway-url` flag — the chart sets that from `gateway.url` — into the Deployment of the revision the Agent's **current spec** names (`internal/controller/injectedenv.go`, `ensureWorkload`). It compares the rendered pod spec and replica count against the existing Deployment's, so a changed URL rewrites that Deployment in place and its Pods roll. The variable is not revision material, so no new revision is minted and no gate runs. The upgrade changes the operator's flags, so the operator restarts and reconciles every Agent.
+
+Every other Deployment keeps the environment it was rendered with. The operator re-renders no other revision, because every renderer reads the current spec: a re-rendered older revision would run the current spec's Pod template under the older revision's name (`internal/controller/agent_controller.go`). So the variable does not reach the Pods taking traffic whenever the serving revision is not the current spec's — a rollout in flight, or a promotion held — nor under any pin, nor when a reconcile stops before the render, in which case the Agent reports `Ready=False` with the reason. `TestChangingTheInjectedGatewayURLDoesNotMintARevision` (`test/envtest/injectedenv_test.go`) pins the in-place rewrite. envtest runs no Pods, so nothing pins the Pods rolling, and nothing pins the cases above.
+
+Read what is serving, and what it carries:
+
+```bash
+kubectl -n "$RUN_NS" get httproute toolcaller-serving \
+  -o jsonpath='{.spec.rules[0].backendRefs[*].name}{"\n"}'
+
+kubectl -n "$RUN_NS" get deploy -l assayd.dev/agent=toolcaller \
+  -o custom-columns='DEPLOY:.metadata.name,REVISION:.metadata.labels.assayd\.dev/revision,URL:.spec.template.spec.containers[0].env[?(@.name=="ASSAYD_GATEWAY_URL")].value'
+```
+
+The first prints the revision Service the route sends to; the second prints each revision's Deployment and the URL it carries. If the serving one carries none, the ways out are: let the current spec's revision become the one serving, by promoting it or by reverting the spec to it; remove the pin; fix whatever stopped the reconcile; or create a new Agent.
+
+**No gate passes yet.** An Agent held at `AwaitingGates` stays held until `spec.gates` is emptied or the EvalSuite CRD is removed — `gatesSatisfied` is true only in those two cases, and nothing evaluates a gate (`internal/controller/agent_controller.go`).
+
+Create a second Agent. It needs `MCP_TOOL_HOST`, which `hello` does not set:
 
 ```bash
 kubectl apply -f - <<EOF
@@ -605,7 +628,10 @@ spec:
     - {name: MCP_TOOL_HOST, value: mcp.demo-tools.example}
 EOF
 kubectl -n demo wait agent/toolcaller --for=jsonpath='{.status.auth.mode}'=apikey --timeout=10m
+kubectl -n demo wait agent/toolcaller --for=condition=Registered --timeout=2m
 ```
+
+The second wait is needed, for the reason in section 5.3: the card is fetched separately, once the Pod is available, and the auth wait can return while `Registered` is still `False`, reason `CardUnreachable`.
 
 It is in namespace `demo`, so section 5.4's `$PERMITTED` key admits it. The responder's `call_tool` skill runs when the message's `metadata.tool` names a tool. It sends the message text as the tool's `text` argument, and the tool's answer becomes the task's artifact:
 
@@ -649,7 +675,7 @@ The last row needs no allowlist in place, so it cannot be seen after section 6.6
 | Every keyed request gets `401` | No key set in the run namespace, the wrong label, or the wrong hash. Hash the key's bytes with no trailing newline. |
 | A tool route is refused, naming `assayd-gateway-routes` | The writer is not in `admission.toolRouteWriters`, the route names `http` or no `sectionName`, or a hostname is missing or an Agent's. The message says which (section 6.4). On chart `0.3.0`, the value does not exist (section 6.2). |
 | Every tool request gets `503 mcp: no backends configured` | The MCP Service's port has no `appProtocol: agentgateway.dev/mcp` (section 6.3). |
-| A tool task fails with `ASSAYD_GATEWAY_URL is not set` | `gateway.url` is unset, or the Agent predates it (section 6.7). |
+| A tool task fails with `ASSAYD_GATEWAY_URL is not set` | `gateway.url` is unset (section 6.2), or the Pods of the revision taking traffic were rendered before it was set. Read which revision serves and what it carries, with the two commands in section 6.7. |
 | A tool task fails with `Unknown tool: <name>` | The allowlist does not admit that tool (section 6.6). |
 
 ## Not covered here
