@@ -87,8 +87,8 @@ func TestTheMissingPolicyLockMessageNamesTheRouteAndItsExits(t *testing.T) {
 		}
 		return st
 	}
-	// pending is the same status with a candidate held at weight 0, which is
-	// what the operator is fetching a card for instead of the active revision.
+	// pending is the same status with a candidate held at weight 0. It is the
+	// DESIRED revision then, so nothing is fetching the active revision's card.
 	pending := func() *assaydv1alpha1.AgentStatus {
 		st := status()
 		st.CandidateRevision = "r3"
@@ -118,55 +118,91 @@ func TestTheMissingPolicyLockMessageNamesTheRouteAndItsExits(t *testing.T) {
 			want: []string{"names revision r1", "left as found", "TERMINAL",
 				"or for status.activeRevision",
 				"ends without an administrator when status.activeRevision's own card records",
-				"An administrator is needed where that card never validates, and wherever nothing is fetching it",
-				"Either exit applies meanwhile",
+				"An administrator is needed where that card never validates",
+				"Either exit applies",
 				"removes " + runNS + "/pricer-serving", "the spec is reverted to the revision the route names"},
 			refused: []string{"re-pointed at status.activeRevision", "only by an administrator",
 				"Neither exit is needed here"},
 		},
 		{
 			// The precondition is in the name because it is now in the CODE:
-			// the arm is gated on there being no candidate, since the operator
-			// fetches the candidate's card and not the active revision's while
-			// one is pending (A60). A78's first version named the retry in the
-			// message and checked nothing.
+			// the arm is gated on there being no candidate, since a card is
+			// fetched from a ready DESIRED revision alone (A60). A78's first
+			// version named the retry in the message and checked nothing.
 			name:   "the route names the active revision, with no candidate pending",
 			status: status(), rt: routeNaming(agent.Name, "r2"),
 			want: []string{"names revision r2", "TERMINAL", "which is also status.activeRevision",
 				"ends without an administrator when status.activeRevision's own card records",
 				"only while that revision has a replica available",
 				"Neither exit is needed here"},
-			refused: []string{"or for status.activeRevision", "Either exit applies meanwhile",
-				"only the first applies meanwhile", "is pending"},
+			refused: []string{"or for status.activeRevision", "Either exit applies",
+				"only the first applies", "is the desired revision now"},
 		},
 		{
-			// MAJOR 1 of the delta review, measured: with a candidate pending
-			// nothing is fetching the active revision's card, so "neither exit
-			// is needed" is false, and the revert it called pointless is the
-			// one action that restarts the fetch.
+			// The candidate case, twice corrected. A78's first code said
+			// "neither exit is needed" here, reading a retry that is not
+			// running; its second said reverting the spec is "the one that
+			// restarts the fetch", which was measured HARMFUL — the candidate
+			// became available, its card recorded, it promoted, the promotion
+			// fired the re-point and the Agent reached Served with nobody
+			// acting, so a revert would have aborted the rollout that ended it.
+			// The message names the promotion and warns against the revert.
 			name:   "the route names the active revision while a candidate is pending",
 			status: pending(), rt: routeNaming(agent.Name, "r2"),
 			want: []string{"names revision r2", "TERMINAL", "which is also status.activeRevision",
-				"candidate revision r3 is pending", "own fetch is NOT running",
-				"Reverting the spec to the revision the route names is a real change here",
-				"The second exit is the one that works here"},
-			refused: []string{"ends without an administrator", "Neither exit is needed here"},
+				"Nothing is fetching status.activeRevision's card",
+				"candidate revision r3 is the desired revision now",
+				"This still ends with nobody acting if that candidate becomes available",
+				"its own card records, it is promoted, and the promotion fires the re-point",
+				"Act only where that candidate can never promote",
+				"reverting the spec aborts a rollout that would end this on its own",
+				"The exit that works then is the second"},
+			refused: []string{"ends without an administrator when", "Neither exit is needed here",
+				"the operator is fetching ITS card", "is the one that restarts the fetch"},
+		},
+		{
+			// Code MAJOR 2 of the combined pass: the candidate text must not
+			// name an exit, because this arm has only one.
+			name:   "two backendRefs while a candidate is pending",
+			status: pending(), rt: routeNaming(agent.Name, "r1", "r2"),
+			want: []string{"does not carry exactly one backendRef",
+				"candidate revision r3 is the desired revision now",
+				"Act only where that candidate can never promote",
+				"only the first applies"},
+			// Where the route names no single revision the revert exit does
+			// not exist, so NOTHING in the message may recommend it — this
+			// lists every arm's way of doing so, not just this arm's.
+			refused: []string{"The exit that works then is the second", "the second exit is",
+				"the second is the cheaper one", "Either exit applies",
+				"Neither exit is needed here"},
 		},
 		{
 			name:   "a foreign traffic policy stopped the pass above the re-point",
 			status: status(), rt: routeNaming(agent.Name, "r2"), foreign: []string{"ns/rogue"},
 			want: []string{"TERMINAL",
-				"None of that ends it while the foreign traffic policy named above stands",
+				"None of that ends it while the foreign traffic policy this pass found stands",
 				"stops before the route is re-pointed and before any answer is taken"},
-			refused: []string{"Gateway-level policy named above stands"},
+			refused: []string{"Gateway-level policy this pass found stands"},
 		},
 		{
 			name:   "a Gateway-level policy holds the credit",
 			status: status(), rt: routeNaming(agent.Name, "r2"), held: true,
 			want: []string{"TERMINAL",
-				"None of that ends it while the Gateway-level policy named above stands",
-				"the re-point still runs, but no 401 through this route is credited"},
-			refused: []string{"foreign traffic policy named above stands"},
+				"None of that ends it while the Gateway-level policy this pass found stands",
+				"even once a card records and the re-point moves the route, no 401 through it is credited"},
+			refused: []string{"foreign traffic policy this pass found stands",
+				// In THIS state cardedRevision is false, so the emitting pass
+				// made no re-point: the note must not say one ran.
+				"the re-point still runs"},
+		},
+		{
+			// The switch is ordered, and the order is the claim: a foreign
+			// policy stops the pass higher up than A75's hold does.
+			name:   "both a foreign policy and a Gateway-level hold",
+			status: status(), rt: routeNaming(agent.Name, "r2"), held: true,
+			foreign: []string{"ns/rogue"},
+			want:    []string{"None of that ends it while the foreign traffic policy this pass found stands"},
+			refused: []string{"Gateway-level policy this pass found stands"},
 		},
 		{
 			name:   "two backendRefs beside an uncarded active revision",
@@ -174,8 +210,10 @@ func TestTheMissingPolicyLockMessageNamesTheRouteAndItsExits(t *testing.T) {
 			want: []string{"does not carry exactly one backendRef", "names no revision", "TERMINAL",
 				"names no single revision to attribute on instead",
 				"ends without an administrator when status.activeRevision's own card records",
-				"only the first applies meanwhile"},
-			refused: []string{"names revision r", "for that revision", "Neither exit is needed here"},
+				"only the first applies"},
+			refused: []string{"names revision r", "for that revision", "Neither exit is needed here",
+				"The exit that works then is the second", "the second exit is",
+				"the second is the cheaper one"},
 		},
 	} {
 		got := missingPolicyRouteNote(agent, tc.status, tc.rt, runNS, tc.repointed, tc.held, tc.foreign)

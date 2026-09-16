@@ -1984,48 +1984,68 @@ func missingPolicyRouteNote(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.
 	// that "only an administrator ends it", which is false, and steered the
 	// reader at the exit this same message calls an unbounded outage.
 	//
-	// But the operator fetches a card only from the DESIRED revision, and only
-	// once that revision is ready (A60, cardFetchDue and agent_controller.go).
-	// So the retry is running only while there is no candidate pending — the
-	// condition §3.3.3 states and A78's first code dropped, which made the
-	// "neither exit is needed" arm fire where nothing was being fetched at all
-	// and the revert it calls pointless is the one action that restarts the
-	// fetch — and only while the active revision has a replica available. Both
-	// are said rather than inferred; the first is read from status, the second
-	// is not readable here and is stated as the condition it is.
+	// But a card is fetched from a ready DESIRED revision alone (A60,
+	// cardFetchDue and agent_controller.go), so with a candidate pending
+	// nothing is fetching status.activeRevision's card. That does NOT make the
+	// state administrator-only, and saying so was this defect class's third
+	// statement: a candidate that becomes available records its own card, is
+	// promoted, and the promotion fires the re-point, which ends the state with
+	// nobody acting — measured. Reverting the spec then ABORTS the rollout that
+	// was about to end it. So the candidate text says what is readable and
+	// names the promotion; the revert is the remedy only where the candidate
+	// can never promote. `status.candidateRevision` is also set on paths where
+	// the candidate is not ready, so nothing here claims its card is being
+	// fetched either — only that the active revision's is not.
+	//
+	// ends is EXIT-AGNOSTIC in both forms: each admits arm below names its own
+	// remedy, because the no-single-backendRef arm has only one exit and a
+	// shared sentence naming the other contradicts it.
 	candidate := status.CandidateRevision != ""
 	ends := "This state ends without an administrator when status.activeRevision's own card " +
 		"records: the re-point then moves the route onto that revision and the 401 can be " +
 		"attributed. The operator retries that fetch only while status.activeRevision is the " +
 		"desired revision, which it is once a rollout has settled, and only while that revision " +
-		"has a replica available, because a card is fetched from a ready revision alone. An " +
-		"administrator is needed where that card never validates, and wherever nothing is " +
-		"fetching it."
+		"has a replica available, because a card is fetched from a ready desired revision alone. " +
+		"An administrator is needed where that card never validates."
 	if candidate {
-		ends = "Nothing will record that digest on its own: candidate revision " +
-			status.CandidateRevision + " is pending, so the operator is fetching ITS card and " +
-			"status.activeRevision's own fetch is NOT running (design 03 A60). Reverting the spec " +
-			"to the revision the route names is a real change here, and the one that restarts the " +
-			"fetch this state waits on."
+		ends = "Nothing is fetching status.activeRevision's card: candidate revision " +
+			status.CandidateRevision + " is the desired revision now, and a card is fetched from " +
+			"a ready desired revision alone (design 03 A60). This still ends with nobody acting " +
+			"if that candidate becomes available: its own card records, it is promoted, and the " +
+			"promotion fires the re-point. An administrator is needed only where the candidate " +
+			"can never promote — held by a gate or an uncompilable spec, or never available — or " +
+			"where the card never validates."
 	}
 	switch {
 	case len(foreign) > 0:
 		// This pass stopped above the re-point, so nothing moved and no answer
 		// was taken: a card recording cannot end the state while that stands.
-		ends += " None of that ends it while the foreign traffic policy named above stands: this " +
-			"pass stops before the route is re-pointed and before any answer is taken."
+		ends += " None of that ends it while the foreign traffic policy this pass found stands, " +
+			"named in the stage's unmet condition below: the pass stops before the route is " +
+			"re-pointed and before any answer is taken."
 	case held:
-		// The re-point still runs under A75's hold; the credit does not.
-		ends += " None of that ends it while the Gateway-level policy named above stands: the " +
-			"re-point still runs, but no 401 through this route is credited while a policy there " +
-			"could have answered it (A75)."
+		// Not "the re-point still runs": in THIS state cardedRevision is false,
+		// so the emitting pass made no re-point either.
+		ends += " None of that ends it while the Gateway-level policy this pass found stands, " +
+			"named in the stage's unmet condition below: even once a card records and the " +
+			"re-point moves the route, no 401 through it is credited while a policy there could " +
+			"have answered it (A75)."
+	}
+	// With a candidate pending, ends has already said its promotion may end
+	// this; every arm's remedy is then the one to take ONLY where it cannot.
+	// The warning is shared so no arm can steer at a revert while a rollout
+	// that would finish the job is still running.
+	only := ""
+	if candidate {
+		only = " Act only where that candidate can never promote: reverting the spec aborts a " +
+			"rollout that would end this on its own."
 	}
 	why, admits := "", ""
 	switch {
 	case backend == "":
 		why = "No card digest is recorded for status.activeRevision, and the route names no single " +
 			"revision to attribute on instead"
-		admits = ends + " Of the two exits, only the first applies meanwhile: the second needs one " +
+		admits = ends + only + " Of the two exits, only the first applies: the second needs one " +
 			"named revision to revert to, and this route does not name one."
 	case backend == WorkloadName(agent.Name, status.ActiveRevision) && !candidate:
 		why = "No card digest is recorded for that revision, which is also status.activeRevision"
@@ -2034,12 +2054,12 @@ func missingPolicyRouteNote(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.
 			"that card is what it is waiting on."
 	case backend == WorkloadName(agent.Name, status.ActiveRevision):
 		why = "No card digest is recorded for that revision, which is also status.activeRevision"
-		admits = ends + " The second exit is the one that works here: the route already serves " +
+		admits = ends + only + " The exit that works then is the second: the route already serves " +
 			"status.activeRevision, and reverting the spec to it makes it the desired revision " +
 			"again, which is what starts its card fetch."
 	default:
 		why = "No card digest is recorded for that revision or for status.activeRevision"
-		admits = ends + " Either exit applies meanwhile, and the second is the cheaper one: " +
+		admits = ends + only + " Either exit applies, and the second is the cheaper one: " +
 			"reverting the spec to the revision the route names makes that revision desired again, " +
 			"so its card can record too."
 	}

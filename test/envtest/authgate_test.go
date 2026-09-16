@@ -231,6 +231,68 @@ func TestTheRepointIsSkippedWhenTheActiveRevisionIsUncarded(t *testing.T) {
 	}
 }
 
+// The promotion exit, which the message now names and which A78's second
+// version told the operator did not exist. From (b)'s end state with a
+// CANDIDATE pending, nobody acts: the candidate becomes available, its own card
+// records, it is promoted, and the promotion fires the re-point. Reverting the
+// spec — what that message called "the one that restarts the fetch" — would
+// have aborted exactly this.
+//
+// Mutation: the message's candidate arm claiming the revert is the remedy,
+// which this leaves green and the unit case kills; and dropping the candidate
+// gate, which the unit case kills too. What this pins is the BEHAVIOUR the
+// message describes, so the two cannot drift apart unnoticed.
+func TestACandidatesPromotionEndsTheWedgeWithNobodyActing(t *testing.T) {
+	a, r, stub := missingPolicyLock(t, "wedgecand", time.Millisecond)
+	r1 := liveAgent(t, a).Status.ActiveRevision
+	// A candidate is minted and left UNavailable, so nothing promotes and
+	// nothing is fetching the active revision's card.
+	mustEdit(t, a, func(x *assaydv1alpha1.Agent) { x.Spec.Runtime.Image = secondImage })
+	edited := liveAgent(t, a)
+	r2, d2 := revision.MustHash(edited.Spec), revision.MustDigest(edited.Spec)
+	stub.hold(a.Name, false)
+	reconcileOnce(t, r, a)
+	if live := liveAgent(t, a); live.Status.CandidateRevision != r2 || live.Status.ActiveRevision != r1 {
+		t.Fatalf("want candidate %s held beside active %s: candidate=%q active=%q", r2, r1,
+			live.Status.CandidateRevision, live.Status.ActiveRevision)
+	}
+	if got := backendOf(t, a); got != r1 {
+		t.Fatalf("the route left r1 while the candidate was still held: %s", got)
+	}
+	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyMissing")
+	if c != nil {
+		for _, want := range []string{
+			"Nothing is fetching status.activeRevision's card",
+			"This still ends with nobody acting if that candidate becomes available",
+			"Act only where that candidate can never promote",
+		} {
+			if !strings.Contains(c.Message, want) {
+				t.Errorf("the message does not carry %q: %s", want, c.Message)
+			}
+		}
+	}
+
+	// Nobody acts. The candidate comes up, its card records as the operator's
+	// own fetch would, and the next pass promotes it.
+	markAvailable(t, a.Namespace, controller.WorkloadName(a.Name, r2), 1)
+	recordCardFor(t, a, r2, d2)
+	reconcileOnce(t, r, a)
+	if live := liveAgent(t, a); live.Status.ActiveRevision != r2 {
+		t.Fatalf("the candidate did not promote: active %s", live.Status.ActiveRevision)
+	}
+	if got := backendOf(t, a); got != r2 {
+		t.Fatalf("the promotion did not fire the re-point: the route names %s", got)
+	}
+	acceptRoute(t, a.Namespace, a.Name)
+	reconcileOnce(t, r, a)
+	if auth := authOf(t, a); auth == nil || auth.Mode != "apikey" || auth.Transaction != nil {
+		t.Fatalf("the candidate's promotion did not end the wedge, with nobody acting: %+v", auth)
+	}
+	if c := condition(liveAgent(t, a), assaydv1alpha1.CondPolicyApplyIncomplete); c != nil {
+		t.Errorf("AuthPolicyMissing outlived the promotion: %+v", c)
+	}
+}
+
 // (c) No backend moves while the policy is not this Agent's. The build order
 // is required: authPolicyPresent matches on name alone, so a foreign policy
 // present when reconcileServed runs sends the pass to reassertServedPolicy and
