@@ -24,11 +24,12 @@ import (
 // it. This measures it, the way TestAnAgentStoredWithABudgetCanStillBeFinalized
 // measures ADR-0034 B2's.
 //
-// Measured at Kubernetes 1.36.2, which is what `make envtest` pins
-// (ENVTEST_K8S in the Makefile). Ratcheting is on by default from 1.30, and
-// charts/assayd/Chart.yaml declares kubeVersion ">=1.30.0-0", so the oldest
-// cluster the chart admits is the oldest one on which this holds. No cluster
-// between 1.30 and 1.36.1 is measured here.
+// Measured at Kubernetes 1.36.2, which is what ENVTEST_K8S's `1.36.x` resolves
+// to today — the Makefile pins the minor, not the patch. Ratcheting is on by
+// default from 1.30, and charts/assayd/Chart.yaml declares kubeVersion
+// ">=1.30.0-0", so the oldest cluster the chart admits is the oldest one on
+// which this is expected to hold. No cluster between 1.30 and 1.36.1 is
+// measured here.
 //
 // The CRD is swapped inside the shared control plane, as the budget test does.
 // No envtest here runs in parallel, and t.Cleanup reinstalls the current CRD

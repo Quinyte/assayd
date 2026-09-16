@@ -175,6 +175,33 @@ spec:
 			expect: "never be read as a query or a fragment",
 		},
 		{
+			// The class is closed, not a "no ? or #" blocklist. A space and a
+			// non-ASCII byte are outside it and A76's table says so, which is
+			// only true if something checks.
+			name: "card path carries a space",
+			doc: `
+apiVersion: assayd.dev/v1alpha1
+kind: Agent
+metadata: {name: card-space}
+spec:
+  runtime: {image: ghcr.io/acme/a@sha256:3bda1c750240ee09000000000000000000000000000000000000000000000000}
+  card: {path: "/agent card.json"}
+`,
+			expect: "use only letters, digits",
+		},
+		{
+			name: "card path carries a non-ASCII byte",
+			doc: `
+apiVersion: assayd.dev/v1alpha1
+kind: Agent
+metadata: {name: card-unicode}
+spec:
+  runtime: {image: ghcr.io/acme/a@sha256:3bda1c750240ee09000000000000000000000000000000000000000000000000}
+  card: {path: "/cárd.json"}
+`,
+			expect: "use only letters, digits",
+		},
+		{
 			// maxLength's TooLong is BLOCKING in apiextensions: when it fires
 			// the API server reports "some validation rules were not checked
 			// because the object was invalid" and skips every CEL rule, so
@@ -292,7 +319,10 @@ func TestAnEmptyCardPathIsRefused(t *testing.T) {
 	}}
 	err := k8s.Create(context.Background(), u)
 	if err == nil {
-		t.Fatal(`path: "" must be refused: it is not the default, and the operator would fetch "/"`)
+		t.Fatal(`path: "" must be refused: it is not a path, and it is not the default either — ` +
+			`the API server only defaults an ABSENT field. The operator falls back to the default ` +
+			`for an empty path (cardPath in internal/controller/authtxn.go), so nothing breaks; the ` +
+			`refusal is so that the field means one thing.`)
 	}
 	if !strings.Contains(err.Error(), "not a URL") {
 		t.Errorf("the error does not tell the developer what to do.\n got: %v", err)

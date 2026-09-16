@@ -470,6 +470,48 @@ func TestA3xxThatIsNotARedirectIsNotCalledOne(t *testing.T) {
 	}
 }
 
+// Design 02 A76 refuses "?", "#" and "%" in spec.card.path, and the reason it
+// gives is that the field cannot express what an author writing one MEANS — a
+// query, a fragment, a pre-encoded byte — not that the operator garbles the
+// characters it does admit. That distinction has to be measured, or the
+// amendment is trading one unchecked justification for another: `url.URL`
+// escapes several admitted sub-delimiters on the way out (`!` goes as `%21`),
+// and if that were lossy the class would be wrong.
+//
+// So: every shape the grammar admits must arrive as the path that was written.
+func TestCardURLCarriesAnAdmittedPathWithoutChangingIt(t *testing.T) {
+	for _, path := range []string{
+		"/.well-known/agent-card.json",
+		// The accepted-cases specimen in test/envtest: every sub-delimiter,
+		// ":" and "@". url.URL escapes ! ' ( ) * here.
+		"/cards/v1:2@site/a!$&'()*+,;=-._~.json",
+		// Admitted, and not excluded by the grammar (A76).
+		"/../../card.json",
+		"//elsewhere.example.com/card.json",
+		"/" + strings.Repeat("a", 1023),
+	} {
+		t.Run(path[:min(len(path), 42)], func(t *testing.T) {
+			raw := cardURL("http", "10.0.0.1:8080", path)
+			u, err := url.Parse(raw)
+			if err != nil {
+				t.Fatalf("cardURL produced %q, which does not parse: %v", raw, err)
+			}
+			if u.Host != "10.0.0.1:8080" {
+				t.Errorf("the path moved the request to %q; the derived authority must stand", u.Host)
+			}
+			if u.Path != path {
+				t.Errorf("the agent is asked for %q, not the path its author wrote, %q\n"+
+					"A76 refuses '?', '#' and '%%' because the field cannot express what they MEAN, "+
+					"not because admitted characters are mangled. If this fires, that reason is wrong.",
+					u.Path, path)
+			}
+			if u.RawQuery != "" || u.Fragment != "" {
+				t.Errorf("cardURL built a query %q or a fragment %q out of a path", u.RawQuery, u.Fragment)
+			}
+		})
+	}
+}
+
 // hostNamingPaths are the two shapes of spec.card.path that read as an
 // authority, and the path each must arrive as at the address the OPERATOR
 // derived. The guard is `cardURL`, not the CRD schema: it writes the derived

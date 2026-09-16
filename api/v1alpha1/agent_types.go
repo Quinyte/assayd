@@ -161,20 +161,24 @@ type CardSpec struct {
 	// characters. Anything else is refused at apply time, an empty string
 	// included (design 02 A76). Omitting the field takes the default.
 	//
-	// That class is RFC 3986 section 3.3's `pchar` MINUS `pct-encoded`, and the
-	// omission is the point rather than an oversight: the operator treats this
-	// value as a DECODED path and percent-encodes it into the request URL. So a
-	// "%" is re-encoded — /card%20.json goes out as /card%2520.json — and a "?"
-	// or a "#" goes out as %3F or %23, inside the path, never as a query or a
-	// fragment. All three would 404 at the first fetch, so they are refused at
-	// write time instead.
+	// That class is RFC 3986 section 3.3's `pchar` MINUS `pct-encoded`. The
+	// operator treats this value as a DECODED path: it is escaped into the
+	// request URL and arrives as the path that was written, whatever the class
+	// admits (TestCardURLCarriesAnAdmittedPathWithoutChangingIt). What "?", "#"
+	// and "%" cost is not bytes but MEANING — this field is one path and cannot
+	// express a query, a fragment, or a pre-encoded byte. A "?" becomes a
+	// literal "?" inside the path, and /card%20.json asks the agent for a path
+	// whose name contains "%20". Refusing the three at apply time says the field
+	// cannot express what the author meant, instead of 404ing later.
 	//
 	// What the class does NOT exclude: dot segments, so /../../card.json is
-	// admitted and sent literally, and a host-shaped path, so
-	// //elsewhere.example.com/card.json is admitted. Neither moves the fetch —
-	// cardURL writes the revision's own authority first and url.URL keeps a path
-	// a path (internal/controller/authprobe.go). It is that construction, not
-	// this schema, that stops a path naming a host.
+	// admitted, and a host-shaped path, so //elsewhere.example.com/card.json is
+	// admitted. Neither moves the fetch — cardURL writes the revision's own
+	// authority first and url.URL keeps a path a path (internal/controller/
+	// authprobe.go). It is that construction, not this schema, that stops a
+	// path naming a host. Both are sent as written, and what answers is the
+	// agent's own server: a Go http.ServeMux cleans the path and redirects,
+	// which the operator reports as Registered=False, reason CardRedirected.
 	//
 	// 1024 is a choice with headroom, not a limit anything imposes: describeProbe
 	// quotes this value raw into a condition message, and metav1.Condition's
