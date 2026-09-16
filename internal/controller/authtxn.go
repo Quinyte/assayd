@@ -1639,6 +1639,10 @@ func (r *AgentReconciler) runLock(ctx context.Context, agent *assaydv1alpha1.Age
 	deadlinePassed := tx.Deadline != nil && !now.Before(tx.Deadline.Time)
 	var unmet string
 	held := false
+	// repointed is A77's step 1, for the missing policy's Lock: whether THIS
+	// pass re-asserted the route on status.activeRevision, which its message
+	// reports either way (§3.3.3's deadline table).
+	repointed := false
 	var above gatewayAuth
 	requeue := time.Duration(0)
 	policyName, _ := compiler.AuthPolicyName(agent.Name)
@@ -1740,6 +1744,82 @@ steps:
 				requeue = AuthProbeInterval
 				break steps
 			}
+			// A77 step 1, the re-point, for a missing policy's Lock only, and
+			// after all four of this stage's reads. `<agent>-serving` is
+			// re-asserted published on status.activeRevision — the write J2's
+			// and K2's already make at the top of this function — followed by
+			// the collection of this Agent's other routes.
+			//
+			// Two conditions, both required. `<agent>-auth` has been read
+			// present and equal to the target in this pass, so the route never
+			// moves ahead of the policy write (§3.3.1, "the policy is written
+			// before the backendRef moves"): the intact read at the top of this
+			// arm is that read, and a failed one rewinds to ApplyingPolicies and
+			// never reaches here. And status.cards records a digest for
+			// status.activeRevision, read by revision name as the attribution
+			// reads it (cardedRevision). Without the second, an Agent whose
+			// route names a CARDED revision beside an uncarded active one would
+			// move from crediting to paging for ever — the inverse of the defect
+			// (A77). The condition holds at the write and promises nothing
+			// later: a failed card re-read clears a digest in place, so a route
+			// re-pointed onto a carded revision can find it uncarded an interval
+			// later, which delays this Lock rather than ending it.
+			if reCreate && cardedRevision(status, status.ActiveRevision) {
+				cur, _, err := r.ensureServingRoute(ctx, agent, runNS, status.ActiveRevision,
+					status.ActiveRevisionDigest, name, routePublicationFor(status.Auth))
+				if errors.Is(err, errRouteGone) {
+					// Gone between this pass's read and this write. An API-key
+					// route is never created published, so re-preparing it is
+					// the route re-create's, not this Lock's (§3.3.1).
+					return r.recreateRoute(ctx, agent, runNS, name, status, conds, out)
+				}
+				if err != nil {
+					return out, err
+				}
+				if err := r.collectRoutes(ctx, agent, runNS, name); err != nil {
+					return out, err
+				}
+				rt, repointed = cur, true
+			}
+			// A77 step 2, the route gate, in EVERY Lock, immediately before the
+			// request: §3.3.2's route half only, re-checked against the route as
+			// it stands now. Two things move a route under it — the re-point
+			// above, and a promotion that moves J2's or K2's, which
+			// ensureServingRoute writes at the top of runLock and which is the
+			// case A77 exists to fix. Either way the pass that moves the route
+			// skips the request and the next one sends it, once the Gateway has
+			// reported at that generation. A write that changes nothing is a
+			// no-op, so a settled route is probed on the pass that re-asserts it.
+			//
+			// It is a PRECONDITION of the request, not a reaction to a change:
+			// it needs no record of what was probed before, and it holds after a
+			// status write lost to a conflict and after a restart. The
+			// transaction STAYS at ProbingAfter: rewinding it to Converging
+			// would drop a standing Gateway-level hold on every pass after the
+			// gated one, because storedHold carries it only at ProbingAfter and
+			// the Converging arm breaks on the tuple before A75's read.
+			//
+			// What it proves is control-plane only, so it narrows the window
+			// rather than closing it: the proxy may still lag the controller's
+			// report, and the route is read through the manager's cache, so a
+			// route someone else moved is compared stale against its matching
+			// stale status (§3.3.3, and §3.3.2's own limit).
+			if ok, why := routeConverged(rt, r.Gateway); !ok {
+				unmet = "no anonymous request is sent and no answer is taken until the assayd " +
+					"Gateway reports Accepted and ResolvedRefs on the serving route at its current " +
+					"generation: " + why
+				if held {
+					unmet += "; and " + above.holdMessage(r.Gateway, runNS, policyName, false)
+				}
+				// The gate is the one wait A77 leaves unbounded — a route that
+				// keeps moving never opens it — so it backs off past the
+				// deadline exactly as the probe below does.
+				requeue = AuthProbeInterval
+				if deadlinePassed {
+					requeue = CardRetryInterval
+				}
+				break steps
+			}
 			answer, perr := r.probeAgent(ctx, agent)
 			if tx.Probe == nil {
 				tx.Probe = &assaydv1alpha1.AuthProbe{}
@@ -1816,7 +1896,8 @@ steps:
 			"was missing, so its route served with no key. It has been re-created from status.auth, "+
 			"and is trusted only once an anonymous request through the route gets a 401 that can be "+
 			"attributed (design 03 §3.3.3, the Lock of a missing policy). The route is not withdrawn. "+
-			"The Lock is in stage %s: %s%s", runNS, policyName, tx.Stage, unmet, deadlineNote)
+			"%s The Lock is in stage %s: %s%s", runNS, policyName,
+			missingPolicyRouteNote(agent, status, rt, runNS, repointed), tx.Stage, unmet, deadlineNote)
 		conds.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonAuthPolicyMissing, msg)
 		// A75's order puts AuthPolicyMissing first, before and at the deadline:
 		// the route is open with no policy, which outranks a 401 that cannot be
@@ -1847,6 +1928,72 @@ steps:
 		withholdInOrder(&out, ReasonGatewayAuthPolicy, msg)
 	}
 	return out, nil
+}
+
+// missingPolicyRouteNote is the clause §3.3.3's deadline table requires of a
+// missing policy's Lock, built once and carried before and at the deadline: the
+// revision the route's single backendRef names, so a reader can tell which card
+// digest the attribution is waiting on, and whether the route was re-pointed
+// onto status.activeRevision or left as found (A77).
+//
+// Where the route was left as found because status.cards records no digest for
+// status.activeRevision EITHER, nothing can ever attribute a 401 through this
+// route, and the note says the state is terminal until a card records or an
+// administrator acts, names both exits, and says which of them the state it
+// reports admits. A message that read as waiting for a state nothing will end
+// would be rule 8's loud-and-wrong, not its silent case.
+func missingPolicyRouteNote(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus,
+	rt *gatewayv1.HTTPRoute, runNS string, repointed bool) string {
+	route, _ := compiler.ServingRouteName(agent.Name)
+	backend := singleBackend(rt)
+	named := ""
+	switch {
+	case backend == "":
+		named = fmt.Sprintf("%s/%s does not carry exactly one backendRef, so it names no revision "+
+			"and is unattributable until it does", runNS, route)
+	default:
+		named = fmt.Sprintf("%s/%s's single backendRef names revision %s, whose recorded card digest "+
+			"is what the attribution waits on", runNS, route, strings.TrimPrefix(backend, agent.Name+"-"))
+	}
+	if repointed {
+		named += ", and the route was re-pointed at status.activeRevision " + status.ActiveRevision +
+			" — re-asserted on it in this pass, and written only if it had drifted"
+	} else {
+		named += ", and the route was left as found"
+	}
+	attributed, _, _ := cardAttributes(agent, status, rt)
+	if attributed || cardedRevision(status, status.ActiveRevision) {
+		return named + "."
+	}
+	// The state is reached in two ways that need different things, so the
+	// reason it cannot attribute and the exit it admits are written per case.
+	// Saying "no card digest is recorded for that revision" of a route that
+	// names no revision would send a reader looking for a digest the sentence
+	// before it says cannot exist — rule 8's loud-and-wrong.
+	why, admits := "", ""
+	switch {
+	case backend == "":
+		why = "No card digest is recorded for status.activeRevision, and the route names no single " +
+			"revision to attribute on instead"
+		admits = "This state admits only the first exit: the second needs one named revision to " +
+			"revert to, and this route does not name one."
+	case backend == WorkloadName(agent.Name, status.ActiveRevision):
+		why = "No card digest is recorded for that revision, which is also status.activeRevision"
+		admits = "This state needs neither exit: the operator is still retrying that revision's own " +
+			"card fetch, and a card recording is what ends it. Reverting the spec would revert to " +
+			"the spec it already has, and deleting the route would cost an outage it does not need."
+	default:
+		why = "No card digest is recorded for that revision or for status.activeRevision"
+		admits = "This state ends only by an administrator acting: the route does not name " +
+			"status.activeRevision, so nothing will fetch the named revision's card again."
+	}
+	return named + ". " + why + ", so no 401 through this route can be attributed, and the state is " +
+		"TERMINAL until a card records or an administrator acts. Two exits: an administrator with " +
+		"delete in the run namespace removes " + runNS + "/" + route + ", which costs an outage until " +
+		"Create republishes it and is unbounded while a Gateway-level or foreign policy holds that " +
+		"Create; or, for a card fetch that later succeeds, the spec is reverted to the revision the " +
+		"route names, so that revision is desired again and its card can record, which does nothing " +
+		"for a card that never validates. " + admits
 }
 
 // lockPendingMessage is GovernanceSkipped=AuthLockPending's message, and
@@ -1944,33 +2091,59 @@ func beforeRevisionFor(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.Agent
 }
 
 // cardAttributes is §3.3.3's attribution for a 401 on a published route: it
-// counts only while status.cards records a digest for a revision the route's
-// backendRefs serve. The operator's own card fetch records one only from an
-// anonymous 200 with a valid card on the same path, so that backend answered
+// counts only while status.cards records a digest for the revision the route's
+// SINGLE backendRef names. The operator's own card fetch records one only from
+// an anonymous 200 with a valid card on the same path, so that backend answered
 // the path anonymously at its fetchedAt, and a 401 there now comes from
 // something in front of it. With no digest, a backend's own 401 would pass
 // for the lock whether or not the policy took.
+//
+// A route not carrying exactly one backendRef is unattributable, whatever
+// status.cards holds (A77). It is the same singleBackend reading ProbingBefore
+// uses, so the attribution and ProbingBefore agree on which backend they mean,
+// and so the route gate, the re-point and the attribution all read one route
+// object. Before A77 this read every rule and every ref and returned on the
+// first recorded digest, so a route momentarily carrying two backends could be
+// attributed on the carded one while the other answered.
 //
 // It returns the digest's fetchedAt, which the message names: how old the
 // anonymous answer it rests on is (§3.3.3).
 func cardAttributes(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus,
 	rt *gatewayv1.HTTPRoute) (bool, string, string) {
-	for _, rule := range rt.Spec.Rules {
-		for _, ref := range rule.BackendRefs {
-			for _, c := range status.Cards {
-				if c.Digest != "" && WorkloadName(agent.Name, c.Revision) == string(ref.Name) {
-					at := "an unrecorded time"
-					if c.FetchedAt != nil {
-						at = c.FetchedAt.UTC().Format(time.RFC3339)
-					}
-					return true, at, ""
-				}
+	backend := singleBackend(rt)
+	if backend == "" {
+		return false, "", "the route does not carry exactly one backendRef, so it is unattributable " +
+			"whatever status.cards records, and no 401 through it can be credited until it carries one"
+	}
+	for _, c := range status.Cards {
+		if c.Digest != "" && WorkloadName(agent.Name, c.Revision) == backend {
+			at := "an unrecorded time"
+			if c.FetchedAt != nil {
+				at = c.FetchedAt.UTC().Format(time.RFC3339)
 			}
+			return true, at, ""
 		}
 	}
-	return false, "", "no card digest is recorded for a revision the route serves, so the " +
-		"backend's anonymous answer on the card path was never observed, and the 401 could be the " +
-		"backend's own"
+	return false, "", "no card digest is recorded for " + backend + ", the revision the route's " +
+		"single backendRef names, so the backend's anonymous answer on the card path was never " +
+		"observed, and the 401 could be the backend's own"
+}
+
+// cardedRevision reports whether status.cards records a non-empty digest for
+// rev, read by revision NAME — exactly as cardAttributes reads it, and NOT
+// through hasCardFor, which keys on the revision DIGEST. A77 gates the
+// missing-policy Lock's re-point on this, and the two readings must never be
+// able to disagree about the same revision (§3.3.3).
+func cardedRevision(status *assaydv1alpha1.AgentStatus, rev string) bool {
+	if rev == "" {
+		return false
+	}
+	for _, c := range status.Cards {
+		if c.Revision == rev && c.Digest != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // authPolicyPresent reports whether `<agent>-auth` exists, read live.
