@@ -461,7 +461,7 @@ Runs anywhere: no LoadBalancer requirement, `local-path` storage, no managed-ide
 
 Discipline: the differentiation only exists once P2/P3 ship — never polish the runtime layer at their expense.
 
-**Status — read this before the build order above.** An earlier version of this line said all five phases were "designed and approved (27/27, each critique-passed)". **That was false and is withdrawn.** It is the same sentence `CLAUDE.md` records as "the first thing every contributor read", and it survived here after being corrected everywhere else. Design 02's own header says it is not approved; design 03's says critique pending, not approved, do not implement. `docs/designs/README.md` arbitrates, and a design's own Status line beats any summary — including this one.
+**Status — read this before the build order above.** An earlier version of this line said all five phases were "designed and approved (27/27, each critique-passed)". **That was false and is withdrawn.** It is the same sentence `CLAUDE.md` records as "the first thing every contributor read", and it survived here after being corrected everywhere else. Design 02's own header says it is not approved. Designs 03 and 16 each approve only their first slice, approved by the human on 2026-09-12 and 2026-09-14, and say the rest is not approved and must not be implemented. `docs/designs/README.md` arbitrates, and a design's own Status line beats any summary — including this one.
 
 **The build order above is superseded by ADR-0030 and is kept for context, not as a plan.** The delivery commitment is now **one end-to-end slice**, not five phases: a single-team managed-container Agent, one pinned gateway release, one identity mechanism, carried until one agent completes one A2A task and one MCP tool call through the gateway with a disallowed principal failing against a permitted control. Designs **21, 23, 25, 26, 27** and the unimplemented parts of **11–14** and **18–19** are **hypotheses** — research retained, not prerequisites and not supported promises.
 
@@ -485,7 +485,7 @@ Discipline: the differentiation only exists once P2/P3 ship — never polish the
 
 ## 20 · The decision record
 
-Most claims above are backed by an ADR and a design that survived adversarial critique — but **"critique-passed" is not "approved", and two central designs are neither**: 02 and 03 both read `critique pending`. Surviving a review is evidence about the prose, not about the component. The corpus lives in the repo: `docs/decisions/` (32 ADRs), `docs/designs/` (27 designs + `reviews/`), `docs/research/` (12 dated notes).
+Most claims above are backed by an ADR and a design that survived adversarial critique — but **"critique-passed" is not "approved", and no central design is approved whole**: 02 is not approved, and 03 and 16 approve only their first slices (2026-09-12 and 2026-09-14). Surviving a review is evidence about the prose, not about the component. The corpus lives in the repo: `docs/decisions/` (32 ADRs), `docs/designs/` (27 designs + `reviews/`), `docs/research/` (12 dated notes).
 
 ### ADRs
 
