@@ -148,6 +148,19 @@ holding the request message, `Content-Type: application/json`. A2A service param
 `SendMessageRequest`: `message` (REQUIRED), plus optional `tenant`, `configuration`,
 `metadata`.
 
+**Omitting `configuration` selects the blocking mode.** `SendMessageConfiguration`'s
+fourth field is `bool return_immediately`, whose proto3 default is false, and whose
+normative comment in `specification/a2a.proto` at `v1.0.1` reads: "If `true`, the
+operation returns immediately after creating the task, even if processing is still in
+progress. If `false` (default), the operation MUST wait until the task reaches a
+terminal (`COMPLETED`, `FAILED`, `CANCELED`, `REJECTED`) or interrupted
+(`INPUT_REQUIRED`, `AUTH_REQUIRED`) state before returning." So a client that sends no
+`configuration` gets a terminal or interrupted task back, not an acknowledgement of a
+task still running. *(Added 2026-09-16, read from the `.proto` at `v1.0.1`. Design 16
+§1.1 rests a case's whole outcome on this default and cited it to this section, which
+recorded `configuration` as optional and said nothing about omitting it — design 16's
+eleventh critique, m8.)*
+
 `Message`: `messageId` (REQUIRED), `role` (REQUIRED), `parts` (REQUIRED), plus optional
 `contextId`, `taskId`, `metadata`, `extensions`, `referenceTaskIds`.
 
