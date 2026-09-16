@@ -156,16 +156,19 @@ func TestTheMissingPolicyLockEndsWhenTheActiveRevisionIsCarded(t *testing.T) {
 
 // (b) The re-point is skipped when the active revision is uncarded, and the
 // message says so. (a)'s build with r2 uncarded as well: the route is left on
-// r1, the Lock never reaches Served, and past the deadline the message names
-// r1, says the route was left as found, says the state is terminal, and names
-// both exits.
+// r1, the Lock does not reach Served while both are uncarded, and past the
+// deadline the message names r1, says the route was left as found, says the
+// state is terminal, and names both exits. A78 gives it the continuation
+// below, which is why "never reaches Served" is the wrong way to say it.
 //
-// Two mutations, and both are killed here. Re-point unconditionally, dropping
-// the recorded-digest condition: the route moves to r2, so the message names
-// r2 and says re-pointed. And make cardAttributes return true whenever the
-// route carries any backendRef: the Lock then credits r1's 401 and reaches
-// Served, so PolicyApplyIncomplete is gone. (a) survives both, so the
-// condition is fixed from both sides across the pair.
+// Four mutations are killed here. Re-point unconditionally, dropping the
+// recorded-digest condition: the route moves to r2, so the message names r2
+// and says re-pointed. Make cardAttributes return true whenever the route
+// carries any backendRef: the Lock then credits r1's 401 and reaches Served,
+// so PolicyApplyIncomplete is gone. Restore A77's "only an administrator ends
+// it", which the message assertion below reads. And take the route as found
+// and write nothing, which the continuation needs. (a) survives the first two,
+// so the condition is fixed from both sides across the pair.
 func TestTheRepointIsSkippedWhenTheActiveRevisionIsUncarded(t *testing.T) {
 	a, r, stub := missingPolicyLock(t, "wedgeholds", time.Millisecond)
 	r1 := liveAgent(t, a).Status.ActiveRevision
@@ -263,7 +266,7 @@ func TestACandidatesPromotionEndsTheWedgeWithNobodyActing(t *testing.T) {
 	if c != nil {
 		for _, want := range []string{
 			"Nothing is fetching status.activeRevision's card",
-			"This still ends with nobody acting if that candidate becomes available",
+			"This still ends with nobody acting if that candidate becomes available AND promotes",
 			"Act only where that candidate can never promote",
 		} {
 			if !strings.Contains(c.Message, want) {

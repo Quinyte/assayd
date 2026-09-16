@@ -2011,7 +2011,7 @@ func missingPolicyRouteNote(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.
 		ends = "Nothing is fetching status.activeRevision's card: candidate revision " +
 			status.CandidateRevision + " is the desired revision now, and a card is fetched from " +
 			"a ready desired revision alone (design 03 A60). This still ends with nobody acting " +
-			"if that candidate becomes available: its own card records, it is promoted, and the " +
+			"if that candidate becomes available AND promotes: its own card records, and the " +
 			"promotion fires the re-point. An administrator is needed only where the candidate " +
 			"can never promote — held by a gate or an uncompilable spec, or never available — or " +
 			"where the card never validates."

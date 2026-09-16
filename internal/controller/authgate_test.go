@@ -152,8 +152,8 @@ func TestTheMissingPolicyLockMessageNamesTheRouteAndItsExits(t *testing.T) {
 			want: []string{"names revision r2", "TERMINAL", "which is also status.activeRevision",
 				"Nothing is fetching status.activeRevision's card",
 				"candidate revision r3 is the desired revision now",
-				"This still ends with nobody acting if that candidate becomes available",
-				"its own card records, it is promoted, and the promotion fires the re-point",
+				"This still ends with nobody acting if that candidate becomes available AND promotes",
+				"its own card records, and the promotion fires the re-point",
 				"Act only where that candidate can never promote",
 				"reverting the spec aborts a rollout that would end this on its own",
 				"The exit that works then is the second"},
@@ -222,8 +222,15 @@ func TestTheMissingPolicyLockMessageNamesTheRouteAndItsExits(t *testing.T) {
 				t.Errorf("%s: the message does not carry %q: %s", tc.name, w, got)
 			}
 		}
+		// Refusals are case-INSENSITIVE. A refusal is a claim about what the
+		// message may not say, and the same sentence capitalised at the start
+		// of one is the same claim: a lowercase entry compared with
+		// strings.Contains never saw it, and a paraphrase that only moved the
+		// recommendation to a sentence boundary survived this whole list.
+		// Same shape as the "re-pointed onto" grep that could never fire.
+		lower := strings.ToLower(got)
 		for _, r := range tc.refused {
-			if strings.Contains(got, r) {
+			if strings.Contains(lower, strings.ToLower(r)) {
 				t.Errorf("%s: the message carries %q, which is false here: %s", tc.name, r, got)
 			}
 		}
