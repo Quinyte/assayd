@@ -87,11 +87,20 @@ func TestTheMissingPolicyLockMessageNamesTheRouteAndItsExits(t *testing.T) {
 		}
 		return st
 	}
+	// pending is the same status with a candidate held at weight 0, which is
+	// what the operator is fetching a card for instead of the active revision.
+	pending := func() *assaydv1alpha1.AgentStatus {
+		st := status()
+		st.CandidateRevision = "r3"
+		return st
+	}
 	for _, tc := range []struct {
 		name          string
 		status        *assaydv1alpha1.AgentStatus
 		rt            *gatewayv1.HTTPRoute
 		repointed     bool
+		held          bool
+		foreign       []string
 		want, refused []string
 	}{
 		{
@@ -109,20 +118,55 @@ func TestTheMissingPolicyLockMessageNamesTheRouteAndItsExits(t *testing.T) {
 			want: []string{"names revision r1", "left as found", "TERMINAL",
 				"or for status.activeRevision",
 				"ends without an administrator when status.activeRevision's own card records",
-				"An administrator is needed only where that card never validates",
+				"An administrator is needed where that card never validates, and wherever nothing is fetching it",
 				"Either exit applies meanwhile",
 				"removes " + runNS + "/pricer-serving", "the spec is reverted to the revision the route names"},
 			refused: []string{"re-pointed at status.activeRevision", "only by an administrator",
 				"Neither exit is needed here"},
 		},
 		{
-			name:   "the route names the active revision, whose card is still being retried",
+			// The precondition is in the name because it is now in the CODE:
+			// the arm is gated on there being no candidate, since the operator
+			// fetches the candidate's card and not the active revision's while
+			// one is pending (A60). A78's first version named the retry in the
+			// message and checked nothing.
+			name:   "the route names the active revision, with no candidate pending",
 			status: status(), rt: routeNaming(agent.Name, "r2"),
 			want: []string{"names revision r2", "TERMINAL", "which is also status.activeRevision",
 				"ends without an administrator when status.activeRevision's own card records",
+				"only while that revision has a replica available",
 				"Neither exit is needed here"},
 			refused: []string{"or for status.activeRevision", "Either exit applies meanwhile",
-				"only the first applies meanwhile"},
+				"only the first applies meanwhile", "is pending"},
+		},
+		{
+			// MAJOR 1 of the delta review, measured: with a candidate pending
+			// nothing is fetching the active revision's card, so "neither exit
+			// is needed" is false, and the revert it called pointless is the
+			// one action that restarts the fetch.
+			name:   "the route names the active revision while a candidate is pending",
+			status: pending(), rt: routeNaming(agent.Name, "r2"),
+			want: []string{"names revision r2", "TERMINAL", "which is also status.activeRevision",
+				"candidate revision r3 is pending", "own fetch is NOT running",
+				"Reverting the spec to the revision the route names is a real change here",
+				"The second exit is the one that works here"},
+			refused: []string{"ends without an administrator", "Neither exit is needed here"},
+		},
+		{
+			name:   "a foreign traffic policy stopped the pass above the re-point",
+			status: status(), rt: routeNaming(agent.Name, "r2"), foreign: []string{"ns/rogue"},
+			want: []string{"TERMINAL",
+				"None of that ends it while the foreign traffic policy named above stands",
+				"stops before the route is re-pointed and before any answer is taken"},
+			refused: []string{"Gateway-level policy named above stands"},
+		},
+		{
+			name:   "a Gateway-level policy holds the credit",
+			status: status(), rt: routeNaming(agent.Name, "r2"), held: true,
+			want: []string{"TERMINAL",
+				"None of that ends it while the Gateway-level policy named above stands",
+				"the re-point still runs, but no 401 through this route is credited"},
+			refused: []string{"foreign traffic policy named above stands"},
 		},
 		{
 			name:   "two backendRefs beside an uncarded active revision",
@@ -134,7 +178,7 @@ func TestTheMissingPolicyLockMessageNamesTheRouteAndItsExits(t *testing.T) {
 			refused: []string{"names revision r", "for that revision", "Neither exit is needed here"},
 		},
 	} {
-		got := missingPolicyRouteNote(agent, tc.status, tc.rt, runNS, tc.repointed)
+		got := missingPolicyRouteNote(agent, tc.status, tc.rt, runNS, tc.repointed, tc.held, tc.foreign)
 		for _, w := range tc.want {
 			if !strings.Contains(got, w) {
 				t.Errorf("%s: the message does not carry %q: %s", tc.name, w, got)

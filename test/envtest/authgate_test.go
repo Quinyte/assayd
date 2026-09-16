@@ -169,7 +169,7 @@ func TestTheMissingPolicyLockEndsWhenTheActiveRevisionIsCarded(t *testing.T) {
 func TestTheRepointIsSkippedWhenTheActiveRevisionIsUncarded(t *testing.T) {
 	a, r, stub := missingPolicyLock(t, "wedgeholds", time.Millisecond)
 	r1 := liveAgent(t, a).Status.ActiveRevision
-	r2, _ := mintRevision(t, r, a, false)
+	r2, d2 := mintRevision(t, r, a, false)
 	stub.hold(a.Name, false) // from here the re-created policy refuses
 
 	reconcileOnce(t, r, a)
@@ -208,6 +208,26 @@ func TestTheRepointIsSkippedWhenTheActiveRevisionIsUncarded(t *testing.T) {
 	// could never fire.
 	if strings.Contains(c.Message, "re-pointed at status.activeRevision") {
 		t.Errorf("the message says the route was re-pointed, and it was not: %s", c.Message)
+	}
+
+	// A78's continuation, and the measurement its correction rests on: from
+	// exactly this end state, recording status.activeRevision's card — with no
+	// administrator acting on anything — ends the wedge. (a) cards r2 before
+	// the promoting pass, so a regression that tied the re-point to that pass
+	// would keep (a) green while this message went false; this asserts the
+	// message instead of trusting it.
+	recordCardFor(t, a, r2, d2)
+	reconcileOnce(t, r, a) // re-points onto r2; the gate holds the moved route
+	if got := backendOf(t, a); got != r2 {
+		t.Fatalf("recording status.activeRevision's card did not re-point the route: %s", got)
+	}
+	acceptRoute(t, a.Namespace, a.Name)
+	reconcileOnce(t, r, a)
+	if auth := authOf(t, a); auth == nil || auth.Mode != "apikey" || auth.Transaction != nil {
+		t.Fatalf("the wedge did not end on a recorded card alone, with no administrator: %+v", auth)
+	}
+	if c := condition(liveAgent(t, a), assaydv1alpha1.CondPolicyApplyIncomplete); c != nil {
+		t.Errorf("AuthPolicyMissing outlived the wedge: %+v", c)
 	}
 }
 

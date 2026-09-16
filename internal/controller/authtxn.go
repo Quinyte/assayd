@@ -1901,7 +1901,8 @@ steps:
 			"and is trusted only once an anonymous request through the route gets a 401 that can be "+
 			"attributed (design 03 §3.3.3, the Lock of a missing policy). The route is not withdrawn. "+
 			"%s The Lock is in stage %s: %s%s", runNS, policyName,
-			missingPolicyRouteNote(agent, status, rt, runNS, repointed), tx.Stage, unmet, deadlineNote)
+			missingPolicyRouteNote(agent, status, rt, runNS, repointed, held, out.foreign),
+			tx.Stage, unmet, deadlineNote)
 		conds.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, ReasonAuthPolicyMissing, msg)
 		// A75's order puts AuthPolicyMissing first, before and at the deadline:
 		// the route is open with no policy, which outranks a 401 that cannot be
@@ -1949,7 +1950,7 @@ steps:
 // named an administrator as the only way out when the operator's own card retry
 // is the ordinary one (A78).
 func missingPolicyRouteNote(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus,
-	rt *gatewayv1.HTTPRoute, runNS string, repointed bool) string {
+	rt *gatewayv1.HTTPRoute, runNS string, repointed, held bool, foreign []string) string {
 	route, _ := compiler.ServingRouteName(agent.Name)
 	backend := singleBackend(rt)
 	named := ""
@@ -1979,18 +1980,46 @@ func missingPolicyRouteNote(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.
 	//
 	// What ends every one of them without an administrator is the SAME event:
 	// status.activeRevision's own card recording, which makes cardedRevision
-	// true and fires the re-point above (A78). The operator retries that fetch
-	// while status.activeRevision is the desired revision, which it is once a
-	// rollout has settled; while a candidate is pending it fetches the
-	// candidate's card instead (A60, cardFetchDue). A77 said of the case below
+	// true and fires the re-point above (A78). A77 said of the third case below
 	// that "only an administrator ends it", which is false, and steered the
 	// reader at the exit this same message calls an unbounded outage.
-	const ends = "This state ends without an administrator when status.activeRevision's own card " +
+	//
+	// But the operator fetches a card only from the DESIRED revision, and only
+	// once that revision is ready (A60, cardFetchDue and agent_controller.go).
+	// So the retry is running only while there is no candidate pending — the
+	// condition §3.3.3 states and A78's first code dropped, which made the
+	// "neither exit is needed" arm fire where nothing was being fetched at all
+	// and the revert it calls pointless is the one action that restarts the
+	// fetch — and only while the active revision has a replica available. Both
+	// are said rather than inferred; the first is read from status, the second
+	// is not readable here and is stated as the condition it is.
+	candidate := status.CandidateRevision != ""
+	ends := "This state ends without an administrator when status.activeRevision's own card " +
 		"records: the re-point then moves the route onto that revision and the 401 can be " +
-		"attributed. The operator retries that fetch while status.activeRevision is the desired " +
-		"revision, which it is once a rollout has settled; while a candidate is pending it fetches " +
-		"the candidate's card instead. An administrator is needed only where that card never " +
-		"validates."
+		"attributed. The operator retries that fetch only while status.activeRevision is the " +
+		"desired revision, which it is once a rollout has settled, and only while that revision " +
+		"has a replica available, because a card is fetched from a ready revision alone. An " +
+		"administrator is needed where that card never validates, and wherever nothing is " +
+		"fetching it."
+	if candidate {
+		ends = "Nothing will record that digest on its own: candidate revision " +
+			status.CandidateRevision + " is pending, so the operator is fetching ITS card and " +
+			"status.activeRevision's own fetch is NOT running (design 03 A60). Reverting the spec " +
+			"to the revision the route names is a real change here, and the one that restarts the " +
+			"fetch this state waits on."
+	}
+	switch {
+	case len(foreign) > 0:
+		// This pass stopped above the re-point, so nothing moved and no answer
+		// was taken: a card recording cannot end the state while that stands.
+		ends += " None of that ends it while the foreign traffic policy named above stands: this " +
+			"pass stops before the route is re-pointed and before any answer is taken."
+	case held:
+		// The re-point still runs under A75's hold; the credit does not.
+		ends += " None of that ends it while the Gateway-level policy named above stands: the " +
+			"re-point still runs, but no 401 through this route is credited while a policy there " +
+			"could have answered it (A75)."
+	}
 	why, admits := "", ""
 	switch {
 	case backend == "":
@@ -1998,11 +2027,16 @@ func missingPolicyRouteNote(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.
 			"revision to attribute on instead"
 		admits = ends + " Of the two exits, only the first applies meanwhile: the second needs one " +
 			"named revision to revert to, and this route does not name one."
-	case backend == WorkloadName(agent.Name, status.ActiveRevision):
+	case backend == WorkloadName(agent.Name, status.ActiveRevision) && !candidate:
 		why = "No card digest is recorded for that revision, which is also status.activeRevision"
 		admits = ends + " Neither exit is needed here: reverting the spec would revert to the spec " +
 			"it already has, and deleting the route would cost an outage it does not need, since " +
 			"that card is what it is waiting on."
+	case backend == WorkloadName(agent.Name, status.ActiveRevision):
+		why = "No card digest is recorded for that revision, which is also status.activeRevision"
+		admits = ends + " The second exit is the one that works here: the route already serves " +
+			"status.activeRevision, and reverting the spec to it makes it the desired revision " +
+			"again, which is what starts its card fetch."
 	default:
 		why = "No card digest is recorded for that revision or for status.activeRevision"
 		admits = ends + " Either exit applies meanwhile, and the second is the cheaper one: " +
