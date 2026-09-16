@@ -101,26 +101,37 @@ func TestTheMissingPolicyLockMessageNamesTheRouteAndItsExits(t *testing.T) {
 			refused: []string{"TERMINAL", "left as found"},
 		},
 		{
+			// A78: the ordinary way out of this state is the operator's own
+			// card retry, not an administrator. A77 said "only an administrator
+			// ends it", and a measurement of exactly this state disproved it.
 			name:   "left as found on an uncarded revision beside an uncarded active one",
 			status: status(), rt: routeNaming(agent.Name, "r1"),
 			want: []string{"names revision r1", "left as found", "TERMINAL",
-				"or for status.activeRevision", "ends only by an administrator acting",
+				"or for status.activeRevision",
+				"ends without an administrator when status.activeRevision's own card records",
+				"An administrator is needed only where that card never validates",
+				"Either exit applies meanwhile",
 				"removes " + runNS + "/pricer-serving", "the spec is reverted to the revision the route names"},
-			refused: []string{"re-pointed at status.activeRevision"},
+			refused: []string{"re-pointed at status.activeRevision", "only by an administrator",
+				"Neither exit is needed here"},
 		},
 		{
 			name:   "the route names the active revision, whose card is still being retried",
 			status: status(), rt: routeNaming(agent.Name, "r2"),
 			want: []string{"names revision r2", "TERMINAL", "which is also status.activeRevision",
-				"needs neither exit"},
-			refused: []string{"or for status.activeRevision", "ends only by an administrator acting"},
+				"ends without an administrator when status.activeRevision's own card records",
+				"Neither exit is needed here"},
+			refused: []string{"or for status.activeRevision", "Either exit applies meanwhile",
+				"only the first applies meanwhile"},
 		},
 		{
 			name:   "two backendRefs beside an uncarded active revision",
 			status: status(), rt: routeNaming(agent.Name, "r1", "r2"),
 			want: []string{"does not carry exactly one backendRef", "names no revision", "TERMINAL",
-				"names no single revision to attribute on instead", "admits only the first exit"},
-			refused: []string{"names revision r", "for that revision"},
+				"names no single revision to attribute on instead",
+				"ends without an administrator when status.activeRevision's own card records",
+				"only the first applies meanwhile"},
+			refused: []string{"names revision r", "for that revision", "Neither exit is needed here"},
 		},
 	} {
 		got := missingPolicyRouteNote(agent, tc.status, tc.rt, runNS, tc.repointed)

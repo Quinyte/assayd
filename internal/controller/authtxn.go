@@ -1577,8 +1577,12 @@ func (r *AgentReconciler) lockMissingPolicy(ctx context.Context, agent *assaydv1
 //
 //   - a Lock that re-creates a missing policy (its targetMode equals the
 //     recorded mode): ApplyingPolicies → Converging → ProbingAfter → Served. It
-//     writes nothing to the route, and a route found absent or stripped
-//     displaces it with the route re-create (A62);
+//     takes the route as found on the way in, and a route found absent or
+//     stripped displaces it with the route re-create (A62). Since A77 it makes
+//     ONE route write of its own, at ProbingAfter and nowhere else: the
+//     re-point, which re-asserts the route published on status.activeRevision
+//     while a card digest is recorded for that revision. Before A77 it wrote
+//     nothing to the route at all;
 //   - J2's, over a recorded `none`, and K2's, over a refused Adopt with no
 //     recorded mode: ProbingBefore → ApplyingPolicies → Converging →
 //     ProbingAfter → Served. The route is re-asserted published at once under
@@ -1937,11 +1941,13 @@ steps:
 // onto status.activeRevision or left as found (A77).
 //
 // Where the route was left as found because status.cards records no digest for
-// status.activeRevision EITHER, nothing can ever attribute a 401 through this
-// route, and the note says the state is terminal until a card records or an
-// administrator acts, names both exits, and says which of them the state it
+// status.activeRevision EITHER, nothing can attribute a 401 through this route
+// as it stands, and the note says the state is terminal until a card records or
+// an administrator acts, names both exits, and says which of them the state it
 // reports admits. A message that read as waiting for a state nothing will end
-// would be rule 8's loud-and-wrong, not its silent case.
+// would be rule 8's loud-and-wrong, not its silent case — and so would one that
+// named an administrator as the only way out when the operator's own card retry
+// is the ordinary one (A78).
 func missingPolicyRouteNote(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus,
 	rt *gatewayv1.HTTPRoute, runNS string, repointed bool) string {
 	route, _ := compiler.ServingRouteName(agent.Name)
@@ -1965,27 +1971,43 @@ func missingPolicyRouteNote(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.
 	if attributed || cardedRevision(status, status.ActiveRevision) {
 		return named + "."
 	}
-	// The state is reached in two ways that need different things, so the
+	// The state is reached in three ways that need different things, so the
 	// reason it cannot attribute and the exit it admits are written per case.
 	// Saying "no card digest is recorded for that revision" of a route that
 	// names no revision would send a reader looking for a digest the sentence
 	// before it says cannot exist — rule 8's loud-and-wrong.
+	//
+	// What ends every one of them without an administrator is the SAME event:
+	// status.activeRevision's own card recording, which makes cardedRevision
+	// true and fires the re-point above (A78). The operator retries that fetch
+	// while status.activeRevision is the desired revision, which it is once a
+	// rollout has settled; while a candidate is pending it fetches the
+	// candidate's card instead (A60, cardFetchDue). A77 said of the case below
+	// that "only an administrator ends it", which is false, and steered the
+	// reader at the exit this same message calls an unbounded outage.
+	const ends = "This state ends without an administrator when status.activeRevision's own card " +
+		"records: the re-point then moves the route onto that revision and the 401 can be " +
+		"attributed. The operator retries that fetch while status.activeRevision is the desired " +
+		"revision, which it is once a rollout has settled; while a candidate is pending it fetches " +
+		"the candidate's card instead. An administrator is needed only where that card never " +
+		"validates."
 	why, admits := "", ""
 	switch {
 	case backend == "":
 		why = "No card digest is recorded for status.activeRevision, and the route names no single " +
 			"revision to attribute on instead"
-		admits = "This state admits only the first exit: the second needs one named revision to " +
-			"revert to, and this route does not name one."
+		admits = ends + " Of the two exits, only the first applies meanwhile: the second needs one " +
+			"named revision to revert to, and this route does not name one."
 	case backend == WorkloadName(agent.Name, status.ActiveRevision):
 		why = "No card digest is recorded for that revision, which is also status.activeRevision"
-		admits = "This state needs neither exit: the operator is still retrying that revision's own " +
-			"card fetch, and a card recording is what ends it. Reverting the spec would revert to " +
-			"the spec it already has, and deleting the route would cost an outage it does not need."
+		admits = ends + " Neither exit is needed here: reverting the spec would revert to the spec " +
+			"it already has, and deleting the route would cost an outage it does not need, since " +
+			"that card is what it is waiting on."
 	default:
 		why = "No card digest is recorded for that revision or for status.activeRevision"
-		admits = "This state ends only by an administrator acting: the route does not name " +
-			"status.activeRevision, so nothing will fetch the named revision's card again."
+		admits = ends + " Either exit applies meanwhile, and the second is the cheaper one: " +
+			"reverting the spec to the revision the route names makes that revision desired again, " +
+			"so its card can record too."
 	}
 	return named + ". " + why + ", so no 401 through this route can be attributed, and the state is " +
 		"TERMINAL until a card records or an administrator acts. Two exits: an administrator with " +

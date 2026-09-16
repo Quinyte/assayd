@@ -196,12 +196,17 @@ func TestTheRepointIsSkippedWhenTheActiveRevisionIsUncarded(t *testing.T) {
 		"TERMINAL",
 		"removes " + runNS(a.Namespace),
 		"reverted to the revision the route names",
+		// A78: the ordinary exit from this state is the operator's own card
+		// retry, not an administrator.
+		"ends without an administrator when status.activeRevision's own card records",
 	} {
 		if !strings.Contains(c.Message, want) {
 			t.Errorf("the message does not carry %q: %s", want, c.Message)
 		}
 	}
-	if strings.Contains(c.Message, "re-pointed onto status.activeRevision") {
+	// The phrase the code emits is "re-pointed AT"; grepping for "onto" here
+	// could never fire.
+	if strings.Contains(c.Message, "re-pointed at status.activeRevision") {
 		t.Errorf("the message says the route was re-pointed, and it was not: %s", c.Message)
 	}
 }
@@ -244,8 +249,11 @@ func TestNoBackendMovesWhileThePolicyIsNotThisAgents(t *testing.T) {
 		t.Fatalf("the route moved to %s while <agent>-auth is not this Agent's; the policy is "+
 			"written before the backendRef moves (design 03 §3.3.1)", got)
 	}
-	if c := condition(liveAgent(t, a), assaydv1alpha1.CondPolicyApplyIncomplete); c != nil &&
-		!strings.Contains(c.Message, "names revision "+r1) {
+	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyMissing")
+	if c == nil {
+		t.Fatal("the held Lock raised no PolicyApplyIncomplete to read the message from")
+	}
+	if !strings.Contains(c.Message, "names revision "+r1) {
 		t.Errorf("the message does not name the revision the route's single backendRef names "+
 			"(%s): %s", r1, c.Message)
 	}
