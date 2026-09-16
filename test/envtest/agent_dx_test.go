@@ -202,6 +202,26 @@ spec:
 			expect: "use only letters, digits",
 		},
 		{
+			// '%' is the character the whole justification rests on, and it was
+			// the one nothing pinned: widening the class to admit it compiled,
+			// rendered, installed, and survived the entire envtest and unit
+			// suites. It is also the most plausible future edit, because RFC
+			// 3986's pchar DOES include pct-encoded and the field comment says
+			// so — so somebody will read the omission as an oversight and
+			// "fix" it. The assertion is on the half of the message that only
+			// '%' earns.
+			name: "card path carries a percent-encoded byte",
+			doc: `
+apiVersion: assayd.dev/v1alpha1
+kind: Agent
+metadata: {name: card-pct}
+spec:
+  runtime: {image: ghcr.io/acme/a@sha256:3bda1c750240ee09000000000000000000000000000000000000000000000000}
+  card: {path: "/card%20.json"}
+`,
+			expect: "a path whose name contains '%20'",
+		},
+		{
 			// maxLength's TooLong is BLOCKING in apiextensions: when it fires
 			// the API server reports "some validation rules were not checked
 			// because the object was invalid" and skips every CEL rule, so

@@ -157,8 +157,8 @@ type ExternalAgent struct {
 type CardSpec struct {
 	// Path is the absolute path the agent serves its Agent Card on, on the
 	// revision's own Service. It must start with "/", use only the unreserved
-	// characters, the sub-delimiters, ":" and "@", and be at most 1024
-	// characters. Anything else is refused at apply time, an empty string
+	// characters, the sub-delimiters !$&'()*+,;= , ":" and "@", and be at most
+	// 1024 characters. Anything else is refused at apply time, an empty string
 	// included (design 02 A76). Omitting the field takes the default.
 	//
 	// That class is RFC 3986 section 3.3's `pchar` MINUS `pct-encoded`. The
@@ -194,7 +194,7 @@ type CardSpec struct {
 	// measured at Kubernetes 1.36.2).
 	// +kubebuilder:default=/.well-known/agent-card.json
 	// +kubebuilder:validation:MaxLength=1024
-	// +kubebuilder:validation:XValidation:rule=`self.matches("^/[A-Za-z0-9._~!$&'()*+,;=:@/-]*$")`,message="spec.card.path is a path on the agent's own Service, not a URL: start it with '/' and use only letters, digits, '-._~', the sub-delimiters, ':' and '@'. A '?' or a '#' is refused because the operator percent-encodes this value into the path, so it would never be read as a query or a fragment — drop it, or take the default /.well-known/agent-card.json"
+	// +kubebuilder:validation:XValidation:rule=`self.matches("^/[A-Za-z0-9._~!$&'()*+,;=:@/-]*$")`,message="spec.card.path is a path on the agent's own Service, not a URL: start it with '/' and use only letters, digits, '-._~', the sub-delimiters !$&'()*+,;=, ':' and '@'. A '?', a '#' or a '%' is refused because this field is one already-decoded path: a '?' or a '#' would never be read as a query or a fragment, and /card%20.json would ask the agent for a path whose name contains '%20'. Drop it, or take the default /.well-known/agent-card.json"
 	// +optional
 	Path string `json:"path,omitempty"`
 }
