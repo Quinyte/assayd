@@ -761,6 +761,22 @@ type AuthStatus struct {
 	// unchanged does not disturb it (design 03 §3.3).
 	// +optional
 	Transaction *AuthTransaction `json:"transaction,omitempty"`
+	// RouteRefused says the last pass that got a report from the assayd Gateway
+	// at the serving route's own generation found the route REFUSED, so
+	// PolicyApplyIncomplete stands under ServingRouteNotAccepted. It is
+	// design 03 A80's claim store, not a condition: a held pass must know
+	// which claim is standing, and the only other record is a human-readable
+	// message whose " | " separator two writers reuse, so a claim's extent in
+	// it is ambiguous. Cleared only by an explicit tuple that is not broken, at
+	// the route's current generation.
+	// +optional
+	RouteRefused bool `json:"routeRefused,omitempty"`
+	// PolicyUnattached is RouteRefused's other half: the last report at the
+	// served <agent>-auth's own generation said the Gateway does not attach it,
+	// so PolicyApplyIncomplete and GovernanceSkipped stand under
+	// AuthPolicyNotAttached (design 03 A80).
+	// +optional
+	PolicyUnattached bool `json:"policyUnattached,omitempty"`
 }
 
 // AuthVerification is how much of the gateway a passing -auth enforcement

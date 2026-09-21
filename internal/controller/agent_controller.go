@@ -828,7 +828,14 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if !transientRouteWrite(rerr) {
 			msg := rerr.Error()
 			reason := gatewayErrorReason(rerr)
-			conds.set(assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, reason, msg)
+			// COMPOSED, not set: a write error must not erase a report that is
+			// still true. Design 03 A80 requires it for its own two reasons —
+			// the Gateway's refusal of a served route survives a failed write —
+			// and the reach is stated rather than discovered: every standing
+			// reason in incompleteOrder now outranks an unranked write error,
+			// so a missing-policy Lock's AuthPolicyMissing keeps the condition
+			// where the write error used to replace it.
+			raiseIncomplete(conds, reason, msg)
 			conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, reason, msg)
 			// Assert Degraded, do not merely set the phase. CondDegraded is owned
 			// and non-sticky, so a path that sets the phase without the condition
@@ -878,9 +885,15 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			withholdReady(status, conds, gatewayOutcome{served: status.Auth.Mode != "" || tx.Kind == TxLock,
 				withhold: &failure{reason, fmt.Sprintf("the -auth %s is in stage %s, and this pass lost "+
 					"a race and is retried: %v", tx.Kind, tx.Stage, rerr)}})
-		} else if w := gw.withhold; w != nil && w.reason == ReasonGatewayAuthPolicy {
+		} else if w := gw.withhold; w != nil && (w.reason == ReasonGatewayAuthPolicy ||
+			w.reason == ReasonServingRouteNotAccepted || w.reason == ReasonAuthPolicyNotAttached) {
 			// W1 on a served Agent, which reconcileGateway re-derives on a lost
 			// race too: Ready stays withheld for the pass (design 03 A75).
+			// A80 widens this arm to its two reasons, which is the one change
+			// it makes outside its own judgement: for a served Agent with an
+			// empty slot or a refused Adopt none of the other two arms fires,
+			// so a restored report would come back beside Ready=True — the
+			// defect one path over.
 			withholdReady(status, conds, gw)
 		}
 		status.Conditions = conds.merge(agent.Status.Conditions)

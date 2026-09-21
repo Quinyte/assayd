@@ -87,6 +87,12 @@ const (
 	// GovernanceSkipped and PolicyApplyIncomplete, a served API-key Agent
 	// beside a Gateway-level policy that could widen its route (A75, W1).
 	ReasonGatewayAuthPolicy = "GatewayAuthPolicy"
+	// A80's two, for a served Agent with no transaction in the slot or a
+	// refused Adopt in it: the assayd Gateway reports the serving route
+	// refused, and it reports that it does not attach the served <agent>-auth.
+	// AuthPolicyNotAttached is a GovernanceSkipped reason too.
+	ReasonServingRouteNotAccepted = "ServingRouteNotAccepted"
+	ReasonAuthPolicyNotAttached   = "AuthPolicyNotAttached"
 	// Ready, while a `Create` is short of `Served` and before its deadline.
 	ReasonAuthEnforcementPending = "AuthEnforcementPending"
 	// GovernanceSkipped (§3.1).
@@ -142,6 +148,18 @@ type gatewayOutcome struct {
 	// when no read ran.
 	aboveRead bool
 	aboveHold string
+	// judgeRoute and judgePolicy are the two objects A80's served judgement
+	// reads, carried out rather than read again. judgeRoute is the route this
+	// pass already held: currentServingRoute's read from the top of the pass on
+	// the API-key path, whose generation the pass has not yet moved, and
+	// ensureServingRoute's return on the `auth: none` and refused-`Adopt`
+	// paths, which after an update is the post-write object and so reads
+	// unknown. judgePolicy is the served `<agent>-auth` reassertServedPolicy
+	// read AFTER both of its guards passed: a policy at that name which is not
+	// this Agent's, or one that does not render to status.auth.appliedDigest,
+	// is never judged.
+	judgeRoute  *gatewayv1.HTTPRoute
+	judgePolicy *unstructured.Unstructured
 }
 
 // authDesire is what the current spec's -auth compiles to, and whether any
@@ -301,6 +319,12 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 		r.assessGovernance(conds, status)
 	}
 	stored, hasStored := storedHold(agent, status)
+	// A80's claim store and gate, both read BEFORE the step: refuseAdopt
+	// assigns status.auth wholesale on every pass of a refused `Adopt`, so
+	// flags read where they are used would read wiped; and a pass that ENTERS
+	// a transaction here is a transaction's pass, whose own reasons this
+	// judgement must not second-guess.
+	claims, judged := storedClaims(agent), judgesServed(status)
 	out, err := r.gatewayStep(ctx, agent, runNS, status, conds, desire)
 	stillLock := func() bool { tx := authTransaction(status); return tx != nil && tx.Kind == TxLock }
 	if _, set := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); err != nil && !set {
@@ -328,6 +352,17 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 		// It only reads, so a lost race does not stop it: W1 must not clear
 		// for a pass (A75).
 		r.reportAboveServed(ctx, agent, status, conds, &out)
+	}
+	// A80, after the step and beside the two reporters above. The gate is the
+	// slot as this pass FOUND it and as it LEAVES it: a pass that reached
+	// `Served`, or that entered a route re-create or a missing-policy `Lock`,
+	// is a transaction's pass either way.
+	if judged {
+		if err == nil {
+			r.judgeServed(agent, status, conds, &out, claims)
+		} else {
+			r.holdServedJudgement(agent, status, conds, &out, claims, err)
+		}
 	}
 	return out, err
 }
@@ -436,6 +471,25 @@ func (r *AgentReconciler) seedStoredAbove(agent *assaydv1alpha1.Agent, status *a
 		}
 		conds.carry(carried(*c))
 	}
+	// A80's two reasons, in a block of their own rather than an addition to
+	// the W1 block below: that block returns unless status.auth.mode is apikey
+	// AND no transaction is in the slot, which excludes a served `auth: none`
+	// Agent and a refused `Adopt` — two of the three classes the route half
+	// covers — so adding the new reasons there would carry nothing for them,
+	// and an early-return pass would drop their report and reset the clock.
+	if judgesServed(status) {
+		for _, t := range []assaydv1alpha1.ConditionType{assaydv1alpha1.CondGovernanceSkipped,
+			assaydv1alpha1.CondPolicyApplyIncomplete} {
+			c := meta.FindStatusCondition(agent.Status.Conditions, string(t))
+			if c == nil || c.Status != metav1.ConditionTrue || !a80Carried(c.Reason) {
+				continue
+			}
+			if _, set := conds.get(t); set && t == assaydv1alpha1.CondPolicyApplyIncomplete {
+				continue
+			}
+			conds.carry(carried(*c))
+		}
+	}
 	if auth := status.Auth; auth == nil || auth.Mode != string(compiler.AuthModeAPIKey) || auth.Transaction != nil {
 		return
 	}
@@ -462,7 +516,25 @@ const carriedNote = " | carried as the last pass that read the Gateway stored it
 // carries, and so one the -auth step withdraws and derives afresh. Neither is
 // raised by anything that runs before that step.
 func carriedReason(reason string) bool {
-	return reason == ReasonGatewayAuthPolicy || reason == ReasonForeignTrafficPolicy
+	return reason == ReasonGatewayAuthPolicy || reason == ReasonForeignTrafficPolicy ||
+		reason == ReasonServingRouteNotAccepted || reason == ReasonAuthPolicyNotAttached
+}
+
+// a80Carried is the predicate of seedStoredAbove's A80 block: A80's two
+// reasons, AND one carriedReason carries.
+//
+// The conjunction enforces ONE direction — everything seeded here is withdrawn
+// by the -auth step on the way in — and that is the direction that fails
+// silently: a reason seeded and not withdrawn survives the pass that
+// re-derives it and never clears. It does NOT enforce the converse, and must
+// not: GatewayAuthPolicy and ForeignTrafficPolicy are withdrawn too and are
+// seeded by their own blocks above. The conjunction therefore reduces to the
+// disjunction today, and it is written this way so that dropping a reason from
+// carriedReason drops it from the seed as well rather than splitting the two
+// lists. TestSeedAndWithdrawAreTheSameSet is the pin.
+func a80Carried(reason string) bool {
+	return carriedReason(reason) &&
+		(reason == ReasonServingRouteNotAccepted || reason == ReasonAuthPolicyNotAttached)
 }
 
 // carried is c, as the last pass stored it, marked once as carried.
@@ -484,7 +556,27 @@ func heldAbove(conds *conditionSet) bool {
 // can stand together: the first is the condition's reason, and the message
 // names every one. A reason not listed, a deadline's or a NACK's, keeps the
 // condition's reason, and the others are appended to it.
-var incompleteOrder = []string{ReasonAuthPolicyMissing, ReasonForeignTrafficPolicy, ReasonGatewayAuthPolicy}
+// A80 appends its two AFTER GatewayAuthPolicy: neither can stand beside a
+// transaction's reason, because neither is raised while a transaction that
+// runs stages is in the slot, and AuthPolicyNotAttached cannot stand beside
+// AuthPolicyMissing, which needs the policy to be absent.
+//
+// ServingRouteNotAccepted comes BEFORE AuthPolicyNotAttached, which reverses
+// what A80 decided (A81). A80 put the route half last on the argument that
+// leading with it "buys nothing, because the condition's message names every
+// reason that stands either way" — and that rested on an untested assumption,
+// that the two halves do not fire together. They do, in A80's own measured
+// incident: renaming the Gateway's listener detaches the route, and
+// agentgateway then writes the synthetic StatusSummary ancestor on
+// <agent>-auth, so one pass reports both. Under A80's order all four
+// conditions then opened with the policy half's "the route may be answering
+// with no credential required" — announcing a security incident the same pass
+// had refuted, over the real one, which is that nothing reaches the agent at
+// all. An Agent nothing can reach is the cause to name first.
+//
+// Both can also stand beside ForeignTrafficPolicy and W1's GatewayAuthPolicy.
+var incompleteOrder = []string{ReasonAuthPolicyMissing, ReasonForeignTrafficPolicy, ReasonGatewayAuthPolicy,
+	ReasonServingRouteNotAccepted, ReasonAuthPolicyNotAttached}
 
 func incompleteRank(reason string) int {
 	for i, r := range incompleteOrder {
@@ -912,7 +1004,12 @@ func (r *AgentReconciler) abandon(ctx context.Context, agent *assaydv1alpha1.Age
 	case tx.Kind == TxLock:
 		// J2's: the recorded `none`. The route kept its backendRefs and its
 		// marker throughout, because only Served removes the marker.
+		kept := storedClaims(agent)
 		status.Auth = &assaydv1alpha1.AuthStatus{Mode: status.Auth.Mode}
+		// A80's claim store survives the assignment: nothing in an abandonment
+		// read the route or the policy, so there is no explicit not-broken
+		// tuple to clear it with (A81).
+		kept.writeTo(status)
 		if err := r.persistStatus(ctx, agent, status); err != nil {
 			return out, false, err
 		}
@@ -984,7 +1081,12 @@ func (r *AgentReconciler) enterLock(ctx context.Context, agent *assaydv1alpha1.A
 	tx := &assaydv1alpha1.AuthTransaction{Kind: TxLock, TargetMode: string(compiler.AuthModeAPIKey),
 		TargetDigest: desire.target.Digest, Stage: StageProbingBefore, Deadline: &deadline}
 	if status.Auth == nil || status.Auth.Mode == "" {
+		// K2's, over a refused `Adopt`: the claim store survives, for the
+		// reason the abandonment gives — nothing here read either object
+		// (A81). The other arm keeps the record and so keeps the flags.
+		kept := storedClaims(agent)
 		status.Auth = &assaydv1alpha1.AuthStatus{Transaction: tx}
+		kept.writeTo(status)
 	} else {
 		status.Auth.Transaction = tx
 	}
@@ -1037,6 +1139,13 @@ func authKept(want, got *assaydv1alpha1.AuthStatus) bool {
 		return got == nil
 	}
 	if got == nil || got.Mode != want.Mode || (want.Transaction == nil) != (got.Transaction == nil) {
+		return false
+	}
+	// A80's claim store decides what the NEXT pass holds, so a CRD that prunes
+	// it is refused exactly as a lost mode is. Without this the hold degrades
+	// silently to the fail-open behaviour it exists to prevent: the chart ships
+	// the CRD under crds/, which `helm upgrade` never updates.
+	if got.RouteRefused != want.RouteRefused || got.PolicyUnattached != want.PolicyUnattached {
 		return false
 	}
 	if w, g := want.Transaction, got.Transaction; w != nil &&
@@ -1455,6 +1564,11 @@ func servedRecord(agent *assaydv1alpha1.Agent, runNS string, target compiler.Aut
 func (r *AgentReconciler) recordServed(ctx context.Context, agent *assaydv1alpha1.Agent, runNS string,
 	target compiler.AuthTarget, status *assaydv1alpha1.AgentStatus, conds *conditionSet, out gatewayOutcome,
 ) (gatewayOutcome, error) {
+	// The claim store is NOT carried here, and that is the clearing rule rather
+	// than an exception to it: a transaction reaching `Served` got §3.3.2's
+	// full tuple — routeConverged and, for apikey, policyConverged — at the
+	// object's current generation, which is exactly the explicit not-broken
+	// reading §3.1 says clears a standing report (A81).
 	status.Auth = servedRecord(agent, runNS, target)
 	if err := r.persistStatus(ctx, agent, status); err != nil {
 		return out, err
@@ -1507,6 +1621,10 @@ func (r *AgentReconciler) reconcileServed(ctx context.Context, agent *assaydv1al
 		if rt == nil || !routePublished(rt) {
 			return r.recreateRoute(ctx, agent, runNS, name, status, conds, out)
 		}
+		// A80 judges this read, from the top of the pass, whose generation the
+		// pass has not yet moved: a promoting pass then judges the last answer
+		// the Gateway gave.
+		out.judgeRoute = rt
 		present, err := r.authPolicyPresent(ctx, agent, runNS)
 		if err != nil {
 			return out, err
@@ -1516,14 +1634,25 @@ func (r *AgentReconciler) reconcileServed(ctx context.Context, agent *assaydv1al
 		}
 		// Re-asserted before the route, so that a promotion never moves the
 		// route's backendRef while the policy has been changed out of band.
-		if err := r.reassertServedPolicy(ctx, agent, runNS, status.Auth); err != nil {
+		p, err := r.reassertServedPolicy(ctx, agent, runNS, status.Auth)
+		if err != nil {
 			return out, &gatewayError{reason: ReasonPolicyWriteFailed, err: err}
 		}
+		// A80 judges the policy only where BOTH of that call's guards passed:
+		// a policy at this name that is not this Agent's is ForeignTrafficPolicy
+		// and is never judged here.
+		out.judgePolicy = p
 	}
 	keep := ""
 	if status.ActiveRevision != "" {
-		_, _, err := r.ensureServingRoute(ctx, agent, runNS, status.ActiveRevision,
+		rt, _, err := r.ensureServingRoute(ctx, agent, runNS, status.ActiveRevision,
 			status.ActiveRevisionDigest, name, routePublicationFor(status.Auth))
+		if !apikey {
+			// On the `auth: none` path this is the only route object the pass
+			// holds. After an update it is the post-write object, so a
+			// promoting pass reads unknown there and holds (A80).
+			out.judgeRoute = rt
+		}
 		if errors.Is(err, errRouteGone) {
 			// Gone between the check above and the write.
 			return r.recreateRoute(ctx, agent, runNS, name, status, conds, out)
@@ -1615,6 +1744,10 @@ func (r *AgentReconciler) runLock(ctx context.Context, agent *assaydv1alpha1.Age
 			return out, fmt.Errorf("a Lock of %s's missing policy has no route and no serving revision", agent.Name)
 		}
 		rt = cur
+		// Carried out like every other pass's route (A80). Nothing judges it
+		// while this Lock is in the slot: the GATE is what excludes a
+		// transaction, not the absence of an object to judge.
+		out.judgeRoute = rt
 	} else {
 		if status.ActiveRevision == "" {
 			return out, fmt.Errorf("a Lock of %s has no serving revision to keep published", agent.Name)
@@ -1628,6 +1761,7 @@ func (r *AgentReconciler) runLock(ctx context.Context, agent *assaydv1alpha1.Age
 			return out, err
 		}
 		rt = cur
+		out.judgeRoute = rt
 		// A promotion puts a different backend behind the probe, so it clears
 		// beforeObserved and beforeRevision in the status update that sees it,
 		// and a 401 must then be attributed on the new revision's own digest
@@ -2240,30 +2374,34 @@ func (r *AgentReconciler) authPolicyPresent(ctx context.Context, agent *assaydv1
 // reassertServedPolicy re-asserts a served `<agent>-auth` to the policy
 // status.auth records (§3.3.1): a pure function of the Agent, checked against
 // appliedDigest. A policy that is missing is the Lock's, not this.
+// It returns the policy it judged intact — present, carrying this Agent's UID,
+// and rendering to status.auth.appliedDigest — and nil when any of those three
+// does not hold, because A80 judges the Gateway's report on THIS Agent's
+// policy and on nothing else. It returned error alone until A80.
 func (r *AgentReconciler) reassertServedPolicy(ctx context.Context, agent *assaydv1alpha1.Agent,
-	runNS string, auth *assaydv1alpha1.AuthStatus) error {
+	runNS string, auth *assaydv1alpha1.AuthStatus) (*unstructured.Unstructured, error) {
 	recorded, err := compiler.AuthPolicy(compiler.AuthInput{AgentName: agent.Name,
 		AgentNamespace: agent.Namespace, AgentUID: agent.UID, RunNamespace: runNS})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	digest, err := compiler.Digest(recorded)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	existing := NewAgentgatewayPolicy()
 	switch err := r.Get(ctx, types.NamespacedName{Namespace: runNS, Name: recorded.GetName()}, existing); {
 	case apierrors.IsNotFound(err):
-		return nil
+		return nil, nil
 	case err != nil:
-		return fmt.Errorf("read policy %s in %s: %w", recorded.GetName(), runNS, err)
+		return nil, fmt.Errorf("read policy %s in %s: %w", recorded.GetName(), runNS, err)
 	}
 	if existing.GetLabels()[LabelAgentUID] != string(agent.UID) {
 		// Not this Agent's by the name-and-label rule: reported as
 		// ForeignTrafficPolicy, and neither taken over nor deleted (§3.2).
 		log.FromContext(ctx).Info("not re-asserting a policy at this Agent's -auth name that does not "+
 			"carry its UID", "policy", recorded.GetName())
-		return nil
+		return nil, nil
 	}
 	if digest != auth.AppliedDigest {
 		// What this build renders is not what was served, so the served policy
@@ -2271,10 +2409,13 @@ func (r *AgentReconciler) reassertServedPolicy(ctx context.Context, agent *assay
 		log.FromContext(ctx).Info("not re-asserting the served -auth policy: this operator renders a "+
 			"different digest than status.auth records", "policy", recorded.GetName(),
 			"recorded", auth.AppliedDigest, "rendered", digest)
-		return nil
+		return nil, nil
 	}
-	_, err = r.writeAuthPolicy(ctx, agent, existing, recorded, digest)
-	return err
+	written, err := r.writeAuthPolicy(ctx, agent, existing, recorded, digest)
+	if err != nil {
+		return nil, err
+	}
+	return written, nil
 }
 
 // refuseAdopt is `Adopt`, refused (§3.3.3): no policy is written, and the
@@ -2284,11 +2425,16 @@ func (r *AgentReconciler) reassertServedPolicy(ctx context.Context, agent *assay
 func (r *AgentReconciler) refuseAdopt(ctx context.Context, agent *assaydv1alpha1.Agent, runNS, name string,
 	status *assaydv1alpha1.AgentStatus, conds *conditionSet, desire authDesire,
 ) (gatewayOutcome, error) {
+	var out gatewayOutcome
 	if status.ActiveRevision != "" {
-		if _, _, err := r.ensureServingRoute(ctx, agent, runNS, status.ActiveRevision,
-			status.ActiveRevisionDigest, name, routePublicationFor(status.Auth)); err != nil {
+		rt, _, err := r.ensureServingRoute(ctx, agent, runNS, status.ActiveRevision,
+			status.ActiveRevisionDigest, name, routePublicationFor(status.Auth))
+		if err != nil {
 			return gatewayOutcome{}, err
 		}
+		// A80: the only route object a refused `Adopt`'s pass holds. With no
+		// status.activeRevision it holds none, and the judgement reads unknown.
+		out.judgeRoute = rt
 	}
 	if err := r.collectRoutes(ctx, agent, runNS, name); err != nil {
 		return gatewayOutcome{}, err
@@ -2307,6 +2453,14 @@ func (r *AgentReconciler) refuseAdopt(ctx context.Context, agent *assaydv1alpha1
 	}
 	status.Auth = &assaydv1alpha1.AuthStatus{Transaction: &assaydv1alpha1.AuthTransaction{
 		Kind: TxAdopt, Stage: StageRefused, RefusedMode: refused}}
+	// A80's claim store is carried across this wholesale assignment, and the
+	// judgement re-derives it after the step. WITHOUT this the two writes fight
+	// every pass — this one clears the flag, the judgement sets it again, and
+	// each write re-enqueues the Agent, so a refused `Adopt` on a route the
+	// Gateway refuses hot-loops for as long as it exists. The judgement still
+	// reads the flags from STORED status, which is what makes it correct for
+	// this class whatever this line does.
+	storedClaims(agent).writeTo(status)
 	if err := r.persistStatus(ctx, agent, status); err != nil {
 		return gatewayOutcome{}, err
 	}
@@ -2332,7 +2486,7 @@ func (r *AgentReconciler) refuseAdopt(ctx context.Context, agent *assaydv1alpha1
 			"serving is refused (design 03 §3.3.3, Adopt), so none is written, and new revisions "+
 			"keep going live on it unauthenticated. Delete the Agent and create it again: it then "+
 			"has no route, and is published only after its -auth is enforced. %s", runNS, name, way))
-	return gatewayOutcome{}, nil
+	return out, nil
 }
 
 // desiredModeName is the desired -auth mode as `refusedMode` records it: the
