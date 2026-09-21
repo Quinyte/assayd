@@ -985,7 +985,12 @@ func (r *AgentReconciler) abandon(ctx context.Context, agent *assaydv1alpha1.Age
 	case tx.Kind == TxLock:
 		// J2's: the recorded `none`. The route kept its backendRefs and its
 		// marker throughout, because only Served removes the marker.
+		kept := storedClaims(agent)
 		status.Auth = &assaydv1alpha1.AuthStatus{Mode: status.Auth.Mode}
+		// A80's claim store survives the assignment: nothing in an abandonment
+		// read the route or the policy, so there is no explicit not-broken
+		// tuple to clear it with (A81).
+		kept.writeTo(status)
 		if err := r.persistStatus(ctx, agent, status); err != nil {
 			return out, false, err
 		}
@@ -1057,7 +1062,12 @@ func (r *AgentReconciler) enterLock(ctx context.Context, agent *assaydv1alpha1.A
 	tx := &assaydv1alpha1.AuthTransaction{Kind: TxLock, TargetMode: string(compiler.AuthModeAPIKey),
 		TargetDigest: desire.target.Digest, Stage: StageProbingBefore, Deadline: &deadline}
 	if status.Auth == nil || status.Auth.Mode == "" {
+		// K2's, over a refused `Adopt`: the claim store survives, for the
+		// reason the abandonment gives — nothing here read either object
+		// (A81). The other arm keeps the record and so keeps the flags.
+		kept := storedClaims(agent)
 		status.Auth = &assaydv1alpha1.AuthStatus{Transaction: tx}
+		kept.writeTo(status)
 	} else {
 		status.Auth.Transaction = tx
 	}
@@ -1535,6 +1545,11 @@ func servedRecord(agent *assaydv1alpha1.Agent, runNS string, target compiler.Aut
 func (r *AgentReconciler) recordServed(ctx context.Context, agent *assaydv1alpha1.Agent, runNS string,
 	target compiler.AuthTarget, status *assaydv1alpha1.AgentStatus, conds *conditionSet, out gatewayOutcome,
 ) (gatewayOutcome, error) {
+	// The claim store is NOT carried here, and that is the clearing rule rather
+	// than an exception to it: a transaction reaching `Served` got §3.3.2's
+	// full tuple — routeConverged and, for apikey, policyConverged — at the
+	// object's current generation, which is exactly the explicit not-broken
+	// reading §3.1 says clears a standing report (A81).
 	status.Auth = servedRecord(agent, runNS, target)
 	if err := r.persistStatus(ctx, agent, status); err != nil {
 		return out, err

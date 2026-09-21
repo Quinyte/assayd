@@ -205,24 +205,48 @@ func judgesServed(status *assaydv1alpha1.AgentStatus) bool {
 	return auth.Transaction.Kind == TxAdopt
 }
 
+// heldMark and erroredMark are the STABLE prefixes of the two notes a held
+// report carries. A held message is cut at whichever marker it already has and
+// REBUILT, never appended to, and the marker is what makes that cut possible:
+// erroredNote interpolates the error, whose text moves — errStaleAgent names
+// the resourceVersions that the errored pass's own write then bumps — so a
+// suffix comparison matches nothing, and A80's change of the caller's
+// non-transient arm to raiseIncomplete appends the write error AFTER the note,
+// so it matches nothing even for a constant error.
+//
+// Measured on this suite before the cut: the message grew 240 bytes a pass on
+// the transient arm and 475 on the non-transient one, and at pass 133 the API
+// server refused EVERY status write for that Agent — "Too long: may not be
+// more than 32768 bytes" — so phase, Ready, Degraded, WorkloadUnavailable and
+// the card conditions all froze, during exactly the incident this judgement
+// exists to report, and it did not heal. §3.3.3 asks only that a held report
+// keep its LastTransitionTime and its ObservedGeneration, and rebuilding keeps
+// both.
+const heldMark = " | carried from the last pass that got a report at this object's generation"
+
 // heldNote marks a report this pass could not re-derive because the Gateway
 // has not reported at the object's current generation. It is NOT carriedNote,
 // whose words say the pass returned before the -auth step: this pass reached
 // the step and read the object.
-const heldNote = " | carried from the last pass that got a report at this object's generation; the " +
-	"Gateway has not reported since (design 03 A80)"
+const heldNote = heldMark + "; the Gateway has not reported since (design 03 A80)"
+
+const erroredMark = " | carried across a pass whose -auth step could not complete"
 
 // erroredNote marks a report held across a pass whose -auth step could not
-// complete, which read nothing and says so.
-const erroredNote = " | carried across a pass whose -auth step could not complete; the objects were " +
-	"not re-read (%v) (design 03 A80)"
+// complete, which read nothing and says so, naming the error.
+const erroredNote = erroredMark + "; the objects were not re-read (%v) (design 03 A80)"
 
-// noteOnce marks a condition with note, once, however many passes hold it.
-func noteOnce(c metav1.Condition, note string) metav1.Condition {
-	if !strings.HasSuffix(c.Message, note) {
-		c.Message += note
+// heldMessage is what a held report says: the fallback, cut at any note a
+// previous pass left, plus this pass's note. One note, once, whatever the
+// sequence of held, errored and early-return passes that got here.
+func heldMessage(fallback, note string) string {
+	cut := len(fallback)
+	for _, m := range []string{heldMark, erroredMark, carriedNote} {
+		if i := strings.Index(fallback, m); i >= 0 && i < cut {
+			cut = i
+		}
 	}
-	return c
+	return fallback[:cut] + note
 }
 
 func routeRefusedMessage(why string) string {
@@ -363,16 +387,21 @@ func (r *AgentReconciler) holdServedJudgement(agent *assaydv1alpha1.Agent,
 // Otherwise the claim is re-appended to whatever reason this pass derived.
 func holdIncomplete(agent *assaydv1alpha1.Agent, conds *conditionSet, out *gatewayOutcome,
 	reason, fallback, note string) {
+	msg := heldMessage(fallback, note)
 	c := meta.FindStatusCondition(agent.Status.Conditions, string(assaydv1alpha1.CondPolicyApplyIncomplete))
 	if _, set := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); !set && c != nil &&
 		c.Status == metav1.ConditionTrue && c.Reason == reason {
-		held := noteOnce(*c, note)
+		// The stored condition WHOLE means its LastTransitionTime (through
+		// merge, both being True) and its ObservedGeneration. The MESSAGE is
+		// rebuilt: carrying the stored one forward is what grew it without
+		// bound.
+		held := *c
+		held.Message = msg
 		conds.carry(held)
-		withholdInOrder(out, reason, held.Message)
+		withholdInOrder(out, reason, msg)
 		out.served = true
 		return
 	}
-	msg := fallback + note
 	raiseIncomplete(conds, reason, msg)
 	withholdInOrder(out, reason, msg)
 	out.served = true
@@ -391,12 +420,16 @@ func holdIncomplete(agent *assaydv1alpha1.Agent, conds *conditionSet, out *gatew
 // Agent reading GovernanceSkipped=False, "auth verified on one replica", while
 // its -auth is attached to nothing.
 func holdGovernance(agent *assaydv1alpha1.Agent, conds *conditionSet, fallback, note string) {
+	msg := heldMessage(fallback, note)
 	c := meta.FindStatusCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGovernanceSkipped))
 	if c != nil && c.Status == metav1.ConditionTrue && c.Reason == ReasonAuthPolicyNotAttached {
-		conds.carry(noteOnce(*c, note))
+		// Whole means its times, not its message: see holdIncomplete.
+		held := *c
+		held.Message = msg
+		conds.carry(held)
 		return
 	}
-	appendGovernance(conds, ReasonAuthPolicyNotAttached, fallback+note)
+	appendGovernance(conds, ReasonAuthPolicyNotAttached, msg)
 }
 
 // appendGovernance is §3.2's reason order on GovernanceSkipped, by hand:

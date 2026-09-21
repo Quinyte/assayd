@@ -428,6 +428,25 @@ func TestARefusedAdoptIsDegradedOnARefusedRoute(t *testing.T) {
 	// out, and an availability failure must not erase it.
 	g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "CompilerUpgradeUnsupported")
 	mustContain(t, g, "GovernanceSkipped", "Delete the Agent and create it again", "not accepting")
+
+	// A81's correction 1. refuseAdopt rebuilds status.auth on EVERY pass, so
+	// unless it carries the claim store its write clears the flag and the
+	// judgement sets it again — two status writes a pass, each of which
+	// re-enqueues the Agent through For(&Agent{}), which carries no generation
+	// predicate. A refused `Adopt` on a refused route would then reconcile for
+	// ever. The pass must converge: same resourceVersion, claim still standing.
+	reconcileOnce(t, r, a)
+	rv := liveAgent(t, a).ResourceVersion
+	reconcileOnce(t, r, a)
+	live := liveAgent(t, a)
+	if live.ResourceVersion != rv {
+		t.Errorf("a refused Adopt on a refused route wrote its status again (resourceVersion %s, "+
+			"then %s): the claim store and refuseAdopt's wholesale assignment are fighting, and "+
+			"each write re-enqueues the Agent", rv, live.ResourceVersion)
+	}
+	if live.Status.Auth == nil || !live.Status.Auth.RouteRefused {
+		t.Errorf("the claim store did not survive refuseAdopt's assignment: %+v", live.Status.Auth)
+	}
 }
 
 // (i) The report survives a pass that returns before the -auth step, which is
@@ -670,20 +689,50 @@ func TestAnErroredPassHoldsAServedReport(t *testing.T) {
 		if base == nil {
 			base = k8s
 		}
-		r.Reader = staleAgentReader{Reader: base}
-		if err := reconcileErr(t, r, a); err == nil || !strings.Contains(err.Error(), "older than the live one") {
-			t.Fatalf("the injected stale read did not reach the caller: %v", err)
+		// THREE consecutive errored passes, because one cannot see
+		// accumulation. A held message is REBUILT from the fallback and cut at
+		// its marker; appending, which is what §3.3.3's restoration reads like,
+		// grew it 240 bytes a pass here and 475 on the arm below, and at pass
+		// 133 the API server refused every status write for the Agent — phase,
+		// Ready, Degraded, WorkloadUnavailable and the card conditions all
+		// froze, during the incident this judgement exists to report, and it
+		// did not heal.
+		var lens []int
+		for i := 1; i <= 3; i++ {
+			r.Reader = staleAgentReader{Reader: base}
+			err := reconcileErr(t, r, a)
+			r.Reader = base
+			if err == nil || !strings.Contains(err.Error(), "older than the live one") {
+				t.Fatalf("pass %d: the injected stale read did not reach the caller: %v", i, err)
+			}
+			c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue,
+				"ServingRouteNotAccepted")
+			mustContain(t, c, "PolicyApplyIncomplete", erroredMark)
+			if n := strings.Count(c.Message, erroredMark); n != 1 {
+				t.Fatalf("pass %d: the errored marker appears %d times, want exactly 1: %s",
+					i, n, c.Message)
+			}
+			if n := strings.Count(c.Message, heldMark); n != 0 {
+				t.Errorf("pass %d: a held message carries %d unknown-reading markers beside its "+
+					"errored one", i, n)
+			}
+			condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "ServingRouteNotAccepted")
+			if got := phaseOf(t, a); got != assaydv1alpha1.PhaseDegraded {
+				t.Errorf("pass %d: a pass whose -auth step errored left the Agent %s on a route the "+
+					"Gateway is still refusing, want Degraded", i, got)
+			}
+			sameTransition(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, at)
+			lens = append(lens, len(withoutDigits(c.Message)))
 		}
-		r.Reader = base
-
-		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "ServingRouteNotAccepted")
-		mustContain(t, c, "PolicyApplyIncomplete", erroredMark)
-		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "ServingRouteNotAccepted")
-		if got := phaseOf(t, a); got != assaydv1alpha1.PhaseDegraded {
-			t.Errorf("a pass whose -auth step errored left the Agent %s on a route the Gateway is "+
-				"still refusing, want Degraded", got)
+		// Passes 2 and 3 are both holds of the same claim under the same note,
+		// so the message is the same length. Digits are stripped because the
+		// error names the Agent's resourceVersions, which this pass's own write
+		// moves — the only part of the text that legitimately varies.
+		if lens[1] != lens[2] {
+			t.Errorf("the held message grew from %d to %d bytes between two errored passes; at "+
+				"~240 bytes a pass it reaches the API server's 32768-byte limit and every status "+
+				"write for this Agent then fails", lens[1], lens[2])
 		}
-		sameTransition(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, at)
 	})
 	t.Run("the non-transient arm composes", func(t *testing.T) {
 		a, r, _ := servedAPIKeyAgent(t, "a80errhard")
@@ -697,14 +746,29 @@ func TestAnErroredPassHoldsAServedReport(t *testing.T) {
 		// write.
 		driftPolicySpec(t, a)
 		r.Client = &policyUpdateForbidden{Client: k8s}
-		if err := reconcileErr(t, r, a); err == nil {
-			t.Fatal("the injected non-transient write error did not reach the caller")
+		var lens []int
+		for i := 1; i <= 3; i++ {
+			if err := reconcileErr(t, r, a); err == nil {
+				t.Fatalf("pass %d: the injected non-transient write error did not reach the caller", i)
+			}
+			c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue,
+				"ServingRouteNotAccepted")
+			mustContain(t, c, "PolicyApplyIncomplete", "PolicyWriteFailed")
+			// The write error composes BESIDE the standing reason rather than
+			// replacing it, and it composes ONCE: the caller's raiseIncomplete
+			// appends it after the note, which is why a held message has to be
+			// rebuilt rather than appended to.
+			if n := strings.Count(c.Message, "PolicyWriteFailed"); n != 1 {
+				t.Fatalf("pass %d: the write error appears %d times, want exactly 1", i, n)
+			}
+			sameTransition(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, at)
+			lens = append(lens, len(withoutDigits(c.Message)))
 		}
 		r.Client = k8s
-
-		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "ServingRouteNotAccepted")
-		mustContain(t, c, "PolicyApplyIncomplete", "PolicyWriteFailed")
-		sameTransition(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, at)
+		if lens[1] != lens[2] {
+			t.Errorf("the held message grew from %d to %d bytes between two failed writes; at "+
+				"~475 bytes a pass it reaches the API server's 32768-byte limit", lens[1], lens[2])
+		}
 	})
 }
 
@@ -720,6 +784,130 @@ func (c *policyUpdateForbidden) Update(ctx context.Context, obj client.Object,
 		return apierrors.NewForbidden(gr, obj.GetName(), errors.New("no grant"))
 	}
 	return c.Client.Update(ctx, obj, opts...)
+}
+
+// withoutDigits is a condition message with its digits removed, so two holds of
+// the same claim compare equal even though the error names the Agent's
+// resourceVersions, which the errored pass's own write moves.
+func withoutDigits(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// claimPruningClient is an Agent CRD that predates A80's two status.auth
+// fields: the write is accepted and the two properties come back missing,
+// which is what `helm upgrade` leaves behind, since it never updates a chart's
+// crds/.
+type claimPruningClient struct{ client.Client }
+
+func (c *claimPruningClient) Status() client.SubResourceWriter {
+	return &claimPruningWriter{SubResourceWriter: c.Client.Status(), inner: c.Client}
+}
+
+type claimPruningWriter struct {
+	client.SubResourceWriter
+	inner client.Client
+}
+
+func (w *claimPruningWriter) Update(ctx context.Context, obj client.Object,
+	opts ...client.SubResourceUpdateOption) error {
+	if err := w.SubResourceWriter.Update(ctx, obj, opts...); err != nil {
+		return err
+	}
+	if a, ok := obj.(*assaydv1alpha1.Agent); ok && a.Status.Auth != nil {
+		a.Status.Auth.RouteRefused = false
+		a.Status.Auth.PolicyUnattached = false
+	}
+	return nil
+}
+
+// A81's correction 2, at the reach it actually has: `authKept` compares the
+// claim store, so an install whose Agent CRD predates the two fields is
+// refused as AuthRecordNotKept rather than going on writing to the gateway
+// with an inert hold. It is consulted only from persistStatus, so the class it
+// reaches is a refused `Adopt` — which calls it on every pass — a route
+// re-create, a missing-policy Lock, an abandonment and every transaction
+// stage, and NOT a served Agent with an empty slot, which calls it on no pass
+// at all (§3.3.3).
+//
+// Mutation, one edit: drop the two comparisons from authKept. It compiles, and
+// this must fail.
+func TestAPruningCRDIsRefusedRatherThanLosingTheClaim(t *testing.T) {
+	a, r := refusedAdoptAgent(t, "a80prune")
+	refuseRoute(t, a.Namespace, a.Name)
+	reconcileOnce(t, r, a)
+	if auth := authOf(t, a); auth == nil || !auth.RouteRefused {
+		t.Fatalf("the claim was not stored, so the pruning has nothing to lose: %+v", auth)
+	}
+
+	// persistStatus no-ops when the write would change nothing, and A81's carry
+	// makes a refused Adopt's pass converge — so the pruning is only observable
+	// on a pass that actually writes status.auth. An edit to the desired mode
+	// moves refusedMode, which is such a pass and which keeps the refusal.
+	mustEdit(t, a, func(x *assaydv1alpha1.Agent) {
+		x.Spec.Expose = &assaydv1alpha1.ExposeSpec{A2A: &assaydv1alpha1.ExposeProtocol{Auth: "none"}}
+	})
+	r.Client = &claimPruningClient{Client: k8s}
+	err := reconcileErr(t, r, a)
+	r.Client = k8s
+	if err == nil || !strings.Contains(err.Error(), "did not come back") {
+		t.Fatalf("a CRD that prunes the claim store was not refused: %v", err)
+	}
+	condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AuthRecordNotKept")
+	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue,
+		"ServingRouteNotAccepted")
+	mustContain(t, c, "PolicyApplyIncomplete", "AuthRecordNotKept", "charts/assayd/crds/")
+}
+
+// The gate is evaluated TWICE — the slot as the pass found it and as it leaves
+// it — and this row pins the half the post-step check cannot: a pass that
+// STARTS with a transaction and ENDS without one. A transaction reaching
+// `Served` got §3.3.2's full tuple at the object's current generation, which is
+// the explicit not-broken reading that clears a standing claim, so nothing of
+// the old claim may be re-raised on that pass.
+//
+// Mutation, one edit: make the gate the post-step slot alone. It compiles, and
+// this must fail, because the judgement then runs on the Served pass and holds
+// a claim the transaction has just disproved.
+func TestThePassThatReachesServedIsNotJudged(t *testing.T) {
+	a, r, stub := servedAPIKeyAgent(t, "a80servedpass")
+	acceptRoute(t, a.Namespace, a.Name)
+	unattachPolicy(t, a)
+	reconcileOnce(t, r, a)
+	if auth := authOf(t, a); auth == nil || !auth.PolicyUnattached {
+		t.Fatalf("the claim was not stored: %+v", auth)
+	}
+	condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+
+	// The policy is deleted out of band, and the missing-policy Lock that
+	// re-creates it runs to Served.
+	recordCardFor(t, a, a.Status.ActiveRevision, a.Status.ActiveRevisionDigest)
+	r.AuthDeadline = 4 * time.Minute
+	stub.hold(a.Name, true)
+	deletePolicy(t, a)
+	reconcileOnce(t, r, a)
+	acceptPolicy(t, a.Namespace, a.Name)
+	acceptRoute(t, a.Namespace, a.Name)
+	stub.hold(a.Name, false)
+	for i := 0; i < 6 && txOf(t, a) != nil; i++ {
+		reconcileOnce(t, r, a)
+		acceptRoute(t, a.Namespace, a.Name)
+		acceptPolicy(t, a.Namespace, a.Name)
+	}
+	auth := authOf(t, a)
+	if auth == nil || auth.Transaction != nil {
+		t.Fatalf("the missing-policy Lock did not reach Served: %+v", auth)
+	}
+	if auth.PolicyUnattached {
+		t.Errorf("a claim the Lock's own policyConverged disproved survived its Served record: %+v", auth)
+	}
+	noA80Reason(t, a, "the pass that reached Served was judged, and held a claim the transaction "+
+		"had just disproved")
 }
 
 // unit, beside them: the new route and policy predicates' THREE answers, in
