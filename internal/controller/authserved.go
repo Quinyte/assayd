@@ -5,7 +5,6 @@ package controller
 
 import (
 	"fmt"
-	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -80,9 +79,21 @@ func routeReport(rt *gatewayv1.HTTPRoute, gw GatewayConfig) (gatewayReport, stri
 		// parentRef. routeConverged matches on the ref alone, which is
 		// survivable for a transaction's stage; here that entry is a CLEARING
 		// signal, and another controller reporting Accepted=True at the current
-		// generation would retract a true refusal. So the controller is
-		// compared, and an entry that is not agentgateway's is not this
-		// Gateway's report about our attachment, in either direction (A81).
+		// generation would retract a true refusal.
+		//
+		// IT IS NOT FAIL-SAFE, and calling it that was wrong. The comparison
+		// gates RAISING as well as clearing, so on a cluster whose agentgateway
+		// controller is renamed this loop matches nothing, every route reads
+		// unknown, and the route half raises nothing at all: A80's defect
+		// stands, unreported, exactly as before this judgement existed.
+		// agentgateway 1.5.0's chart exposes controllerName for running several
+		// controllers, and assayd exposes no knob for it — GatewayConfig has no
+		// such field and the chart's `gateway:` map none. Measured: one edit to
+		// the constant and case 19 (a) fails with Ready=True on a refused
+		// route. The fix that would not trade one for the other — telling "a
+		// parent entry exists for our parentRef but none from our controller"
+		// apart from "no entry at all" — adds vocabulary to an approved slice
+		// and is recorded as OWED in A81, not built here.
 		if string(p.ControllerName) != AgentgatewayControllerName {
 			continue
 		}
@@ -118,6 +129,14 @@ func policyReport(p *unstructured.Unstructured, gw GatewayConfig) (gatewayReport
 	if p == nil {
 		return reportUnknown, ""
 	}
+	// THE ASYMMETRY WITH routeReport IS DELIBERATE AND IS STATED RATHER THAN
+	// TIDIED: an ancestor carries a controllerName and this function does not
+	// compare it, where routeReport now does. Making it would widen the
+	// fail-open hole that comparison already opens (above) to the policy half
+	// as well, on a cluster whose controller is renamed, for a case nobody has
+	// seen: an ancestor list is keyed by ancestorRef, and a second controller
+	// writing an ancestor for the assayd GATEWAY on a policy it does not own is
+	// not a shape §3.3.2 records. It goes with A81's owed fix, not before it.
 	where := fmt.Sprintf("policy %s/%s at generation %d", p.GetNamespace(), p.GetName(), p.GetGeneration())
 	ancestors, _, _ := unstructured.NestedSlice(p.Object, "status", "ancestors")
 	if len(ancestors) == 0 {
@@ -252,18 +271,16 @@ const erroredMark = " | carried across a pass whose -auth step could not complet
 // complete, which read nothing and says so, naming the error.
 const erroredNote = erroredMark + "; the objects were not re-read (%v) (design 03 A80)"
 
-// heldMessage is what a held report says: the fallback, cut at any note a
-// previous pass left, plus this pass's note. One note, once, whatever the
-// sequence of held, errored and early-return passes that got here.
-func heldMessage(fallback, note string) string {
-	cut := len(fallback)
-	for _, m := range []string{heldMark, erroredMark, carriedNote} {
-		if i := strings.Index(fallback, m); i >= 0 && i < cut {
-			cut = i
-		}
-	}
-	return fallback[:cut] + note
-}
+// heldMessage is what a held report says: the report's own text, built fresh
+// on this pass, plus this pass's note. One note, once, whatever the sequence of
+// held, errored and early-return passes got here.
+//
+// **Rebuilding is the whole fix**, and an earlier version of this function also
+// cut the fallback at any marker it carried — dead code, because every caller
+// passes a freshly built constant that has never been through a note. The
+// markers are kept: they are what the tests read, and erroredMark is the stable
+// half of a note whose other half moves.
+func heldMessage(fallback, note string) string { return fallback + note }
 
 func routeRefusedMessage(why string) string {
 	return "the assayd Gateway is not accepting this Agent's serving route, so nothing reaches this " +
@@ -273,10 +290,26 @@ func routeRefusedMessage(why string) string {
 		"accept. Check the assayd Gateway's listener and this route's parentRef (design 03 §3.3.3, §5)"
 }
 
-func policyUnattachedMessage(why string) string {
-	return "this Agent's route is accepted and SERVING while the assayd Gateway reports that it does " +
-		"not attach the <agent>-auth policy, so the route may be answering with no credential " +
-		"required: " + why + ". Nothing is withdrawn, deleted or rewritten — doing so would hand " +
+// policyUnattachedMessage takes THE ROUTE'S READING, because the two halves
+// fire together in A80's own measured incident: renaming the Gateway's listener
+// detaches the route, and agentgateway then writes the synthetic StatusSummary
+// ancestor on <agent>-auth, so the same pass reports Accepted=False AND a
+// policy attached to nothing. Opening unconditionally with "accepted and
+// SERVING" then announces a security incident — a route answering with no
+// credential required — that the same pass has just refuted, when the real
+// incident is that nothing reaches the agent at all (A81).
+func policyUnattachedMessage(why string, routeOK bool) string {
+	lead := "this Agent's route is accepted and SERVING while the assayd Gateway reports that it " +
+		"does not attach the <agent>-auth policy, so the route may be answering with no credential " +
+		"required: "
+	if !routeOK {
+		lead = "the assayd Gateway reports that it does not attach this Agent's <agent>-auth " +
+			"policy. Whether the route is answering with no credential required depends on the " +
+			"route, and THIS PASS DID NOT READ IT AS ACCEPTED: PolicyApplyIncomplete names the " +
+			"route's own reading first, and if it says the route is refused then nothing is " +
+			"reaching this Agent at all and this half is the smaller of the two problems: "
+	}
+	return lead + why + ". Nothing is withdrawn, deleted or rewritten — doing so would hand " +
 		"anyone who can edit the Gateway a switch that takes this Agent off the air — so the hole is " +
 		"announced, not closed. This is not AuthPolicyMissing: the policy is present, carries this " +
 		"Agent's UID and renders to status.auth.appliedDigest, and the operator is not re-creating " +
@@ -306,7 +339,13 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 	// The route half, fail-CLOSED: nothing reaches the agent. It applies to a
 	// served apikey Agent, a served `auth: none` Agent and a refused `Adopt`,
 	// all three of which reported Ready=True on a refused route before A81.
-	switch rep, why := routeReport(out.judgeRoute, r.Gateway); rep {
+	routeRep, routeWhy := routeReport(out.judgeRoute, r.Gateway)
+	// What the POLICY half is allowed to assert about the route, read once.
+	// Only an explicit good tuple on this pass licenses "accepted and
+	// SERVING"; a refusal and a held claim both read unknown or broken here,
+	// which is what "broken or held" comes to.
+	routeOK := routeRep == reportHolding
+	switch rep, why := routeRep, routeWhy; rep {
 	case reportBroken:
 		claims.routeRefused = true
 		msg := routeRefusedMessage(why)
@@ -342,7 +381,7 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 	switch rep, why := policyReport(out.judgePolicy, r.Gateway); rep {
 	case reportBroken:
 		claims.policyUnattached = true
-		msg := policyUnattachedMessage(why)
+		msg := policyUnattachedMessage(why, routeOK)
 		raiseIncomplete(conds, ReasonAuthPolicyNotAttached, msg)
 		appendGovernance(conds, ReasonAuthPolicyNotAttached, msg)
 		withholdInOrder(out, ReasonAuthPolicyNotAttached, msg)
@@ -351,7 +390,7 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 		claims.policyUnattached = false
 	default:
 		if stored.policyUnattached {
-			held := policyUnattachedMessage("the Gateway has not reported on it since")
+			held := policyUnattachedMessage("the Gateway has not reported on it since", routeOK)
 			holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, heldNote)
 			holdGovernance(agent, conds, held, heldNote)
 		}
@@ -381,7 +420,7 @@ func (r *AgentReconciler) holdServedJudgement(agent *assaydv1alpha1.Agent,
 			routeRefusedMessage("this pass could not re-read it"), note)
 	}
 	if stored.policyUnattached {
-		held := policyUnattachedMessage("this pass could not re-read it")
+		held := policyUnattachedMessage("this pass could not re-read it", false)
 		holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, note)
 		holdGovernance(agent, conds, held, note)
 	}

@@ -392,6 +392,90 @@ func TestAServedPolicyTheGatewayDoesNotAttachIsReported(t *testing.T) {
 	})
 }
 
+// Both halves on ONE pass, which is A80's own measured incident and which no
+// row covered: every policy-half row above calls acceptRoute first. Renaming
+// the assayd Gateway's listener detaches the route AND leaves <agent>-auth
+// attached to nothing, so the Gateway reports Accepted=False and writes the
+// synthetic StatusSummary ancestor in the same breath.
+//
+// The ROUTE half leads. An Agent nothing can reach is the cause to name first,
+// and the policy half's own text must not open by announcing that the route
+// "may be answering with no credential required" when this pass recorded
+// Accepted=False — which is what it did until A81 (the review's MAJOR 2).
+//
+// Mutations, each a single edit: put AuthPolicyNotAttached back before
+// ServingRouteNotAccepted in incompleteOrder, which the reason and phase
+// assertions must fail; and make policyUnattachedMessage ignore the route
+// reading, which the message assertions must fail.
+func TestBothHalvesOnOnePassNameTheRouteFirst(t *testing.T) {
+	a, r, _ := servedAPIKeyAgent(t, "a80bothhalves")
+	refuseRoute(t, a.Namespace, a.Name)
+	summarisePolicy(t, a)
+	reconcileOnce(t, r, a)
+
+	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue,
+		"ServingRouteNotAccepted")
+	mustContain(t, c, "PolicyApplyIncomplete", "NoMatchingParent", "AuthPolicyNotAttached")
+	if strings.HasPrefix(c.Message, "this Agent's route is accepted and SERVING") {
+		t.Errorf("PolicyApplyIncomplete opens by claiming the route is accepted and serving, on a "+
+			"pass that recorded Accepted=False: %s", c.Message)
+	}
+	// Ready and Degraded follow the same order, because withholdInOrder reads
+	// incompleteOrder too: the operator must not page an administrator with a
+	// security incident when the real one is that nothing reaches the agent.
+	condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "ServingRouteNotAccepted")
+	condIs(t, a, assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ServingRouteNotAccepted")
+	if got := phaseOf(t, a); got != assaydv1alpha1.PhaseDegraded {
+		t.Errorf("an Agent with both halves standing is %s, want Degraded", got)
+	}
+	// GovernanceSkipped still reads the policy half, which is the condition
+	// that records the tier, and its message must not assert the route either.
+	g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+	if strings.Contains(g.Message, "route is accepted and SERVING") {
+		t.Errorf("GovernanceSkipped claims the route is accepted and serving, on a pass that "+
+			"recorded Accepted=False: %s", g.Message)
+	}
+	// Both claims are stored, which is what lets a held pass re-raise each.
+	if auth := authOf(t, a); auth == nil || !auth.RouteRefused || !auth.PolicyUnattached {
+		t.Errorf("both halves fired and the claim store records %+v", auth)
+	}
+}
+
+// A81's MINOR-2 carries, at the one that is not benign: K2's Lock over a
+// refused `Adopt` assigns status.auth wholesale, and nothing in entering a
+// transaction read the route, so there is no explicit not-broken tuple to
+// clear a standing claim with. The claim must survive the entry.
+//
+// Mutation, one edit: drop the carry from enterLock's empty-mode arm. It
+// compiles, and this must fail.
+func TestEnteringK2SLockKeepsAStandingClaim(t *testing.T) {
+	a, r := refusedAdoptAgent(t, "a80k2claim")
+	refuseRoute(t, a.Namespace, a.Name)
+	reconcileOnce(t, r, a)
+	if auth := authOf(t, a); auth == nil || !auth.RouteRefused {
+		t.Fatalf("the claim was not stored: %+v", auth)
+	}
+	// refusedMode must read something other than apikey before an edit to
+	// apikey counts as K2's consent (§3.3.3).
+	toMode(t, a, "none")
+	reconcileOnce(t, r, a)
+	if tx := txOf(t, a); tx == nil || tx.RefusedMode != "none" {
+		t.Fatalf("refusedMode did not track the edit: %+v", tx)
+	}
+	recordCardFor(t, a, liveAgent(t, a).Status.ActiveRevision, liveAgent(t, a).Status.ActiveRevisionDigest)
+	toMode(t, a, "apikey")
+	reconcileOnce(t, r, a)
+
+	auth := authOf(t, a)
+	if auth == nil || auth.Transaction == nil || auth.Transaction.Kind != "Lock" {
+		t.Fatalf("K2's Lock was not entered: %+v", auth)
+	}
+	if !auth.RouteRefused {
+		t.Error("entering K2's Lock dropped a standing routeRefused claim; nothing in the entry " +
+			"read the route, so there was no not-broken tuple to clear it with")
+	}
+}
+
 // (g) A transaction that runs stages is left alone. The assertion is an
 // ABSENCE, because the rule is that neither reason is produced at all while
 // such a transaction is in the slot.

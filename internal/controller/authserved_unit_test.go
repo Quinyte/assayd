@@ -4,11 +4,14 @@
 package controller
 
 import (
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
 // Design 03 §8.1 case 19's unit table, beside the envtest rows and mirroring
@@ -203,20 +206,49 @@ func TestSeedAndWithdrawAreTheSameSet(t *testing.T) {
 	}
 }
 
-// A80's two reasons sit at the END of incompleteOrder, after GatewayAuthPolicy.
-// Neither can stand beside a transaction's reason, and AuthPolicyNotAttached
-// cannot stand beside AuthPolicyMissing, which needs the policy to be absent —
-// so the only states in which these ranks are exercised are beside
-// ForeignTrafficPolicy and W1's GatewayAuthPolicy, which both keep the reason.
-func TestA80SReasonsRankLast(t *testing.T) {
-	want := []string{ReasonAuthPolicyMissing, ReasonForeignTrafficPolicy, ReasonGatewayAuthPolicy,
-		ReasonAuthPolicyNotAttached, ReasonServingRouteNotAccepted}
-	if len(incompleteOrder) != len(want) {
-		t.Fatalf("incompleteOrder is %v, want %v", incompleteOrder, want)
-	}
-	for i := range want {
-		if incompleteOrder[i] != want[i] {
-			t.Fatalf("incompleteOrder is %v, want %v", incompleteOrder, want)
-		}
+// The ORDER, asserted through raiseIncomplete — which is what a reader sees —
+// rather than by comparing the slice to a copy of itself. A literal copy is a
+// change-detector: it fails on any edit and proves nothing about a wrong one,
+// because the "want" moves with the code (A81, the review's MINOR 9).
+//
+// The row that matters most is the last: in A80's own measured incident both
+// halves fire on one pass, and the route half must LEAD, because an Agent
+// nothing can reach is the cause to name first and the policy half's own text
+// would otherwise announce a security incident the same pass refuted.
+func TestPolicyApplyIncompleteNamesTheOutrankingCauseFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		first, then   string
+		wantReason    string
+		wantInMessage string
+	}{
+		{"a missing policy outranks a foreign one", ReasonForeignTrafficPolicy,
+			ReasonAuthPolicyMissing, ReasonAuthPolicyMissing, ReasonForeignTrafficPolicy},
+		{"a foreign policy outranks a Gateway-level one", ReasonGatewayAuthPolicy,
+			ReasonForeignTrafficPolicy, ReasonForeignTrafficPolicy, ReasonGatewayAuthPolicy},
+		{"a Gateway-level policy outranks a refused route", ReasonServingRouteNotAccepted,
+			ReasonGatewayAuthPolicy, ReasonGatewayAuthPolicy, ReasonServingRouteNotAccepted},
+		{"a refused route outranks an unattached policy", ReasonAuthPolicyNotAttached,
+			ReasonServingRouteNotAccepted, ReasonServingRouteNotAccepted, ReasonAuthPolicyNotAttached},
+		{"an unattached policy does not outrank a refused route", ReasonServingRouteNotAccepted,
+			ReasonAuthPolicyNotAttached, ReasonServingRouteNotAccepted, ReasonAuthPolicyNotAttached},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conds := newConditionSet(1)
+			raiseIncomplete(conds, tc.first, tc.first+" happened")
+			raiseIncomplete(conds, tc.then, tc.then+" happened")
+			c, ok := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete)
+			if !ok {
+				t.Fatal("PolicyApplyIncomplete was not raised at all")
+			}
+			if c.Reason != tc.wantReason {
+				t.Errorf("the condition reads %s, want %s: the outranking cause is what a reader is "+
+					"sent to", c.Reason, tc.wantReason)
+			}
+			if !strings.Contains(c.Message, tc.wantInMessage) {
+				t.Errorf("the message drops %s: every cause that stands must be named (%s)",
+					tc.wantInMessage, c.Message)
+			}
+		})
 	}
 }

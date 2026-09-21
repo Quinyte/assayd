@@ -559,11 +559,24 @@ func heldAbove(conds *conditionSet) bool {
 // A80 appends its two AFTER GatewayAuthPolicy: neither can stand beside a
 // transaction's reason, because neither is raised while a transaction that
 // runs stages is in the slot, and AuthPolicyNotAttached cannot stand beside
-// AuthPolicyMissing, which needs the policy to be absent. Both can stand
-// beside ForeignTrafficPolicy and W1's GatewayAuthPolicy, which are the only
-// states in which the appended ranks are exercised at all.
+// AuthPolicyMissing, which needs the policy to be absent.
+//
+// ServingRouteNotAccepted comes BEFORE AuthPolicyNotAttached, which reverses
+// what A80 decided (A81). A80 put the route half last on the argument that
+// leading with it "buys nothing, because the condition's message names every
+// reason that stands either way" — and that rested on an untested assumption,
+// that the two halves do not fire together. They do, in A80's own measured
+// incident: renaming the Gateway's listener detaches the route, and
+// agentgateway then writes the synthetic StatusSummary ancestor on
+// <agent>-auth, so one pass reports both. Under A80's order all four
+// conditions then opened with the policy half's "the route may be answering
+// with no credential required" — announcing a security incident the same pass
+// had refuted, over the real one, which is that nothing reaches the agent at
+// all. An Agent nothing can reach is the cause to name first.
+//
+// Both can also stand beside ForeignTrafficPolicy and W1's GatewayAuthPolicy.
 var incompleteOrder = []string{ReasonAuthPolicyMissing, ReasonForeignTrafficPolicy, ReasonGatewayAuthPolicy,
-	ReasonAuthPolicyNotAttached, ReasonServingRouteNotAccepted}
+	ReasonServingRouteNotAccepted, ReasonAuthPolicyNotAttached}
 
 func incompleteRank(reason string) int {
 	for i, r := range incompleteOrder {
