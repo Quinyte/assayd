@@ -1,7 +1,7 @@
 # The `controllerName` on a route's `status.parents` entry, agentgateway 1.5.0
 
 **Measured 2026-09-22**, on the k3d e2e cluster `hack/e2e.sh` builds, mid-run,
-for design 03 A81 (the review's MINOR 4). Every other measurement this design
+for design 03 A81, answering the FIRST independent review's MINOR 4 (`03-a81-review.md` is the second pass's record, whose own MINOR 4 is a different finding). Every other measurement this design
 cites has a file; this one did not until now.
 
 ## Why it was measured

@@ -241,22 +241,29 @@ func judgesServed(status *assaydv1alpha1.AgentStatus) bool {
 }
 
 // heldMark and erroredMark are the STABLE prefixes of the two notes a held
-// report carries. A held message is cut at whichever marker it already has and
-// REBUILT, never appended to, and the marker is what makes that cut possible:
+// report carries. A held message is REBUILT from the report's own text with one note
+// appended, never appended to the stored one, and the markers are what the tests read.
+// They were also what an earlier cut made possible, before that cut was found to be dead
+// code:
 // erroredNote interpolates the error, whose text moves — errStaleAgent names
 // the resourceVersions that the errored pass's own write then bumps — so a
 // suffix comparison matches nothing, and A80's change of the caller's
 // non-transient arm to raiseIncomplete appends the write error AFTER the note,
 // so it matches nothing even for a constant error.
 //
-// Measured on this suite before the cut: the message grew 240 bytes a pass on
+// Measured on this suite before the fix: the message grew 240 bytes a pass on
 // the transient arm and 475 on the non-transient one, and at pass 133 the API
 // server refused EVERY status write for that Agent — "Too long: may not be
-// more than 32768 bytes" — so phase, Ready, Degraded, WorkloadUnavailable and
-// the card conditions all froze, during exactly the incident this judgement
-// exists to report, and it did not heal. §3.3.3 asks only that a held report
-// keep its LastTransitionTime and its ObservedGeneration, and rebuilding keeps
-// both.
+// more than 32768 bytes" — so observedGeneration, phase, Ready, Degraded and
+// the card conditions all stopped moving, during exactly the incident this
+// judgement exists to report. It heals on the first pass that neither errors
+// nor holds, which rebuilds the message. The independent review reproduced it
+// on its own fixture at +244 and +479 bytes a pass, saturating at pass 129;
+// the few bytes of difference are the Agent's own name and namespace, which
+// the message carries. §3.3.3 asks only that a held report keep its
+// LastTransitionTime and its ObservedGeneration, and rebuilding keeps both,
+// with one exception the design states: in the both-held state the claim goes
+// through raiseIncomplete, which re-stamps the generation.
 const heldMark = " | carried from the last pass that got a report at this object's generation"
 
 // heldNote marks a report this pass could not re-derive because the Gateway
@@ -341,9 +348,14 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 	// all three of which reported Ready=True on a refused route before A81.
 	routeRep, routeWhy := routeReport(out.judgeRoute, r.Gateway)
 	// What the POLICY half is allowed to assert about the route, read once.
-	// Only an explicit good tuple on this pass licenses "accepted and
-	// SERVING"; a refusal and a held claim both read unknown or broken here,
-	// which is what "broken or held" comes to.
+	// ONLY an explicit good tuple on this pass licenses "accepted and SERVING".
+	// The false set is wider than "broken or held" and the difference is worth
+	// naming: a plain UNKNOWN reading is in it too, with no claim standing —
+	// so a promoting pass, and every pass on a cluster whose agentgateway
+	// controller is renamed (routeReport then matches nothing), hedges the
+	// policy half's message as well. That is a second reach of the fail-open
+	// this comparison opens, in the message rather than in what is raised, and
+	// it is stated in §3.3.3 rather than left to be discovered (A81).
 	routeOK := routeRep == reportHolding
 	switch rep, why := routeRep, routeWhy; rep {
 	case reportBroken:
@@ -441,15 +453,23 @@ func (r *AgentReconciler) holdServedJudgement(agent *assaydv1alpha1.Agent,
 //
 // What is held is the reason's CLAIM, not the condition object, and that
 // distinction is load-bearing: A80's two reasons sit at the END of
-// incompleteOrder, so in the states where the appended ranks are exercised at
-// all the stored condition's REASON belongs to another cause and a reason
-// match finds nothing to restore. So the stored condition is put back WHOLE
+// incompleteOrder, so whenever another cause outranks one of them — and
+// whenever the route half outranks the policy half, which is A80's own
+// incident — the stored condition's REASON belongs to that other cause and a
+// reason match finds nothing to restore. So the stored condition is put back WHOLE
 // only when its reason is this one and nothing outranks it on this pass —
 // keeping its ObservedGeneration, and its LastTransitionTime through merge,
 // which is what makes design 10's duration rule meaningful when it lands.
 // Otherwise the claim is re-appended to whatever reason this pass derived.
 func holdIncomplete(agent *assaydv1alpha1.Agent, conds *conditionSet, out *gatewayOutcome,
 	reason, fallback, note string) {
+	// ONE EXCEPTION to "keeps its ObservedGeneration", stated rather than
+	// quietly untrue: when this pass has already asserted the condition — both
+	// halves held, or another cause standing — the claim goes through
+	// raiseIncomplete below, whose conds.set stamps THIS pass's generation. The
+	// LastTransitionTime still survives, through merge, which is what design
+	// 10's duration rule reads; the generation is the weaker half of the claim
+	// and is lost only in the composed state (A81).
 	msg := heldMessage(fallback, note)
 	c := meta.FindStatusCondition(agent.Status.Conditions, string(assaydv1alpha1.CondPolicyApplyIncomplete))
 	if _, set := conds.get(assaydv1alpha1.CondPolicyApplyIncomplete); !set && c != nil &&

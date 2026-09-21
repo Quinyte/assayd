@@ -416,9 +416,12 @@ func TestBothHalvesOnOnePassNameTheRouteFirst(t *testing.T) {
 	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue,
 		"ServingRouteNotAccepted")
 	mustContain(t, c, "PolicyApplyIncomplete", "NoMatchingParent", "AuthPolicyNotAttached")
-	if strings.HasPrefix(c.Message, "this Agent's route is accepted and SERVING") {
-		t.Errorf("PolicyApplyIncomplete opens by claiming the route is accepted and serving, on a "+
-			"pass that recorded Accepted=False: %s", c.Message)
+	// NOT HasPrefix: under the corrected order the message leads with the route
+	// half, so a prefix check passes whatever the policy half says and proves
+	// nothing. What must not appear ANYWHERE is the claim itself.
+	if strings.Contains(c.Message, "route is accepted and SERVING") {
+		t.Errorf("PolicyApplyIncomplete claims the route is accepted and serving, on a pass that "+
+			"recorded Accepted=False: %s", c.Message)
 	}
 	// Ready and Degraded follow the same order, because withholdInOrder reads
 	// incompleteOrder too: the operator must not page an administrator with a
@@ -435,6 +438,38 @@ func TestBothHalvesOnOnePassNameTheRouteFirst(t *testing.T) {
 		t.Errorf("GovernanceSkipped claims the route is accepted and serving, on a pass that "+
 			"recorded Accepted=False: %s", g.Message)
 	}
+
+	// The licence is an explicit GOOD tuple on this pass, not merely "not
+	// broken": an UNKNOWN reading must hedge too, or a promoting pass — and
+	// every pass on a cluster whose agentgateway controller is renamed — would
+	// assert a route it did not read. Without this half,
+	// routeOK := routeRep != reportBroken survives the whole suite.
+	//
+	// Mutation, one edit: make routeOK `routeRep != reportBroken`.
+	t.Run("an unknown route reading hedges too", func(t *testing.T) {
+		b, rb, _ := servedAPIKeyAgent(t, "a80unknownhedge")
+		acceptRoute(t, b.Namespace, b.Name)
+		unattachPolicy(t, b)
+		reconcileOnce(t, rb, b)
+		condIs(t, b, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyNotAttached")
+		// Move the route's generation and report nothing new: the reading goes
+		// unknown, with no routeRefused claim standing.
+		rt := servingRoute(t, b.Namespace, b.Name)
+		rt.Spec.Hostnames = append(rt.Spec.Hostnames, "drifted.example.com")
+		if err := k8s.Update(context.Background(), rt); err != nil {
+			t.Fatal(err)
+		}
+		reconcileOnce(t, rb, b)
+		if auth := authOf(t, b); auth == nil || auth.RouteRefused {
+			t.Fatalf("this half needs an UNKNOWN reading with no claim standing: %+v", auth)
+		}
+		c := condIs(t, b, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue,
+			"AuthPolicyNotAttached")
+		if strings.Contains(c.Message, "route is accepted and SERVING") {
+			t.Errorf("the policy half asserts the route is accepted on a pass that did not read "+
+				"it at its current generation: %s", c.Message)
+		}
+	})
 	// Both claims are stored, which is what lets a held pass re-raise each.
 	if auth := authOf(t, a); auth == nil || !auth.RouteRefused || !auth.PolicyUnattached {
 		t.Errorf("both halves fired and the claim store records %+v", auth)
