@@ -520,12 +520,18 @@ func carriedReason(reason string) bool {
 		reason == ReasonServingRouteNotAccepted || reason == ReasonAuthPolicyNotAttached
 }
 
-// a80Carried is the predicate of seedStoredAbove's A80 block. It asks
-// carriedReason as well as naming the two, because the set seeded here and the
-// set the -auth step withdraws on the way in must be the SAME set: a reason
-// seeded and not withdrawn would survive the pass that re-derives it and would
-// never clear, and one withdrawn and not seeded would have its clock reset by
-// every pass that returns early.
+// a80Carried is the predicate of seedStoredAbove's A80 block: A80's two
+// reasons, AND one carriedReason carries.
+//
+// The conjunction enforces ONE direction — everything seeded here is withdrawn
+// by the -auth step on the way in — and that is the direction that fails
+// silently: a reason seeded and not withdrawn survives the pass that
+// re-derives it and never clears. It does NOT enforce the converse, and must
+// not: GatewayAuthPolicy and ForeignTrafficPolicy are withdrawn too and are
+// seeded by their own blocks above. The conjunction therefore reduces to the
+// disjunction today, and it is written this way so that dropping a reason from
+// carriedReason drops it from the seed as well rather than splitting the two
+// lists. TestSeedAndWithdrawAreTheSameSet is the pin.
 func a80Carried(reason string) bool {
 	return carriedReason(reason) &&
 		(reason == ReasonServingRouteNotAccepted || reason == ReasonAuthPolicyNotAttached)

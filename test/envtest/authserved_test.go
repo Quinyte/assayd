@@ -648,19 +648,33 @@ func TestAnUnknownReadingHoldsAStandingReport(t *testing.T) {
 	// The fourth half: GovernanceSkipped in the ordinary policy half, where
 	// the stored reason IS AuthPolicyNotAttached and assessGovernance has
 	// already derived False/AuthVerifiedOnOneReplica fresh on this pass.
-	t.Run("GovernanceSkipped is re-asserted whole", func(t *testing.T) {
+	t.Run("GovernanceSkipped is re-asserted from the stored condition", func(t *testing.T) {
 		a, r, _ := servedAPIKeyAgent(t, "a80holdgov")
 		acceptRoute(t, a.Namespace, a.Name)
 		unattachPolicy(t, a)
 		reconcileOnce(t, r, a)
-		condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
 		at := transitionedAt(t, a, assaydv1alpha1.CondGovernanceSkipped)
+		observed := g.ObservedGeneration
 
+		// The Agent's generation and the policy's both move, in one step and
+		// with no new policy report. The Agent's is what makes the hold
+		// OBSERVABLE: conds.set would stamp this pass's generation, and this
+		// pass observed nothing. Without that, appendGovernance produces the
+		// same status, reason and message and deleting the whole-restore branch
+		// leaves the suite green (A81, the review's MINOR 1).
+		mustEdit(t, a, func(x *assaydv1alpha1.Agent) { x.Spec.Runtime.Image = secondImage })
 		driftPolicySpec(t, a)
 		reconcileOnce(t, r, a)
-		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+
+		g = condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
 		mustContain(t, g, "GovernanceSkipped", heldMark)
 		sameTransition(t, a, assaydv1alpha1.CondGovernanceSkipped, at)
+		if live := liveAgent(t, a); g.ObservedGeneration != observed {
+			t.Errorf("a held GovernanceSkipped was stamped with generation %d; it must keep the %d "+
+				"that observed it, because this pass read no report at the policy's generation "+
+				"(the Agent is at %d)", g.ObservedGeneration, observed, live.Generation)
+		}
 	})
 }
 

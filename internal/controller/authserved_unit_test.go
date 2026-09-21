@@ -64,6 +64,25 @@ func TestTheServedRouteReportHasThreeAnswers(t *testing.T) {
 		{"only one leg reported at the current generation", route(3, ours(
 			cond("Accepted", metav1.ConditionTrue, 3))), reportUnknown},
 		{"no entry for the assayd Gateway", route(3), reportUnknown},
+		// Gateway API keys a RouteParentStatus by (parentRef, controllerName),
+		// so a second controller can write its own entry for the same
+		// parentRef. Here that entry would CLEAR a true refusal, which
+		// routeConverged's ref-only match cannot do (A81, the review's MINOR
+		// 4).
+		{"another controller's Accepted=True for the same parentRef does not clear", route(3,
+			func() gatewayv1.RouteParentStatus {
+				p := ours(cond("Accepted", metav1.ConditionTrue, 3),
+					cond("ResolvedRefs", metav1.ConditionTrue, 3))
+				p.ControllerName = "example.com/some-other-controller"
+				return p
+			}()), reportUnknown},
+		{"another controller's Accepted=False for the same parentRef does not raise", route(3,
+			func() gatewayv1.RouteParentStatus {
+				p := ours(cond("Accepted", metav1.ConditionFalse, 3),
+					cond("ResolvedRefs", metav1.ConditionTrue, 3))
+				p.ControllerName = "example.com/some-other-controller"
+				return p
+			}()), reportUnknown},
 		{"another Gateway's entry only", route(3, func() gatewayv1.RouteParentStatus {
 			p := ours(cond("Accepted", metav1.ConditionFalse, 3), cond("ResolvedRefs", metav1.ConditionFalse, 3))
 			p.ParentRef.Name = "someone-else"
@@ -123,6 +142,13 @@ func TestTheServedPolicyReportHasThreeAnswers(t *testing.T) {
 		{"Accepted=True with a reason other than Valid", policy(2, ours(
 			cond("Accepted", "True", "Translated", 2), cond("Attached", "True", "Attached", 2))), reportBroken},
 		{"the synthetic StatusSummary ancestor", policy(2, summary), reportBroken},
+		// THE ONE EXCEPTION to "at the object's current generation", and it is
+		// deliberate and stated in §3.3.3: the ancestor list is rewritten whole
+		// on every status write, so there is no generation to compare the
+		// synthetic ancestor's PRESENCE against, and §3.3.2 already calls that
+		// presence the signal. Fail-safe on the fail-OPEN half (A81, the
+		// review's MINOR 3).
+		{"the StatusSummary ancestor is not generation-gated", policy(5, summary), reportBroken},
 		{"a failure reported a generation behind", policy(3, ours(
 			cond("Accepted", "True", "Valid", 2), cond("Attached", "False", "NotAttached", 2))), reportUnknown},
 		{"an empty ancestor list", policy(2), reportUnknown},
@@ -140,6 +166,40 @@ func TestTheServedPolicyReportHasThreeAnswers(t *testing.T) {
 				t.Error("a broken report names nothing")
 			}
 		})
+	}
+}
+
+// What seedStoredAbove's A80 block seeds and what the -auth step withdraws are
+// the same set in the direction that fails silently: a reason seeded and not
+// withdrawn survives the pass that re-derives it and NEVER CLEARS. The converse
+// does not hold and a80Carried does not claim it — GatewayAuthPolicy and
+// ForeignTrafficPolicy are withdrawn too, and are seeded by their own blocks
+// (A81, the review's MINOR 8).
+func TestSeedAndWithdrawAreTheSameSet(t *testing.T) {
+	for _, r := range []string{ReasonServingRouteNotAccepted, ReasonAuthPolicyNotAttached} {
+		if !a80Carried(r) {
+			t.Errorf("seedStoredAbove's A80 block does not seed %s, so a pass that returns before "+
+				"the -auth step drops the report and resets design 10's clock", r)
+		}
+		if !carriedReason(r) {
+			t.Errorf("%s is seeded and NOT withdrawn: it would survive the pass that re-derives it "+
+				"and never clear, which is the fail-open direction", r)
+		}
+	}
+	for _, r := range []string{ReasonGatewayAuthPolicy, ReasonForeignTrafficPolicy} {
+		if a80Carried(r) {
+			t.Errorf("A80's block seeds %s, which has a block of its own; it would be carried twice", r)
+		}
+		if !carriedReason(r) {
+			t.Errorf("%s is no longer withdrawn by the -auth step, which A75 requires", r)
+		}
+	}
+	for _, r := range []string{ReasonAuthPolicyMissing, ReasonAuthLockUnverified,
+		ReasonAuthEnforcementUnverified, ReasonGoverned} {
+		if carriedReason(r) || a80Carried(r) {
+			t.Errorf("%s is carried across a pass that re-read nothing; only the reasons the -auth "+
+				"step alone derives may be", r)
+		}
 	}
 }
 

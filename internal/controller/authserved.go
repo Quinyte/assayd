@@ -75,6 +75,17 @@ func routeReport(rt *gatewayv1.HTTPRoute, gw GatewayConfig) (gatewayReport, stri
 		if string(p.ParentRef.Name) != gw.Name || ns != gw.Namespace {
 			continue
 		}
+		// Gateway API keys a RouteParentStatus by (parentRef, controllerName),
+		// so a second controller may write its own entry for the SAME
+		// parentRef. routeConverged matches on the ref alone, which is
+		// survivable for a transaction's stage; here that entry is a CLEARING
+		// signal, and another controller reporting Accepted=True at the current
+		// generation would retract a true refusal. So the controller is
+		// compared, and an entry that is not agentgateway's is not this
+		// Gateway's report about our attachment, in either direction (A81).
+		if string(p.ControllerName) != AgentgatewayControllerName {
+			continue
+		}
 		known := 0
 		for _, t := range []string{"Accepted", "ResolvedRefs"} {
 			c := meta.FindStatusCondition(p.Conditions, t)
@@ -121,9 +132,14 @@ func policyReport(p *unstructured.Unstructured, gw GatewayConfig) (gatewayReport
 		name, _ := ref["name"].(string)
 		ns, _ := ref["namespace"].(string)
 		if group == "agentgateway.dev" && name == "StatusSummary" {
-			// The ancestor list is rewritten whole on every status write, so
-			// the presence of the synthetic ancestor is a current fact about
-			// the object rather than a generation-stamped claim.
+			// THE ONE EXCEPTION TO "at the object's current generation", and it
+			// is stated in §3.3.3 rather than left here: the ancestor list is
+			// rewritten WHOLE on every status write, so the presence of the
+			// synthetic ancestor is a current fact about the object and not a
+			// generation-stamped claim — there is no generation to compare it
+			// against. §3.3.2 already calls its presence the signal. It is the
+			// fail-safe direction on the fail-OPEN half: the last thing the
+			// Gateway said is that this policy attached to nothing (A81).
 			return reportBroken, where + ": it carries agentgateway's synthetic StatusSummary " +
 				"ancestor, which is written when the policy attached to nothing (" +
 				describeConditions(m) + ")"
@@ -369,7 +385,15 @@ func (r *AgentReconciler) holdServedJudgement(agent *assaydv1alpha1.Agent,
 		holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, note)
 		holdGovernance(agent, conds, held, note)
 	}
-	stored.writeTo(status)
+	// The claim store is NOT written back here, and the reason is worth stating
+	// rather than leaving a line no test can pin (rule 5). `status` began as a
+	// deep copy of stored status, so it already carries the flags; every path
+	// that assigns status.auth WHOLESALE carries them across (refuseAdopt, the
+	// J2 abandonment, enterLock over a refused Adopt); and the one that
+	// deliberately drops them, recordServed, cannot be reached on a pass this
+	// judgement runs on, because such a pass began with a transaction in the
+	// slot and the gate excludes it. A write here would be a no-op, and a
+	// no-op nothing can fail reads as load-bearing (A81).
 }
 
 // holdIncomplete re-asserts a standing PolicyApplyIncomplete claim this pass
@@ -412,13 +436,25 @@ func holdIncomplete(agent *assaydv1alpha1.Agent, conds *conditionSet, out *gatew
 // writes. And the condition is owned AND sticky, so a stored value always
 // exists and assessGovernance has already rewritten the PASS's assertion — for
 // a served API-key Agent, to False/AuthVerifiedOnOneReplica. So a stored
-// GovernanceSkipped whose reason IS AuthPolicyNotAttached is re-asserted WHOLE,
-// on seedStoredAbove's precedent; only a claim it carries as a fragment under
-// another reason is re-appended.
+// GovernanceSkipped whose reason IS AuthPolicyNotAttached is re-asserted from
+// the stored condition, on seedStoredAbove's precedent; only a claim it carries
+// as a fragment under another reason is re-appended.
 //
-// Getting this backwards is fail-open: a rule that only ever appends leaves the
-// Agent reading GovernanceSkipped=False, "auth verified on one replica", while
-// its -auth is attached to nothing.
+// TWO things are at stake, and they are different sizes, which is worth
+// separating because one of them is not reachable here:
+//
+//   - the REASON. A rule that appends to whatever the pass derived, keeping
+//     that reason, leaves the Agent reading GovernanceSkipped=False, "auth
+//     verified on one replica", while its -auth is attached to nothing. That
+//     is fail-open and it is what case 19 (k)'s fourth half kills. It is NOT
+//     what appendGovernance does below: with neither ForeignTrafficPolicy nor
+//     GatewayAuthPolicy standing, appendGovernance makes AuthPolicyNotAttached
+//     the reason, so the status and the reason come out the same either way.
+//   - what is left is ObservedGeneration, which is the whole remaining point
+//     of carrying rather than setting: conds.set stamps the generation of THIS
+//     pass, and this pass observed nothing. carry keeps the generation that
+//     did. Case 19 (k)'s fourth half asserts it, because without that
+//     assertion deleting this branch leaves the suite green (A81).
 func holdGovernance(agent *assaydv1alpha1.Agent, conds *conditionSet, fallback, note string) {
 	msg := heldMessage(fallback, note)
 	c := meta.FindStatusCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGovernanceSkipped))
