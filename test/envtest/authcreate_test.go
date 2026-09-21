@@ -842,6 +842,60 @@ func TestAServedPolicyChangedOutOfBandIsReasserted(t *testing.T) {
 	}
 }
 
+// plantLegacyRoute writes the `<agent>-serving` route an operator WITHOUT a
+// compiler left behind: published at once, with no marker and no record in
+// status.auth, which is `Adopt`'s trigger (§3.3.3).
+func plantLegacyRoute(t *testing.T, a *assaydv1alpha1.Agent, rev string) {
+	t.Helper()
+	name, _ := compiler.ServingRouteName(a.Name)
+	group, kind := gatewayv1.Group(gatewayv1.GroupName), gatewayv1.Kind("Gateway")
+	svcGroup, svcKind := gatewayv1.Group(""), gatewayv1.Kind("Service")
+	gwNS, section := gatewayv1.Namespace("assayd-gateway"), gatewayv1.SectionName("http")
+	port, weight := gatewayv1.PortNumber(8080), int32(100)
+	legacy := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: runNS(a.Namespace), Labels: map[string]string{
+			controller.LabelAgent: a.Name, controller.LabelAgentUID: string(a.UID),
+			controller.LabelAgentNamespace: a.Namespace, controller.LabelRevision: rev}},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{
+				Group: &group, Kind: &kind, Name: "assayd", Namespace: &gwNS, SectionName: &section}}},
+			Hostnames: []gatewayv1.Hostname{gatewayv1.Hostname(a.Name + "." + a.Namespace + "." +
+				controller.DefaultGatewayHostnameSuffix)},
+			Rules: []gatewayv1.HTTPRouteRule{{BackendRefs: []gatewayv1.HTTPBackendRef{{
+				BackendRef: gatewayv1.BackendRef{BackendObjectReference: gatewayv1.BackendObjectReference{
+					Group: &svcGroup, Kind: &svcKind,
+					Name: gatewayv1.ObjectName(controller.WorkloadName(a.Name, rev)), Port: &port},
+					Weight: &weight}}}}},
+		},
+	}
+	if err := k8s.Create(context.Background(), legacy); err != nil {
+		t.Fatalf("plant the legacy route: %v", err)
+	}
+}
+
+// refusedAdoptAgent is an Agent whose published route predates the compiler,
+// taken to `Adopt`, refused: {kind: Adopt, stage: Refused}, no `<agent>-auth`,
+// and GovernanceSkipped=CompilerUpgradeUnsupported.
+func refusedAdoptAgent(t *testing.T, name string) (*assaydv1alpha1.Agent, *controller.AgentReconciler) {
+	t.Helper()
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, name, nil)
+	off := newReconciler(false)
+	rev := revision.MustHash(a.Spec)
+	reconcileOnce(t, off, a)
+	reconcileOnce(t, off, a)
+	markAvailable(t, ns, controller.WorkloadName(name, rev), 1)
+	settle(t, off, a)
+	plantLegacyRoute(t, a, rev)
+	r, _ := createReconciler()
+	reconcileOnce(t, r, a)
+	reconcileOnce(t, r, a)
+	if tx := txOf(t, a); tx == nil || tx.Kind != "Adopt" || tx.Stage != "Refused" {
+		t.Fatalf("the Adopt was not refused: %+v", tx)
+	}
+	return liveAgent(t, a), r
+}
+
 // A route published before this operator carried a compiler, with nothing in
 // status.auth, is `Adopt`'s trigger: refused. No policy is written, the route
 // keeps serving, and GovernanceSkipped says it is unauthenticated (§3.3.3).
@@ -858,30 +912,7 @@ func TestARoutePublishedBeforeTheCompilerIsNotLocked(t *testing.T) {
 
 	// What an operator without a compiler left: the same route, published at
 	// once, with no marker and no record in status.auth.
-	name, _ := compiler.ServingRouteName("legacy")
-	group, kind := gatewayv1.Group(gatewayv1.GroupName), gatewayv1.Kind("Gateway")
-	svcGroup, svcKind := gatewayv1.Group(""), gatewayv1.Kind("Service")
-	gwNS, section := gatewayv1.Namespace("assayd-gateway"), gatewayv1.SectionName("http")
-	port, weight := gatewayv1.PortNumber(8080), int32(100)
-	legacy := &gatewayv1.HTTPRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: runNS(ns), Labels: map[string]string{
-			controller.LabelAgent: "legacy", controller.LabelAgentUID: string(a.UID),
-			controller.LabelAgentNamespace: ns, controller.LabelRevision: rev}},
-		Spec: gatewayv1.HTTPRouteSpec{
-			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{
-				Group: &group, Kind: &kind, Name: "assayd", Namespace: &gwNS, SectionName: &section}}},
-			Hostnames: []gatewayv1.Hostname{gatewayv1.Hostname("legacy." + ns + "." +
-				controller.DefaultGatewayHostnameSuffix)},
-			Rules: []gatewayv1.HTTPRouteRule{{BackendRefs: []gatewayv1.HTTPBackendRef{{
-				BackendRef: gatewayv1.BackendRef{BackendObjectReference: gatewayv1.BackendObjectReference{
-					Group: &svcGroup, Kind: &svcKind,
-					Name: gatewayv1.ObjectName(controller.WorkloadName("legacy", rev)), Port: &port},
-					Weight: &weight}}}}},
-		},
-	}
-	if err := k8s.Create(context.Background(), legacy); err != nil {
-		t.Fatalf("plant the legacy route: %v", err)
-	}
+	plantLegacyRoute(t, a, rev)
 
 	r, stub := createReconciler()
 	reconcileOnce(t, r, a)
