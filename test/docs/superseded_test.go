@@ -16,14 +16,24 @@
 // Scope is deliberate — it covers what an implementer builds FROM, and nothing
 // whose job is to record or refute:
 //
+//   - Both `.md` and `.html` are scanned. `docs/architecture.html` is the
+//     rendered face of the canonical document, hand-maintained beside it with no
+//     generator between them; while the walk stopped at the file extension, that
+//     page carried "27/27 designs approved · 26 ADRs" in its header and footer
+//     for weeks after both bodies had been corrected. See renderHTML for what a
+//     page is reduced to, and for the two things it deliberately does not read.
 //   - Only the AUTHORITATIVE BODY is scanned — everything before a design's
 //     amendment section. Amendment logs must be free to quote what they retract.
 //   - docs/designs/reviews/** is never scanned. Reviews are history and are never
 //     edited to match a later decision (write-spec).
 //   - docs/research/** is never scanned. A research note is evidence, and the
 //     note that supersedes another must quote every claim it refutes.
-//   - A document already marked superseded is never scanned. An ADR's content is
-//     frozen when it is superseded, by the rule in the adr skill.
+//   - A document marked superseded IN WHOLE is never scanned. An ADR's content
+//     is frozen when it is superseded, by the rule in the adr skill. A document
+//     marked superseded IN PART is scanned, because the parts that stand are
+//     what people build from — see partiallySuperseded, which exists because the
+//     bare-word marker had quietly excluded `docs/architecture.md`, the document
+//     this project calls canonical.
 //   - The superseded research note is not scanned but IS required to say so.
 //
 // Each rule bans an ASSERTION and permits a RETRACTION, because "X is withdrawn"
@@ -49,7 +59,11 @@ type rule struct {
 	// onlyIn restricts a rule to one document. Used where a phrase is stale in
 	// one design and correct elsewhere.
 	onlyIn string
-	banned *regexp.Regexp
+	// exceptDir exempts one directory from a rule. Used exactly once, and only
+	// where enforcing the rule would demand an edit another of this corpus's
+	// rules forbids — see blanket-approval-claim.
+	exceptDir string
+	banned    *regexp.Regexp
 	// allowed rescues a line that mentions the banned thing in order to retract
 	// it. Nil means the mention is banned outright.
 	allowed *regexp.Regexp
@@ -57,6 +71,42 @@ type rule struct {
 }
 
 var rules = []rule{
+	{
+		// The most-repeated false sentence in this corpus, and the one every
+		// other rule here was written around rather than for.
+		//
+		// CLAUDE.md and AGENTS.md both open by recording it: "An earlier version
+		// of this line said all 27 designs were approved and critique-passed.
+		// That was false, and it was the first thing every contributor read."
+		// It was corrected in architecture.md §18 and in the HTML body, and it
+		// went on sitting in the HTML page's HEADER and FOOTER — because nothing
+		// mechanical had ever looked for it. A withdrawn guarantee about a
+		// gateway gets a rule; the withdrawn claim about the corpus itself did
+		// not.
+		//
+		// exceptDir is `decisions` and the reason is a rule collision, not
+		// convenience. ADR-0026's Consequences states this in its own frozen
+		// body, and the adr skill forbids editing an ADR's content to match a
+		// later decision — that is why ADR-0020 and ADR-0033 carry
+		// `superseded-by` with their bodies untouched. ADR-0026 is corrected, not
+		// superseded, so it carries the marker in its Status line and Amendment 2
+		// instead. A gate that demanded the body be rewritten would be enforcing
+		// one repository rule by breaking another, and the frozen record is not
+		// what an implementer builds from.
+		//
+		// The rescue clause deliberately omits the bare word `supersed`, which
+		// every other rule here carries. Measured: with it, re-planting the
+		// header claim did NOT fail the gate. `<span>` is inline, so the page's
+		// whole `meta-row` renders as ONE block, and the corrected pill beside
+		// it — "superseded in part" — rescued the planted one. The word this
+		// rule's own corrections use is "withdrawn", so the clause asks for
+		// that and for the other explicit retractions, and nothing weaker.
+		name:      "blanket-approval-claim",
+		exceptDir: "decisions",
+		banned:    regexp.MustCompile(`(?i)27/27|design phase is complete|all 27 designs|every component[^.]{0,80}approved`),
+		allowed:   regexp.MustCompile(`(?i)withdraw|retract|w(as|ere) false|are now false|is false|is not true|not approved|first slice|no longer|never meant`),
+		why:       "no central design is approved whole: design 02 is not approved by its own header, and 03 and 16 approve only their first slice (ADR-0030; docs/designs/README.md arbitrates)",
+	},
 	{
 		name:    "superseded-research-note",
 		banned:  regexp.MustCompile(regexp.QuoteMeta(supersededNote)),
@@ -231,11 +281,33 @@ func supersedes(path, ruleName string) bool {
 	return strings.Contains(head, "supersedes ADR-0020")
 }
 
-// isFrozen reports whether the document announces its own supersession up front.
+// partiallySuperseded is the head of a document that is still the document
+// people read.
+//
+// "Superseded IN PART" is the opposite of frozen: the parts that stand are
+// exactly what an implementer builds from, so they are exactly what must be
+// scanned. The bare-word marker did not distinguish the two, and it swallowed
+// **docs/architecture.md** — the canonical document, whose Status line reads
+// "superseded in part — read §18 before relying on this document" at byte 608,
+// inside the 800-byte head.
+//
+// So the most-read document in the repository was exempt from this gate from the
+// day the gate was written, and nothing ever failed: an unscanned file reports
+// nothing, which is the same silence as a clean one. That is the shape
+// TestAnEmptyCorpusIsAFailure exists to catch at the level of the whole corpus,
+// happening to one file.
+var partiallySuperseded = regexp.MustCompile(`(?i)superseded in part`)
+
+// isFrozen reports whether the document announces that ALL of it is superseded,
+// which is the only case where scanning would demand an edit the corpus's own
+// rules forbid.
 func isFrozen(content string) bool {
 	head := content
 	if len(head) > 800 {
 		head = head[:800]
+	}
+	if partiallySuperseded.MatchString(head) {
+		return false
 	}
 	return frozenMarker.MatchString(head)
 }
@@ -359,6 +431,57 @@ func blocks(text string) []string {
 	return out
 }
 
+// HTML pages are scanned too, because `docs/architecture.html` is the rendered
+// face of the canonical document and is hand-maintained beside it with no
+// generator between them. Scanning only the Markdown is how "27/27 designs
+// approved · 26 ADRs" — the exact sentence CLAUDE.md opens by recording as false
+// and as "the first thing every contributor read" — survived in that page's
+// header and footer for weeks after the body of both files had been corrected.
+// A gate that stops at the file extension does not cover the document.
+//
+// SCOPE, stated because the limit is the point. This reduces a page to the text
+// a reader sees; it is not a browser:
+//
+//   - `<script>`, `<style>` and inline `<svg>` plates are dropped WHOLE. Their
+//     text nodes are code, declarations and diagram coordinates, not prose — and
+//     an `<img src="data:…">` blob is not prose either, which is why tags are
+//     removed with their attributes. The cost is real and is the reason it is
+//     written here: a withdrawn guarantee typed into an SVG's `aria-label` is
+//     NOT scanned.
+//   - Block-level tags end a rendered block, so a table cell and a paragraph are
+//     separate blocks exactly as in Markdown; every other tag is inline and is
+//     removed without a break, so `<b>` inside a phrase cannot split it.
+//   - Only the handful of entities this corpus actually uses are decoded.
+var (
+	htmlComment = regexp.MustCompile(`(?s)<!--.*?-->`)
+	// Dropped whole, content included. One pattern per element because RE2 has
+	// no back-reference, and a single alternation would let `<style>…</svg>`
+	// swallow everything between two different elements.
+	htmlDropped = []*regexp.Regexp{
+		regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script\s*>`),
+		regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style\s*>`),
+		regexp.MustCompile(`(?is)<svg\b[^>]*>.*?</svg\s*>`),
+	}
+	// Tags a reader perceives as a break between blocks.
+	htmlBlockTag = regexp.MustCompile(`(?i)</?(p|div|li|tr|td|th|h[1-6]|br|hr|section|article|table|thead|tbody|tfoot|ul|ol|dl|dt|dd|pre|blockquote|figure|figcaption|nav|header|footer|main|aside|title)\b[^>]*>`)
+	// Everything left is inline, and leaves no gap when it goes.
+	htmlAnyTag  = regexp.MustCompile(`(?s)<[^>]*>`)
+	htmlEntity  = strings.NewReplacer("&nbsp;", " ", "&amp;", "&", "&lt;", "<", "&gt;", ">", "&quot;", `"`, "&#39;", "'", "&mdash;", "—", "&ndash;", "–", "&hellip;", "…", "&rarr;", "→", "&times;", "×")
+	htmlDoctype = regexp.MustCompile(`(?i)<!doctype[^>]*>`)
+)
+
+// renderHTML reduces a page to the blocks of text a reader sees.
+func renderHTML(s string) string {
+	s = htmlDoctype.ReplaceAllString(s, "\n")
+	s = htmlComment.ReplaceAllString(s, "\n")
+	for _, re := range htmlDropped {
+		s = re.ReplaceAllString(s, "\n")
+	}
+	s = htmlBlockTag.ReplaceAllString(s, "\n")
+	s = htmlAnyTag.ReplaceAllString(s, "")
+	return htmlEntity.Replace(s)
+}
+
 // amendmentHeading marks where a design's authoritative body ends.
 var amendmentHeading = regexp.MustCompile(`(?m)^## \d+\. Amendment`)
 
@@ -386,6 +509,9 @@ func scanBody(path, text string) []violation {
 	for _, blk := range blocks(text) {
 		for _, r := range rules {
 			if r.onlyIn != "" && filepath.Base(path) != r.onlyIn {
+				continue
+			}
+			if r.exceptDir != "" && filepath.Base(filepath.Dir(path)) == r.exceptDir {
 				continue
 			}
 			if supersedes(path, r.name) {
@@ -420,12 +546,24 @@ func discover(root string) (map[string]string, error) {
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, ".md") {
+		isMD := strings.HasSuffix(path, ".md")
+		isHTML := strings.HasSuffix(path, ".html")
+		if !isMD && !isHTML {
 			return nil
 		}
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
+		}
+		if isHTML {
+			// The frozen rule is Markdown's. It reads the first 800 bytes for a
+			// document that announces its own supersession, and an HTML file's
+			// first 800 bytes are `<head>` — so the check could only ever answer
+			// "not frozen" here, and stating it as a check would be a rule
+			// nothing enforces. No page in this corpus is frozen; one that ever
+			// is needs a rule written for where an HTML document says so.
+			out[path] = renderHTML(string(b))
+			return nil
 		}
 		if isFrozen(string(b)) {
 			return nil
@@ -463,6 +601,51 @@ func TestAnEmptyCorpusIsAFailure(t *testing.T) {
 	}
 }
 
+// TestTheCanonicalDocumentIsScanned names the two files by path, because the
+// corpus-level guard cannot see one file going missing.
+//
+// AGENTS.md calls `docs/architecture.md` canonical and `docs/architecture.html`
+// its rendered face. Both were outside this gate: the Markdown by the frozen
+// rule (see partiallySuperseded), the HTML by the file extension (see
+// renderHTML). Either exclusion returning leaves every rule here passing on a
+// corpus that no longer contains the documents most people read.
+func TestTheCanonicalDocumentIsScanned(t *testing.T) {
+	got := scanned(t, docsRoot)
+	for _, want := range []string{"architecture.md", "architecture.html"} {
+		p := filepath.Join(docsRoot, want)
+		if _, ok := got[p]; !ok {
+			t.Errorf("%s is not in the scanned corpus. It is the document this project calls "+
+				"canonical, or its rendered face; a gate that skips it reports the same silence "+
+				"as a clean scan", p)
+		}
+	}
+}
+
+// TestFrozenMeansTheWholeDocument pins the distinction directly, so the two
+// heads cannot be conflated again.
+func TestFrozenMeansTheWholeDocument(t *testing.T) {
+	cases := map[string]struct {
+		head string
+		want bool
+	}{
+		"a superseded ADR": {
+			"# ADR-0020: Policy compiler\n- **Status**: **superseded-by ADR-0028** · 2026-08-27\n", true,
+		},
+		"a dated record superseded whole": {
+			"# Handoff\n> **Dated record — superseded, not rewritten.**\n", true,
+		},
+		"the canonical document, superseded in part": {
+			"# assayd — Architecture v1.0\n- **Status**: **superseded in part — read §18 before relying on this document.**\n", false,
+		},
+		"an ordinary document": {"# Design 03\n\nStatus: draft.\n", false},
+	}
+	for name, c := range cases {
+		if got := isFrozen(c.head); got != c.want {
+			t.Errorf("%s: isFrozen = %v, want %v", name, got, c.want)
+		}
+	}
+}
+
 // TestNoSupersededGuaranteeInAnAuthoritativeBody is the gate BLOCKER 8 asked for.
 func TestNoSupersededGuaranteeInAnAuthoritativeBody(t *testing.T) {
 	for path, text := range scanned(t, docsRoot) {
@@ -482,6 +665,7 @@ func TestNoSupersededGuaranteeInAnAuthoritativeBody(t *testing.T) {
 // A deleted rule leaves its fixture uncaught. A weakened regex stops matching.
 // Either fails here.
 var ruleFixtures = map[string]string{
+	"blanket-approval-claim":    "The design phase is complete — 27/27 approved, every one through independent critique.",
 	"superseded-research-note":  "See `agentgateway-2.2-2026-08.md` for the OTLP claims.",
 	"nonexistent-release":       "The compiler targets agentgateway 2.2 resources.",
 	"cuts-early-guarantee":      "The limiter is conservative: it cuts early, never late.",
@@ -512,8 +696,12 @@ var ruleFixtures = map[string]string{
 // classification table an implementer copies from — and the pre-r6 pattern
 // matched neither. A rule must be pinned by how the corpus says it.
 var livePhrasingFixtures = map[string]string{
-	"spec-only-hash":    "1. Spec change → `revisionHash(spec)` — **spec only**; the card digest is status.",
-	"env-referent-hash": "| `runtime.env`, `runtime.envFrom` (by **referent**, not contents) | `runtime.port` |\n|---|---|\n| a | b |",
+	// The two that sat in docs/architecture.html's header and footer, kept as the
+	// page wrote them. The body of both documents had been corrected; these had
+	// not, so the page read as current to anyone who did not scroll to §18.
+	"blanket-approval-claim": "<span><b>status</b> 27/27 designs approved · 26 ADRs</span>",
+	"spec-only-hash":         "1. Spec change → `revisionHash(spec)` — **spec only**; the card digest is status.",
+	"env-referent-hash":      "| `runtime.env`, `runtime.envFrom` (by **referent**, not contents) | `runtime.port` |\n|---|---|\n| a | b |",
 }
 
 // TestTheLivePhrasingsThatSlippedThroughAreCaught pins r6 MAJOR 5's second half.
@@ -634,6 +822,148 @@ func TestLinkAndImageSyntaxCannotHideAWithdrawnClaim(t *testing.T) {
 		if !caught(t, name, evasion) {
 			t.Errorf("rule %q is bypassed by inline markdown:\n    source:   %s\n    rendered: %s",
 				name, evasion, normalize(evasion))
+		}
+	}
+}
+
+// caughtHTML is caught()'s twin for a rendered page: a real .html file on disk,
+// discovered by the same walk, rendered by renderHTML and matched by the same
+// scanBody. It takes no shortcut the corpus cannot take, for the reason caught()
+// gives.
+func caughtHTML(t *testing.T, name, page string) bool {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "architecture.html"), []byte(page), 0o644); err != nil {
+		t.Fatalf("fixture corpus: %v", err)
+	}
+	for path, text := range scanned(t, dir) {
+		for _, v := range scanBody(path, text) {
+			if v.rule == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// htmlPage wraps a fragment in the skeleton a real page has, so the fixture
+// exercises the doctype, the head and a dropped <style> rather than a bare
+// string the production walk would never see.
+func htmlPage(fragment string) string {
+	return "<!doctype html>\n<html><head><title>assayd — Architecture v1.0</title>\n" +
+		"<style>:root { --bg: #F7F8FA; }</style></head>\n<body>\n" + fragment + "\n</body></html>\n"
+}
+
+// htmlFixtures pin that a withdrawn guarantee cannot hide in the RENDERED page.
+// Each states its claim in markup the source bytes do not contain contiguously:
+// inline emphasis inside the phrase, a soft wrap, an entity, and a link.
+// Each tag sits INSIDE the banned phrase, which is the property that makes the
+// fixture evidence: the source bytes do not contain the phrase contiguously, so
+// a scanner that leaves inline markup in place matches none of them.
+var htmlFixtures = map[string]string{
+	"cuts-early-guarantee": `<p>The limiter is conservative: it cuts <b>early</b>, never late.</p>`,
+	"overshoot-bound":      "<p>Status publishes a measured\novershoot bound per replica.</p>",
+	"exact-usd-tier":       `<p>The <code>exact</code> <em>tier</em> &mdash; the receipt backstop.</p>`,
+	"superseded-adr":       `<td><a href="decisions/0020-policy-compiler.md">ADR</a>-0020 governs compilation order</td>`,
+}
+
+// TestAWithdrawnGuaranteeCannotHideInTheRenderedPage is the gate's HTML half.
+//
+// It exists because `docs/architecture.html` was outside the corpus entirely:
+// the walk returned early on any path not ending in `.md`, so the page carrying
+// "27/27 designs approved · 26 ADRs" in its header and footer was never read by
+// the gate whose whole job is that sentence. Deleting renderHTML, or narrowing
+// the walk back to Markdown, fails here.
+func TestAWithdrawnGuaranteeCannotHideInTheRenderedPage(t *testing.T) {
+	for name, fragment := range htmlFixtures {
+		if !caughtHTML(t, name, htmlPage(fragment)) {
+			t.Errorf("rule %q is bypassed by HTML:\n    source:   %s\n    rendered: %q",
+				name, fragment, renderHTML(fragment))
+		}
+	}
+}
+
+// TestTheApprovalRuleIsExemptOnlyInDecisions pins `exceptDir` in both
+// directions, because an exemption nobody can fail is a hole with a comment
+// on it.
+//
+// The claim must be reported wherever an implementer reads it, and must NOT be
+// reported in `docs/decisions/`, whose bodies are frozen records — ADR-0026
+// states it in its own Consequences and carries the correction in its Status
+// line and Amendment 2 instead. Widening `exceptDir` to another directory, or
+// dropping the check, fails one half or the other.
+func TestTheApprovalRuleIsExemptOnlyInDecisions(t *testing.T) {
+	const claim = "The design phase is complete — 27/27 approved, every one through independent critique."
+
+	dir := t.TempDir()
+	for _, sub := range []string{"designs", "decisions"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, sub, "doc.md"), []byte("# Doc\n\n"+claim+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reported := map[string]bool{}
+	for path, text := range scanned(t, dir) {
+		for _, v := range scanBody(path, text) {
+			if v.rule == "blanket-approval-claim" {
+				reported[filepath.Base(filepath.Dir(path))] = true
+			}
+		}
+	}
+	if !reported["designs"] {
+		t.Error("the blanket-approval claim was not reported in a design — it is the sentence this rule exists for")
+	}
+	if reported["decisions"] {
+		t.Error("the blanket-approval claim was reported in docs/decisions/. An ADR's body is a frozen " +
+			"record and the adr skill forbids editing it to match a later decision; this gate must not " +
+			"demand that edit. The correction belongs in the ADR's Status line and an amendment")
+	}
+}
+
+// TestARenderedCellIsItsOwnBlock is the HTML twin of the Markdown per-cell
+// rescue rule, and it is what pins htmlBlockTag. A page's §00 corrections table
+// and §20 ADR index are both two-column tables where one side ASSERTS and the
+// other COMMENTS — so if a whole row rendered as one block, the word "retracted"
+// in the right-hand cell would launder a live guarantee stated in the left.
+//
+// Deleting htmlBlockTag merges the row and this test fails.
+func TestARenderedCellIsItsOwnBlock(t *testing.T) {
+	row := `<tr><td>The limiter cuts early, never late</td><td>a retracted note about something else</td></tr>`
+	if !caughtHTML(t, "cuts-early-guarantee", htmlPage(row)) {
+		t.Error("a retraction word in an ADJACENT CELL rescued a live guarantee; rescue must be per-cell")
+	}
+}
+
+// TestTheRenderedPageDoesNotInventASentence pins the other direction, because a
+// renderer that joined everything would fail the gate on documents nobody wrote,
+// and a gate that cries wolf gets its rules deleted.
+//
+//   - Two cells must not be spliced into a phrase neither contains. Each half
+//     here is innocuous alone, which is the whole point: replacing the block
+//     boundary with a space fails this.
+//   - A base64 `data:` image, a `<style>` body and an `<svg>` plate must
+//     contribute no text at all. They are most of this page's bytes, and a
+//     `quiesc` or an `ADR-0020` surfacing out of one would be a false report.
+func TestTheRenderedPageDoesNotInventASentence(t *testing.T) {
+	splice := `<tr><td>the acceptance</td><td>polling verifies convergence</td></tr>`
+	if caughtHTML(t, "in-worker-poll", htmlPage(splice)) {
+		t.Errorf("two cells were spliced into a claim neither states:\n    rendered: %q", renderHTML(splice))
+	}
+
+	noise := `<p>Nothing withdrawn is asserted here.</p>` +
+		`<img alt="plate" src="data:image/webp;base64,UklGRpqbAABXRUJQVlA4II6bAACwWgSdASpABkAG">` +
+		`<style>.pod { content: "it cuts early, never late"; }</style>` +
+		`<svg role="img" aria-label="x"><text>the acceptance poll runs on the reconcile worker</text></svg>`
+	if txt := renderHTML(noise); strings.Contains(txt, "UklGRp") || strings.Contains(txt, "cuts early") ||
+		strings.Contains(txt, "acceptance poll") {
+		t.Errorf("a data: blob, a <style> body or an <svg> plate reached the scanner as prose:\n%q", txt)
+	}
+	for _, r := range rules {
+		if caughtHTML(t, r.name, htmlPage(noise)) {
+			t.Errorf("rule %q fired on markup that asserts nothing", r.name)
 		}
 	}
 }
