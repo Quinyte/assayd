@@ -112,11 +112,14 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          asset="lychee-x86_64-unknown-linux-musl.tar.gz"
-          curl -sSLo "/tmp/${asset}" \
-            "https://github.com/lycheeverse/lychee/releases/download/lychee-${LYCHEE_VERSION}/${asset}"
-          echo "${LYCHEE_SHA256}  /tmp/${asset}" | sha256sum --check --strict
-          sudo tar -xzf "/tmp/${asset}" -C /usr/local/bin lychee
+          target="lychee-x86_64-unknown-linux-musl"
+          curl -sSLo "/tmp/${target}.tar.gz" \
+            "https://github.com/lycheeverse/lychee/releases/download/lychee-${LYCHEE_VERSION}/${target}.tar.gz"
+          echo "${LYCHEE_SHA256}  /tmp/${target}.tar.gz" | sha256sum --check --strict
+          # The binary sits one directory down, beside its man page and shell
+          # completions — --strip-components is not optional here.
+          sudo tar -xzf "/tmp/${target}.tar.gz" \
+            -C /usr/local/bin --strip-components=1 "${target}/lychee"
           lychee --version
 
       # Runs against the BUILT output of both targets, so it reproduces the
