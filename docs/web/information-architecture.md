@@ -26,19 +26,30 @@ The split is decided and is not relitigated here.
 
 One consequence is worth stating because it constrains every page below: **concepts live on `.io`, and the guides that use them live on `.dev`.** A guide therefore links across the domain boundary on first use of a concept, and never re-explains it. Re-explaining is how two copies start.
 
-### 2.1 Prior art, and what is borrowed from it
+### 2.1 Prior art
 
-**The design rule this section exists to serve: a reader arriving cold should have to learn exactly one unusual thing about this site, and that one thing is the claim class.** Everything else is deliberately conventional, because novelty spent on navigation is novelty not available for the idea that actually needs it.
+Surveyed live on 2026-09-22: Gateway API, Envoy Gateway, Istio, Cilium, kgateway, agentgateway, cert-manager, Crossplane, Knative, KEDA, Flux, Argo CD, Tekton, Sigstore, SLSA, in-toto, and seven projects that already split a marketing domain from a docs domain (Traefik, Grafana, Vault, Temporal, Dagger, Pulumi, with Prometheus as the single-domain contrast).
 
-Three conventions are therefore adopted rather than invented, and the argument for each is that the pattern already exists in this project's own neighbourhood:
+**The design rule the survey serves: a reader arriving cold should have to learn exactly one unusual thing about this site, and that one thing is the claim class.** Everything else is conventional, because novelty spent on navigation is novelty not available for the idea that needs it.
 
-- **The Diátaxis-shaped split** — *guides (how-to) / concepts (explanation) / reference*. `docs/install.md` is already a how-to, `docs/agent-contract.md` is already a reference with a sources table, and neither explains why the gateway is where a rule lives. The split falls out of the corpus rather than being imposed on it.
-- **A per-claim maturity label, rendered inline.** Kubernetes has trained every reader of a Kubernetes-adjacent project to accept a small `alpha`/`beta`/`GA` marker beside a heading and not read it as clutter. The claim class is that badge with two differences: it attaches to a *claim*, not to a feature, and it names the *evidence*, not the ship stage.
-- **One canonical status page** that answers "is this actually done" without the reader reconstructing it from release notes. `/status` (§7) is that page.
+**The conventional docs navigation is nine slots**, and essentially every site surveyed is a subset or a renaming of it: *Overview · Getting Started · Concepts · Guides/Tasks · Reference · Operations · Troubleshooting/FAQ · Releases · Contributing*. §3.2 is that set with `Operations` folded into the guides, because assayd has no day-2 surface yet, and with `Feature status`, `Supply chain` and `Archive` added.
 
-What is deliberately **not** adopted: the comparison table (§9.4), and the "Why *project*?" landing pattern that asserts capabilities in the present tense. Both are near-universal and both are exactly the shape this project has already been burned by.
+Three conventions are adopted:
 
-**This section is the weakest in the document and is marked so.** The three conventions above are argued from this repository and from the Kubernetes convention a reader brings with them, not from a completed survey of comparable sites' current navigation. That survey is owed (§12, O9), and it could change the labels — though it is unlikely to change the split, which the corpus already has.
+- **`Concepts` as a top-level section, spelled that way.** Top-level in Flux (2nd item), Argo CD (3rd), KEDA (2nd), Gateway API, Tekton, Istio, Envoy Gateway and Prometheus. Nested under `Reference` only in cert-manager; absent entirely in Crossplane and Cilium, where the explanation is visibly scattered across `Component Overview`, `eBPF Datapath` and `Internals`.
+- **An inline per-claim maturity label.** Kubernetes has trained every reader of a Kubernetes-adjacent project to accept a small stage marker beside a heading and not read it as clutter. §4.4 specifies the rendering from the strongest examples found.
+- **One canonical page answering "is this actually done"**, rather than leaving a reader to reconstruct it from release notes — Istio's `Feature Stages`, Argo CD's `Feature Maturity`, kgateway's `Feature Maturity`, OpenTelemetry's per-signal matrix. §7 is that page.
+
+**Not adopted:** the comparison table (§9.4), and the "Why *project*?" landing pattern that asserts capabilities in the present tense. Both are near-universal and both are the shape this project has already been burned by.
+
+#### Evidence against this document's own frame, recorded rather than removed
+
+Two survey findings cut against the decided `.io`/`.dev` split. The split is decided and is not relitigated here; the cost is named so that it is arguable rather than discovered.
+
+- **Every one of the seven two-domain splits puts its concept *pages* on the docs side.** Traefik, Grafana, Vault, Temporal, Dagger and Pulumi all do, and Prometheus — which has no marketing site — keeps `Concepts` top-level in docs. What marketing gets in all seven is *one linear narrative* "how it works" page using the same nouns. Temporal is the clean case: `temporal.io/how-it-works` is a nine-step narrative, and `docs.temporal.io/…/Encyclopedia` is the addressable set. **Nobody duplicates the concept pages themselves.** The reconciliation this document adopts, which honours the decided frame: the eight concept pages stay on `.io` as decided, `.dev` links to them and never restates them (§2), and no second narrative page is created — the landing page *is* the narrative. The cost is that a reader in the middle of `/guides/install` who needs a concept crosses a domain boundary. §12, O9.
+- **The supported-versions and end-of-life table belongs on the docs side**, on the same evidence: cert-manager, Grafana, Flux and Istio all keep it in docs because it is operator-facing, and Envoy Gateway puts `(EOL)` labels inside its docs version dropdown. `/releases` stays on `.io` as decided and carries the announcement view — what changed, and which claim classes moved. The **supported-versions table is a `.dev` reference page**, `/reference/tested-versions`, which already exists in §3.2 for the same reason. §12, O10.
+
+`/roadmap` on `.io` is confirmed by the survey rather than contradicted: Prometheus is the only project of the sixteen that keeps a real roadmap in its docs, and it has no marketing site to keep it out of. The design and ADR archive on `.dev` is likewise confirmed — Gateway API carries its GEPs at `/geps/`, inside the docs site, linked from the header as `Enhancements`.
 
 ## 3. The page tree
 
@@ -78,7 +89,7 @@ Every page below states the question it answers for a reader who arrives cold, k
 | `/guides/troubleshooting` | My install or my Agent is stuck — what is it telling me? |
 | `/agent-contract` | What must my container do to run as an Agent? |
 | `/supply-chain` | How do I verify the bytes I am about to run? |
-| `/status` | Is the thing I need actually enforced, at the version I run? |
+| `/feature-status` | Is the thing I need actually enforced, at the version I run? |
 | `/reference/` | Which reference surface do I want? |
 | `/reference/agent` | Every field of the Agent CRD, its default, and what refuses it |
 | `/reference/values` | Every chart value and its default |
@@ -147,7 +158,7 @@ A realistic record, the `measured` claim on the landing page:
     layer: e2e
   conditions:
     - "k3d only. The kind lane skips every gateway test and reports the path unverified."
-  pages: [io/, io/concepts/governance-at-the-gateway, dev/status]
+  pages: [io/, io/concepts/governance-at-the-gateway, dev/feature-status]
 ```
 
 And a `designed` record:
@@ -162,8 +173,31 @@ And a `designed` record:
     design: docs/designs/03-policy-compiler.md
     section: "§3.5"
     status: "The rest of this document is not approved, and must not be implemented."
-  pages: [io/roadmap, dev/status]
+  pages: [io/roadmap, dev/feature-status]
 ```
+
+### 4.4 How a claim class renders, and the failure mode that must not be repeated
+
+**The dominant failure in the surveyed projects is definitions without application: a careful definitions page, and then no signal on the pages the reader actually lands on.** It is worth naming three cases, because this document could produce all three.
+
+- **Istio** has the best definitions artifact found anywhere — a 15-row × 4-stage table specifying what each stage promises about security, performance, support, deprecation, testing and upgradeability. It then signals an Alpha feature with **a bare asterisk appended to the sidebar link**, whose meaning lives only in a `title` tooltip. The Alpha feature's own page body carries nothing.
+- **kgateway** has a good three-table maturity page and **zero** inline signal: its Alpha feature's page is indistinguishable from a GA one, and the maturity page is not even in the site's `/llms.txt`.
+- **Knative Serving** defines its lifecycle stages carefully and then lists all 24 feature flags **with no stage on any of them**. Knative *Eventing*, on the same site, does it right — one table with a compound `Maturity` cell reading `Beta, disabled by default`.
+
+So `/claims` alone is not the system. Gate F of §5.2 — every manifest record must be referenced by at least one page — is the gate that stops this project shipping Istio's failure, and it is why the gate exists.
+
+**The rendering**, drawn from the four strongest examples:
+
+| Borrowed from | What is taken |
+|---|---|
+| **SLSA** | One templated line under the heading — literally `Status: Approved` — where the **status word hyperlinks to the definitions page**. It is the cheapest mechanism in the survey and the one that makes a class impossible to render without also rendering its definition. Every assayd badge links to `/claims`. |
+| **Gateway API** | A collapsible, colour-bordered box whose summary *is* the claim and whose body carries the evidence, placed **beside the sub-feature, mid-page** — not only under the H1. `/reference/api-types/httproute/` carries four of them. This matters here because the concept and reference pages are exactly where a deep-linked reader arrives. |
+| **Elastic `applies_to`** | Annotation at three levels — front matter, the line after a heading, and **inline at the start of a paragraph or list item** — with an explicit rule against annotating page titles. This is the only surveyed system that is genuinely per-*claim* rather than per-*feature*, and it is the model for a document whose unit is the sentence. |
+| **Argo CD** | Maturity keyed to the **exact CRD property path, ConfigMap key and env var** (`Skip Application Reconcile \| metadata.annotations[argocd.argoproj.io/skip-reconcile] \| Alpha`), with the inline admonition and the central table **hyperlinking to each other in both directions**. That two-way link is what keeps the two from drifting, and it maps onto assayd directly: `spec.budget` → refused at admission; `auth: oauth` → `PolicyCompileFailed`; `GovernanceSkipped=AuthVerifiedOnOneReplica` → measured on one replica only. |
+
+**Cilium's mechanism is adopted as a supplement and never as the only signal.** Baking the stage into the H1 (`Standalone DNS Proxy (alpha)`) propagates it free into the sidebar, breadcrumb, search results and browser tab, which nothing else does. But Cilium's casing drifts between `(beta)` and `(Beta)` across its eight such pages, and its accompanying note links nowhere because the project has no definitions page. Taken as a supplement to the SLSA line, it is free reach; taken alone, it is the Istio failure with better propagation.
+
+**One technique is adopted that no other project in the survey has: making the badge's absence a build failure.** Crossplane's Hugo partial reads a page's front-matter `state` and its required `alphaVersion`/`betaVersion`, and **`errorf`s — failing the build — if a page declares a state without a version.** Given this project's history, a convention people are asked to remember is the wrong shape; §5.2's gates are the assayd equivalent, and gate F is its direct analogue.
 
 ## 5. Source of truth, and what keeps the site from going stale
 
@@ -181,12 +215,12 @@ Three modes of page production follow from that, and every page in §3 is assign
 
 **Alternatives considered.**
 
-- *Per-page front matter, no manifest.* Rejected. The same claim appears on the landing page, `/status` and `/roadmap`; three copies is the defect being fixed, and it is the shape of the original failure — a summary restating what a design held.
+- *Per-page front matter, no manifest.* Rejected. The same claim appears on the landing page, `/feature-status` and `/roadmap`; three copies is the defect being fixed, and it is the shape of the original failure — a summary restating what a design held.
 - *No manifest; derive the class from the test suite alone.* This is the simpler option and it is recorded as rejected, because Go offers no stable place to hang a claim identifier that survives a refactor, and because `designed` and `not-built` claims have no test to hang one on. Half the system would need a manifest anyway, so the hybrid is the smaller total surface, not the larger one.
 - *A release checklist.* Rejected on the standard the coordinator set and this project already holds: a mechanism that requires a human to remember something is not a mechanism. It is named here because it is what the project does **today** for `README.md`'s two lists and `CLAUDE.md`'s paragraph, and that is precisely the thing that went false once.
 - *A lint over page prose for assertive verbs.* Rejected. `test/docs/superseded_test.go` works because each rule bans one specific known-false phrase and permits its retraction; a rule that bans a grammatical category produces false positives at a rate that trains people to add exemptions. **What is adopted instead** is extending that existing test's scan root to cover the site's content files, so that the nine withdrawn guarantees it already bans cannot reappear on the website.
 
-**Consequences.** Adding a page, moving a claim between classes and generating `/status`, `/roadmap` and the landing page from one place all become cheap. Two things become harder. The site can no longer be built outside a checkout, because the manifest and the tests must be read together — intended, since the site is built at a tag. And a claim whose evidence is a *mutation result* rather than a test — "three mutations kill it", which is the strongest evidence this repository produces — has no field in the record; §10 carries it. Reversing is cheap: delete the manifest and the test, and pages render an unclassified badge.
+**Consequences.** Adding a page, moving a claim between classes and generating `/feature-status`, `/roadmap` and the landing page from one place all become cheap. Two things become harder. The site can no longer be built outside a checkout, because the manifest and the tests must be read together — intended, since the site is built at a tag. And a claim whose evidence is a *mutation result* rather than a test — "three mutations kill it", which is the strongest evidence this repository produces — has no field in the record; §10 carries it. Reversing is cheap: delete the manifest and the test, and pages render an unclassified badge.
 
 ### 5.2 The gates
 
@@ -238,8 +272,9 @@ Each is one assertion in `test/docs/claims_test.go`, and each fails the build.
 | `/guides/troubleshooting` | `docs/install.md` "When it does not work" | derived-and-reviewed | someone notices |
 | `/agent-contract` | `docs/agent-contract.md` | derived-and-reviewed | its own "Sources" table already names the file or test behind every row — the closest thing in the corpus to what §5.1 proposes, and the model for the manifest |
 | `/supply-chain` | `docs/supply-chain.md`; `.github/workflows/release.yml` | derived-and-reviewed | someone notices |
-| `/status` | `web/claims.yaml` at each release tag | generated | CI (A–G) |
+| `/feature-status` | `web/claims.yaml` at each release tag | generated | CI (A–G) |
 | `/reference/agent` | `api/v1alpha1/agent_types.go` → `config/crd/assayd.dev_agents.yaml` | generated | the reference agent's drift check, plus `make verify` |
+| *(note to the reference owner, not a decision of this document)* | The survey checked the two usual generators. **`ahmetb/gen-crd-api-reference-docs` has self-deprecated** — its README says "not super actively maintained… consider crd-ref-docs" and its last release was 2019, though cert-manager, Flux and Knative all still use it. **`elastic/crd-ref-docs` is active** (v0.3.0, 2026-02) and is what **Gateway API and Cluster API** both use. Separately: **agentgateway — the gateway assayd pins at 1.5.0 — renders its own CRD docs with `kubespec-render`**, and is indexed on `kubespec.dev` beside Gateway API, cert-manager, Cilium and Argo CD. If assayd's Agent CRD should sit next to agentgateway's, that is the shape to match. | — | — |
 | `/reference/values` | `charts/assayd/values.yaml` | generated | the reference agent's drift check |
 | `/reference/conditions` | the `const` block at `api/v1alpha1/agent_types.go` and `designConditions()` beside it | generated | CI — `TestNoConditionTypeIsALiteral` already closes this vocabulary |
 | `/reference/flags` | `cmd/` flag registrations | generated | the reference agent's drift check |
@@ -254,8 +289,8 @@ Each is one assertion in `test/docs/claims_test.go`, and each fails the build.
 
 **A page that restates a claim held elsewhere points at the holder.** Concretely, and these are the five holders that matter:
 
-- `README.md`'s *What is true today* / *What is NOT true today* — restated by `/` and `/status`.
-- The *What remains untrue* paragraph in `AGENTS.md` (and its copy in `CLAUDE.md`) — restated by `/status` and `/roadmap`.
+- `README.md`'s *What is true today* / *What is NOT true today* — restated by `/` and `/feature-status`.
+- The *What remains untrue* paragraph in `AGENTS.md` (and its copy in `CLAUDE.md`) — restated by `/feature-status` and `/roadmap`.
 - `docs/designs/README.md`'s status table — **not** the holder for `/roadmap`. Each design's own `- **Status**:` bullet is, because `README.md`, `AGENTS.md` and the table itself all say a design's own Status line beats any summary, and the table is a summary. The table becomes a derived view like the site is.
 - `api/v1alpha1` and `charts/assayd/values.yaml` — restated by `/reference/agent` and `/reference/values`, generated.
 - git tags plus `docs/supply-chain.md` — restated by `/releases`.
@@ -286,23 +321,31 @@ Eight pages. Each one states the single sentence a reader should leave with, the
 Two constraints on every concept page:
 
 - **The diagram on a concept page carries the class of what it depicts.** Of the eight existing plates, only `01-architecture` and `06-api-surface` are even candidates, and both depict the target surface rather than the shipped one. `08-rollout-lifecycle` shows a `Canary` state design 16's approved slice explicitly never enters. New diagrams are owed for `the-auth-transaction` and `create-lock-adopt`, which have no plate at all and are the two concepts a reader most needs a picture for.
-- **A concept page names what it is not.** `governance-at-the-gateway` states in its own body that no `AgentgatewayBackend` is emitted; `reserved-writes` states that `DELETE` is not reserved. Leaving the negation to `/status` is how a concept page becomes a promise.
+- **A concept page names what it is not.** `governance-at-the-gateway` states in its own body that no `AgentgatewayBackend` is emitted; `reserved-writes` states that `DELETE` is not reserved. Leaving the negation to `/feature-status` is how a concept page becomes a promise.
 
 ## 7. The status page
 
-`/status` answers one question: **is the thing I need actually enforced, at the version I run?**
+`/feature-status` answers one question: **is the thing I need actually enforced, at the version I run?**
+
+**It is not called `/status`, because "status" reads as uptime.** `status.sigstore.dev` is literally an uptime dashboard, and a reader following a link labelled "status" from a landing page expects to learn whether the service is up. The surveyed names for this page are `Feature Stages` (Istio), `Feature Maturity` (Argo CD, kgateway) and `/status/` (OpenTelemetry, which gets away with it because it has no hosted service). `Feature status` is the closest conventional label; the page differs from all of them in being keyed to **measurement** rather than to intent, which the survey found no project doing — so the convention is borrowed for the name and not for the content.
 
 **How it avoids being a third hand-maintained copy: it is generated from `web/claims.yaml`, and the manifest is versioned by git along with the code it describes.** There is no per-version editing step, because there is no per-version file.
 
 **Per-version presentation.**
 
 - The page has a version selector listing every release tag from the first tag that carries a manifest onward. Each entry renders that tag's `web/claims.yaml`. A tag predating the manifest renders a stub naming the tag and linking `README.md` at that tag — honest, and cheap.
-- The default view is the **latest release tag**, not `main`. A reader on `/status` is asking about the version they can install. `main` is available as an explicit selection and is labelled unreleased.
+- The default view is the **latest release tag**, not `main`. A reader on `/feature-status` is asking about the version they can install. `main` is available as an explicit selection and is labelled unreleased.
 - A **delta view** between two selections lists every claim whose class changed, in both directions. That view is also the input to `/releases`, so the release notes and the status page cannot disagree.
 
 **Layout.** Three sections, in this order: `measured` (what is enforced), `designed` (what a design specifies and nothing enforces), `not-built`. Within `measured`, claims carrying `conditions` are grouped under a sub-heading naming the condition — so "true on k3d only" is a heading a reader cannot skim past, not a footnote.
 
 **What the page must not do.** It must not summarise. The manifest's `text` is rendered verbatim, because a summary of a claim list is the artefact this whole document exists to prevent.
+
+**Where this sits against prior art.** The survey found **no project publishing what it claims against what it has measured**. The nearest things are Gateway API's per-implementation conformance matrix — which is the only mechanism found anywhere where "does not work" is *produced by tests* rather than asserted by a writer, complete with ❌ cells and an `Extended Features: 25/27` count — and OpenTelemetry's `/status/` per-signal-per-language grid, which states outright that a signal's status in the specification may differ from its status in an SDK. Argo CD's feature-maturity page is a third relative: it indexes *only* unstable surface, so the page is by construction a list of what not to rely on.
+
+Dedicated "limitations" or "non-goals" pages essentially do not exist in this cohort; the genre exemplar is outside it, in SQLite's *Quirks, Caveats, and Gotchas*, which is a first-class maintained document rather than a caveat scattered through prose.
+
+**The consequence for assayd is a claim, not a boast, and it should be stated carefully on the page**: `/feature-status` is keyed to measurement, and this project already produces the input — `AuthVerifiedOnOneReplica`, "the policy half is still not measured", "nothing pages, because design 10 is not built". The ambitious version, which Gateway API shows is reachable, is to **generate the `measured` section from a test run rather than from a manifest field**. Nothing here proposes that, and §12, O3 carries why: the manifest asserts that a test exists, and only a person can assert that it measures the sentence.
 
 ## 8. The roadmap page
 
@@ -326,6 +369,14 @@ ADR-0030's build order, one row per step, each carrying a class. The ADR is the 
 Generated, one row per design, **quoting each design's own `- **Status**:` bullet verbatim rather than summarising it**. `docs/designs/README.md`'s table is not the holder, for the reason in §5.4.
 
 The generator truncates nothing and renders no shortened form. Three Status lines here run to several hundred words, and every attempt to compress one is the mechanism that produced the false line in the first place. Long rows are a collapsed disclosure, expanded by default on `designed` and `not-built` rows.
+
+**And the archive is browsable by state, where the state is the claim class.** This is taken from Gateway API, and the survey named it the single most transferable structure found. Gateway API has **no roadmap page at all**: its enhancement proposals are browsable *By State* — `Provisional`, `Prototyping`, `Implementable`, `Experimental`, `Standard`, `Completed`, `Deferred`, `Declined`, `Withdrawn` — and those states are **the same vocabulary as its release channels**, so "where is this in the design pipeline" and "can I use it" are one axis rather than two that can drift apart.
+
+That is a structural answer to the exact failure `CLAUDE.md` opens by recording. Here the two axes are already one, because a design's state *is* the claim class of what it specifies: a design whose slice is implemented and tested produces `measured` claims, an approved-but-unimplemented slice produces `designed` claims, and a hypothesis under ADR-0030 produces `not-built` ones. So `/archive/designs/` is faceted by claim class and needs no second vocabulary, and "approved" stops being a word that can drift from "built" because it is not the word on the facet.
+
+The counter-example is Tekton, which runs the two ladders separately — TEP status (`proposed`/`implementable`/`implementing`/`implemented`/`deferred`/`withdrawn`) against API stability (`alpha`/`beta`/`stable`) — joined only by a `Proposal` column in a hand-maintained table. That table has visibly drifted: one row has a blank Beta Release and a version sitting in the wrong column. Two vocabularies joined by hand is the shape to avoid.
+
+**§8.1's slice table takes its status labels from Flux**, whose roadmap the survey rated the most honest found: each milestone opens with a literal status line (`Status: Completed - Flux v2.8 GA`), unshipped milestones are labelled `provisional` with the reason ("subject to change based on the project's priorities and the community's feedback"), and items include **explicit removals and end-of-support**, not only additions.
 
 ### 8.3 Open follow-ups, under the disclosure posture
 
@@ -392,7 +443,7 @@ A comparison page can exist when its rows are `measured`. Until then there is no
 
 | Not published | Why |
 |---|---|
-| `CLAUDE.md`, `AGENTS.md` | Contributor-facing working rules. `/status` and `/roadmap` carry what a user needs from them; republishing the paragraph creates the copy §5.5 is trying to reduce. |
+| `CLAUDE.md`, `AGENTS.md` | Contributor-facing working rules. `/feature-status` and `/roadmap` carry what a user needs from them; republishing the paragraph creates the copy §5.5 is trying to reduce. |
 | `docs/HANDOFF.md` | Its own first line marks it a dated record, superseded and deliberately not rewritten. That is the exact class of document a site page must never be, because a site page is the one artefact a reader assumes is current. |
 | `docs/research/**` (33 notes) as a section | Each note is dated evidence about a third party, several past their re-verify dates. A stale note on our own site reads as our current position on someone else's product. Notes are linked individually from the concept or reference page that cites one. |
 | `docs/requirements.md` as a page | Of 30 FR/NFR identifiers, **zero `FR-` identifiers appear in any code or test file**, and only NFR-8 and NFR-3 appear at all. Publishing a requirements list where the overwhelming majority is `not-built` adds nothing `/roadmap` does not say better. Individual requirements are cited from claims where they are the holder. |
@@ -408,7 +459,7 @@ Ordered. Each item is shippable on its own, and each is a prerequisite of the on
 | 0 | **`make docs` added to `.github/workflows/ci.yml`** | Not a page. Every "CI" in §5.4 is false until this lands, including for the gate that already exists. It is one line and it is the difference between a mechanism and an intention. |
 | 1 | `web/claims.yaml` + `test/docs/claims_test.go` (gates A–G) | Infrastructure, not a page. Every badge on every page depends on it; shipping a page first means shipping unclassed prose and retrofitting, which is how the copies start. |
 | 2 | `assayd.io/` and `assayd.io/claims` | The landing page is the highest-reach surface. `/claims` ships with it, because a badge with no definition is decoration. |
-| 3 | `assayd.dev/status` | Generated from item 1. The landing page's honest list has to resolve to something. |
+| 3 | `assayd.dev/feature-status` | Generated from item 1. The landing page's honest list has to resolve to something. |
 | 4 | `assayd.dev/guides/install`, `/guides/api-keys`, `/guides/troubleshooting` | The first thing a reader can actually *do*. Derived from `docs/install.md`, which is already written to this standard. |
 | 5 | `assayd.dev/agent-contract` | The second thing a reader can do. Its existing Sources table means it needs the least rewriting of any page here. |
 | 6 | `assayd.io/roadmap` | Needs items 1 and 3. Its §8.3 gap list is the reason the disclosure posture was decided, so it should not wait. |
@@ -423,8 +474,8 @@ Ordered. Each item is shippable on its own, and each is a prerequisite of the on
 
 | Deferred | Until |
 |---|---|
-| Site search | There is more than one page worth searching and `/archive` is published. Search over a site where `/archive` and `/status` return adjacent results needs a scoping decision this document has not made. |
-| Versioned documentation (more than one version of the guides) | A second supported version exists. `/status` is versioned from item 3; the guides are not, and pin one tested version. |
+| Site search | There is more than one page worth searching and `/archive` is published. Search over a site where `/archive` and `/feature-status` return adjacent results needs a scoping decision this document has not made. |
+| Versioned documentation (more than one version of the guides) | A second supported version exists. `/feature-status` is versioned from item 3; the guides are not, and pin one tested version. |
 | A blog, case studies, a newsletter | There is something measured to write about that `/releases` does not cover. |
 | A comparison page | Its rows are `measured` (§9.4). |
 | Full-text publication of `docs/designs/reviews/**` | Never, on the argument in §9.1. |
@@ -501,11 +552,13 @@ Carried forward rather than hedged in the prose above.
 | # | Item | Why it is open |
 |---|---|---|
 | O1 | **The brief names a gap "D6"; the repository carries no such label.** `grep -n '\bD6\b' docs/` returns nothing. Design 03's D-list runs D1–D4 and design 07's D1–D3, and neither includes this defect. The defect itself is real and is described at design 03 §3.4.4 and §8.1. Either the label comes from a conversation not in the repository, or it needs assigning. §8.3 states the defect and flags the label. |
-| O2 | Whether `v0.4.1` published a chart and image, or is a tag with no release. `docs/supply-chain.md` and `docs/install.md` both stop at `0.4.0`. `/releases` and `/status` cannot be generated from tags until this is settled. |
+| O2 | Whether `v0.4.1` published a chart and image, or is a tag with no release. `docs/supply-chain.md` and `docs/install.md` both stop at `0.4.0`. `/releases` and `/feature-status` cannot be generated from tags until this is settled. |
 | O3 | **The strongest evidence this project produces has no field in the claim record.** "Three mutations kill it" (`TestTheGatewayIsTheOnlyWayIn`) and "every case was run with a mutation of its own, in five batches" (design 03 §8.1) are stronger than "a test exists", and the record in §4.3 cannot express either. A `mutations:` field is the obvious answer and nothing would check it, which is the argument against adding it. Unresolved. |
 | O4 | **`/reference/reasons` is not specified, because it cannot be generated correctly.** Condition *types* are 38 constants closed by `designConditions()` and `TestNoConditionTypeIsALiteral`. Condition *reasons* are 30 constants in `internal/controller/` plus **26 bare string literals** at their call sites, with no constant and no closure test. A reasons reference would be right about 30 and silently absent on 26. The fix is a closure test for reasons mirroring the one for types; that is a code change this document does not make. Until then `/reference/conditions` documents types and phases only, and says so. |
 | O5 | Where the claim manifest lives. `web/claims.yaml` is proposed because the site consumes it, but `web/**` is another agent's territory and a manifest under it is a site asset rather than a repository one. `docs/web/claims.yaml` is the alternative. Not decided. |
 | O6 | Whether `/archive/designs/<nn>` should render 27 designs whose bodies contradict their own Status lines in places. Design 03's body is 2,000+ lines specifying an unapproved system; publishing it verbatim is honest and is also 2,000 lines of `designed` prose with one approval banner at the top. A per-section banner was considered and needs the design's own section structure, which varies. Not decided. |
 | O7 | Whether the landing page may state the thesis — "what was evaluated is what runs" — as an unclassed sentence. It is a statement of intent, not of behaviour, and §4.2 rule 1's boundary does not cleanly settle it. The conservative reading is that it is a claim and is `measured` only for revision identity, not for evaluation, since the eval gate is `designed`. |
 | O8 | Gate B's implementation. Detecting that a named test "reaches a `t.Skip`" requires following helper calls — `responderImage`, `requireGateway` and `requireCluster` are where the skips actually live, not the test bodies. A one-level call-graph walk covers today's cases; nothing guarantees it covers tomorrow's. |
-| O9 | **The prior-art survey behind §2.1 is owed.** A survey of how comparable projects' documentation sites are currently structured — Gateway API and its implementations, cert-manager, Crossplane, Flux, Knative, Sigstore, and the projects that already split a marketing domain from a docs domain — was dispatched and had not returned when this document was written. §2.1 is argued from this repository and from the Kubernetes maturity-label convention instead, and says so. The survey could change the navigation labels; the guides/concepts/reference split is independently supported by the corpus and would survive it. |
+| O9 | **Whether the eight concept pages should move to `assayd.dev`.** The `.io`/`.dev` split is decided and §2.1 does not relitigate it, but all seven surveyed two-domain projects put concept *pages* on the docs side and give marketing one narrative page instead. The cost of the decided frame is a cross-domain hop mid-guide. Raised for the human, not decided here. |
+| O10 | **Whether `/releases` on `.io` should keep the supported-versions and end-of-life table, or hand it to `/reference/tested-versions` on `.dev`.** §2.1 proposes the latter on the survey's evidence (cert-manager, Grafana, Flux and Istio all keep it operator-side), but this splits one reader's question across two domains and may be worse than either whole. |
+| O11 | Whether to serve every docs URL as Markdown by appending `.md`, and publish `/llms.txt`. kgateway, agentgateway and Temporal all do. It is cheap, and this project's documentation is demonstrably read by agents as well as people — `AGENTS.md` exists for exactly that reason. Not specified above because it is a scaffold decision, and the scaffold is another agent's. |
