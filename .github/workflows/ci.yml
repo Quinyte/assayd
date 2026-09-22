@@ -52,6 +52,19 @@ jobs:
       - name: unit
         run: make unit
 
+      # The dependency contract read from the pinned agentgateway chart, and
+      # the untagged half of the cluster suite — test/conformance/ancestor.go's
+      # transcription of policyReport, which exists because that transcription
+      # already drifted once and which ran in no automated gate until now
+      # (design 03 A82). It needs no cluster and no network.
+      - name: dependency contract and the policy-report transcription
+        run: make conformance
+
+      # A superseded guarantee must not survive in the text implementers build
+      # from. Also in `make test` and, like conformance, in no CI job before.
+      - name: docs do not carry a superseded guarantee
+        run: make docs
+
       - name: unit (race)
         run: make race
 
