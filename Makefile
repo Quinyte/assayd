@@ -5,6 +5,7 @@ SHELL := /bin/bash
 GOBIN := $(shell go env GOPATH)/bin
 CONTROLLER_GEN := $(GOBIN)/controller-gen
 SETUP_ENVTEST  := $(GOBIN)/setup-envtest
+CRDOC          := $(GOBIN)/crdoc
 ENVTEST_K8S    ?= 1.36.x
 # `make envtest` runs the suite once. A scheduled workflow reruns it with
 # ENVTEST_COUNT=3 so that a test which cannot run twice in one process is caught,
@@ -20,6 +21,14 @@ CLUSTER        ?= assayd-local
 # absent everywhere else.
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
 ENVTEST_VERSION          ?= release-0.24
+# crdoc renders the CRD half of docs/reference/. Pinned like the rest: `make
+# verify` compares the committed reference against a fresh one, so a generator
+# that floated would fail the gate for whoever happened to pick up a new version
+# first. Chosen over elastic/crd-ref-docs, which is better maintained and reads
+# the Go types directly but DROPS x-kubernetes-validations — and this CRD's
+# load-bearing constraints are CEL. Apache-2.0. Its own `--version` self-reports
+# v0.6.2 at this module version; the module version here is what is pinned.
+CRDOC_VERSION            ?= v0.6.4
 
 .PHONY: help
 help: ## show targets
@@ -30,7 +39,7 @@ help: ## show targets
 # so a fresh clone or a fresh CI runner works without a setup document nobody
 # reads.
 .PHONY: tools
-tools: $(CONTROLLER_GEN) $(SETUP_ENVTEST) ## install the pinned build tools
+tools: $(CONTROLLER_GEN) $(SETUP_ENVTEST) $(CRDOC) ## install the pinned build tools
 
 $(CONTROLLER_GEN):
 	GOBIN=$(GOBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
@@ -38,12 +47,28 @@ $(CONTROLLER_GEN):
 $(SETUP_ENVTEST):
 	GOBIN=$(GOBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION)
 
+$(CRDOC):
+	GOBIN=$(GOBIN) go install fybrik.io/crdoc@$(CRDOC_VERSION)
+
 ## ---------- generate ----------
-.PHONY: generate manifests
+.PHONY: generate manifests reference
 generate: $(CONTROLLER_GEN) ## deepcopy funcs
 	$(CONTROLLER_GEN) object:headerFile=hack/boilerplate.go.txt paths=./api/...
 manifests: $(CONTROLLER_GEN) ## CRDs + RBAC
 	$(CONTROLLER_GEN) crd rbac:roleName=assayd-operator paths=./... output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
+
+# The public reference under docs/reference/: the CRD schema, the chart values,
+# and the operator's condition and reason vocabulary — derived from config/crd,
+# charts/assayd and internal/controller respectively, never hand-written. This
+# repository has already shipped two hand-kept copies of one document that
+# drifted apart (docs/architecture.md and docs/architecture.html); a reference on
+# a public website is the same liability with a larger blast radius.
+#
+# It depends on manifests: the CRD page is rendered from config/crd, so
+# generating against a stale CRD would publish a schema the cluster does not
+# enforce.
+reference: $(CRDOC) manifests ## docs/reference/ — generated from the CRD, the chart and the code
+	PATH="$(GOBIN):$$PATH" go run ./cmd/refgen -root . -out docs/reference
 
 ## ---------- the loop ----------
 .PHONY: fmt vet unit envtest docs conformance conformance-cluster chart chart-conform test race cover e2e verify
@@ -86,9 +111,14 @@ verify: ## what CI runs — generation must be reproducible
 	@$(MAKE) generate manifests
 	@cp config/crd/assayd.dev_agents.yaml charts/assayd/crds/assayd.dev_agents.yaml
 	@sed -n '/^rules:/,$$p' config/rbac/role.yaml > charts/assayd/files/operator-rules.yaml
-	@out="$$(git status --porcelain -- api config charts)"; \
+# The generated reference is held to the same bar as the generated CRD. A
+# generator nobody runs is worse than no generator: its output reads as current
+# and is not. Regenerating here makes a stale docs/reference/ fail CI in the
+# same breath as a stale config/crd/.
+	@$(MAKE) reference
+	@out="$$(git status --porcelain -- api config charts docs/reference)"; \
 	if [ -n "$$out" ]; then \
-		echo "generated files are stale or uncommitted — run 'make generate manifests' and commit:"; \
+		echo "generated files are stale or uncommitted — run 'make generate manifests reference' and commit:"; \
 		echo "$$out"; \
 		exit 1; \
 	fi

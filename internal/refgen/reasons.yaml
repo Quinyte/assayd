@@ -1,0 +1,857 @@
+# SPDX-FileCopyrightText: 2026 Quinyte
+# SPDX-License-Identifier: Apache-2.0
+#
+# The three answers no compiler knows, for every reason string the operator can
+# set on a condition.
+#
+# docs/reference/conditions.md is generated from this file AND from the code.
+# The code supplies the reason strings, the conditions they land on, the call
+# sites and whether any test names them; this file supplies only:
+#
+#   state     — what state of the world makes the operator set this reason
+#   operator  — what the operator does on that pass
+#   traffic   — withdrawn | not-withdrawn | depends | unknown
+#
+# The two halves are JOINED and CHECKED. A reason the code can set with no entry
+# here fails `make reference`, and so fails `make verify` and CI; an entry whose
+# reason no code path sets fails the same way. That is the whole point: this file
+# cannot silently describe a system that no longer exists, which is how
+# docs/architecture.md and docs/architecture.html came apart.
+#
+# `traffic: unknown` is a legitimate answer and must be used wherever the code
+# does not settle it. AGENTS.md rule 8 — a degraded path is never loud and wrong
+# — applies to a reference as much as to a condition. Do not guess here.
+#
+# `disagreement` records a place where the CODE and an approved design say
+# different things. Record it; do not reconcile it. The generated page reports
+# the conflict and leaves it to the people whose job it is to settle it.
+#
+# Entries are alphabetical by reason.
+
+reasons:
+  - reason: AuthInputUncompilable
+    state: >-
+      The current spec's `-auth` input does not compile, an earlier revision is
+      active, and its digest differs from the digest this spec computes to, so
+      the new revision cannot be promoted.
+    operator: >-
+      Records the candidate revision, holds the promotion, sets phase `Held`, and
+      leaves `Ready=True` with reason `Available` because the agent is still
+      serving. `PolicyCompileFailed` carries what to change.
+    traffic: not-withdrawn
+    note: >-
+      `status.activeRevision` is untouched, so the route keeps the `-auth` it was
+      last served with and the backend it already names (design 03 §3.3.1, I1).
+
+  - reason: Available
+    state: >-
+      A revision is serving. Four distinct passes reach this reason: a rollout in
+      flight, a promotion held because the `-auth` input does not compile, a
+      promotion held for gates with an earlier revision active, and a completed
+      promotion.
+    operator: >-
+      Sets `Ready=True` and the phase — `Ready` for the rollout and the completed
+      promotion, `Held` for the two holds — then goes on to converge the serving
+      route on `status.activeRevision`.
+    traffic: not-withdrawn
+
+  - reason: AwaitingGates
+    state: >-
+      The Agent declares gates, the desired revision has not satisfied them, and
+      its digest differs from the active one. Today that is always because the
+      gate controller is unbuilt or gate detection is unwired, not because a gate
+      ran and failed.
+    operator: >-
+      Records the candidate, holds the promotion at zero traffic and sets phase
+      `Held`. `Ready` stays `True` where an earlier revision is active and goes
+      `False` with this reason where none is.
+    traffic: not-withdrawn
+    note: >-
+      Not withdrawn where an earlier revision is active. Where the Agent has
+      never served, `status.activeRevision` is empty and no route is published at
+      all, so there is no traffic to withdraw.
+
+  - reason: BindingRecordInvalid
+    state: >-
+      The run namespace's binding ConfigMap failed a strict decode — a missing
+      field, an unknown state, or a `schemaVersion` this operator carries no
+      decoder for. Nothing is defaulted.
+    operator: >-
+      Terminal. Sets `RunNamespaceUnavailable=True`, `Ready=False`,
+      `Degraded=True`, phase `Degraded`, and returns without retrying. Recovery
+      is a human correcting the record.
+    traffic: not-withdrawn
+    note: >-
+      The pass returns before the gateway step, so a route already published
+      stays published even though the namespace record it depends on cannot be
+      read.
+
+  - reason: CandidateNotAvailable
+    state: >-
+      The desired revision's workload is not available, while a different
+      revision is verified available and holding traffic.
+    operator: >-
+      Records the candidate, sets `Progressing=True`, keeps `Ready=True` with
+      reason `Available` and phase `Ready`, and does not promote.
+    traffic: not-withdrawn
+
+  - reason: CardDrifted
+    state: >-
+      The revision serves an Agent Card whose digest differs from the one
+      `status.cards[]` already records for that same revision.
+    operator: >-
+      Sets `Registered=True` naming both digests and upserts the new card. It
+      logs the change and nothing gates it.
+    traffic: not-withdrawn
+    note: >-
+      No Event is emitted, because no EventRecorder is wired. Nothing refuses a
+      revision whose card changed under it.
+
+  - reason: CardNameMismatch
+    state: >-
+      The fetched card's `name` differs from the Agent's name — the workload is
+      not the agent this CR describes.
+    operator: >-
+      Sets `Registered=False`, stamps the attempt on status, and requeues on the
+      card retry interval. It is retried indefinitely rather than treated as
+      terminal.
+    traffic: not-withdrawn
+
+  - reason: CardNoInterfaces
+    state: >-
+      The card declares an empty `supportedInterfaces`, which A2A v1.0 requires.
+      An A2A v0.x card, which carries a top-level `url` instead, decodes this way.
+    operator: >-
+      Sets `Registered=False`, stamps the attempt, and requeues on the card retry
+      interval.
+    traffic: not-withdrawn
+
+  - reason: CardProtocolUnsupported
+    state: >-
+      Every interface the card declares names an A2A protocol version this
+      operator does not support.
+    operator: >-
+      Sets `Registered=False` naming the declared versions, stamps the attempt,
+      and requeues on the card retry interval.
+    traffic: not-withdrawn
+
+  - reason: CardRedirected
+    state: >-
+      The card path answered 301, 302, 303, 307 or 308. Redirects are never
+      followed: the operator reads a card only from the revision's own Service,
+      which is what keeps the fetch from being an SSRF primitive.
+    operator: >-
+      Sets `Registered=False`, stamps the attempt, and requeues. The `Location`
+      header is deliberately not echoed into status.
+    traffic: not-withdrawn
+
+  - reason: CardUnparseable
+    state: The body at the card path is not valid JSON.
+    operator: >-
+      Sets `Registered=False`, stamps the attempt, and requeues on the card retry
+      interval.
+    traffic: not-withdrawn
+
+  - reason: CardUnreachable
+    state: >-
+      The revision's Service could not be read, has no ClusterIP, or the HTTP
+      fetch failed or answered a status that is neither 200 nor a redirect.
+    operator: >-
+      Sets `Registered=False`, stamps the attempt, and requeues on the card retry
+      interval. Retries live between reconciles, never inside one.
+    traffic: not-withdrawn
+    note: >-
+      Registration failure is never a serving failure here: the operator's own
+      message says the agent keeps serving.
+
+  - reason: CardValidated
+    state: >-
+      The card was fetched, parsed, name-matched, declares a supported interface,
+      and its digest equals the one already recorded for the revision.
+    operator: >-
+      Sets `Registered=True`, upserts `status.cards[]`, and schedules the next
+      drift check.
+    traffic: not-withdrawn
+
+  - reason: DigestMismatch
+    state: >-
+      A desired revision NAME matches one already recorded — in status, or on an
+      owned Deployment or Service — while the digest differs. Two different
+      projections have collided on one 40-bit revision name.
+    operator: >-
+      Terminal. Sets `RevisionHashCollision=True` with this reason, plus
+      `Ready=False` and `Degraded=True` under `RevisionHashCollision`, phase
+      `Degraded`, and returns. It will not adopt or rewrite the workload, because
+      doing so is the gate bypass the collision buys.
+    traffic: not-withdrawn
+    note: >-
+      This is the reason on the `RevisionHashCollision` condition; the same pass
+      puts `RevisionHashCollision` on `Ready` and `Degraded`.
+
+  - reason: EnvSourceUnresolved
+    state: >-
+      A ConfigMap or Secret named by `spec.runtime.env[].valueFrom` or
+      `spec.runtime.envFrom` is missing or unreadable, so the revision cannot be
+      hashed.
+    operator: >-
+      Sets `Ready=False` naming each unresolved reference and phase `Pending`. No
+      revision is minted and no workload is created.
+    traffic: not-withdrawn
+    note: >-
+      This is the reason on `Ready`; the same pass puts `Unresolved` on the
+      `EnvSourceUnresolved` condition.
+
+  - reason: EvalSuiteCRDAbsent
+    state: >-
+      The Agent declares gates, gate detection is wired, and it reports that the
+      EvalSuite CRD is not installed on this cluster.
+    operator: >-
+      Sets `GatesSkipped=True` and treats gates as satisfied, so the candidate
+      revision is PROMOTED UNGATED.
+    traffic: not-withdrawn
+    note: >-
+      The promotion proceeds. This reason is the record that a gate an operator
+      declared did not run.
+
+  - reason: ExternalRegistrationUnimplemented
+    state: >-
+      `spec.external` is set — the agent runs outside this cluster — and nothing
+      in this build registers one.
+    operator: >-
+      Sets `Ready=False` and phase `Pending`, assesses governance, writes status
+      and returns. No run namespace, workload, Service or route is created.
+    traffic: not-withdrawn
+    note: An Agent that reaches this reason has never had a route to withdraw.
+
+  - reason: GateControllerUnimplemented
+    state: >-
+      The Agent declares gates and the EvalSuite CRD is installed, but design
+      16's gate controller is not built, so nothing can decide whether the gate
+      passed.
+    operator: >-
+      Sets `GatesPassed=False`, which holds the promotion: the candidate sits at
+      zero traffic under `AwaitingGates` and phase `Held`, with no exit in this
+      build.
+    traffic: not-withdrawn
+    note: >-
+      Not withdrawn where an earlier revision is active; where none ever served,
+      no route is published.
+
+  - reason: GateDetectionUnwired
+    state: >-
+      The Agent declares gates and this operator was built with no EvalSuite
+      detection, so it cannot tell whether the rollout should be gated.
+    operator: >-
+      Sets `GatesPassed=False`. Detection defaults to "installed", so gates are
+      treated as unsatisfied and the promotion is held under `AwaitingGates`,
+      phase `Held`.
+    traffic: not-withdrawn
+
+  - reason: LabelAuthorityAbsent
+    state: >-
+      The admission policies that reserve the `assayd.dev` namespace labels to
+      the operator identities are not installed, so those labels — which SPIRE
+      and the Gateway act on — would be forgeable.
+    operator: >-
+      Terminal, and checked before any namespace is read. Sets
+      `RunNamespaceUnavailable=True`, `Ready=False`, `Degraded=True`, phase
+      `Degraded`. NO RUN NAMESPACE IS CREATED.
+    traffic: not-withdrawn
+    note: >-
+      Presence is checked by policy NAME only. A policy of that name that
+      validates nothing satisfies this check.
+
+  - reason: MaterialInvalid
+    state: >-
+      A revision-scoped immutable copy already exists under the expected name and
+      refuses the bytes or the provenance being written to it.
+    operator: >-
+      Sets `RevisionMaterialUnavailable=True` with this reason and `Ready=False`,
+      phase `Degraded`, and returns with no error — terminal until a human acts.
+    traffic: not-withdrawn
+    disagreement: >-
+      Design 02 (§ on revision material, and amendments A41 and A72) specifies
+      that a revision whose material cannot be vouched for goes to WEIGHT 0. The
+      code sets the conditions and the phase and returns before the gateway step,
+      so no weight is changed and no route is stripped. Reported, not settled.
+
+  - reason: MaterialUnavailable
+    state: >-
+      Writing or verifying a revision's immutable copies failed for a reason that
+      is not a typed material error — an RBAC refusal, an unavailable API server,
+      cache lag.
+    operator: >-
+      Sets `RevisionMaterialUnavailable=True` with this reason and `Ready=False`,
+      phase `Degraded`, and RETURNS THE ERROR so the queue retries with backoff.
+    traffic: not-withdrawn
+    disagreement: >-
+      The same design-versus-code conflict as `MaterialInvalid`: design 02 says
+      weight 0; the code changes no weight.
+
+  - reason: NameCollision
+    state: >-
+      The run namespace's binding record names a different source namespace than
+      this Agent's — two source namespaces truncate-and-hash to one run namespace
+      name.
+    operator: >-
+      Terminal. Sets `RunNamespaceUnavailable=True`, `Ready=False`,
+      `Degraded=True`, phase `Degraded`, and returns without retrying. Nothing
+      belonging to the first tenant is touched; recovery is renaming a namespace.
+    traffic: not-withdrawn
+    note: Only the SECOND tenant's Agents are affected.
+
+  - reason: NoGatesDeclared
+    state: The Agent declares no gates. Checked first, before gate detection.
+    operator: >-
+      Sets `GatesSkipped=True`; gates count as satisfied and the candidate
+      promotes normally.
+    traffic: not-withdrawn
+    disagreement: >-
+      Design 16 describes gate assessment also setting `GatesPassed=False` with
+      this reason for an Agent whose gate was removed. No such branch exists in
+      the code. Design 16 approves only its first slice and that slice is
+      unimplemented, so this may be intended-future rather than drift; it is
+      recorded either way.
+
+  - reason: NoRolloutInFlight
+    state: >-
+      The desired revision is not available and no other healthy revision is
+      rolling over it.
+    operator: >-
+      Clears `Progressing`. `Ready` is then set by one of the two workload
+      branches below, not by this line.
+    traffic: not-withdrawn
+
+  - reason: NoSigningConfigured
+    state: >-
+      A card was fetched and validated, and nothing in this build signs or
+      verifies Agent Cards.
+    operator: >-
+      Sets `CardUnsigned=True` on every successful registration pass, beside
+      `CardValidated` or `CardDrifted`.
+    traffic: not-withdrawn
+    note: >-
+      This is the standing record that card signature verification is not built.
+      It is set on healthy Agents, not only on failing ones.
+
+  - reason: NoWorkloadSpecified
+    state: Neither `spec.runtime` nor `spec.external` is set.
+    operator: >-
+      Assesses governance so the tier record is not lost, then sets
+      `Degraded=True` and `Ready=False`, phase `Degraded`, and returns.
+    traffic: not-withdrawn
+    note: >-
+      Reached before the run namespace, the workload and the gateway, so no route
+      is ever created for such an Agent.
+
+  - reason: NotCreatedByOperator
+    state: >-
+      A namespace with the run namespace's name exists that the binding record
+      does not vouch for — no record at all, an unknown nonce during creation, or
+      a UID that disagrees with a bound record.
+    operator: >-
+      Terminal. Sets `RunNamespaceUnavailable=True`, `Ready=False`,
+      `Degraded=True`, phase `Degraded`, and returns without retrying. NOTHING IS
+      WRITTEN INTO THAT NAMESPACE.
+    traffic: not-withdrawn
+
+  - reason: ProtocolHasNoDeclaration
+    state: >-
+      `spec.runtime.replicas` is greater than 1, and A2A v1.0 gives a card no way
+      to assert shared task state, so the operator cannot verify that two
+      replicas share one.
+    operator: >-
+      Sets `TaskStateUnverified=True` as an assessment. It changes no phase and
+      holds nothing.
+    traffic: not-withdrawn
+    note: >-
+      Advisory. It is deliberately not keyed off the registered card, so it is
+      raised whether or not a card has been fetched.
+
+  - reason: ReleasePinUnresolvable
+    state: >-
+      `spec.release` pins a revision digest that no retained revision carries —
+      collected, or never minted. A digest is a full SHA-256, so a typo reads the
+      same as a collected revision.
+    operator: >-
+      Sets `Degraded=True` and phase `Degraded` and returns without retrying.
+      DELIBERATELY NOT `Ready=False`: the current release is untouched, and
+      failing the canonical condition would page the on-call for a typo while the
+      agent serves normally.
+    traffic: not-withdrawn
+
+  - reason: RevisionHashCollision
+    state: >-
+      The same state as `DigestMismatch`: one revision name, two different
+      projections.
+    operator: >-
+      Terminal. This is the reason carried on `Ready=False` and `Degraded=True`
+      while `RevisionHashCollision=True` carries `DigestMismatch`. Phase
+      `Degraded`; no adoption and no rewrite.
+    traffic: not-withdrawn
+
+  - reason: RevisionMaterialUnavailable
+    state: >-
+      A revision-scoped copy is missing, or its owner UID or digest disagrees
+      with the record, or a pinned revision's retained material could not be
+      verified.
+    operator: >-
+      This is the reason on `Ready=False`; the `RevisionMaterialUnavailable`
+      condition carries `MaterialUnavailable` or `MaterialInvalid` on the same
+      pass. Phase `Degraded`.
+    traffic: not-withdrawn
+    disagreement: >-
+      Design 02 §3 and amendments A41 and A72 say the revision's route goes to
+      weight 0 here. The code returns before the gateway step and changes no
+      weight. Reported, not settled.
+
+  - reason: RolloutComplete
+    state: >-
+      The desired revision is available, its `-auth` input compiles, and gates are
+      satisfied.
+    operator: >-
+      Promotes: writes `activeRevision` and its digest, clears the candidate,
+      sets phase `Ready` and `Progressing=False`. The serving route is then
+      converged onto the new active revision.
+    traffic: not-withdrawn
+
+  - reason: RunNamespaceUnavailable
+    state: >-
+      The operator-owned run namespace that an Agent's workload and material must
+      live in cannot be used, for any of the five run-namespace reasons, or a
+      create raced a namespace going into Terminating.
+    operator: >-
+      This is the reason on `Ready=False` and, for a terminal cause, on
+      `Degraded=True`; the `RunNamespaceUnavailable` condition carries the
+      specific cause. A terminal cause returns without retrying and sets phase
+      `Degraded`; a transient one sets phase `Pending` and requeues.
+    traffic: not-withdrawn
+    note: >-
+      The pass returns before the gateway step, so a route stays published even
+      when the run namespace holding its backend Service is going away.
+
+  - reason: SandboxRuntimeUnavailable
+    state: >-
+      `spec.runtime.sandbox` is set and no sandbox runtime is bound in this build,
+      so every sandboxed agent downgrades.
+    operator: >-
+      Sets `SandboxDowngraded=True` as an assessment and runs a hardened
+      Deployment instead. It changes no phase and blocks nothing.
+    traffic: not-withdrawn
+    note: Advisory, and set on every pass of a sandboxed Agent.
+
+  - reason: ServiceRejected
+    state: >-
+      The API server refused the Service the operator rendered for a revision,
+      with an Invalid error.
+    operator: >-
+      Sets `Ready=False`, `Degraded=True` and phase `Degraded`, writes status and
+      returns with no error, so there is no backoff retry.
+    traffic: not-withdrawn
+    note: The pass returns before the gateway step; nothing touches the route.
+
+  - reason: TeardownWaiting
+    state: >-
+      The Agent is being deleted with the gateway enabled, and the serving route
+      or the `-auth` policy has been sent a delete that has not completed —
+      another controller's finalizer is holding it.
+    operator: >-
+      Writes `Ready=False` alone and leaves every other condition as it is, then
+      requeues after 30 seconds. Teardown goes no further: the workload, the
+      Service and the revision material are not deleted while either gateway
+      delete is pending.
+    traffic: withdrawn
+    note: >-
+      The route's delete has already been issued; it is still present only
+      because a finalizer holds it. Routes are deleted before policies, so the
+      reverse order cannot leave a published route with no authentication.
+
+  - reason: Terminating
+    state: >-
+      A run namespace, or its binding record, is on its way out. Eight distinct
+      waits reach this reason, including a source namespace deleted and
+      recreated, a binding in a terminating state, and a bound namespace deleted
+      by someone with cluster rights.
+    operator: >-
+      Transient. Sets `RunNamespaceUnavailable=True` and `Ready=False`, phase
+      `Pending`, and requeues after five seconds. Several arms also act — swapping
+      the binding, or deleting the stale binding or namespace.
+    traffic: not-withdrawn
+
+  - reason: Unresolved
+    state: >-
+      The same state as `EnvSourceUnresolved`: a referenced ConfigMap or Secret is
+      missing or unreadable.
+    operator: >-
+      This is the reason on the `EnvSourceUnresolved` condition; the same pass
+      puts `EnvSourceUnresolved` on `Ready=False` and sets phase `Pending`.
+    traffic: not-withdrawn
+
+  - reason: WorkloadNotAvailable
+    state: >-
+      The desired revision has no available replicas and it is not the revision
+      recorded as active — a first rollout, or one where the active revision is
+      also down.
+    operator: >-
+      Records the candidate, sets `Ready=False` and phase `Pending`. No error is
+      returned and no requeue is set on this line.
+    traffic: not-withdrawn
+    note: >-
+      Not withdrawn where an earlier revision is active. Where nothing ever
+      served, no route exists.
+
+  - reason: WorkloadRejected
+    state: >-
+      The API server refused the Deployment the operator rendered for a revision,
+      with an Invalid error.
+    operator: >-
+      Sets `Ready=False`, `Degraded=True` and phase `Degraded`, writes status and
+      returns with no error, so there is no backoff retry.
+    traffic: not-withdrawn
+
+  - reason: WorkloadUnavailable
+    state: >-
+      The revision RECORDED AS ACTIVE has no available replicas — the agent that
+      is serving is down.
+    operator: >-
+      Sets `Degraded=True` and `Ready=False`, clears the candidate and sets phase
+      `Degraded`. `status.activeRevision` is deliberately KEPT.
+    traffic: not-withdrawn
+    note: >-
+      Because the active revision is kept, the route goes on naming a Service
+      with no ready endpoints. Requests reach the gateway and fail there rather
+      than being routed elsewhere.
+
+  # ---------------------------------------------------------------------------
+  # The `-auth` policy compiler (design 03's first slice). Everything below is
+  # reached only with `gateway.enabled`.
+  # ---------------------------------------------------------------------------
+
+  - reason: AuthAbandonWaiting
+    state: >-
+      A transaction whose target no longer matches the spec was abandoned, and
+      the route or policy delete it issued has returned while the object is still
+      held by another controller's finalizer.
+    operator: >-
+      Keeps the abandoned transaction in the slot, sets
+      `PolicyApplyIncomplete=True`, withholds `Ready` if nothing else has, and
+      requeues after 30 seconds.
+    traffic: depends
+    note: >-
+      Withdrawn on the `Create` arm: the route's `backendRefs` are stripped and
+      the route deleted BEFORE this reason is raised. Not withdrawn on the
+      `Lock`'s policy-delete arm, which touches no route.
+
+  - reason: AuthEnforcementPending
+    state: >-
+      A `Create` is short of `Served` and still before its deadline, with nothing
+      else withholding `Ready`. It is raised only on the arm where the route is
+      not yet published.
+    operator: >-
+      Carries `Ready=False`. Phase is `Pending` for an Agent that never served,
+      and `Degraded` where a served Agent's route is being re-created.
+    traffic: withdrawn
+    note: >-
+      It is set only while the route is PREPARED WITH NO `backendRefs` — written,
+      matched, and sending nothing anywhere. That is the compiler's whole point:
+      a new API-key Agent's route is published only after an anonymous request
+      through it gets `401`.
+
+  - reason: AuthEnforcementUnverified
+    state: >-
+      A `Create` whose deadline has passed, or one that saw a genuine NACK from
+      the Gateway naming its `<agent>-auth`.
+    operator: >-
+      Sets `PolicyApplyIncomplete=True` and withholds `Ready` if nothing else
+      has. The transaction goes on working and goes on requeuing; it is not
+      abandoned.
+    traffic: depends
+    note: >-
+      Withdrawn while the transaction is short of `Publishing` — the route stays
+      prepared with no `backendRefs`. Not withdrawn once it has published, where
+      `Publishing` has already written them.
+
+  - reason: AuthInputAbsent
+    state: >-
+      Compiling `spec.expose.a2a.auth` failed — `oauth`, which no build here
+      compiles, is the ordinary cause.
+    operator: >-
+      Sets `PolicyCompileFailed=True` and withholds `Ready`. NO TRANSACTION IS
+      ENTERED. A served Agent keeps the last `-auth` that worked.
+    traffic: depends
+    note: >-
+      Not withdrawn for a served Agent: its route goes on serving under the
+      `-auth` it already has (design 03 §3.3.1, I1). For an Agent that never
+      served, no route is published and its own unpublished routes are collected
+      — there was never traffic to withdraw.
+
+  - reason: AuthLockPending
+    state: >-
+      A `Lock` is in the slot that is not a re-creation: a served `auth: none`
+      Agent edited to `apikey` (J2), or a refused `Adopt` being locked (K2).
+    operator: >-
+      Sets `GovernanceSkipped=True`. The `Lock` re-asserts the route published on
+      `status.activeRevision`, writes `<agent>-auth` onto it, and probes.
+    traffic: not-withdrawn
+    note: >-
+      The route keeps its `backendRefs` throughout the lock. This is the whole
+      design of J2: the Agent goes on answering while its authentication is put
+      in place underneath it.
+
+  - reason: AuthLockUnverified
+    state: >-
+      A `Lock` is past its deadline, or it saw a NACK. The policy has been
+      written and the `401` that would prove it has not been credited.
+    operator: >-
+      Sets `PolicyApplyIncomplete=True`, `Ready=False` and phase `Degraded`. The
+      `Lock` keeps working.
+    traffic: not-withdrawn
+    note: >-
+      The route keeps serving, OPEN, exactly as before the edit. The Agent is
+      degraded because its declared authentication is not proved, not because it
+      stopped answering.
+
+  - reason: AuthOptedOut
+    state: >-
+      `status.auth.mode` is `none` — the route was published unauthenticated at
+      the owner's request.
+    operator: >-
+      Sets `GovernanceSkipped=True`. The route carries the marker label
+      `assayd.dev/auth: "none"` so that the choice is visible on the object.
+    traffic: not-withdrawn
+
+  - reason: AuthPolicyMissing
+    state: >-
+      A served API-key Agent's `<agent>-auth` policy is absent, or the `Lock`
+      that restores it is already in the slot.
+    operator: >-
+      Enters or runs the missing-policy `Lock` from `ApplyingPolicies`, rewrites
+      the policy, and may re-point the route at `status.activeRevision`. Sets
+      `GovernanceSkipped=True` and `PolicyApplyIncomplete=True`, withholds
+      `Ready`, phase `Degraded`.
+    traffic: not-withdrawn
+    note: >-
+      The route goes on serving WITHOUT AUTHENTICATION while this stands. The
+      condition says so; nothing closes the hole by withdrawing traffic.
+
+  - reason: AuthPolicyNotAttached
+    state: >-
+      A served `<agent>-auth` exists, carries the Agent's UID and renders to the
+      recorded `appliedDigest`, and the Gateway reports its tuple broken at the
+      policy's current generation — `Accepted=False`, `Accepted=True` with a
+      reason other than `Valid`, `Attached=False`, or only the synthetic
+      `StatusSummary` ancestor.
+    operator: >-
+      Sets `PolicyApplyIncomplete=True` and `GovernanceSkipped=True`,
+      `Ready=False`, phase `Degraded`, and records the claim on
+      `status.auth.policyUnattached` so it is re-asserted on passes that learn
+      nothing new.
+    traffic: not-withdrawn
+    note: >-
+      Nothing is withdrawn, deleted or rewritten: this is the fail-open half,
+      ANNOUNCED AND NOT CLOSED. A cluster measurement on agentgateway 1.5.0 found
+      a state that reaches this report while the route still answers `401`, so
+      the fail-open consequence the message announces is not true of every state
+      that produces it.
+    disagreement: >-
+      Design 03 §5 frames this row as firing on a pass that ALSO read the route
+      accepted at its current generation. The code raises it whenever the policy
+      report comes back broken, whatever the route report said; the route report
+      only chooses the opening clause of the message. The same design row later
+      describes the both-fire case and its ordering, so the document is
+      self-reconciling, but its leading clause reads as a precondition the code
+      does not implement. Separately, design 03 records as OWED that this
+      reason's message can name the wrong cause — it opens "the assayd Gateway
+      reports that it does not attach the policy" in a measured case where the
+      Gateway says `Attached=True` — a rule-8 defect both sides agree on and
+      neither has fixed.
+
+  - reason: AuthRecordNotKept
+    state: >-
+      The operator wrote `status.auth` and it did not come back — an Agent CRD
+      that predates the field prunes it silently, so the operator could not keep
+      the record of what it is about to do at the gateway.
+    operator: >-
+      Refuses to write to the gateway at all. Sets `PolicyApplyIncomplete=True`,
+      `Ready=False`, phase `Degraded` or `Pending`, and returns the error so the
+      queue retries.
+    traffic: not-withdrawn
+    note: >-
+      The status write always precedes the gateway write it authorizes, so no
+      route write happens on the pass that raises this. The check is reached only
+      from the persist path, which a served Agent in steady state never calls.
+
+  - reason: AuthTargetUnrenderable
+    state: >-
+      The `targetDigest` recorded on `status.auth` is not what this operator
+      renders for this Agent — a status restored under a new UID, for example.
+    operator: >-
+      Refuses the transaction before any route or policy write. Sets
+      `PolicyApplyIncomplete=True`, `Ready=False` and `Degraded`, and returns the
+      error to requeue.
+    traffic: not-withdrawn
+
+  - reason: AuthTransitionNotBuilt
+    state: >-
+      The recorded mode is `apikey` and the spec now asks for `none` — the lock
+      is one-way and the transaction that would open a locked route is not built.
+    operator: >-
+      Sets `PolicyCompileFailed=True` and withholds `Ready`. The served `-auth`
+      policy stays and no transaction is entered.
+    traffic: not-withdrawn
+    note: >-
+      To serve an Agent unauthenticated after it has been locked, delete it and
+      create it again with `auth: none`.
+
+  - reason: AuthVerifiedOnOneReplica
+    state: >-
+      A served API-key Agent whose replica count is unknown or greater than one:
+      one anonymous probe proved one gateway replica, and nothing declares how
+      many there are. Also a `Create` that has just published and whose route has
+      not yet converged.
+    operator: >-
+      Sets `GovernanceSkipped=False` with this reason and a message saying what
+      the probe did and did not prove. It writes no object and withholds nothing.
+    traffic: not-withdrawn
+    note: >-
+      This is the ordinary steady state of a governed API-key Agent in this
+      build, not a fault. It is the record that enforcement was verified once, on
+      one replica.
+
+  - reason: CompilerUpgradeUnsupported
+    state: >-
+      A serving route is published and `status.auth` holds nothing — a route
+      written before the compiler existed, or one whose status was lost. The
+      operator cannot tell what that route is enforcing, so adopting it is
+      refused.
+    operator: >-
+      Records a refused `Adopt`, keeps the route published following promotion,
+      collects the Agent's other routes, and sets `GovernanceSkipped=True`. NO
+      POLICY IS EVER WRITTEN for it.
+    traffic: not-withdrawn
+    note: >-
+      The route stays UNAUTHENTICATED and is re-asserted published on every pass.
+      It leaves this state only when the Agent is deleted and created again, or
+      when K2 locks it.
+
+  - reason: ConcernNotBuilt
+    state: >-
+      `spec.budget` is stored on the Agent from before admission refused it, and
+      nothing in this build enforces a budget.
+    operator: >-
+      Sets `PolicyCompileFailed=True` and withholds `Ready`. No transaction is
+      entered until the field is removed.
+    traffic: not-withdrawn
+    note: >-
+      A route already served keeps the `-auth` it was served with. An Agent that
+      never served publishes nothing.
+
+  - reason: ForeignTrafficPolicy
+    state: >-
+      A `traffic` policy the operator did not emit targets this Agent's serving
+      route. Two same-level policies on one route resolve at random, so nothing
+      about the route's authentication can be concluded.
+    operator: >-
+      Sets `PolicyApplyIncomplete=True`, and `GovernanceSkipped=True` unless a
+      refused `Adopt` is in the slot, and withholds `Ready`. A transaction takes
+      no probe answer and publishes nothing while it stands.
+    traffic: not-withdrawn
+    note: >-
+      A published route is NOT withdrawn, and the operator never deletes the
+      foreign policy.
+
+  - reason: GatewayAuthPolicy
+    state: >-
+      Something on the assayd Gateway could have answered the anonymous `401` the
+      compiler is about to credit — a counting Gateway-level policy, a Gateway
+      that admits ListenerSets, or a Gateway or policy list that cannot be read.
+      Also W1: a served API-key Agent beside a Gateway-level policy that could
+      widen its route.
+    operator: >-
+      A `Create` or `Lock` HOLDS at `ProbingAfter` and credits no `401`. On a
+      served Agent it writes conditions only — `GovernanceSkipped=True`,
+      `PolicyApplyIncomplete=True`, `Degraded` — and the hold is carried across a
+      lost race.
+    traffic: depends
+    note: >-
+      Withdrawn for a held `Create`: its route stays prepared and unpublished.
+      Not withdrawn for a served Agent or a held `Lock`, where the route stays
+      open and no object is written.
+
+  - reason: GatewayDisabled
+    state: >-
+      `gateway.enabled` is false — what P1 ships. The operator emits nothing at
+      the gateway.
+    operator: >-
+      Sets `GovernanceSkipped=True` on every Agent and returns from the gateway
+      step immediately, emitting nothing.
+    traffic: not-withdrawn
+    note: >-
+      It also SWEEPS nothing. Teardown on disable is not implemented, so a route
+      left behind by a previously-enabled install goes on serving.
+
+  - reason: Governed
+    state: >-
+      Either exactly one gateway replica is declared and at least one was probed,
+      or — the arm that is actually reachable — the Agent has no route the
+      compiler published, so there is vacuously nothing skipped.
+    operator: >-
+      Sets `GovernanceSkipped=False`. It writes no object and never withholds
+      `Ready`.
+    traffic: not-withdrawn
+    note: >-
+      The non-vacuous arm is UNREACHABLE in this build: no flag declares a
+      gateway replica count, so a served API-key Agent reads
+      `AuthVerifiedOnOneReplica` instead.
+
+  - reason: PolicyWriteFailed
+    state: >-
+      A create, update or delete of an `<agent>-auth` policy failed — during an
+      abandonment, a `Create`, a `Lock`, or the re-assertion of a served policy.
+    operator: >-
+      Returns the failure out of the gateway step. `PolicyApplyIncomplete` is
+      raised, `Ready=False`, phase `Degraded` or `Pending`, and the error is
+      returned so the queue retries with backoff.
+    traffic: not-withdrawn
+    note: >-
+      No route write follows this reason on the same pass. One caveat: on the
+      abandonment arm the pass had already stripped the route before the policy
+      delete failed.
+
+  - reason: RouteApplyFailed
+    state: >-
+      Any non-transient failure out of the gateway step that is not one of the
+      typed gateway errors — a route write the API server refused, a serving
+      Service or port that could not be read, a route name collision. It is the
+      fallback reason, written as a literal with no constant.
+    operator: >-
+      Raises `PolicyApplyIncomplete` — though only where this pass asserted
+      nothing stronger, because the literal is not in the ranking and an unranked
+      write error never displaces a standing report. Sets `Ready=False`, and
+      `Degraded` with phase `Degraded` for an Agent that was serving or `Pending`
+      for a `Create` that never served. Returns the error so the queue retries.
+    traffic: unknown
+    note: >-
+      It names a write that did NOT land, so the route keeps whatever state it
+      already had, and whether that state was serving depends on which write
+      failed. Nothing on this path strips or deletes a route. The reference will
+      not collapse that into a yes or a no.
+
+  - reason: ServingRouteNotAccepted
+    state: >-
+      On a pass of a SERVED Agent with no transaction in the slot, or a refused
+      `Adopt` in it, the assayd Gateway's own entry for this route — matched on
+      both `parentRef` and controller name — reports `Accepted=False` or
+      `ResolvedRefs=False` AT THE ROUTE'S CURRENT GENERATION.
+    operator: >-
+      Sets `PolicyApplyIncomplete=True`, `Ready=False` and phase `Degraded`,
+      leaves `GovernanceSkipped` where it was with a note, and records the claim
+      on `status.auth.routeRefused` so it is re-asserted on passes that learn
+      nothing new.
+    traffic: not-withdrawn
+    note: >-
+      Explicitly not withdrawn: the route is left alone and its `backendRefs` are
+      not stripped. Anything that is not an explicit failure at the current
+      generation is treated as unknown — it raises nothing and clears nothing —
+      because every route write bumps the generation and the Gateway's report
+      lags it.
