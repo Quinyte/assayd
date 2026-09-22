@@ -9,7 +9,97 @@
 set -euo pipefail
 
 DISTRO="${DISTRO:-k3d}"
-CLUSTER="${CLUSTER:-assayd-local}"
+KEEP="${KEEP:-0}"
+
+# Everything this run names is keyed off ONE id, so two runs at once cannot
+# share a cluster, an image tag or a kubeconfig by accident.
+#
+# The seconds alone are not enough: two runs started in the same second get the
+# same IMAGE_TAG, and so the same `assayd-operator:e2e-<n>` in the same image
+# store. The pid is what makes the id unique among runs on one host.
+RUN_ID="$(date +%s)-$$"
+
+# THE RUN GETS ITS OWN KUBECONFIG, and that is not hygiene — it is the
+# difference between a result and a coincidence.
+#
+# Until 2026-09-22 this script ran `kubectl config use-context` against the
+# SHARED default kubeconfig. Two runs at once — routine here, because several
+# agents work in parallel — each flipped the global current-context under the
+# other, so a run could build one operator image and then measure the
+# deployment another run had just made. Measured by an independent reviewer:
+#
+#   TestTheOperatorUnderTestIsTheOneJustBuilt: the deployed operator is
+#   e2e-1790099107 and this run built e2e-1790098449 — every assertion in this
+#   suite is about the wrong binary
+#
+# and that self-check is the ONLY thing standing between a collision and a
+# false green: a colliding run does not reliably fail, it can report PASS for a
+# build that was never under test.
+#
+# So the run's kubeconfig is a file nobody else can name, exported before the
+# first cluster tool runs. kubectl, helm, k3d, kind and `go test` all read
+# $KUBECONFIG, so the export is what carries the isolation to every call site,
+# rather than a flag that has to be repeated on each one and can be forgotten
+# on one. It is deliberately NOT seeded from the environment: a caller whose
+# KUBECONFIG already points at the shared default would inherit exactly the bug
+# this removes.
+KUBECONFIG="$(mktemp "${TMPDIR:-/tmp}/assayd-e2e-kubeconfig.XXXXXX")"
+export KUBECONFIG
+
+# The trap is armed HERE, on the line after the file exists, and before anything
+# that can exit. An earlier version armed it after the DISTRO check below, so
+# `DISTRO=bogus ./hack/e2e.sh` created a kubeconfig and exited past the cleanup
+# that would have removed it — the one leak a run can produce without ever
+# reaching a cluster. Cleanup runs on failure and on interrupt as well as on a
+# clean exit: the INT and TERM traps exit, and that is what fires the EXIT trap.
+# KEEP=1 is the only way to hold on to either artefact, and it says where they
+# are. OWNED_CLUSTER is empty until a cluster this run named is created.
+OWNED_CLUSTER=""
+cleanup() {
+  if [ "${KEEP}" = "1" ]; then
+    echo "==> KEEP=1: kubeconfig ${KUBECONFIG} kept${OWNED_CLUSTER:+, cluster ${OWNED_CLUSTER} left up}"
+    return
+  fi
+  rm -f "${KUBECONFIG}"
+  if [ -n "${OWNED_CLUSTER}" ]; then
+    echo "==> deleting ${OWNED_CLUSTER}, the cluster this run created"
+    k3d cluster delete "${OWNED_CLUSTER}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Cluster naming, and why the default is no longer a fixed name.
+#
+# A private kubeconfig isolates which cluster a run TALKS to; it does nothing
+# about two runs talking to the SAME one. With the old default both runs
+# helm-installed into `assayd-local`, the second overwrote the first's
+# Deployment, and the first then measured the second's binary — the same
+# corruption, reached without touching a kubeconfig at all.
+#
+# So a k3d run that is not told a cluster name invents one nobody else can be
+# using, and deletes it again on exit. Naming one is a deliberate choice to
+# share: the caller owns that cluster, this script never deletes it, and two
+# runs that name the same cluster are colliding on purpose.
+#
+# kind clusters are created outside this script (CI's kind-action makes one),
+# so there is nothing there for a unique name to create.
+CLUSTER_IS_OURS=0
+case "${DISTRO}" in
+k3d)
+  if [ -z "${CLUSTER:-}" ]; then
+    CLUSTER="assayd-e2e-${RUN_ID}"
+    CLUSTER_IS_OURS=1
+  fi
+  ;;
+kind)
+  CLUSTER="${CLUSTER:-assayd-local}"
+  ;;
+*)
+  echo "DISTRO must be k3d or kind, got ${DISTRO}" >&2; exit 1 ;;
+esac
+
 # The tag is UNIQUE PER RUN, and that is not cosmetic.
 #
 # With a fixed tag and pullPolicy: Never, `helm upgrade` sees an unchanged
@@ -20,8 +110,10 @@ CLUSTER="${CLUSTER:-assayd-local}"
 #
 # A unique tag changes the pod template, so Kubernetes must roll it, and
 # `--wait` then means what it appears to mean.
-IMAGE_TAG="e2e-$(date +%s)"
+IMAGE_TAG="e2e-${RUN_ID}"
 IMAGE="assayd-operator:${IMAGE_TAG}"
+
+echo "==> run ${RUN_ID}: distro ${DISTRO}, cluster ${CLUSTER}, image ${IMAGE}"
 
 # The agent image the suite deploys, and why it needs a registry at all.
 #
@@ -65,9 +157,24 @@ k3d)
   # FAILURE for a registry that exists — the script then tries to create it
   # and dies on "already exists". Plain grep reads all its input. The same
   # rule applies to every `cmd | grep` below.
+  # The registry is SHARED between concurrent runs on purpose — it is keyed by a
+  # fixed name and port, every image in it is tagged with the run's own RUN_ID,
+  # and a second copy could not bind ${REG_PORT} anyway. Which means two runs
+  # can both find it missing and both try to create it: the loser used to die on
+  # "already exists" under `set -e`, turning a cosmetic race into a failed run.
+  # Re-check instead of swallowing the error, so a create that failed for any
+  # OTHER reason still stops the run and says so.
   if ! k3d registry list -o json 2>/dev/null | grep "\"k3d-${REG_NAME}\"" >/dev/null; then
     echo "==> creating registry k3d-${REG_NAME}"
-    k3d registry create "${REG_NAME}" --port "${REG_PORT}" >/dev/null
+    if ! REG_ERR="$(k3d registry create "${REG_NAME}" --port "${REG_PORT}" 2>&1)"; then
+      if k3d registry list -o json 2>/dev/null | grep "\"k3d-${REG_NAME}\"" >/dev/null; then
+        echo "    another run created it first; using it"
+      else
+        echo "ERROR: could not create registry k3d-${REG_NAME} on port ${REG_PORT}:" >&2
+        echo "${REG_ERR}" >&2
+        exit 1
+      fi
+    fi
   fi
   if [ "$(docker inspect -f '{{.State.Running}}' "k3d-${REG_NAME}" 2>/dev/null)" != "true" ]; then
     echo "==> registry k3d-${REG_NAME} exists but is not running; starting it"
@@ -87,8 +194,18 @@ k3d)
   fi
   if ! k3d cluster list -o json | grep "\"${CLUSTER}\"" >/dev/null; then
     echo "==> creating k3d cluster ${CLUSTER}"
+    # --kubeconfig-update-default=false is belt and braces beside the KUBECONFIG
+    # export above: it is the flag that makes "never touch the shared file" a
+    # property of the command rather than of the environment it inherited.
+    # --kubeconfig-switch-context=false for the same reason — switching the
+    # current context of a file two other runs are reading IS the bug.
     k3d cluster create "${CLUSTER}" --agents 0 --wait \
-      --registry-use "k3d-${REG_NAME}:${REG_PORT}"
+      --registry-use "k3d-${REG_NAME}:${REG_PORT}" \
+      --kubeconfig-update-default=false --kubeconfig-switch-context=false
+    # Only a cluster this run both NAMED and CREATED is this run's to delete.
+    # A cluster the caller named is the caller's, whether it existed already or
+    # this run had to make it.
+    if [ "${CLUSTER_IS_OURS}" = "1" ]; then OWNED_CLUSTER="${CLUSTER}"; fi
   elif ! docker exec "k3d-${CLUSTER}-server-0" \
         cat /etc/rancher/k3s/registries.yaml 2>/dev/null \
       | grep "k3d-${REG_NAME}:${REG_PORT}" >/dev/null; then
@@ -105,22 +222,28 @@ k3d)
     echo "       Recreate it:  k3d cluster delete ${CLUSTER}" >&2
     exit 1
   fi
-  # Merge explicitly rather than assume `cluster create` left a context behind.
-  # A cluster outlives its kubeconfig entry — restarting the Docker VM, or
+  # Write the context into THIS RUN'S kubeconfig, whether the cluster was made a
+  # moment ago or already existed. `k3d kubeconfig get` prints to stdout and
+  # touches no file of its own, so nothing outside ${KUBECONFIG} is written and
+  # nothing outside it is read — where the old `merge --kubeconfig-merge-default`
+  # plus `config use-context` pair mutated the shared default that every other
+  # run and every other tool on this machine reads.
+  #
+  # Generating it unconditionally also keeps the property the merge was there
+  # for: a cluster outlives its kubeconfig entry — restarting the Docker VM, or
   # reusing a cluster from an earlier session, leaves the cluster running with
-  # no context pointing at it, and the run then fails on something unrelated to
+  # no context pointing at it — and the run then fails on something unrelated to
   # what it is testing.
-  echo "==> merging kubeconfig for ${CLUSTER}"
-  k3d kubeconfig merge "${CLUSTER}" --kubeconfig-merge-default >/dev/null
-  kubectl config use-context "k3d-${CLUSTER}" >/dev/null
+  echo "==> writing this run's kubeconfig for ${CLUSTER}"
+  k3d kubeconfig get "${CLUSTER}" > "${KUBECONFIG}"
   ;;
 kind)
   command -v kind >/dev/null || { echo "kind is not installed"; exit 1; }
-  kind export kubeconfig --name "${CLUSTER}" >/dev/null
-  kubectl config use-context "kind-${CLUSTER}" >/dev/null
+  # --kubeconfig, not the default file: `kind export kubeconfig` sets the
+  # current-context in whatever file it writes, and the file it writes must be
+  # this run's alone.
+  kind export kubeconfig --name "${CLUSTER}" --kubeconfig "${KUBECONFIG}" >/dev/null
   ;;
-*)
-  echo "DISTRO must be k3d or kind, got ${DISTRO}"; exit 1 ;;
 esac
 
 # Fail here, with a useful message, rather than three steps later on something
@@ -252,11 +375,23 @@ if [ "${DISTRO}" = "k3d" ] && [ "${ASSAYD_E2E_GATEWAY:-1}" = "1" ]; then
   # workaround for this. assayd-system stays `restricted`; the vendored data
   # plane gets `baseline`, which it does satisfy.
   echo "==> creating the Gateway in its own namespace"
-  kubectl apply -f - >/dev/null <<GWEOF
+  # THE DELIMITER IS QUOTED, so nothing in this block is expanded by the shell.
+  #
+  # `<<GWEOF` expanded all of it, prose comments included, and the backticked
+  # word in the `tools` listener's comment below therefore RAN on every single
+  # run — `./hack/e2e.sh: line 255: http: command not found` was printed by this
+  # script, not by anything it called. That one was harmless; a `$(...)` written
+  # into the same comment would not have been, and a manifest whose comments
+  # execute is a manifest nobody can safely annotate.
+  #
+  # The block needs exactly two values from the run, so they are substituted by
+  # name afterwards rather than by handing the shell the whole document.
+  sed -e "s|__GATEWAY_NS__|${GATEWAY_NS}|g" \
+      -e "s|__TOOLS_NS__|${TOOLS_NS}|g" <<'GWEOF' | kubectl apply -f - >/dev/null
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: ${GATEWAY_NS}
+  name: __GATEWAY_NS__
   labels:
     pod-security.kubernetes.io/enforce: baseline
     pod-security.kubernetes.io/enforce-version: latest
@@ -265,7 +400,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: assayd
-  namespace: ${GATEWAY_NS}
+  namespace: __GATEWAY_NS__
 spec:
   gatewayClassName: agentgateway
   listeners:
@@ -296,7 +431,7 @@ spec:
         from: Selector
         selector:
           matchLabels:
-            kubernetes.io/metadata.name: ${TOOLS_NS}
+            kubernetes.io/metadata.name: __TOOLS_NS__
 GWEOF
   kubectl create ns "${TOOLS_NS}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl -n "${GATEWAY_NS}" wait --for=condition=Programmed gateway/assayd --timeout=180s >/dev/null
