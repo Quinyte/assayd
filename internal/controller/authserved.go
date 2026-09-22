@@ -234,17 +234,37 @@ func policyReport(p *unstructured.Unstructured, gw GatewayConfig) (gatewayReport
 				rejected = why
 			}
 		case want.reason != "" && c.Status == metav1.ConditionTrue && c.Reason != want.reason:
-			unwanted = fmt.Sprintf("%s: Gateway %s/%s reports %s=True with reason %s, not %s",
-				where, gw.Namespace, gw.Name, want.typ, c.Reason, want.reason)
+			// c.Message IS CARRIED, and dropping it was a defect this
+			// amendment's own review caught: on the partly-valid clause the
+			// REASON is `PartiallyValid` for every cause 1.5.0 has been
+			// measured producing — a rejected key-ConfigMap entry, an
+			// unparseable CEL expression, an extAuth Service that does not
+			// exist — and the MESSAGE is the only field that says which
+			// (`research/a80-policy-half-conformance-2026-09.md` rows 1, 7b,
+			// 10). A condition that sends the reader to the wrong object is
+			// rule 8 whichever half of the report withholds the right one.
+			unwanted = fmt.Sprintf("%s: Gateway %s/%s reports %s=True with reason %s, not %s: %s",
+				where, gw.Namespace, gw.Name, want.typ, c.Reason, want.reason, c.Message)
 		default:
-			// Only a condition that broke NOTHING counts towards the good
-			// tuple, exactly as the returning cut counted it.
+			// known counts the conditions that broke nothing. It is read ONLY
+			// where neither iteration set a clause, because the ranking switch
+			// below returns first on every other path — so its placement
+			// cannot change the answer, and this arm is here to keep the
+			// counter's meaning obvious rather than because anything depends
+			// on it (A83's review, MINOR 2).
 			known++
 		}
 	}
 	// Strongest claim first: non-attachment is the one that says the route may
 	// be unauthenticated, rejection the one that says none of the policy is in
 	// force, partial acceptance the one that says neither.
+	//
+	// Only the pairs involving NON-ATTACHMENT can actually occur, and saying so
+	// is the difference between a rank and a decoration (A83's review, MINOR
+	// 1): `rejected` and `unwanted` are set by mutually exclusive arms of one
+	// switch over one `Accepted` condition, so they are never both set and
+	// their order here is unfalsifiable. The two reachable pairs each have a
+	// unit row.
 	switch {
 	case unattached != "":
 		return reportBroken, clauseUnattached, unattached
@@ -364,14 +384,28 @@ func routeRefusedMessage(why string) string {
 		"accept. Check the assayd Gateway's listener and this route's parentRef (design 03 §3.3.3, §5)"
 }
 
-// policyBrokenTail is what is true of EVERY clause and of a held report:
-// nothing is touched, and the reader is told which condition this is not.
+// policyBrokenTail is what is true of EVERY clause and of a held report,
+// including one held over a pass that read no policy at all: nothing is
+// touched, and the reader is told which condition this is not.
 // "the hole is announced, not closed" is NOT in it, because a hole is what
 // only two of the four clauses saw (A83).
 const policyBrokenTail = ". Nothing is withdrawn, deleted or rewritten — doing so would hand " +
 	"anyone who can edit the Gateway a switch that takes this Agent off the air. This is not " +
-	"AuthPolicyMissing: the policy is present, carries this Agent's UID and renders to " +
-	"status.auth.appliedDigest, and the operator is not re-creating it (design 03 §3.3.3, §5)"
+	"AuthPolicyMissing: the operator is not re-creating the policy (design 03 §3.3.3, §5)"
+
+// policyJudgedNote is §5's precondition, stated as a FACT THIS PASS ESTABLISHED
+// — so it is appended only where the pass actually established it.
+//
+// It used to live in the tail, and that was wrong on exactly the path A83
+// added a lead for: a held claim can be re-asserted on a pass that read no
+// policy at all, because `reassertServedPolicy` returns nothing for a policy
+// that lost this Agent's UID and for one whose render digest no longer matches
+// `status.auth` — the second of which every operator upgrade that changes
+// `compiler.AuthPolicy` produces, permanently. Asserting there that the policy
+// "is present, carries this Agent's UID and renders to appliedDigest" is a
+// claim about an object the pass never looked at (A83's review, MAJOR 3).
+const policyJudgedNote = ". The policy is present, carries this Agent's UID and renders to " +
+	"status.auth.appliedDigest, which is what put it inside this judgement (§5)"
 
 // announcedNotClosed is the clause-specific half of the tail, for the two
 // clauses in which the Gateway's own report is consistent with the route
@@ -412,7 +446,11 @@ const announcedNotClosed = ". The hole is announced, not closed"
 //
 // The REASON does not branch. AuthPolicyNotAttached stays on both conditions
 // for every clause, which is (B1) kept, and D5(b) stays open: see policyClause.
-func policyBrokenMessage(clause policyClause, why string, routeOK bool) string {
+// judged says whether THIS PASS read a policy that passed §5's precondition.
+// It is true on every raised clause by construction — `out.judgePolicy` is set
+// only where the three guards passed — and false on a held claim whose pass
+// read no policy, which is what `policyJudgedNote` exists to keep honest.
+func policyBrokenMessage(clause policyClause, why string, routeOK, judged bool) string {
 	var lead, consequence string
 	switch clause {
 	case clauseUnattached:
@@ -449,22 +487,35 @@ func policyBrokenMessage(clause policyClause, why string, routeOK bool) string {
 		lead = "the assayd Gateway ACCEPTED this Agent's <agent>-auth policy but not the whole of " +
 			"it, so a rule the compiler wrote may have been dropped in translation and this Agent's " +
 			"governance may be weaker than its spec asks for. The Gateway is NOT reporting the " +
-			"policy unattached on this pass, and this judgement reads the Gateway's report and " +
-			"makes no request of its own, so whether a credential is still required is not " +
-			"established here either way — the cause measured on agentgateway 1.5.0 is an entry " +
-			"the controller rejects in the API-key ConfigMap an administrator wrote, which leaves " +
-			"the route still refusing anonymous requests. That ConfigMap is shared by every Agent " +
-			"in this run namespace, so expect this on all of them at once. The Gateway's own " +
-			"reason names what it would not translate: "
+			"policy unattached at the policy's current generation, and this judgement reads the " +
+			"Gateway's report and makes no request of its own, so whether a credential is still " +
+			"required is not established here either way. THE GATEWAY'S OWN REASON AND MESSAGE, " +
+			"BELOW, NAME WHAT IT WOULD NOT TRANSLATE, and they are where to start: agentgateway " +
+			"1.5.0 reports the same `PartiallyValid` for causes as different as a rejected entry " +
+			"in the API-key ConfigMap an administrator wrote, an authorization expression that " +
+			"does not parse, and an extAuth Service that does not exist. IF it is the key " +
+			"ConfigMap, that one is shared by every Agent in this run namespace, so expect this " +
+			"on all of them at once; the other causes are this policy's alone. Here is what the " +
+			"Gateway said: "
 	default:
 		// A HELD report: this pass re-derived nothing, so it has no clause.
 		// Restating A81's non-attachment lead here would re-enter the defect
 		// one pass later, for a claim that may have been the partly-valid one.
-		lead = "the assayd Gateway last reported this Agent's <agent>-auth policy broken and has " +
-			"not reported at the policy's current generation since. WHICH of its answers produced " +
-			"that report is not carried — status.auth stores one flag for this half and not the " +
-			"clause — so this pass restates the claim and cannot narrow it, and it stands until " +
-			"the Gateway reports again: "
+		//
+		// It says NOTHING about what the Gateway has or has not done since,
+		// and nothing about what would clear it. Two paths reach this lead and
+		// neither can support either claim: an errored pass read nothing at
+		// all, and an unknown reading includes the case where §5's
+		// precondition excluded the policy, in which case no later Gateway
+		// report is ever read and "it stands until the Gateway reports again"
+		// would be a promise nothing keeps (A83's review, MAJOR 3). The `why`
+		// this pass passes in is what names its own situation.
+		lead = "a claim from an earlier pass is standing, and this pass re-derived nothing, so it " +
+			"cannot say WHICH of the Gateway's answers produced it — status.auth stores one flag " +
+			"for this half and not the clause. This pass restates the claim and cannot narrow it: "
+	}
+	if judged {
+		consequence += policyJudgedNote
 	}
 	return lead + why + consequence + policyBrokenTail
 }
@@ -539,7 +590,9 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 	switch rep, clause, why := policyReport(out.judgePolicy, r.Gateway); rep {
 	case reportBroken:
 		claims.policyUnattached = true
-		msg := policyBrokenMessage(clause, why, routeOK)
+		// judged is true by construction: out.judgePolicy is set only where
+		// §5's three guards passed.
+		msg := policyBrokenMessage(clause, why, routeOK, true)
 		raiseIncomplete(conds, ReasonAuthPolicyNotAttached, msg)
 		appendGovernance(conds, ReasonAuthPolicyNotAttached, msg)
 		withholdInOrder(out, ReasonAuthPolicyNotAttached, msg)
@@ -551,7 +604,27 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 			// clauseUnknown, and not the clause that raised it: the claim
 			// store is one boolean and does not carry which answer the
 			// Gateway gave (A83).
-			held := policyBrokenMessage(clauseUnknown, "the Gateway has not reported on it since", routeOK)
+			//
+			// TWO different unknowns reach here and they are not the same
+			// situation, which the held message must not blur: the Gateway has
+			// gone quiet at this policy's generation, or §5's precondition
+			// took the policy out of the judgement altogether — the policy
+			// lost this Agent's UID, or this operator renders a digest
+			// status.auth does not record, which an upgrade produces
+			// PERMANENTLY. In the second the operator reads no policy status
+			// at all, so no Gateway report will ever clear the claim, and a
+			// message saying it waits on one is a promise nothing keeps
+			// (A83's review, MAJOR 3).
+			judged := out.judgePolicy != nil
+			why := "this pass did not judge a policy at all: the one at this Agent's -auth name " +
+				"is not this Agent's by the name-and-label rule, or it renders to a digest " +
+				"status.auth.appliedDigest does not record, so §5's precondition excludes it and " +
+				"NOTHING here will clear this claim until that changes — see GovernanceSkipped " +
+				"and any ForeignTrafficPolicy report"
+			if judged {
+				why = "the Gateway has not reported on it at its current generation since"
+			}
+			held := policyBrokenMessage(clauseUnknown, why, routeOK, judged)
 			holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, heldNote)
 			holdGovernance(agent, conds, held, heldNote)
 		}
@@ -581,7 +654,9 @@ func (r *AgentReconciler) holdServedJudgement(agent *assaydv1alpha1.Agent,
 			routeRefusedMessage("this pass could not re-read it"), note)
 	}
 	if stored.policyUnattached {
-		held := policyBrokenMessage(clauseUnknown, "this pass could not re-read it", false)
+		// judged is FALSE: this pass's -auth step errored, so it read no
+		// policy and may assert nothing about one.
+		held := policyBrokenMessage(clauseUnknown, "this pass could not re-read it", false, false)
 		holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, note)
 		holdGovernance(agent, conds, held, note)
 	}

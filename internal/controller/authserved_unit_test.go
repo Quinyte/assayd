@@ -207,36 +207,63 @@ func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
 		name          string
 		clause        policyClause
 		routeOK       bool
+		judged        bool
 		says, saysNot []string
 	}{
-		{"unattached on an accepted route", clauseUnattached, true,
+		{"unattached on an accepted route", clauseUnattached, true, true,
 			[]string{"does not attach", "no credential required", "announced, not closed"},
 			[]string{"THIS PASS DID NOT READ IT AS ACCEPTED", "but not the whole of it"}},
-		{"unattached beside a route this pass did not read as accepted", clauseUnattached, false,
+		{"unattached beside a route this pass did not read as accepted", clauseUnattached, false, true,
 			[]string{"does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED"},
 			[]string{"route is accepted and SERVING"}},
-		{"rejected outright", clauseRejected, true,
+		{"rejected outright on an accepted route", clauseRejected, true, true,
 			[]string{"REJECTED", "none of this Agent's authentication or authorization is in force",
 				"announced, not closed"},
 			[]string{"does not attach", "but not the whole of it"}},
+		// The row A83's own review found missing, and it found it by DELETING
+		// this lead's !routeOK block and watching the whole suite stay green.
+		// The arm is live — §5 keeps it for a release that starts producing
+		// Accepted=False — and unpinned it reaches A81's MAJOR 2 verbatim:
+		// "route is accepted and SERVING" on a pass that recorded the route
+		// refused, with nothing able to fail on it (rule 5).
+		{"rejected beside a route this pass did not read as accepted", clauseRejected, false, true,
+			[]string{"REJECTED", "THIS PASS DID NOT READ IT AS ACCEPTED"},
+			[]string{"route is accepted and SERVING"}},
 		// The shape A82 measured, and the one A83 exists for: the Gateway
 		// says Attached=True and the route is measured refusing, so a lead
-		// asserting non-attachment or an open route is rule 8.
-		{"accepted only in part", clausePartlyValid, true,
+		// asserting non-attachment or an open route is rule 8. The ConfigMap
+		// attribution is HEDGED, because 1.5.0 reports the same PartiallyValid
+		// for three measured causes and only one of them is namespace-wide.
+		{"accepted only in part", clausePartlyValid, true, true,
 			[]string{"but not the whole of it", "NOT reporting the policy unattached",
-				"makes no request of its own", "shared by every Agent in this run namespace"},
+				"makes no request of its own", "IF it is the key ConfigMap",
+				"shared by every Agent in this run namespace",
+				"the other causes are this policy's alone"},
 			[]string{"does not attach", "no credential required", "REJECTED",
-				"announced, not closed"}},
+				"announced, not closed", "the cause measured on agentgateway"}},
 		// A held report has no clause to name, because the claim store is one
 		// boolean. Restating the unattached lead here would re-enter the
 		// defect one pass later for a claim that may have been partly-valid.
-		{"held, with no clause to re-derive", clauseUnknown, true,
-			[]string{"last reported", "not carried", "restates the claim and cannot narrow it"},
+		// It also says NOTHING about what the Gateway has done since or about
+		// what would clear it: neither held path checked either.
+		{"held over a pass that still judged the policy", clauseUnknown, true, true,
+			[]string{"re-derived nothing", "restates the claim and cannot narrow it",
+				"The policy is present"},
 			[]string{"does not attach", "no credential required", "REJECTED",
-				"but not the whole of it"}},
+				"but not the whole of it", "stands until the Gateway reports again",
+				"has not reported at the policy's current generation since"}},
+		// The path A83's review found asserting a precondition nothing on it
+		// established: a claim held over a pass that read NO policy, which is
+		// every pass after a foreign takeover of the -auth name and every pass
+		// after an upgrade that renders a digest status.auth does not record —
+		// permanently, in the second case.
+		{"held over a pass that judged no policy", clauseUnknown, true, false,
+			[]string{"re-derived nothing", "restates the claim and cannot narrow it"},
+			[]string{"The policy is present", "carries this Agent's UID",
+				"stands until the Gateway reports again"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			msg := policyBrokenMessage(tc.clause, "WHY", tc.routeOK)
+			msg := policyBrokenMessage(tc.clause, "WHY", tc.routeOK, tc.judged)
 			for _, s := range tc.says {
 				if !strings.Contains(msg, s) {
 					t.Errorf("the message does not say %q: %s", s, msg)
@@ -254,6 +281,46 @@ func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
 				t.Errorf("every clause tells the reader which condition this is not: %s", msg)
 			}
 		})
+	}
+}
+
+// The Gateway's own MESSAGE reaches the condition on the partly-valid clause,
+// and it is the only field that separates the three causes 1.5.0 has been
+// measured reporting as `PartiallyValid`: a rejected key-ConfigMap entry, an
+// authorization expression that does not parse, an extAuth Service that does
+// not exist (`research/a80-policy-half-conformance-2026-09.md` rows 10, 1, 7b).
+// A83's first cut formatted the REASON alone, so the condition withheld the
+// one field the Gateway had written to name the cause while its own lead
+// named a different one — rule 8, inside the amendment that exists to remove
+// it, and found by A83's review.
+//
+// Mutation: drop c.Message from the reason-mismatch arm's format, and this
+// must fail.
+func TestThePartlyValidReportCarriesTheGatewaysMessage(t *testing.T) {
+	gw := GatewayConfig{Name: "assayd", Namespace: "assayd-gateway"}
+	p := NewAgentgatewayPolicy()
+	p.SetName("a-auth")
+	p.SetNamespace("assayd-run-x")
+	p.SetGeneration(2)
+	p.Object["status"] = map[string]any{"ancestors": []any{map[string]any{
+		"ancestorRef": map[string]any{"group": gatewayv1.GroupName, "kind": "Gateway",
+			"name": "assayd", "namespace": "assayd-gateway"},
+		"conditions": []any{
+			map[string]any{"type": "Accepted", "status": "True", "reason": "PartiallyValid",
+				"message":            "authorization matchExpression is not a valid CEL expression",
+				"observedGeneration": int64(2)},
+			map[string]any{"type": "Attached", "status": "True", "reason": "Attached",
+				"message": "Attached to all targets", "observedGeneration": int64(2)},
+		},
+	}}}
+	rep, clause, why := policyReport(p, gw)
+	if rep != reportBroken || clause != clausePartlyValid {
+		t.Fatalf("policyReport = %v/%v, want broken/partly-valid (%s)", rep, clause, why)
+	}
+	if !strings.Contains(why, "authorization matchExpression is not a valid CEL expression") {
+		t.Errorf("the report drops the Gateway's own message, which is the only field that says "+
+			"WHICH translation failed; the reader is then sent to the key ConfigMap for a cause "+
+			"that is not there: %s", why)
 	}
 }
 

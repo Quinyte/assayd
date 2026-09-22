@@ -134,15 +134,23 @@ func unattachPolicy(t *testing.T, a *assaydv1alpha1.Agent) {
 // the real ancestor, which 1.5.0 was measured NOT to produce, and
 // `summarisePolicy` writes the synthetic one. This one is neither, and it is
 // the shape the measurement says an operator will actually meet.
+// partlyValidGatewayMessage is a REAL 1.5.0 message, and it deliberately names
+// a cause that is NOT the key ConfigMap: the reason is `PartiallyValid` for
+// every cause the research note measured, so the message is the only field
+// that separates them, and a fixture whose message repeats its reason cannot
+// tell whether the operator carries it (A83's review, MAJOR 2).
+const partlyValidGatewayMessage = "authorization matchExpression is not a valid CEL expression"
+
 func partiallyValidPolicy(t *testing.T, a *assaydv1alpha1.Agent) {
 	t.Helper()
 	gen := policyExists(t, runNS(a.Namespace), policyNameOf(a)).GetGeneration()
+	accepted := policyCondition("Accepted", "True", "PartiallyValid", gen)
+	accepted["message"] = partlyValidGatewayMessage
 	reportPolicyAncestors(t, a, []any{map[string]any{
 		"ancestorRef": map[string]any{"group": gatewayv1.GroupName, "kind": "Gateway",
 			"name": "assayd", "namespace": "assayd-gateway"},
 		"controllerName": "agentgateway.dev/agentgateway",
-		"conditions": []any{policyCondition("Accepted", "True", "PartiallyValid", gen),
-			policyCondition("Attached", "True", "Attached", gen)},
+		"conditions":     []any{accepted, policyCondition("Attached", "True", "Attached", gen)},
 	}})
 }
 
@@ -429,7 +437,15 @@ func TestAServedPolicyTheGatewayDoesNotAttachIsReported(t *testing.T) {
 		judged(t, a, r, "PartiallyValid",
 			"ACCEPTED this Agent's <agent>-auth policy but not the whole of it",
 			"NOT reporting the policy unattached", "makes no request of its own",
-			"shared by every Agent in this run namespace")
+			// The Gateway's own MESSAGE, which is the only field naming WHICH
+			// translation failed, and which this fixture deliberately sets to
+			// a cause that is not the key ConfigMap. Without it the condition
+			// sends the reader to a shared object for a per-policy fault.
+			partlyValidGatewayMessage,
+			// The ConfigMap attribution is hedged, and the hedge is asserted:
+			// an unconditional one is the same rule-8 shape one layer down.
+			"IF it is the key ConfigMap", "shared by every Agent in this run namespace",
+			"the other causes are this policy's alone")
 		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyNotAttached")
 		mustNotContain(t, c, "PolicyApplyIncomplete", "does not attach", "no credential required")
 		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
@@ -893,11 +909,57 @@ func TestAnUnknownReadingHoldsAStandingReport(t *testing.T) {
 		driftPolicySpec(t, a)
 		reconcileOnce(t, r, a)
 		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyNotAttached")
-		mustContain(t, c, "PolicyApplyIncomplete", heldMark, "last reported",
-			"restates the claim and cannot narrow it")
+		mustContain(t, c, "PolicyApplyIncomplete", heldMark, "re-derived nothing",
+			"restates the claim and cannot narrow it",
+			// This pass DID read the policy — the reading was unknown, not
+			// absent — so §5's precondition is a fact it established and the
+			// judged note belongs. The errored hold below must not carry it.
+			"The policy is present")
 		mustNotContain(t, c, "PolicyApplyIncomplete", "does not attach", "no credential required",
 			"but not the whole of it")
 		sameTransition(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, at)
+		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AuthPolicyNotAttached")
+	})
+	// A held claim over a pass that judged NO POLICY, which is the arm A83's
+	// review found asserting §5's precondition about an object nothing on that
+	// pass had read. reassertServedPolicy returns nothing for a policy that
+	// lost this Agent's UID and for one whose RENDER digest is not the one
+	// status.auth records — and the second is what every operator upgrade that
+	// changes compiler.AuthPolicy produces, PERMANENTLY, so a standing claim
+	// there is re-asserted for ever by a pass that reads no policy status at
+	// all. The message must say that, and must not say the policy "is present,
+	// carries this Agent's UID and renders to status.auth.appliedDigest".
+	//
+	// The digest is moved rather than the UID label, deliberately: stripping
+	// the label also raises ForeignTrafficPolicy, which outranks this claim and
+	// would let the row pass on the wrong condition's text.
+	//
+	// Mutations, each one edit: pass judged=true at this call site, which the
+	// forbidden fragment must fail; and give this branch the other why, which
+	// the "will clear this claim" fragment must fail.
+	t.Run("a held claim over a pass that judged no policy", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "a80holdunjudged")
+		acceptRoute(t, a.Namespace, a.Name)
+		partiallyValidPolicy(t, a)
+		reconcileOnce(t, r, a)
+		condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyNotAttached")
+
+		// What an upgrade does: this build renders a digest status.auth does
+		// not record, so §5's precondition excludes the policy and the pass
+		// reads no policy status at all.
+		live := liveAgent(t, a)
+		live.Status.Auth.AppliedDigest = strings.Repeat("e", 64)
+		if err := k8s.Status().Update(context.Background(), live); err != nil {
+			t.Fatalf("move status.auth.appliedDigest off this build's render: %v", err)
+		}
+		reconcileOnce(t, r, a)
+
+		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyNotAttached")
+		mustContain(t, c, "PolicyApplyIncomplete", "did not judge a policy at all",
+			"NOTHING here will clear this claim", "restates the claim and cannot narrow it")
+		mustNotContain(t, c, "PolicyApplyIncomplete", "The policy is present",
+			"the Gateway has not reported on it at its current generation since",
+			"does not attach", "but not the whole of it")
 		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AuthPolicyNotAttached")
 	})
 	// The third half: the CLAIM rather than the condition. In the composed
@@ -1099,12 +1161,17 @@ func TestAnErroredPassHoldsAServedReport(t *testing.T) {
 			t.Fatalf("the injected stale read did not reach the caller: %v", err)
 		}
 		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyNotAttached")
-		mustContain(t, c, "PolicyApplyIncomplete", erroredMark, "last reported",
+		mustContain(t, c, "PolicyApplyIncomplete", erroredMark, "re-derived nothing",
 			"restates the claim and cannot narrow it")
+		// An errored pass read NO policy, so it asserts §5's precondition
+		// about none: the judged note is absent here and present on the
+		// unknown-reading hold above, which did read one (A83's review,
+		// MAJOR 3).
 		mustNotContain(t, c, "PolicyApplyIncomplete", "does not attach", "no credential required",
-			"but not the whole of it")
+			"but not the whole of it", "The policy is present")
 		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
-		mustNotContain(t, g, "GovernanceSkipped", "does not attach", "no credential required")
+		mustNotContain(t, g, "GovernanceSkipped", "does not attach", "no credential required",
+			"The policy is present")
 		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AuthPolicyNotAttached")
 		sameTransition(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, at)
 	})
