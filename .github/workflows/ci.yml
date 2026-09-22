@@ -43,7 +43,12 @@ jobs:
       # into a step failure. It passed in two jobs and failed in a third on the
       # same commit, which is the signature of exactly that.
 
-      - name: generation is reproducible and committed
+      # Covers the generated CRD and RBAC, and since the reference landed, the
+      # three pages under docs/reference/ as well: `make verify` regenerates all
+      # of them and fails if what is committed differs. A generator nobody runs
+      # is worse than none — its output reads as current and is not — so this is
+      # where docs/reference/ stops being a document and starts being a gate.
+      - name: generation is reproducible and committed (CRD, RBAC, docs/reference)
         run: make verify
 
       - name: vet
