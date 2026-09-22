@@ -50,87 +50,49 @@ import (
 	"github.com/Quinyte/assayd/internal/controller"
 )
 
-// ancestorCondition is one condition on one policy ancestor, carrying the two
-// fields §3.3.2's tuple reads beyond the status: the REASON, which separates
-// `Valid` from every translation failure agentgateway still calls accepted,
-// and the GENERATION it was observed at, which is what makes the report
-// evidence about the object as it stands rather than a stale echo of it.
-type ancestorCondition struct {
-	Status             string
-	Reason             string
-	Message            string
-	ObservedGeneration int64
-}
-
-// ancestorReport is a policy's first ancestor: the ref that discriminates the
-// real Gateway from agentgateway's synthetic `StatusSummary` (§3.3.2), and its
-// conditions.
-type ancestorReport struct {
-	Group, Kind, Name string
-	Conds             map[string]ancestorCondition
-}
-
-// broken says whether this report is one of the four §5 calls a broken tuple:
-// `Accepted=False`, `Accepted=True` with a reason other than `Valid`,
-// `Attached=False`, or the synthetic `StatusSummary` ancestor.
-func (a ancestorReport) broken() bool {
-	acc := a.Conds["Accepted"]
-	return acc.Status != "True" || acc.Reason != "Valid" ||
-		a.Conds["Attached"].Status != "True" || a.Name == "StatusSummary"
-}
-
-func (a ancestorReport) String() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "ancestor %s/%s %s", a.Group, a.Kind, a.Name)
-	for _, k := range []string{"Accepted", "Attached"} {
-		if c, ok := a.Conds[k]; ok {
-			fmt.Fprintf(&b, "; %s=%s reason=%s gen=%d (%s)", k, c.Status, c.Reason,
-				c.ObservedGeneration, tail(c.Message, 1))
-		}
-	}
-	return b.String()
-}
-
-// awaitPolicyAncestor polls a policy until its first ancestor's conditions were
-// all observed at the policy's CURRENT generation and `want` accepts the
-// report, then returns it.
+// awaitPolicyAncestor polls a policy until the ancestor policyReport would read
+// carries only conditions observed at the policy's CURRENT generation and
+// `want` accepts the report, then returns it.
 //
 // The generation gate is statusIsCurrent's rule, applied here for the same
 // reason: a report read immediately after a patch is the previous reconcile's
 // verdict. It is applied per READ rather than once, because a policy whose
 // translation fails can leave one condition a generation behind the other —
 // measured on 1.5.0 for an unparseable CEL expression, where `Accepted` moved
-// to the new generation and `Attached` stayed on the old one — so a test that
-// waited for a whole current ancestor there would wait forever. Both cases
-// below reach reports whose conditions are current together; this helper says
-// so rather than assuming it.
+// to the new generation and `Attached` stayed on the old one. That is also why
+// the timeout prints the last RAW read, stale conditions and all: a case that
+// hits the split-generation hazard would otherwise time out reporting nothing
+// at all, which is the one failure mode this file documents and would then not
+// diagnose.
 func awaitPolicyAncestor(t *testing.T, name string, timeout time.Duration,
 	why string, want func(ancestorReport) bool) ancestorReport {
 	t.Helper()
-	var last string
+	last := "nothing was read at all"
 	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); {
-		got, ok := readPolicyAncestor(t, name)
-		if ok {
-			last = got.String()
-			if want(got) {
-				return got
-			}
+		got, raw, current := readPolicyAncestor(t, name)
+		last = raw
+		if current && want(got) {
+			return got
 		}
 		time.Sleep(time.Second)
 	}
 	t.Fatalf("%s: policy %s/%s never published the report this case is about in %s; "+
-		"the last current one was %s", why, sliceNS, name, timeout, last)
+		"the last read was %s", why, sliceNS, name, timeout, last)
 	return ancestorReport{}
 }
 
-// readPolicyAncestor reads one policy's first ancestor. It reports ok=false
-// while the object has no ancestor, or while any of that ancestor's conditions
-// was observed at another generation.
-func readPolicyAncestor(t *testing.T, name string) (ancestorReport, bool) {
+// readPolicyAncestor reads the ancestor policyReport would read: the synthetic
+// one if it is present anywhere in the list, otherwise the assayd Gateway's
+// own. It scans the whole list rather than indexing [0] because policyReport
+// does, and a list whose order changed would otherwise take the two apart.
+//
+// It returns the report, a raw description for a diagnostic, and whether every
+// condition on that ancestor was observed at the policy's current generation.
+func readPolicyAncestor(t *testing.T, name string) (rep ancestorReport, raw string, current bool) {
 	t.Helper()
 	out, err := kubectl(t, "get", "agentgatewaypolicy", name, "-n", sliceNS, "-o", "json")
 	if err != nil {
-		return ancestorReport{}, false
+		return ancestorReport{}, fmt.Sprintf("kubectl get failed: %s", tail(out, 2)), false
 	}
 	var obj struct {
 		Metadata struct {
@@ -139,7 +101,7 @@ func readPolicyAncestor(t *testing.T, name string) (ancestorReport, bool) {
 		Status struct {
 			Ancestors []struct {
 				AncestorRef struct {
-					Group, Kind, Name string
+					Group, Kind, Name, Namespace string
 				} `json:"ancestorRef"`
 				Conditions []struct {
 					Type, Status, Reason, Message string
@@ -148,27 +110,53 @@ func readPolicyAncestor(t *testing.T, name string) (ancestorReport, bool) {
 			} `json:"ancestors"`
 		} `json:"status"`
 	}
-	if json.Unmarshal([]byte(out), &obj) != nil || len(obj.Status.Ancestors) == 0 {
-		return ancestorReport{}, false
+	if err := json.Unmarshal([]byte(out), &obj); err != nil {
+		return ancestorReport{}, fmt.Sprintf("the policy's JSON did not parse: %v", err), false
 	}
-	a := obj.Status.Ancestors[0]
-	rep := ancestorReport{
-		Group: a.AncestorRef.Group, Kind: a.AncestorRef.Kind, Name: a.AncestorRef.Name,
-		Conds: map[string]ancestorCondition{},
+	if len(obj.Status.Ancestors) == 0 {
+		return ancestorReport{}, "the policy carries no ancestor at all", false
 	}
-	if len(a.Conditions) == 0 {
-		return ancestorReport{}, false
-	}
-	for _, c := range a.Conditions {
-		if c.ObservedGeneration != obj.Metadata.Generation {
-			return ancestorReport{}, false
+	chosen := -1
+	for i, a := range obj.Status.Ancestors {
+		r := a.AncestorRef
+		if r.Group == "agentgateway.dev" && r.Name == "StatusSummary" {
+			chosen = i
+			break
 		}
+		if chosen < 0 && r.Group == "gateway.networking.k8s.io" && r.Kind == "Gateway" &&
+			r.Name == sliceGateway && r.Namespace == sliceGatewayNS {
+			chosen = i
+		}
+	}
+	if chosen < 0 {
+		return ancestorReport{}, fmt.Sprintf(
+			"none of the policy's %d ancestors is the synthetic one or Gateway %s/%s — which is "+
+				"what policyReport calls unknown, and the state in which A80's policy half raises "+
+				"nothing at all", len(obj.Status.Ancestors), sliceGatewayNS, sliceGateway), false
+	}
+	a := obj.Status.Ancestors[chosen]
+	rep = ancestorReport{
+		Group: a.AncestorRef.Group, Kind: a.AncestorRef.Kind,
+		Name: a.AncestorRef.Name, Namespace: a.AncestorRef.Namespace,
+		Synthetic: a.AncestorRef.Group == "agentgateway.dev" && a.AncestorRef.Name == "StatusSummary",
+		Conds:     map[string]ancestorCondition{},
+	}
+	stale := []string{}
+	for _, c := range a.Conditions {
 		rep.Conds[c.Type] = ancestorCondition{
 			Status: c.Status, Reason: c.Reason, Message: c.Message,
 			ObservedGeneration: c.ObservedGeneration,
 		}
+		if c.ObservedGeneration != obj.Metadata.Generation {
+			stale = append(stale, fmt.Sprintf("%s at gen %d", c.Type, c.ObservedGeneration))
+		}
 	}
-	return rep, true
+	raw = fmt.Sprintf("policy at gen %d: %s", obj.Metadata.Generation, rep)
+	if len(stale) > 0 {
+		return rep, raw + fmt.Sprintf("; REJECTED as not current: %s while the policy is at %d",
+			strings.Join(stale, ", "), obj.Metadata.Generation), false
+	}
+	return rep, raw, true
 }
 
 // requireRouteAccepted is the half of each case that makes it about the POLICY.
@@ -191,7 +179,8 @@ func requireRouteAccepted(t *testing.T, route, why string) {
 			Parents []struct {
 				ControllerName string `json:"controllerName"`
 				ParentRef      struct {
-					Name, Namespace string
+					Name      string  `json:"name"`
+					Namespace *string `json:"namespace"`
 				} `json:"parentRef"`
 				Conditions []struct {
 					Type, Status, Reason string
@@ -204,8 +193,16 @@ func requireRouteAccepted(t *testing.T, route, why string) {
 		t.Fatalf("%s: parse route %s/%s: %v", why, sliceNS, route, err)
 	}
 	for _, p := range obj.Status.Parents {
+		// An absent parentRef namespace means the ROUTE's namespace, as
+		// routeReport defaults it. The fixture always sets it — the Gateway is
+		// in another namespace — but matching the way the code matches is what
+		// keeps the comment above true.
+		ns := sliceNS
+		if p.ParentRef.Namespace != nil {
+			ns = *p.ParentRef.Namespace
+		}
 		if p.ControllerName != controller.AgentgatewayControllerName ||
-			p.ParentRef.Name != sliceGateway || p.ParentRef.Namespace != sliceGatewayNS {
+			p.ParentRef.Name != sliceGateway || ns != sliceGatewayNS {
 			continue
 		}
 		got := map[string]string{}
@@ -299,10 +296,21 @@ func TestSliceAPolicyBrokenByItsKeySetStaysAttachedAndKeepsRefusing(t *testing.T
 	route, _ := compiler.ServingRouteName(agent)
 	policy, _ := compiler.AuthPolicyName(agent)
 
+	// The policy is healthy BEFORE the stimulus. Without this the case would
+	// pass having caused nothing on a KEEP=1 cluster where an earlier run left
+	// a rejected key set behind: the first read would already be
+	// `PartiallyValid` and every check below would hold.
+	if base := awaitPolicyAncestor(t, policy, 2*time.Minute,
+		"the served <agent>-auth before anything is broken",
+		func(a ancestorReport) bool { return a.healthy() }); base.Synthetic {
+		t.Fatalf("the baseline is already the synthetic ancestor: %s", base)
+	}
+
 	// A second labelled key set, never the shared one: the shared one is every
 	// other slice case's, and a json-patch that half-failed would leave it
-	// broken for them.
-	const badKeys = "conf-slice-rejected-keys"
+	// broken for them. runID, as everything else here is named, so a run on a
+	// kept cluster never meets the ConfigMap a previous one left.
+	badKeys := "conf-slice-rejected-keys-" + runID
 	if err := apply(t, fmt.Sprintf(`
 apiVersion: v1
 kind: ConfigMap
@@ -322,19 +330,31 @@ data:
 	// been the slowest step here. The timeout is what it is because of this
 	// number; log it so a later run that gets close says so before it flakes.
 	reported := time.Now()
+	// `broken` is in the predicate rather than asserted after it, so the thing
+	// waited for is the thing claimed: §5's second tuple break, on a report
+	// that is one of the four and not merely a reason string.
 	rep := awaitPolicyAncestor(t, policy, 2*time.Minute,
 		"a served <agent>-auth whose key source carries a rejected entry",
-		func(a ancestorReport) bool { return a.Conds["Accepted"].Reason == "PartiallyValid" })
+		func(a ancestorReport) bool {
+			return a.broken() && a.Conds["Accepted"].Reason == "PartiallyValid"
+		})
 	t.Logf("the break as agentgateway reports it, %s after the ConfigMap was written: %s",
 		time.Since(reported).Round(time.Millisecond), rep)
-	if !rep.broken() {
-		t.Fatalf("the report is not one §5 calls a broken tuple: %s", rep)
-	}
-	// The ancestor is the REAL Gateway, and the policy is still attached: this
-	// is the reported-broken-but-attached shape, not case (B)'s.
-	if rep.Name == "StatusSummary" || rep.Conds["Attached"].Status != "True" {
+	// The ancestor is the REAL Gateway, named the way policyReport names it,
+	// and the policy is still attached: this is the reported-broken-but-
+	// attached shape, not case (B)'s. All four ref fields, because
+	// policyReport compares all four and an upstream rename of any of them
+	// takes A80's policy half silent.
+	if rep.Synthetic || rep.Conds["Attached"].Status != "True" {
 		t.Fatalf("this case is the ATTACHED break; agentgateway reported the unattached one "+
 			"instead, which is case (B)'s state: %s", rep)
+	}
+	if rep.Group != "gateway.networking.k8s.io" || rep.Kind != "Gateway" ||
+		rep.Name != sliceGateway || rep.Namespace != sliceGatewayNS {
+		t.Errorf("policyReport finds this Agent's report by {group: gateway.networking.k8s.io, "+
+			"kind: Gateway, name: %s, namespace: %s} and agentgateway wrote %s; on an install "+
+			"where that is what it writes, the policy half reads reportUnknown and raises nothing",
+			sliceGateway, sliceGatewayNS, rep)
 	}
 	if !strings.Contains(rep.Conds["Accepted"].Message, badKeys) {
 		t.Errorf("the reported reason does not name the ConfigMap that caused it, so an "+
@@ -364,12 +384,9 @@ data:
 	if out, err := kubectl(t, "delete", "configmap", badKeys, "-n", sliceNS, "--wait=true"); err != nil {
 		t.Fatalf("remove the rejected key set: %s", out)
 	}
-	healed := awaitPolicyAncestor(t, policy, 2*time.Minute,
+	awaitPolicyAncestor(t, policy, 2*time.Minute,
 		"the report clearing once the rejected entry is gone",
-		func(a ancestorReport) bool { return !a.broken() })
-	if healed.Name == "StatusSummary" {
-		t.Fatalf("the report cleared to the synthetic ancestor: %s", healed)
-	}
+		func(a ancestorReport) bool { return a.healthy() })
 	expectCode(t, gw, servingPort, host, cardPath, keyTeam, 200,
 		"the admitted key after the rejected key set is gone")
 }
@@ -406,6 +423,13 @@ func TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen(t *testing.T) {
 	route, _ := compiler.ServingRouteName(agent)
 	policy, _ := compiler.AuthPolicyName(agent)
 
+	// Healthy first, on §3.3.2's whole tuple: publishedWithAuth's
+	// requireAttached takes any `Accepted` reason, so without this the case
+	// could start from a policy that was already reported broken.
+	awaitPolicyAncestor(t, policy, 2*time.Minute,
+		"the served <agent>-auth before its target is broken",
+		func(a ancestorReport) bool { return a.healthy() })
+
 	patch := fmt.Sprintf(
 		`{"spec":{"targetRefs":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute",`+
 			`"name":%q,"sectionName":"conf-no-such-rule"}]}}`, route)
@@ -417,9 +441,16 @@ func TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen(t *testing.T) {
 	rep := awaitPolicyAncestor(t, policy, 2*time.Minute,
 		"a served <agent>-auth the Gateway attaches to nothing",
 		func(a ancestorReport) bool { return a.Conds["Attached"].Status == "False" })
-	if rep.Name != "StatusSummary" {
-		t.Errorf("§3.3.2 says a failure emits the synthetic StatusSummary ancestor, and the "+
-			"unattached report names %q instead: %s", rep.Name, rep)
+	// Both fields, spelled as policyReport spells them
+	// (`internal/controller/authserved.go`): it keys the fail-open signal on
+	// `group == "agentgateway.dev"` AND `name == "StatusSummary"`, so a rename
+	// of either takes A80's policy half silent while the bypass below stays
+	// real, and asserting the name alone would not see it.
+	if rep.Group != "agentgateway.dev" || rep.Name != "StatusSummary" || !rep.Synthetic {
+		t.Errorf("§3.3.2 says a failure emits the synthetic ancestor {group: agentgateway.dev, "+
+			"name: StatusSummary}, which is what policyReport matches on, and agentgateway wrote "+
+			"%s; on an install where that is what it writes, the policy half raises nothing while "+
+			"the route below still answers 200", rep)
 	}
 	if got := rep.Conds["Attached"]; got.Reason != "Pending" {
 		t.Errorf("the unattached report reads reason %q; 1.5.0 reported Pending, and the "+
@@ -473,12 +504,9 @@ func TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen(t *testing.T) {
 		"--type=json", "-p", `[{"op":"remove","path":"/spec/targetRefs/0/sectionName"}]`); err != nil {
 		t.Fatalf("restore <agent>-auth's target: %s", out)
 	}
-	healed := awaitPolicyAncestor(t, policy, 2*time.Minute,
+	awaitPolicyAncestor(t, policy, 2*time.Minute,
 		"the policy attaching again once its target resolves",
-		func(a ancestorReport) bool { return !a.broken() })
-	if healed.Name == "StatusSummary" {
-		t.Fatalf("the policy healed onto the synthetic ancestor: %s", healed)
-	}
+		func(a ancestorReport) bool { return a.healthy() })
 	awaitCode(t, gw, servingPort, host, cardPath, "", 401, []int{200}, 2*time.Minute,
 		"the anonymous request once <agent>-auth attaches again")
 	requireDigestUnchanged(t, agent, "the restored policy")

@@ -117,7 +117,21 @@ shipped are built on rows 14 and 4, whose conditions move together.
    Gateway attaches to nothing leaves a published route wide open — 200 to
    anyone. Nothing in this probe reached that shape with a policy the operator
    would still recognise as its own.
-4. **The two halves could not be separated in the other direction either.**
+4. **The operator's own report names the wrong cause in the reachable shape.**
+   In row 14 the Gateway says `Attached=True`, reason `Attached`, "Attached to
+   all targets". `internal/controller`'s `policyUnattachedMessage` opens "this
+   Agent's route is accepted and SERVING while the assayd Gateway reports that
+   it **does not attach** the `<agent>-auth` policy", under reason
+   `AuthPolicyNotAttached`, and takes the Agent to `Ready=False`, phase
+   `Degraded`, `GovernanceSkipped=True` — while the same route is measured
+   refusing anonymous requests. The trailing "may be answering with no
+   credential required" is a hedge and survives; the lead is not. That is
+   AGENTS.md rule 8 — a condition naming a plausible cause that was never
+   checked — one clause over from the one A81 already fixed with its `routeOK`
+   branch. Recorded as **OWED** in design 03 §5 and A82, not fixed here: the
+   message needs a third lead and the `PartiallyValid` clause probably needs a
+   reason of its own, and both add user-facing vocabulary to an approved slice.
+5. **The two halves could not be separated in the other direction either.**
    Renaming the Gateway's listener, run again here, reproduces the walkthrough:
    `StatusSummary`, `Attached=False`, and the route `Accepted=False` on the same
    pass. That is the conflated state A81 ordered route-first, and it is the
@@ -161,11 +175,28 @@ backup copy.
 | drop the bogus `sectionName` from the unattached case's patch | KILLED — the policy never reports `Attached=False` |
 | expect 401 from the anonymous request in the unattached case | KILLED — 29 consecutive 200s |
 | replace the unattached case's stimulus with the LISTENER RENAME | KILLED at the route gate: "route … reads Accepted=False … this case measures the POLICY half and needs an ACCEPTED route" — which is what makes the case a separation of the halves and not a second walkthrough |
+| expect the synthetic ancestor under another `group` | KILLED — `policyReport` keys the fail-open signal on `group == "agentgateway.dev"` as well as the name, and an upstream rename of either takes A80's policy half silent while the bypass stays real |
+| expect the real Gateway ancestor in another `namespace` | KILLED — `policyReport` compares all four ref fields, so all four are asserted |
+| wrong `controllerName` in the route gate | KILLED — the gate's match on agentgateway's controller is live |
 
-All twelve `TestSlice` cases pass together on one cluster after these, in 117 s,
-and the whole `make conformance-cluster` gate — both phases, both clusters
-provisioned from scratch — passes with no SKIP, the two new cases at 32.9 s and
-2.0 s. On a warm cluster the `PartiallyValid` report appeared **26 ms** after
-the ConfigMap was written; the case logs that number, because the selected key
-set is found by a label re-list rather than a watch on a named object and it is
-the step with the least margin against the 2-minute wait.
+The report's three answers — broken, healthy, and the unknown between them —
+are pinned by `test/conformance/ancestor_test.go`, untagged and inside
+`make test`, for the reason `statusIsCurrent` gives in `status.go`: the arm
+where an ancestor carries only one of the two conditions is unreachable on
+1.5.0, which writes both, so a cluster run can never exercise it and it would
+otherwise be defensive code no test can pin. The rule it encodes is
+`policyReport`'s: an absent condition is **unknown**, not one of §5's four
+breaks.
+
+All twelve `TestSlice` cases pass together on one cluster after these, and the
+whole `make conformance-cluster` gate — both phases, both clusters provisioned
+from scratch — passes with no SKIP: phase 2 in 156 s, the two new cases at
+45.7 s and 2.1 s.
+
+The `PartiallyValid` report appeared **26 ms** after the ConfigMap was written,
+on a warm cluster and on a cold one alike; the rest of the key-set case's 45.7 s
+is fixture, publication and probing. The case logs that number because the
+selected key set is found by a label re-list rather than by a watch on a named
+object, so it was the step most likely to be slow and is measured rather than
+assumed. Against the 2-minute wait the margin is four orders of magnitude,
+which is the answer to "is this timeout about to flake".
