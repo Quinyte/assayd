@@ -61,15 +61,30 @@ const (
 	// now so that agents created today do not need a migration to acquire it.
 	Finalizer = "assayd.dev/agent-teardown"
 
-	// CondReasonServiceHeadless names the ONE shape fault this operator cannot
-	// converge away: `spec.clusterIP` is immutable, so a headless Service at a
-	// revision's name can never be given an address (design 02 §3.2, A77).
+	// CondReasonServiceReplaceFailed names a replace that did not complete: the
+	// operator could not repair its revision Service in place and could not put
+	// a replacement in its stead (design 02 §3.2, A77).
 	//
-	// It names the field rather than the class. An earlier cut refused four
-	// shapes under "RevisionServiceNotRendered"; three of those are now
-	// converged back, and a reason covering all four would name a rule that no
+	// It is its own reason because the state is worse than the one it came
+	// from. The serving route's backendRef names the Service by NAME, so the
+	// window between the delete and the create is a window in which somebody
+	// else can take that name — and the pass that says nothing here is the one
+	// that leaves a published route pointing at a stranger's object while the
+	// Agent reads Ready=True.
+	CondReasonServiceReplaceFailed = "RevisionServiceReplaceFailed"
+
+	// CondReasonServiceReplaceHeld names an Agent whose revision Service this
+	// operator could not repair in place, already replaced once, and will not
+	// replace again inside ServiceReplaceCooldown (design 02 §3.2, A77).
+	//
+	// It names the HOLD, not the shape, because the shape alone no longer
+	// stops anything: an unrepairable Service is deleted and recreated. What an
+	// operator needs to know when they see this is that the repair already ran
+	// and did not stick. An earlier cut refused four shapes under
+	// "RevisionServiceNotRendered"; three of those are converged and the fourth
+	// is replaced, so a reason covering the class would name a rule that no
 	// longer exists. Rule 8 is about naming the real cause.
-	CondReasonServiceHeadless = "RevisionServiceHeadless"
+	CondReasonServiceReplaceHeld = "RevisionServiceReplaceHeld"
 
 	// DefaultRevisionHistoryLimit is the number of revisions retained IN ADDITION
 	// TO the active one and any in-flight candidate (design 02 §3.3). Counting
@@ -618,6 +633,21 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			// loud-and-wrong half of rule 8. Returning here is what keeps the
 			// revision unpromoted and reconcileGateway unreached, so no route is
 			// ever emitted naming the object this refuses.
+			// A replace that did not complete. Reported FIRST, because it is the
+			// only one of these exits that can leave no object at all under a
+			// name the serving route still points at.
+			if failed := (*serviceReplaceError)(nil); errors.As(err, &failed) {
+				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse,
+					CondReasonServiceReplaceFailed, failed.Error())
+				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue,
+					CondReasonServiceReplaceFailed, failed.Error())
+				r.carryGatewayReport(conds, &agent)
+				status.Phase = assaydv1alpha1.PhaseDegraded
+				status.Conditions = conds.merge(agent.Status.Conditions)
+				status.ObservedGeneration = agent.Generation
+				return ctrl.Result{RequeueAfter: RefusedServiceRecheck},
+					r.writeStatus(ctx, &agent, status)
+			}
 			if shape := (*serviceShapeError)(nil); errors.As(err, &shape) {
 				msg := shape.Error()
 				if r.routeNames(status, desired) {
@@ -630,8 +660,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 					// same words for the same reason (authtxn.go).
 					msg += servedRouteNote
 				}
-				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, CondReasonServiceHeadless, msg)
-				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, CondReasonServiceHeadless, msg)
+				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, CondReasonServiceReplaceHeld, msg)
+				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, CondReasonServiceReplaceHeld, msg)
 				// This exit returns BEFORE the -auth step, and design 03's two
 				// conditions are owned and not sticky, so merge would CLEAR them —
 				// retracting A81's announced fail-open on an Agent whose route is
@@ -645,18 +675,25 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				return ctrl.Result{RequeueAfter: RefusedServiceRecheck},
 					r.writeStatus(ctx, &agent, status)
 			}
-			if apierrors.IsInvalid(err) {
-				// A97's convergence made this exit reachable from a Service the
-				// operator OWNS: it asserts an enumerated set of shape fields, and
-				// Kubernetes couples some of them to the type being left, so a
-				// field outside the enumeration can make the repair itself
-				// invalid. The remedy is the same as every other Service refusal's
-				// and the message must say so, because the API server's own
-				// wording names a field and no action — and the exit requeues, or
-				// a `services/patch` principal wedges the Agent until the
-				// manager's resync.
+			if rejectedByAPIServer(err) {
+				// A77's convergence made this exit reachable from a Service the
+				// operator OWNS, and by more than one route: it asserts an
+				// enumerated set of shape fields, so a field Kubernetes couples to
+				// the type being left can make the repair itself invalid — and an
+				// ordinary ValidatingAdmissionPolicy or webhook over `services`
+				// ("every Service must carry a cost-centre label") refuses the
+				// repair outright, which is far likelier.
+				//
+				// NOT `IsInvalid` alone, which is what this branch read. A VAP's
+				// DEFAULT reason, and what a webhook returns, is `Forbidden` — and
+				// a Forbidden repair fell through to a bare error, wrote NO
+				// status, requeued at zero and left the Agent reading
+				// `Ready=True/Available` with the off-gateway exposure standing.
+				// NFR-8's silent degraded path, on the exit that exists to report.
 				msg := err.Error() + ". This operator could not repair its own Service in place. " +
-					"To recover: delete that Service and let the operator recreate it."
+					"To recover: delete that Service and let the operator recreate it — and if " +
+					"an admission policy refused the repair, that policy will refuse the " +
+					"re-creation too, so fix or exempt it first."
 				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "ServiceRejected", msg)
 				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ServiceRejected", msg)
 				// And another, eight lines from the one above: see carryGatewayReport.
@@ -1252,6 +1289,32 @@ func collisionAgainstStatus(st *assaydv1alpha1.AgentStatus, rev, digest string) 
 		}
 	}
 	return nil
+}
+
+// rejectedByAPIServer answers whether an API-server rejection is the object's
+// fault rather than the moment's — a spec it will not take, or a policy that
+// refuses the write — as opposed to something a retry fixes.
+//
+// It is written as a list of TRANSIENT reasons with everything else reported,
+// not the other way round, because the failure that matters is the one nobody
+// enumerated: a rejection that falls through unlisted writes no status at all,
+// which is what `IsInvalid` alone did to every `Forbidden` from an admission
+// policy.
+func rejectedByAPIServer(err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case apierrors.IsConflict(err), apierrors.IsNotFound(err), apierrors.IsAlreadyExists(err),
+		apierrors.IsServerTimeout(err), apierrors.IsTimeout(err), apierrors.IsTooManyRequests(err),
+		apierrors.IsInternalError(err), apierrors.IsServiceUnavailable(err),
+		apierrors.IsUnexpectedServerError(err):
+		return false
+	}
+	// Anything the API server answered WITH A STATUS, that is not one of the
+	// above, is the object's or the policy's fault and must be reported. A
+	// transport failure carries no status and is left to the caller's retry.
+	var status apierrors.APIStatus
+	return errors.As(err, &status)
 }
 
 // RefusedServiceRecheck is how soon a revision Service the operator refused is

@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -762,38 +763,32 @@ func TestARefusedRevisionServiceIsRecheckedAndTheAgentHealsWhenItGoes(t *testing
 	// the shape exit left the provenance exit's requeue — and reportCollision's
 	// condition carry with it — unmeasured.
 	for _, tc := range []struct {
-		name     string
-		agent    string
-		shape    corev1.ServiceSpec
-		forgeUID bool
-		promoted bool
-		reason   string
+		name         string
+		agent        string
+		shape        corev1.ServiceSpec
+		heldHeadless bool
+		reason       string
 	}{{
-		// The one shape refusal left: a headless Service cannot be converged,
-		// because spec.clusterIP is immutable. Reaching it needs BOTH a forged
-		// UID label and a vouched revision — status is what admits an unstamped
-		// object — so this case promotes the revision first and then replaces
-		// the operator's own Service.
+		// The one shape refusal left: an unrepairable Service already replaced
+		// once inside the cooldown, which is reported rather than replaced
+		// again. It needs the operator's own object — promoted, stamped, and
+		// carrying the replaced-at annotation — and two patches to break it.
 		name: "shape", agent: "healshape",
-		shape: corev1.ServiceSpec{
-			Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone,
-		},
-		forgeUID: true,
-		promoted: true,
-		reason:   controller.CondReasonServiceHeadless,
+		heldHeadless: true,
+		reason:       controller.CondReasonServiceReplaceHeld,
 	}, {
 		name: "provenance", agent: "healprov",
 		shape:  corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP},
 		reason: "RevisionHashCollision",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
-			healsWhenTheServiceGoes(t, tc.agent, tc.shape, tc.forgeUID, tc.promoted, tc.reason)
+			healsWhenTheServiceGoes(t, tc.agent, tc.shape, tc.heldHeadless, tc.reason)
 		})
 	}
 }
 
 func healsWhenTheServiceGoes(t *testing.T, name string, shape corev1.ServiceSpec,
-	forgeUID, promoted bool, reason string) {
+	heldHeadless bool, reason string) {
 	t.Helper()
 	ns := newNamespace(t)
 	r := newGatewayReconciler("assayd-gateway", "assayd")
@@ -803,32 +798,23 @@ func healsWhenTheServiceGoes(t *testing.T, name string, shape corev1.ServiceSpec
 	rev := revision.MustHash(a.Spec)
 	svcName := controller.WorkloadName(name, rev)
 	shape.Ports = []corev1.ServicePort{{Name: "a2a", Port: 8080, Protocol: corev1.ProtocolTCP}}
-	labels := map[string]string{}
-	if forgeUID {
-		labels[controller.LabelAgentUID] = string(a.UID)
-	}
-	if promoted {
-		// Let the operator build and promote the revision first, so `status`
-		// vouches for the name; then take its Service away and leave the
-		// planted one in its place.
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	if heldHeadless {
+		// The operator's OWN Service, promoted so status vouches for it, stamped
+		// as already replaced, then broken by patch alone.
 		settle(t, r, a)
 		markAvailable(t, ns, svcName, 1)
 		settle(t, r, a)
-		var mine corev1.Service
-		key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
-		if err := k8s.Get(context.Background(), key, &mine); err != nil {
-			t.Fatalf("get the operator's Service: %v", err)
+		armReplaceCooldown(t, a, rev)
+		headlessByPatchAlone(t, key)
+	} else {
+		planted := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Namespace: runNS(ns), Name: svcName},
+			Spec:       shape,
 		}
-		if err := k8s.Delete(context.Background(), &mine); err != nil {
-			t.Fatalf("delete the operator's Service: %v", err)
+		if err := k8s.Create(context.Background(), planted); err != nil {
+			t.Fatalf("plant: %v", err)
 		}
-	}
-	planted := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Namespace: runNS(ns), Name: svcName, Labels: labels},
-		Spec:       shape,
-	}
-	if err := k8s.Create(context.Background(), planted); err != nil {
-		t.Fatalf("plant: %v", err)
 	}
 
 	// The refusing pass must ask to be run again. Asserted on the Result, which
@@ -857,8 +843,12 @@ func healsWhenTheServiceGoes(t *testing.T, name string, shape corev1.ServiceSpec
 	}
 
 	// The remedy, performed.
-	if err := k8s.Delete(context.Background(), planted); err != nil {
-		t.Fatalf("delete the planted Service: %v", err)
+	var doomed corev1.Service
+	if err := k8s.Get(context.Background(), key, &doomed); err != nil {
+		t.Fatalf("get the refused Service: %v", err)
+	}
+	if err := k8s.Delete(context.Background(), &doomed); err != nil {
+		t.Fatalf("delete the refused Service: %v", err)
 	}
 	for i := 0; i < 6; i++ {
 		reconcileOnce(t, r, a)
@@ -890,17 +880,19 @@ func healsWhenTheServiceGoes(t *testing.T, name string, shape corev1.ServiceSpec
 // of them separately and a test of one measures nothing about the other.
 func TestARefusalDoesNotRetractTheGatewayReport(t *testing.T) {
 	for _, tc := range []struct {
-		name             string
-		exit             func(t *testing.T, svc *corev1.Service)
-		recreateHeadless bool
-		reason           string
+		name         string
+		exit         func(t *testing.T, svc *corev1.Service)
+		heldHeadless bool
+		reason       string
 	}{{
-		// The one shape fault convergence cannot repair. It needs the object
-		// replaced rather than patched, because spec.clusterIP is immutable —
-		// which is the whole reason this fault is refused and the others are
-		// converged. The forged UID label gets it past provenance.
-		name: "the shape exit", reason: controller.CondReasonServiceHeadless,
-		recreateHeadless: true,
+		// The one shape fault convergence cannot repair — spec.clusterIP is
+		// immutable — and which is therefore DELETED and recreated. To get a
+		// refusal out of it the fixture must also carry the replaced-at stamp,
+		// because only a second occurrence inside the cooldown is reported.
+		// Reaching the state needs no create and no forged label: two
+		// strategic-merge patches through ExternalName do it (headlessByPatchAlone).
+		name: "the shape exit", reason: controller.CondReasonServiceReplaceHeld,
+		heldHeadless: true,
 	}, {
 		// And PROVENANCE sees a well-shaped object that is not ours. This exit
 		// reports through reportCollision, which carries separately.
@@ -955,25 +947,9 @@ func TestARefusalDoesNotRetractTheGatewayReport(t *testing.T) {
 			if err := k8s.Get(context.Background(), key, &svc); err != nil {
 				t.Fatalf("get the operator's Service: %v", err)
 			}
-			if tc.recreateHeadless {
-				if err := k8s.Delete(context.Background(), &svc); err != nil {
-					t.Fatalf("delete: %v", err)
-				}
-				headless := &corev1.Service{
-					ObjectMeta: metav1.ObjectMeta{
-						Namespace: runNS(ns), Name: svcName,
-						Labels: map[string]string{controller.LabelAgentUID: string(a.UID)},
-					},
-					Spec: corev1.ServiceSpec{
-						Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone,
-						Ports: []corev1.ServicePort{{
-							Name: "a2a", Port: 8080, Protocol: corev1.ProtocolTCP,
-						}},
-					},
-				}
-				if err := k8s.Create(context.Background(), headless); err != nil {
-					t.Fatalf("create headless: %v", err)
-				}
+			if tc.heldHeadless {
+				armReplaceCooldown(t, a, rev)
+				headlessByPatchAlone(t, key)
 			} else {
 				tc.exit(t, &svc)
 				if err := k8s.Update(context.Background(), &svc); err != nil {
@@ -1496,5 +1472,718 @@ func TestTheCarryDoesNotOverwriteWhatThisPassDerived(t *testing.T) {
 			"%q, want AuthPolicyMissing. A stored report must never displace one the pass "+
 			"derived, and carry() does not go through raiseIncomplete's precedence order, so "+
 			"nothing else would catch it. It is %+v", held.Reason, held)
+	}
+}
+
+// headlessByPatchAlone performs the two strategic-merge patches that make a
+// revision Service headless WITHOUT create, delete or a forged label.
+//
+// `spec.clusterIP` is immutable except across transitions to and from
+// `ExternalName`, so a round trip through it wipes the address and lets the
+// second patch set `None`. The object keeps the operator's UID label and its
+// revision digest the whole way, so it sails through provenance — which is why
+// the first cut's "reaching it needs more than services/patch" was false, and
+// why the human chose delete-and-recreate on 2026-09-22.
+func headlessByPatchAlone(t *testing.T, key types.NamespacedName) {
+	t.Helper()
+	ctx := context.Background()
+	for _, patch := range []string{
+		`{"spec":{"type":"ExternalName","externalName":"elsewhere.example.com"}}`,
+		`{"spec":{"type":"ClusterIP","externalName":null,"clusterIP":"None","clusterIPs":["None"]}}`,
+	} {
+		var svc corev1.Service
+		if err := k8s.Get(ctx, key, &svc); err != nil {
+			t.Fatalf("get for patch: %v", err)
+		}
+		if err := k8s.Patch(ctx, &svc, client.RawPatch(types.StrategicMergePatchType, []byte(patch))); err != nil {
+			t.Fatalf("patch %s: %v", patch, err)
+		}
+	}
+	var after corev1.Service
+	if err := k8s.Get(ctx, key, &after); err != nil {
+		t.Fatalf("get after patches: %v", err)
+	}
+	if after.Spec.ClusterIP != corev1.ClusterIPNone {
+		t.Fatalf("the two-patch sequence did not make the Service headless (clusterIP=%q), so "+
+			"this fixture is not reproducing the blocker", after.Spec.ClusterIP)
+	}
+	if after.Labels[controller.LabelAgentUID] == "" {
+		t.Fatalf("the patches lost the UID label, so provenance would refuse it and the test " +
+			"would measure the wrong branch")
+	}
+}
+
+// A Service this operator owns and CANNOT repair in place is deleted and
+// recreated — not refused.
+//
+// The first cut refused it, on the premise that reaching a headless Service at
+// a revision's name needed a create with a forged UID label. That premise was
+// false: two strategic-merge patches get there with `services/patch` alone,
+// and a served Agent sat permanently Degraded with its route still naming the
+// object. The human chose delete-and-recreate on 2026-09-22.
+func TestAnUnrepairableRevisionServiceIsDeletedAndRecreated(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "replaced")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("replaced", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	var before corev1.Service
+	if err := k8s.Get(context.Background(), key, &before); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	headlessByPatchAlone(t, key)
+
+	reconcileOnce(t, r, a)
+
+	var after corev1.Service
+	if err := k8s.Get(context.Background(), key, &after); err != nil {
+		t.Fatalf("the Service is gone and was not recreated: %v", err)
+	}
+	if after.UID == before.UID {
+		t.Fatalf("the Service was not replaced — same UID %s. An object this operator owns and "+
+			"cannot repair by Update wedges the Agent forever if it is only reported", after.UID)
+	}
+	if after.Spec.ClusterIP == "" || after.Spec.ClusterIP == corev1.ClusterIPNone {
+		t.Errorf("the replacement has no ClusterIP (%q), so the card fetch still cannot reach it",
+			after.Spec.ClusterIP)
+	}
+	if after.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Errorf("the replacement is type %q", after.Spec.Type)
+	}
+	if after.Annotations[controller.ServiceReplacedAnnotation] == "" {
+		t.Errorf("the replacement carries no %s: nothing READS it, but a human looking at the "+
+			"object has no other sign that this operator replaced it",
+			controller.ServiceReplacedAnnotation)
+	}
+	// The BOUND is in status, which only this controller writes.
+	recorded := liveAgentPtr(t, a)
+	if recorded.Status.ServiceReplacedRevision != rev || recorded.Status.ServiceReplacedAt == nil {
+		t.Errorf("status records no replace (%q, %v), so nothing bounds a second one — and the "+
+			"annotation cannot, because the principal that breaks the Service can rewrite it",
+			recorded.Status.ServiceReplacedRevision, recorded.Status.ServiceReplacedAt)
+	}
+
+	// And the Agent HEALS rather than reporting the replacement as an incident.
+	markAvailable(t, ns, svcName, 1)
+	healed := settle(t, r, a)
+	if healed.Status.ActiveRevision != rev {
+		t.Errorf("the Agent did not return to its active revision: %+v", healed.Status)
+	}
+	if d := condition(&healed, assaydv1alpha1.CondDegraded); d != nil &&
+		d.Status == metav1.ConditionTrue {
+		t.Errorf("the Agent is Degraded after its own Service was repaired: %+v", d)
+	}
+}
+
+// The replace is BOUNDED. A replacement that lands back in the unrepairable
+// state is a delete, a new ClusterIP and a fresh traffic gap on every pass, so
+// the second occurrence inside the window is reported instead.
+func TestASecondUnrepairableServiceInsideTheWindowIsHeldNotReplacedAgain(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "held")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("held", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	// Stamp it as replaced a moment ago — the state the operator leaves behind
+	// — and break it again.
+	var svc corev1.Service
+	if err := k8s.Get(context.Background(), key, &svc); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	armReplaceCooldown(t, a, rev)
+	headlessByPatchAlone(t, key)
+	var before corev1.Service
+	if err := k8s.Get(context.Background(), key, &before); err != nil {
+		t.Fatalf("get before: %v", err)
+	}
+
+	reconcileOnce(t, r, a)
+
+	var after corev1.Service
+	if err := k8s.Get(context.Background(), key, &after); err != nil {
+		t.Fatalf("the Service was deleted despite the cooldown: %v", err)
+	}
+	if after.UID != before.UID {
+		t.Fatalf("the Service was replaced a second time inside %s — a replacement that keeps "+
+			"coming back becomes a delete and a traffic gap on every pass",
+			controller.ServiceReplaceCooldown)
+	}
+	got := liveAgentPtr(t, a)
+	ready := condition(got, assaydv1alpha1.CondReady)
+	if ready == nil || ready.Reason != controller.CondReasonServiceReplaceHeld {
+		t.Fatalf("the held replace is not reported: %+v", got.Status.Conditions)
+	}
+	for _, want := range []string{"already deleted and recreated it", "services/patch",
+		"delete that Service"} {
+		if !strings.Contains(ready.Message, want) {
+			t.Errorf("the held message does not contain %q; it is: %s", want, ready.Message)
+		}
+	}
+}
+
+// The delete is reachable ONLY past provenance. A foreign or unstamped object
+// is refused, never deleted — the operator must not destroy something it
+// cannot establish it created.
+func TestAnUnrepairableServiceThatIsNotOursIsRefusedAndNeverDeleted(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		forgeUID bool
+		reason   string
+	}{
+		{"a foreign object", false, "ForeignObject"},
+		// A forged UID label needs only `create` — so the stamp is what decides,
+		// and an unstamped object at a revision status does NOT vouch for is
+		// refused too.
+		{"a forged UID label", true, "Unstamped"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := newNamespace(t)
+			r := newGatewayReconciler("assayd-gateway", "assayd")
+			settle(t, r, noneAgent(t, ns, "neighbour"))
+
+			a := noneAgent(t, ns, "notours")
+			rev := revision.MustHash(a.Spec)
+			svcName := controller.WorkloadName("notours", rev)
+			labels := map[string]string{}
+			if tc.forgeUID {
+				labels[controller.LabelAgentUID] = string(a.UID)
+			}
+			planted := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: runNS(ns), Name: svcName, Labels: labels,
+				},
+				Spec: corev1.ServiceSpec{
+					Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone,
+					Ports: []corev1.ServicePort{{
+						Name: "a2a", Port: 8080, Protocol: corev1.ProtocolTCP,
+					}},
+				},
+			}
+			if err := k8s.Create(context.Background(), planted); err != nil {
+				t.Fatalf("plant: %v", err)
+			}
+			uid := planted.UID
+
+			for i := 0; i < 4; i++ {
+				reconcileOnce(t, r, a)
+			}
+
+			var after corev1.Service
+			if err := k8s.Get(context.Background(),
+				types.NamespacedName{Namespace: runNS(ns), Name: svcName}, &after); err != nil {
+				t.Fatalf("THE OPERATOR DELETED AN OBJECT IT COULD NOT ESTABLISH IT CREATED. The "+
+					"delete path must be reachable only past provenance: %v", err)
+			}
+			if after.UID != uid {
+				t.Fatalf("the object at %s was replaced (%s -> %s): the operator destroyed "+
+					"something that is not its own", svcName, uid, after.UID)
+			}
+			got := liveAgentPtr(t, a)
+			coll := condition(got, assaydv1alpha1.CondRevisionHashCollision)
+			if coll == nil || coll.Reason != tc.reason {
+				t.Errorf("want RevisionHashCollision/%s, got %+v", tc.reason, coll)
+			}
+		})
+	}
+}
+
+// The ESCAPE path, MEASURED AND NOT FIXED. Design 02 §5 carries it.
+//
+// An owner whose revision Service has been broken edits the spec to recover.
+// The edit mints a new DESIRED revision, and `ensureService` converges only the
+// desired one — so the pass that would have replaced the broken Service never
+// looks at it again. The old revision stays ACTIVE, its workload is still
+// Available, and the Agent reads `Ready=True/Available` while the Service its
+// serving route names has no address at all.
+//
+// Measured on 2026-09-22:
+//
+//	activeRevision="126eb2a71a"  candidate="e75424173f"
+//	phase="Ready"  Ready=True/Available  clusterIP="None"
+//
+// Delete-and-recreate does NOT remove this: it removes the wedge for an Agent
+// whose broken Service is still the desired one, which is every case where the
+// owner does nothing. The owner's own recovery attempt is what walks past it.
+//
+// It is not fixed here because both fixes reach past this change. Making
+// `ensureService` look at the active revision as well as the desired one
+// reverses the property design 16's A10 and A11 critiques rest on — "once C is
+// desired, a Service of R that the test deletes is not re-created" — and making
+// readiness depend on the serving revision's Service changes what `Ready`
+// means. Either is its own change with its own review.
+//
+// THIS TEST ASSERTS THE DEFECT. That is deliberate: a fix flips it, and
+// whoever flips it must come here, and from here to §5, rather than quietly
+// leaving the record saying something that is no longer true.
+func TestAnOwnerEditEscapesOverABrokenActiveRevision(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "escape")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("escape", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	headlessByPatchAlone(t, key)
+
+	// The owner's recovery attempt: edit the spec, minting a new revision.
+	live := liveAgentPtr(t, a)
+	live.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:" + strings.Repeat("a", 64)
+	if err := k8s.Update(context.Background(), live); err != nil {
+		t.Fatalf("edit the spec: %v", err)
+	}
+	newRev := revision.MustHash(live.Spec)
+	if newRev == rev {
+		t.Fatalf("setup: the edit did not mint a new revision")
+	}
+	for i := 0; i < 6; i++ {
+		reconcileOnce(t, r, live)
+	}
+
+	var active corev1.Service
+	if err := k8s.Get(context.Background(), key, &active); err != nil {
+		t.Fatalf("the active revision's Service is gone: %v", err)
+	}
+	got := liveAgentPtr(t, a)
+	ready := condition(got, assaydv1alpha1.CondReady)
+	if ready == nil {
+		t.Fatal("no Ready condition")
+	}
+	t.Logf("measured: activeRevision=%q candidate=%q phase=%q ready=%v/%v clusterIP=%q",
+		got.Status.ActiveRevision, got.Status.CandidateRevision, got.Status.Phase,
+		ready.Status, ready.Reason, active.Spec.ClusterIP)
+
+	if got.Status.ActiveRevision != rev {
+		t.Fatalf("the edit promoted a new active revision (%q), which would take the route with "+
+			"it and make this defect unreachable. Re-derive §5 rather than deleting this test",
+			got.Status.ActiveRevision)
+	}
+	if active.Spec.ClusterIP != corev1.ClusterIPNone {
+		t.Fatalf("the ACTIVE revision's Service was repaired (clusterIP=%q). If something now "+
+			"converges a revision other than the desired one, design 02 §5's escape row and "+
+			"design 16's A10/A11 premise are both out of date — fix the record, then delete "+
+			"this test", active.Spec.ClusterIP)
+	}
+	if ready.Status != metav1.ConditionTrue {
+		t.Fatalf("the Agent no longer reads Ready=True over a broken active revision (%v/%v). "+
+			"That is the DEFECT being fixed, not a regression — update design 02 §5's escape "+
+			"row and delete this test", ready.Status, ready.Reason)
+	}
+	// The defect, stated: Ready=True and the address the serving route resolves
+	// to is gone.
+	t.Logf("DEFECT (design 02 §5): Ready=True/%s while the active revision %s, which the serving "+
+		"route names, has no ClusterIP", ready.Reason, got.Status.ActiveRevision)
+}
+
+// swapBeforeDelete replaces the revision Service with a DIFFERENT object under
+// the same name at the moment the operator issues its delete.
+//
+// That is the race the UID precondition exists for. The operator reads an
+// object, decides it is unrepairable and its own, and then deletes it — and in
+// between, the name can come to hold something else. Without the precondition
+// the delete names only the name, so whatever now holds it is destroyed:
+// the operator would be a deputy for anyone who can win that window.
+type swapBeforeDelete struct {
+	client.Client
+	t    *testing.T
+	at   types.NamespacedName
+	swap func()
+	done bool
+}
+
+func (c *swapBeforeDelete) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if !c.done {
+		if svc, ok := obj.(*corev1.Service); ok &&
+			svc.Name == c.at.Name && svc.Namespace == c.at.Namespace {
+			c.done = true
+			c.swap()
+		}
+	}
+	return c.Client.Delete(ctx, obj, opts...)
+}
+
+// The delete carries a UID precondition, so a name that has come to hold a
+// different object between the read and the delete is left alone.
+//
+// This is the one guard standing between "the operator replaces its own broken
+// Service" and "the operator deletes whatever is at that name". The window is
+// real on any cluster: the name is derived from the Agent's name and a public
+// revision hash, so anyone with services/create can take it the moment the
+// operator's own object goes.
+func TestTheReplaceDeletesTheObjectItReadAndNotTheName(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "swapped")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("swapped", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	headlessByPatchAlone(t, key)
+
+	// At the delete, the operator's object vanishes and somebody else's takes
+	// the name. `innocent` is what must survive.
+	var innocentUID types.UID
+	swapper := &swapBeforeDelete{Client: k8s, t: t, at: key, swap: func() {
+		var mine corev1.Service
+		if err := k8s.Get(context.Background(), key, &mine); err != nil {
+			t.Fatalf("swap: get: %v", err)
+		}
+		if err := k8s.Delete(context.Background(), &mine); err != nil {
+			t.Fatalf("swap: delete: %v", err)
+		}
+		innocent := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: key.Namespace, Name: key.Name,
+				Labels: map[string]string{"someone": "else"},
+			},
+			Spec: corev1.ServiceSpec{
+				Type: corev1.ServiceTypeClusterIP,
+				Ports: []corev1.ServicePort{{
+					Name: "other", Port: 9999, Protocol: corev1.ProtocolTCP,
+				}},
+			},
+		}
+		if err := k8s.Create(context.Background(), innocent); err != nil {
+			t.Fatalf("swap: create the innocent object: %v", err)
+		}
+		innocentUID = innocent.UID
+	}}
+	racing := newGatewayReconciler("assayd-gateway", "assayd")
+	racing.Client = swapper
+
+	if _, err := racing.Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)}); err != nil {
+		t.Logf("reconcile returned %v (a lost race is allowed to error; destroying the "+
+			"bystander is not)", err)
+	}
+	if !swapper.done {
+		t.Fatal("setup: no delete was issued, so the race never happened")
+	}
+
+	var after corev1.Service
+	if err := k8s.Get(context.Background(), key, &after); err != nil {
+		t.Fatalf("THE OPERATOR DELETED THE OBJECT THAT TOOK THE NAME. Its delete named only the "+
+			"name, so whoever wins the window between the read and the delete has their object "+
+			"destroyed by this operator: %v", err)
+	}
+	if after.UID != innocentUID {
+		t.Fatalf("the object at %s is not the one that took the name (%s vs %s): the delete "+
+			"reached past the object it had read", svcName, after.UID, innocentUID)
+	}
+	if after.Labels["someone"] != "else" {
+		t.Errorf("the bystander was rewritten: %v", after.Labels)
+	}
+}
+
+// armReplaceCooldown puts the operator in the state it leaves behind after a
+// replace, through the status subresource — which is the only writer of it.
+func armReplaceCooldown(t *testing.T, a *assaydv1alpha1.Agent, rev string) {
+	t.Helper()
+	live := liveAgentPtr(t, a)
+	now := metav1.Now()
+	live.Status.ServiceReplacedRevision, live.Status.ServiceReplacedAt = rev, &now
+	if err := k8s.Status().Update(context.Background(), live); err != nil {
+		t.Fatalf("arm the cooldown: %v", err)
+	}
+}
+
+// The bound must not be writable by the principal it exists to stop.
+//
+// The first implementation kept it in an annotation on the Service, and
+// `services/patch` writes annotations. Both directions were measured: a
+// future-dated value held the replace forever — the permanent wedge the
+// human's decision was taken to remove, restored with one more patch of the
+// same verb — and deleting the value removed the bound, producing a delete, a
+// new ClusterIP and a traffic gap on every pass.
+func TestTheReplaceBoundIsNotWritableByWhoeverBreaksTheService(t *testing.T) {
+	t.Run("a future-dated annotation does not hold the replace", func(t *testing.T) {
+		ns := newNamespace(t)
+		a := noneAgent(t, ns, "future")
+		r := newGatewayReconciler("assayd-gateway", "assayd")
+		rev := revision.MustHash(a.Spec)
+		svcName := controller.WorkloadName("future", rev)
+		settle(t, r, a)
+		markAvailable(t, ns, svcName, 1)
+		settle(t, r, a)
+
+		key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+		var svc corev1.Service
+		if err := k8s.Get(context.Background(), key, &svc); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		before := svc.UID
+		if err := k8s.Patch(context.Background(), &svc, client.RawPatch(types.StrategicMergePatchType,
+			[]byte(`{"metadata":{"annotations":{"assayd.dev/service-replaced-at":"3000-01-01T00:00:00Z"}}}`))); err != nil {
+			t.Fatalf("patch the annotation: %v", err)
+		}
+		headlessByPatchAlone(t, key)
+		for i := 0; i < 3; i++ {
+			reconcileOnce(t, r, a)
+		}
+
+		var after corev1.Service
+		if err := k8s.Get(context.Background(), key, &after); err != nil {
+			t.Fatalf("get after: %v", err)
+		}
+		if after.UID == before {
+			t.Fatalf("the Service was not replaced: a value the breaking principal wrote held "+
+				"the repair off, which is the permanent wedge delete-and-recreate exists to "+
+				"remove. Ready=%+v", condition(liveAgentPtr(t, a), assaydv1alpha1.CondReady))
+		}
+	})
+
+	t.Run("deleting the annotation does not remove the bound", func(t *testing.T) {
+		ns := newNamespace(t)
+		a := noneAgent(t, ns, "stripped")
+		r := newGatewayReconciler("assayd-gateway", "assayd")
+		rev := revision.MustHash(a.Spec)
+		svcName := controller.WorkloadName("stripped", rev)
+		settle(t, r, a)
+		markAvailable(t, ns, svcName, 1)
+		settle(t, r, a)
+		key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+
+		seen := map[types.UID]bool{}
+		for i := 0; i < 3; i++ {
+			var svc corev1.Service
+			if err := k8s.Get(context.Background(), key, &svc); err != nil {
+				t.Fatalf("iteration %d: get: %v", i, err)
+			}
+			seen[svc.UID] = true
+			if err := k8s.Patch(context.Background(), &svc, client.RawPatch(types.StrategicMergePatchType,
+				[]byte(`{"metadata":{"annotations":{"assayd.dev/service-replaced-at":null}}}`))); err != nil {
+				t.Fatalf("iteration %d: strip: %v", i, err)
+			}
+			headlessByPatchAlone(t, key)
+			reconcileOnce(t, r, a)
+		}
+		var last corev1.Service
+		if err := k8s.Get(context.Background(), key, &last); err != nil {
+			t.Fatalf("get last: %v", err)
+		}
+		seen[last.UID] = true
+		if len(seen) > 2 {
+			t.Errorf("%d distinct Services inside one cooldown window: stripping the annotation "+
+				"removed the bound, so the operator deletes and recreates on every pass — one "+
+				"new ClusterIP and one traffic gap each", len(seen))
+		}
+	})
+}
+
+// takeNameOnDelete plants somebody else's Service at the name the instant the
+// operator's delete frees it.
+type takeNameOnDelete struct {
+	client.Client
+	t     *testing.T
+	at    types.NamespacedName
+	uid   types.UID
+	taken bool
+}
+
+func (c *takeNameOnDelete) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	err := c.Client.Delete(ctx, obj, opts...)
+	if err == nil && !c.taken {
+		if svc, ok := obj.(*corev1.Service); ok && svc.Name == c.at.Name {
+			c.taken = true
+			planted := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: c.at.Namespace, Name: c.at.Name,
+					Labels: map[string]string{"planted": "yes"},
+				},
+				Spec: corev1.ServiceSpec{
+					Type:     corev1.ServiceTypeClusterIP,
+					Selector: map[string]string{"app": "attacker"},
+					Ports: []corev1.ServicePort{{
+						Name: "a2a", Port: 8080, Protocol: corev1.ProtocolTCP,
+					}},
+				},
+			}
+			if cerr := c.Client.Create(ctx, planted); cerr != nil {
+				c.t.Fatalf("take the name: %v", cerr)
+			}
+			c.uid = planted.UID
+		}
+	}
+	return err
+}
+
+// The delete frees the name the serving route's backendRef points at. If the
+// recreate then fails, the Agent must SAY so — not report Ready=True over
+// whatever took it.
+//
+// Measured before this was reported: the create failed `AlreadyExists`, which
+// rejectedByAPIServer counts as transient, so the error fell through to a bare
+// return with no status written and the published route named the planted
+// object while the Agent read Ready=True/Available.
+func TestAFailedRecreateIsReportedAndDoesNotPromoteOverWhateverTookTheName(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "nametake")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("nametake", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	headlessByPatchAlone(t, key)
+
+	taker := &takeNameOnDelete{Client: k8s, t: t, at: key}
+	racing := newGatewayReconciler("assayd-gateway", "assayd")
+	racing.Client = taker
+	if _, err := racing.Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)}); err != nil {
+		t.Logf("reconcile: %v", err)
+	}
+	if !taker.taken {
+		t.Fatal("setup: the name was never taken, so the window was not exercised")
+	}
+
+	got := liveAgentPtr(t, a)
+	ready := condition(got, assaydv1alpha1.CondReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse {
+		t.Fatalf("the Agent reads %+v after its serving Service was deleted and the replacement "+
+			"refused. The published route names that object BY NAME, so traffic now reaches "+
+			"whatever took it", ready)
+	}
+	if ready.Reason != controller.CondReasonServiceReplaceFailed {
+		t.Errorf("Ready reason is %q, want %s", ready.Reason,
+			controller.CondReasonServiceReplaceFailed)
+	}
+	if !strings.Contains(ready.Message, "whatever holds that name now is what traffic reaches") {
+		t.Errorf("the message does not tell the reader that the name is what traffic follows: %s",
+			ready.Message)
+	}
+}
+
+// And the replace is not attempted at all when the replacement would be
+// refused — the serving object is not destroyed to find out.
+func TestTheReplaceIsNotAttemptedWhenTheReplacementWouldBeRefused(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "dryrun")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("dryrun", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	headlessByPatchAlone(t, key)
+	var before corev1.Service
+	if err := k8s.Get(context.Background(), key, &before); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	refusing := &refuseCreate{Client: k8s, at: key}
+	guarded := newGatewayReconciler("assayd-gateway", "assayd")
+	guarded.Client = refusing
+	if _, err := guarded.Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)}); err != nil {
+		t.Logf("reconcile: %v", err)
+	}
+
+	var after corev1.Service
+	if err := k8s.Get(context.Background(), key, &after); err != nil {
+		t.Fatalf("THE SERVING SERVICE WAS DELETED and could not be recreated. The Create must be "+
+			"dry-run before anything is destroyed: %v", err)
+	}
+	if after.UID != before.UID {
+		t.Fatalf("the object was replaced despite the replacement being refused")
+	}
+	ready := condition(liveAgentPtr(t, a), assaydv1alpha1.CondReady)
+	if ready == nil || ready.Reason != controller.CondReasonServiceReplaceFailed {
+		t.Errorf("the refused replace is not reported: %+v", ready)
+	}
+}
+
+// refuseCreate refuses every Service create at one name, as an admission policy
+// over `services` would.
+type refuseCreate struct {
+	client.Client
+	at types.NamespacedName
+}
+
+func (c *refuseCreate) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if svc, ok := obj.(*corev1.Service); ok && svc.Name == c.at.Name && svc.Namespace == c.at.Namespace {
+		return apierrors.NewForbidden(schema.GroupResource{Resource: "services"}, svc.Name,
+			fmt.Errorf("every Service must carry a cost-centre label"))
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+// The delete is reachable only for an object carrying this operator's STAMP for
+// this revision — not merely one provenance admitted.
+//
+// The third provenance ground adopts an unstamped object while status vouches
+// for the name, and a forged agent-uid label needs only `create`. Such an
+// object is rewritten but must never be destroyed, or the claim "nothing this
+// operator did not create is ever deleted here" is false.
+func TestAnUnstampedVouchedServiceIsRefusedNotDeleted(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "vouchdel")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("vouchdel", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	got := settle(t, r, a)
+	if got.Status.ActiveRevision != rev {
+		t.Fatalf("setup: status vouches for nothing: %+v", got.Status)
+	}
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	var mine corev1.Service
+	if err := k8s.Get(context.Background(), key, &mine); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if err := k8s.Delete(context.Background(), &mine); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	// Unstamped, forged UID label, headless, at a revision status vouches for.
+	planted := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: runNS(ns), Name: svcName,
+			Labels: map[string]string{controller.LabelAgentUID: string(a.UID)},
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone,
+			Ports: []corev1.ServicePort{{Name: "a2a", Port: 8080, Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	if err := k8s.Create(context.Background(), planted); err != nil {
+		t.Fatalf("plant: %v", err)
+	}
+	uid := planted.UID
+	for i := 0; i < 3; i++ {
+		reconcileOnce(t, r, a)
+	}
+
+	var after corev1.Service
+	if err := k8s.Get(context.Background(), key, &after); err != nil {
+		t.Fatalf("THE OPERATOR DELETED AN UNSTAMPED OBJECT. The status disjunct adopts one it "+
+			"cannot establish it created; it must not DESTROY one: %v", err)
+	}
+	if after.UID != uid {
+		t.Fatalf("the unstamped object was replaced (%s -> %s)", uid, after.UID)
+	}
+	ready := condition(liveAgentPtr(t, a), assaydv1alpha1.CondReady)
+	if ready == nil || ready.Reason != controller.CondReasonServiceReplaceHeld {
+		t.Errorf("the refusal is not reported: %+v", ready)
 	}
 }

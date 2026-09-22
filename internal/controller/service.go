@@ -6,12 +6,14 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
@@ -64,6 +66,12 @@ func (r *AgentReconciler) serviceFor(agent *assaydv1alpha1.Agent, runNS, rev str
 		Spec: corev1.ServiceSpec{
 			Selector: selector,
 			Type:     corev1.ServiceTypeClusterIP,
+			// Explicit, because the converge asserts it: `Local` is served only
+			// by endpoints on the caller's node and DROPS the request when there
+			// are none, so one patch black-holes the gateway's hop to the agent.
+			// The API server defaults it to `Cluster` anyway; rendering it says
+			// the operator has the opinion rather than inheriting it.
+			InternalTrafficPolicy: ptr(corev1.ServiceInternalTrafficPolicyCluster),
 			Ports: []corev1.ServicePort{{
 				Name: ServicePortName,
 				// The port as of the revision that MINTED this Service, which is
@@ -160,14 +168,44 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 	// namespace a permanent per-Agent outage, needing no ExternalName and no
 	// cleverness, which is a worse failure than the one this amendment closes.
 	//
-	// ONE field cannot be converged, and it is refused ON ITS OWN rather than
-	// by widening the refusal to the rest: `spec.clusterIP` is immutable, so a
-	// headless Service at this name can never be given an address. It is
-	// reachable for an object this switch admits — a forged UID label needs
-	// only `create`, and an unstamped object at a vouched revision is adopted —
-	// so this is a live branch and not a guard against the impossible.
+	// ONE field cannot be repaired by an Update — `spec.clusterIP` is immutable
+	// — so that object is DELETED and recreated instead. The human decided this
+	// on 2026-09-22, after the first cut refused it.
+	//
+	// The warrant is the line above: provenance has already admitted the object
+	// as ours, and an object carrying our stamp for this revision is ours to
+	// replace as much as it is ours to rewrite. **The ordering is the safety
+	// property**, not an accident of where the code sits: a foreign or
+	// unstamped object never reaches this line, because every ground above
+	// returns. Nothing this operator did not create is ever deleted here.
+	//
+	// Refusing instead was measured to be a wedge, and the premise that made it
+	// look narrow was false. `spec.clusterIP` is immutable EXCEPT across
+	// transitions to and from `ExternalName`, so two strategic-merge patches
+	// reach it with no create, no delete and no forged label — the object keeps
+	// our UID and our stamp the whole way:
+	//
+	//	{"spec":{"type":"ExternalName","externalName":"elsewhere.example.com"}}
+	//	{"spec":{"type":"ClusterIP","externalName":null,"clusterIP":"None","clusterIPs":["None"]}}
+	//
+	// That is `services/patch` alone, and it left a served Agent permanently
+	// Degraded with its route still naming the object.
+	//
+	// Only this fault takes this path. Every shape an Update CAN repair is
+	// repaired in place, because a delete is strictly more destructive and the
+	// replacement gets a new ClusterIP — design 02 §5 states the gap.
 	if shape != nil && shape.what == faultHeadless {
-		return shape
+		// STAMPED, and with THIS revision's digest. Not merely "provenance
+		// admitted it": the third provenance ground adopts an unstamped object
+		// while `status` vouches for the name, and a forged `agent-uid` label
+		// needs only `create` — so that object is one the operator cannot
+		// establish it created, and the claim above would be false of it if it
+		// were deleted. It is adopted (rewritten) but never destroyed. The
+		// narrower rule is the one the absolute claim needs.
+		if !stamped || existingDigest != digest {
+			return shape
+		}
+		return r.replaceUnrepairableService(ctx, &existing, desired, rev, status)
 	}
 
 	// ClusterIP is assigned by the API server and must survive the update, as
@@ -186,32 +224,195 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 	// The shape, asserted rather than merely checked. Setting Type back to
 	// ClusterIP on an ExternalName Service makes the API server allocate an
 	// address; clearing externalIPs removes the node DNAT; clearing
-	// publishNotReadyAddresses restores the readiness gate promotion rests on.
+	// publishNotReadyAddresses restores the readiness gate promotion rests on;
+	// and internalTrafficPolicy back to Cluster restores the one setting whose
+	// `Local` value DROPS traffic rather than steering it — a Service served
+	// only by endpoints on the caller's node black-holes the gateway's hop to
+	// the agent on any multi-node cluster, and nothing reported it.
 	updated.Spec.Type = desired.Spec.Type
 	updated.Spec.ExternalName = ""
 	updated.Spec.ExternalIPs = nil
 	updated.Spec.PublishNotReadyAddresses = false
-	// AND the fields that only exist UNDER a type we are leaving. Kubernetes
-	// couples them: `dropTypeDependentFields` clears most on a type change —
-	// externalTrafficPolicy, loadBalancerIP, allocateLoadBalancerNodePorts,
-	// healthCheckNodePort, loadBalancerClass, the ports' nodePorts — but it
-	// does NOT clear loadBalancerSourceRanges, and the API server then refuses
-	// the repair with `may only be used when type is 'LoadBalancer'`. Measured:
-	// one `services/patch` setting type=LoadBalancer with a source range left
-	// the Agent permanently Degraded under ServiceRejected with the exposure
-	// intact — the wedge this convergence exists to avoid, restored by
-	// asserting a subset of a coupled field set. Design 02 §5 records that this
-	// is an enumeration and a future coupled field would land in the same exit,
-	// which is why that exit now requeues and names a remedy.
+	updated.Spec.InternalTrafficPolicy = desired.Spec.InternalTrafficPolicy
+	// AND the field that only exists UNDER a type we are leaving. Kubernetes
+	// couples several to the type: `dropTypeDependentFields` clears
+	// externalTrafficPolicy, allocateLoadBalancerNodePorts, healthCheckNodePort,
+	// loadBalancerClass and the ports' nodePorts on a type change, which is why
+	// those are not here. It does NOT clear loadBalancerSourceRanges, and the
+	// API server then refuses the repair with `may only be used when type is
+	// 'LoadBalancer'`. Measured: one `services/patch` setting type=LoadBalancer
+	// with a source range left the Agent permanently Degraded under
+	// ServiceRejected with the exposure intact — the wedge this convergence
+	// exists to avoid, restored by asserting a subset of a coupled field set.
+	//
+	// It does not clear `loadBalancerIP` either. An earlier version of this
+	// comment said it did, and the measurement says otherwise: a repaired
+	// Service keeps it. It is left alone rather than added here because nothing
+	// on a ClusterIP Service reads it — no type-coupled validation refuses it
+	// and no load-balancer controller acts on it — so it is an inert leftover
+	// and §5 lists it with the other fields this operator does not read.
 	updated.Spec.LoadBalancerSourceRanges = nil
 	if equalService(&existing, updated) {
 		return nil
+	}
+	// SAY what was reset. There is no durable record of a repair — no
+	// EventRecorder is wired and a condition would announce every overwritten
+	// hand-edit as an incident — so an attempted off-gateway exposure of a
+	// governed Agent otherwise leaves nothing but a resourceVersion bump. A log
+	// line is greppable, costs no machinery, and does not pretend to be more
+	// than it is. Design 02 §5 records that this is the whole signal.
+	if reset := shapeFieldsReset(&existing); len(reset) > 0 {
+		log.FromContext(ctx).Info("repairing a revision Service whose shape had drifted",
+			"service", runNS+"/"+desired.Name, "fields", reset)
 	}
 	if err := r.Update(ctx, updated); err != nil {
 		return fmt.Errorf("converge service %s: %w", desired.Name, err)
 	}
 	return nil
 }
+
+// shapeFieldsReset names the shape fields the converge is about to put back, so
+// the log line says which. It reads the SAME fields the converge asserts; a
+// field added to one and not the other is a repair nothing reports.
+func shapeFieldsReset(existing *corev1.Service) []string {
+	var reset []string
+	if existing.Spec.Type != corev1.ServiceTypeClusterIP {
+		reset = append(reset, "spec.type="+string(existing.Spec.Type))
+	}
+	if existing.Spec.ExternalName != "" {
+		reset = append(reset, "spec.externalName")
+	}
+	if len(existing.Spec.ExternalIPs) > 0 {
+		reset = append(reset, "spec.externalIPs")
+	}
+	if existing.Spec.PublishNotReadyAddresses {
+		reset = append(reset, "spec.publishNotReadyAddresses")
+	}
+	if p := existing.Spec.InternalTrafficPolicy; p != nil && *p != corev1.ServiceInternalTrafficPolicyCluster {
+		reset = append(reset, "spec.internalTrafficPolicy="+string(*p))
+	}
+	if len(existing.Spec.LoadBalancerSourceRanges) > 0 {
+		reset = append(reset, "spec.loadBalancerSourceRanges")
+	}
+	return reset
+}
+
+// ServiceReplacedAnnotation says on the object that this operator replaced it,
+// and when. It is a MARKER FOR A HUMAN and nothing reads it: the bound lives in
+// `status.serviceReplacedAt`, because `metadata.annotations` is writable by the
+// principal the bound exists to stop.
+const ServiceReplacedAnnotation = "assayd.dev/service-replaced-at"
+
+// ServiceReplaceCooldown bounds the replace to at most one per revision per
+// window, counted from `status.serviceReplacedAt`.
+//
+// Without a bound, a replacement that lands back in the unrepairable state —
+// a mutating webhook that forces `clusterIP: None`, or a principal patching it
+// back — is a delete-and-create against the API server on every pass, each one
+// a fresh ClusterIP and a fresh traffic gap. With it, the second occurrence
+// inside the window is REPORTED instead, under a reason that says the replace
+// was held. An attacker who re-patches after the window gets one more replace
+// and one more gap, which is their loop rather than the operator's, and each
+// iteration leaves the Service repaired.
+const ServiceReplaceCooldown = 10 * time.Minute
+
+// replaceUnrepairableService deletes a revision Service this operator owns and
+// cannot repair by Update, and creates the rendered one in its place.
+//
+// CALLED ONLY ON AN OBJECT CARRYING THIS OPERATOR'S STAMP FOR THIS REVISION.
+// That is the whole safety argument, and it is why this function takes the
+// object the caller already validated rather than re-reading it: a second read
+// could return a different object under the same name.
+//
+// Three things guard the window the delete opens, and each was a measured
+// failure before it existed.
+//
+//   - The BOUND is read from `status`, not from the object. An annotation was
+//     writable by the principal it exists to stop: a future-dated value held
+//     the replace forever (the permanent wedge this amendment removes) and a
+//     deleted value removed the bound, producing a delete and a traffic gap on
+//     every pass.
+//   - The Create is DRY-RUN before the Delete. The route's backendRef names
+//     the Service by NAME, so a delete frees that name for one round trip. A
+//     Create that would be refused — by an admission policy over `services`,
+//     which is the likeliest case — must not be discovered after the serving
+//     object is already gone.
+//   - A lost race NEVER returns nil. Returning success let the pass go on to
+//     readiness, promotion and the route, so the operator credited whatever had
+//     taken the name with the Agent's traffic and reported Ready=True about it.
+func (r *AgentReconciler) replaceUnrepairableService(
+	ctx context.Context, existing, desired *corev1.Service, rev string,
+	status *assaydv1alpha1.AgentStatus,
+) error {
+	if status.ServiceReplacedRevision == rev && status.ServiceReplacedAt != nil {
+		if since := time.Since(status.ServiceReplacedAt.Time); since >= 0 && since < ServiceReplaceCooldown {
+			return &serviceShapeError{
+				ns: existing.Namespace, name: existing.Name,
+				what: faultHeadless, heldSince: status.ServiceReplacedAt.Time,
+			}
+		}
+	}
+
+	// Would the replacement be admitted? Asked BEFORE anything is destroyed.
+	probe := desired.DeepCopy()
+	if err := r.Create(ctx, probe, client.DryRunAll); err != nil && !apierrors.IsAlreadyExists(err) {
+		return &serviceReplaceError{
+			ns: existing.Namespace, name: existing.Name, stage: "would not be admitted", cause: err,
+		}
+	}
+
+	if err := r.Delete(ctx, existing, client.Preconditions{UID: &existing.UID}); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Already gone. The next pass reads what is there now; this one must
+			// not go on to promote over an object it never established.
+			return &serviceReplaceError{
+				ns: existing.Namespace, name: existing.Name, stage: "vanished before it could be replaced", cause: err,
+			}
+		}
+		return &serviceReplaceError{
+			ns: existing.Namespace, name: existing.Name, stage: "could not be deleted", cause: err,
+		}
+	}
+	desired.Annotations[ServiceReplacedAnnotation] = time.Now().UTC().Format(time.RFC3339)
+	if err := r.Create(ctx, desired); err != nil {
+		// The name was free for a round trip and is now taken, or the create was
+		// refused. Either way the serving object is GONE and this must be
+		// reported, not returned bare — the pass that says nothing here is the
+		// one that leaves a route pointing at a stranger's Service.
+		return &serviceReplaceError{
+			ns: existing.Namespace, name: existing.Name, stage: "could not be recreated after it was deleted", cause: err,
+		}
+	}
+	// Recorded only once the replacement exists, and in `status`, which only
+	// this controller writes.
+	now := metav1.Now()
+	status.ServiceReplacedRevision, status.ServiceReplacedAt = rev, &now
+	log.FromContext(ctx).Info("replaced a revision Service that could not be repaired in place",
+		"service", existing.Namespace+"/"+existing.Name, "reason", "spec.clusterIP is immutable",
+		"was", existing.UID, "now", desired.UID)
+	return nil
+}
+
+// serviceReplaceError is a replace that did not complete. It is reported rather
+// than returned bare, because every stage of it leaves the Agent worse than it
+// found it: before the delete, an object that cannot be repaired; after, no
+// object at all under a name the serving route still points at.
+type serviceReplaceError struct {
+	ns, name string
+	stage    string
+	cause    error
+}
+
+func (e *serviceReplaceError) Error() string {
+	return fmt.Sprintf("service %s/%s could not be repaired in place — spec.clusterIP is "+
+		"immutable — and the replacement %s: %v. The serving route's backendRef names this "+
+		"object by name, so whatever holds that name now is what traffic reaches. To recover: "+
+		"check what is at that name, delete it if it is not this Agent's, and look for an "+
+		"admission policy over services that refuses this operator's writes.",
+		e.ns, e.name, e.stage, e.cause)
+}
+
+func (e *serviceReplaceError) Unwrap() error { return e.cause }
 
 // serviceShapeError is a revision Service whose shape this operator never
 // renders.
@@ -226,6 +427,10 @@ type serviceShapeError struct {
 	typ          corev1.ServiceType
 	externalName string
 	externalIPs  []string
+	// heldSince is set when the replace was HELD by the cooldown rather than
+	// performed: the object was replaced at this time and is unrepairable
+	// again, so replacing it once more would be a loop.
+	heldSince time.Time
 }
 
 type shapeFault int
@@ -248,9 +453,9 @@ func (e *serviceShapeError) detail() string {
 	switch e.what {
 	case faultHeadless:
 		return "It is headless (spec.clusterIP: None), and spec.clusterIP is immutable, so this " +
-			"operator cannot converge it back — every other shape it renders is repaired in " +
-			"place. The card fetch, which addresses the Service by its ClusterIP, can never " +
-			"succeed against it either."
+			"operator cannot repair it in place — every other shape it renders is converged. " +
+			"The card fetch, which addresses the Service by its ClusterIP, can never succeed " +
+			"against it either."
 	case faultExternalIPs:
 		// BOUNDED, because the value is the writer's and `spec.externalIPs` has
 		// no item cap in Kubernetes validation while metav1.Condition.Message is
@@ -283,12 +488,16 @@ func (e *serviceShapeError) detail() string {
 }
 
 func (e *serviceShapeError) Error() string {
-	// Reached only for faultHeadless, which is the only fault this operator
-	// returns as an error rather than converging away.
-	return fmt.Sprintf("service %s/%s cannot be converged to the shape this operator renders. %s "+
-		"Refusing this one field rather than widening the refusal to shapes that CAN be "+
-		"repaired. To recover: delete that Service and let the operator recreate it.",
-		e.ns, e.name, e.detail())
+	// Reached only when the replace was HELD: every other unrepairable Service
+	// is deleted and recreated rather than reported.
+	return fmt.Sprintf("service %s/%s cannot be repaired in place. %s This operator already "+
+		"deleted and recreated it at %s and it is unrepairable again, so it is being left alone "+
+		"rather than replaced a second time inside %s — replacing it on every pass would be a "+
+		"delete, a new ClusterIP and a fresh traffic gap each time. Something is putting it back: "+
+		"look for an admission policy that forces spec.clusterIP, or a principal with "+
+		"services/patch on this namespace. To recover: stop whatever is rewriting it, then delete "+
+		"that Service and let the operator recreate it.",
+		e.ns, e.name, e.detail(), e.heldSince.UTC().Format(time.RFC3339), ServiceReplaceCooldown)
 }
 
 // serviceNotRendered answers whether an existing revision Service has a shape
@@ -342,10 +551,17 @@ func equalService(a, b *corev1.Service) bool {
 	// compares equal to its own repair and no Update is ever issued — the
 	// convergence would be dead code, which a mutation shows and a reader does
 	// not.
+	// Lengths, not contents, for the two slices: `b` is the render, which names
+	// no address in either, so any non-empty value on `a` differs in length.
+	// A content comparison was written here and deleted — its loop body could
+	// never execute, and unreachable code that reads as load-bearing is what
+	// rule 5 forbids. If the render ever names an address this must compare
+	// contents, and §5 says so.
 	if a.Spec.Type != b.Spec.Type || a.Spec.ExternalName != b.Spec.ExternalName ||
 		a.Spec.PublishNotReadyAddresses != b.Spec.PublishNotReadyAddresses ||
-		!equalStrings(a.Spec.ExternalIPs, b.Spec.ExternalIPs) ||
-		!equalStrings(a.Spec.LoadBalancerSourceRanges, b.Spec.LoadBalancerSourceRanges) {
+		!equalInternalTrafficPolicy(a.Spec.InternalTrafficPolicy, b.Spec.InternalTrafficPolicy) ||
+		len(a.Spec.ExternalIPs) != len(b.Spec.ExternalIPs) ||
+		len(a.Spec.LoadBalancerSourceRanges) != len(b.Spec.LoadBalancerSourceRanges) {
 		return false
 	}
 	return a.Annotations[RevisionDigestAnnotation] == b.Annotations[RevisionDigestAnnotation]
@@ -402,18 +618,13 @@ func (r *AgentReconciler) collectRevisionServices(ctx context.Context, agent *as
 	return nil
 }
 
-// equalStrings compares two string slices by CONTENT, not length. Length alone
-// is sound only while the render has no opinion about the values — which is
-// true of externalIPs today and is exactly the kind of assumption that stops
-// being true without anything failing.
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
+// equalInternalTrafficPolicy compares the pointer field by VALUE. A stored
+// Service always carries one, because the API server defaults it, and the
+// render always sets it — but nil is compared rather than dereferenced so a
+// Service stored before the field existed cannot panic the manager.
+func equalInternalTrafficPolicy(a, b *corev1.ServiceInternalTrafficPolicy) bool {
+	if a == nil || b == nil {
+		return a == b
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return *a == *b
 }

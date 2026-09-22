@@ -601,6 +601,27 @@ type AgentStatus struct {
 	ActiveRevisionDigest string `json:"activeRevisionDigest,omitempty"`
 	// +optional
 	CandidateRevisionDigest string `json:"candidateRevisionDigest,omitempty"`
+	// ServiceReplacedRevision and ServiceReplacedAt record the last revision
+	// Service this operator DELETED and recreated because it could not repair
+	// it in place (design 02 §3.2, A77). They bound that operation to one per
+	// revision per cooldown.
+	//
+	// They live in `status` and not on the Service, which is where the first
+	// implementation put them, because `status` is the non-forgeable side: this
+	// controller is its only author and writes it through the status
+	// subresource, while `metadata.annotations` is writable by the very
+	// principal the bound exists to stop. An annotation bound was measured
+	// broken both ways — a future-dated value held the replace forever, which
+	// is the permanent wedge this amendment exists to remove, and deleting the
+	// value removed the bound entirely and produced a delete, a new ClusterIP
+	// and a traffic gap on every pass.
+	//
+	// The revision is recorded beside the time because a NEW revision gets a
+	// new Service, which the last revision's cooldown must not hold.
+	// +optional
+	ServiceReplacedRevision string `json:"serviceReplacedRevision,omitempty"`
+	// +optional
+	ServiceReplacedAt *metav1.Time `json:"serviceReplacedAt,omitempty"`
 	// SupersededCandidates records abandoned in-flight candidates so the
 	// transition is auditable rather than silent. It is capped: the audit trail
 	// belongs in events and receipts, which are durable, whereas an unbounded
