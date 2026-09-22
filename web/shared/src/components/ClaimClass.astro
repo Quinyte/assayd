@@ -1,0 +1,222 @@
+---
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+import { resolveClaim, type Claim, type ClaimClassName } from "../claim-class.ts";
+
+type Variant = "inline" | "header";
+
+export type Props = Claim & {
+  /**
+   * "inline" sits in a sentence; "header" states the class of a whole page.
+   * They are genuinely different typographic objects, not one object at two
+   * sizes — see the note above the styles.
+   */
+  variant?: Variant;
+  class?: string;
+};
+
+const { variant = "inline", class: extraClass, ...claimProps } = Astro.props;
+const resolved = resolveClaim(claimProps as Claim);
+
+const classes: string[] = [
+  "cc",
+  `cc--${variant}`,
+  `cc--${resolved.claim satisfies ClaimClassName}`,
+];
+if (extraClass) classes.push(extraClass);
+const className = classes.join(" ");
+---
+
+{
+  /*
+   * The visible markup is hidden from assistive technology wholesale and a
+   * single sentence is announced in its place. The alternative — leaving the
+   * fragments exposed and adding a prefix — makes a screen reader read the
+   * evidence twice, once inside the sentence and once as loose text.
+   *
+   * This is safe because the badge is NOT interactive: WCAG 2.5.3 (Label in
+   * Name) governs controls, and there is no control here. Nothing in this
+   * component is focusable, and nothing about it moves.
+   */
+}
+{
+  variant === "header" ? (
+    <div class={className}>
+      <span class="cc__sr">{resolved.label}</span>
+      <div class="cc__vis" aria-hidden="true">
+        <span class="cc__eyebrow">Claim class</span>
+        <span class="cc__word">{resolved.word}</span>
+        {resolved.evidence && <span class="cc__evidence">{resolved.evidence}</span>}
+      </div>
+    </div>
+  ) : (
+    <span class={className}>
+      <span class="cc__sr">{resolved.label}</span>
+      <span class="cc__vis" aria-hidden="true">
+        <span class="cc__mark">{resolved.mark}</span>
+        <span class="cc__word">{resolved.word}</span>
+        {resolved.evidence && <span class="cc__evidence">{resolved.evidence}</span>}
+      </span>
+    </span>
+  )
+}
+
+<style>
+  /*
+   * The design brief for this component, because it is the one piece the whole
+   * site leans on and the obvious version of it is wrong:
+   *
+   * IT IS NOT A COLOURED PILL. There is no green/amber/red. The three classes
+   * are told apart by STROKE — filled, hairline, dashed — and by a mark that
+   * survives greyscale, monochrome and a colour-blind reader. Hue carries none
+   * of the meaning, which is SC 1.4.1 satisfied by construction rather than by
+   * adding an icon to a colour system after the fact.
+   *
+   * IT IS NOT GOLD. Gold is one decorative beat per composition. A badge that
+   * appears forty times in a page of prose would be forty beats, so the badge
+   * is ink and the page's single gold beat is spent elsewhere.
+   *
+   * IT IS TWO TYPE TREATMENTS IN ONE OBJECT. The state word is an annotation:
+   * uppercase, letterspaced, weight 500 — the design system's one sanctioned
+   * use of weight 500. The evidence is a verbatim identifier: monospace, case
+   * preserved, no letterspacing, because a reader is meant to grep for it and
+   * a smallcapped test name is not greppable. That pairing is what makes it
+   * read as typeset marginalia rather than as a status chip.
+   */
+
+  /* Self-contained: the component does not depend on base.css being present. */
+  .cc__sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .cc__word {
+    text-transform: uppercase;
+    letter-spacing: var(--ax-tracking-label, 0.08em);
+    font-weight: var(--ax-weight-medium, 500);
+  }
+
+  .cc__evidence {
+    font-family: var(--ax-font-mono, ui-monospace, monospace);
+    letter-spacing: normal;
+    text-transform: none;
+    /* A long test name must be able to break rather than force a scrollbar. */
+    overflow-wrap: anywhere;
+  }
+
+  /* ------------------------------------------------------------- inline --- */
+
+  .cc--inline {
+    /*
+     * Relative to the prose it sits in, not a fixed 16px: this badge appears
+     * inside 20px marketing body on one target and 16px docs body on the
+     * other, and a fixed size would look correct in exactly one of them.
+     */
+    font-size: 0.8em;
+    line-height: var(--ax-leading-flat, 1);
+  }
+
+  .cc--inline .cc__vis {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5em;
+    padding: 0.35em 0.75em;
+    /* The design system reserves the pill radius for badges, and only badges. */
+    border-radius: var(--ax-radius-pill, 9999px);
+    border: var(--ax-hairline, 1px) solid transparent;
+    vertical-align: baseline;
+  }
+
+  .cc--inline .cc__mark {
+    font-size: 0.75em;
+    line-height: 1;
+  }
+
+  .cc--inline.cc--measured .cc__vis {
+    background: var(--ax-ink, #14141a);
+    color: var(--ax-on-ink, #fafaf7);
+  }
+
+  .cc--inline.cc--designed .cc__vis {
+    background: transparent;
+    color: var(--ax-ink, #14141a);
+    border-color: var(--ax-ink, #14141a);
+  }
+
+  .cc--inline.cc--not-built .cc__vis {
+    background: transparent;
+    color: var(--ax-on-surface-variant, #666666);
+    border-style: dashed;
+    border-color: var(--ax-outline, #999999);
+  }
+
+  /* ------------------------------------------------------------- header --- */
+
+  /*
+   * The header variant is not the inline one enlarged. A pill at 40px reads as
+   * a button and invites a click the badge does not answer. This is a masthead
+   * rule instead: the same stroke vocabulary — 2px solid, 1px solid, 1px
+   * dashed — drawn across the top of the block it governs.
+   */
+  .cc--header {
+    display: block;
+    padding-top: var(--ax-space-2, 16px);
+    margin-bottom: var(--ax-space-3, 24px);
+  }
+
+  .cc--header .cc__vis {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--ax-space-1, 8px) var(--ax-space-2, 16px);
+  }
+
+  .cc--header .cc__eyebrow {
+    font-size: var(--ax-label-md, 16px);
+    line-height: var(--ax-leading-flat, 1);
+    font-weight: var(--ax-weight-medium, 500);
+    text-transform: uppercase;
+    letter-spacing: var(--ax-tracking-label, 0.08em);
+    color: var(--ax-on-surface-variant, #666666);
+  }
+
+  .cc--header .cc__word {
+    font-size: var(--ax-heading-sm, 40px);
+    line-height: var(--ax-leading-tight, 1.2);
+    /* Deliberately weight 400 at display size — headings do not shout here. */
+    font-weight: var(--ax-weight-regular, 400);
+    letter-spacing: var(--ax-tracking-label, 0.08em);
+    color: var(--ax-ink, #14141a);
+  }
+
+  .cc--header .cc__evidence {
+    /* Its own line: an identifier is not a subtitle. */
+    flex-basis: 100%;
+    font-size: var(--ax-body-sm, 16px);
+    line-height: var(--ax-leading-normal, 1.5);
+    color: var(--ax-ink-soft, #2a2a33);
+  }
+
+  .cc--header.cc--measured {
+    border-top: 2px solid var(--ax-ink, #14141a);
+  }
+
+  .cc--header.cc--designed {
+    border-top: var(--ax-hairline, 1px) solid var(--ax-ink, #14141a);
+  }
+
+  .cc--header.cc--not-built {
+    border-top: var(--ax-hairline, 1px) dashed var(--ax-outline, #999999);
+  }
+
+  .cc--header.cc--not-built .cc__word {
+    color: var(--ax-on-surface-variant, #666666);
+  }
+</style>

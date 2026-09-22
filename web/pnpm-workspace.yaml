@@ -1,0 +1,31 @@
+# Three packages, two deploy targets.
+#
+#   site   -> assayd.io   the site  (landing, concepts, roadmap, releases)
+#   docs   -> assayd.dev  the docs  (guides, generated reference, status, archive)
+#   shared -> neither; the tokens and components both of the above build on.
+#
+# shared is deliberately not published. It is consumed over the workspace
+# protocol so that a token change cannot reach one target and miss the other —
+# which is the failure this layout exists to prevent.
+packages:
+  - "shared"
+  - "site"
+  - "docs"
+
+# esbuild's install script unpacks the platform binary it cannot work without.
+# It is a direct dependency of Astro, and named here rather than left to
+# pnpm's prompt so that a CI install is not interactive.
+allowBuilds:
+  esbuild: true
+
+# NOT SET, deliberately: minimumReleaseAgeExclude.
+#
+# pnpm refuses a dependency younger than its minimum release age, because that
+# window is when a compromised or hijacked publish is most likely to be caught
+# and yanked. @astrojs/starlight 0.42.3 was published the day this scaffold was
+# written, and pnpm offered to add an exclusion for it.
+#
+# The pin steps back to 0.42.2 instead. A project whose own release pipeline
+# argues that it must meet the bar it sets for the agents it runs should not
+# switch off a supply-chain control to pick up a release a few hours sooner.
+# Raise the pin when 0.42.3 has aged past the gate on its own.

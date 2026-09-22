@@ -1,0 +1,25 @@
+---
+title: Placeholder
+description: Scaffold placeholder for the assayd docs target.
+---
+
+import ClaimClass from "@assayd/web-shared/ClaimClass.astro";
+
+{/*
+  PLACEHOLDER. One of this target's two scaffold pages. It proves that
+  Starlight renders, that the Ink + Gold tokens reach it, and that the shared
+  components import cleanly into MDX. The information architecture and the
+  generated reference belong to other agents.
+*/}
+
+This page carries no documentation. It exists to prove the layout.
+
+The shared claim-class badge works inline in MDX prose, like
+<ClaimClass claim="measured" test="TestAnAgentAnswersThroughTheGateway" />, and
+as a page-level header:
+
+<ClaimClass variant="header" claim="not-built" note="the docs have not been written" />
+
+Cross-references on this target must be written with an explicit `.html`
+extension — see [the figure placeholder](/guides/figures.html) — because
+`build.format: 'file'` does not rewrite links written in prose.

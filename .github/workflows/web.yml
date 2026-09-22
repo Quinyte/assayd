@@ -1,0 +1,171 @@
+# The website gate: both targets must build from a clean checkout.
+#
+# Actions are pinned by commit SHA and tools by exact version, matching ci.yml.
+# The reasoning there applies here unchanged — a repository whose admission
+# story requires digest-pinned, signed images should not run CI off a moving
+# tag.
+#
+# NOTHING HERE DEPLOYS. The publish job is gated on a manual dispatch input, it
+# targets a GitHub environment that does not exist yet, and its final step
+# stops with a non-zero exit. Publishing is the human's call and has not been
+# given. See the note above the `publish` job.
+name: web
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/web.yml"]
+  pull_request:
+    paths: ["web/**", ".github/workflows/web.yml"]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: >-
+          Which target to publish. Leave as "none" to build only.
+          Anything else is refused until a human has completed the setup in
+          web/README.md.
+        required: true
+        default: "none"
+        type: choice
+        options:
+          - none
+          - site
+          - docs
+          - both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build both targets
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Version comes from web/package.json#packageManager; naming it twice
+      # would let the two drift.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: web/.nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      # --frozen-lockfile makes the lockfile the pin it claims to be: a
+      # manifest edited without regenerating the lockfile fails here rather
+      # than resolving to something nobody chose.
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: typecheck both targets
+        run: pnpm run check
+
+      - name: build both targets
+        run: pnpm run build
+
+      # A build that produced nothing still exits 0. These two steps are what
+      # turn "the command succeeded" into "the artifact exists", and they are
+      # also where the flat-.html requirement is actually enforced rather than
+      # asserted in a config comment.
+      - name: site produced real .html files
+        run: |
+          set -euo pipefail
+          test -f site/dist/index.html
+          test -f site/dist/claim-classes.html
+          echo "site: $(find site/dist -name '*.html' | wc -l) html file(s)"
+
+      - name: docs produced real .html files
+        run: |
+          set -euo pipefail
+          test -f docs/dist/index.html
+          test -f docs/dist/guides/figures.html
+          echo "docs: $(find docs/dist -name '*.html' | wc -l) html file(s)"
+
+      - name: upload site artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: assayd-site
+          path: web/site/dist
+          if-no-files-found: error
+
+      - name: upload docs artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: assayd-docs
+          path: web/docs/dist
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- publish --
+  #
+  # THIS JOB DOES NOT PUBLISH, AND IS NOT SUPPOSED TO YET.
+  #
+  # It is here so the shape of the deploy is reviewable — which secrets, which
+  # artifact, which target — without the shape being mistaken for a working
+  # pipeline. Three independent things stop it, any one of which is sufficient:
+  #
+  #   1. `if:` — it runs only on a manual dispatch whose `deploy` input is not
+  #      "none". A push to main and a pull request cannot reach it at all.
+  #   2. `environment:` — it targets a GitHub environment that has not been
+  #      created. A dispatch against a missing environment fails before a step
+  #      runs, and once the environment IS created it can carry a required
+  #      reviewer, which is where the human gate belongs permanently.
+  #   3. The last step exits non-zero. No upload command is written, because
+  #      nobody here has run one against the host and a command that has never
+  #      been executed is not a deploy path — it is a guess that would be read
+  #      as a guarantee the first time someone needed it.
+  #
+  # Removing the stop is a deliberate change by whoever has the credentials and
+  # has read web/README.md, not a line to delete in passing.
+  publish:
+    name: publish (refused until configured)
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy != 'none'
+    runs-on: ubuntu-latest
+    environment: web-production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Named here so the required secrets are discoverable from the workflow
+      # itself. None of them is set; the preflight below reports which.
+      - name: preflight — are the credentials present
+        env:
+          ASSAYD_WEB_HOST: ${{ secrets.ASSAYD_WEB_HOST }}
+          ASSAYD_WEB_USER: ${{ secrets.ASSAYD_WEB_USER }}
+          ASSAYD_WEB_SSH_KEY: ${{ secrets.ASSAYD_WEB_SSH_KEY }}
+          ASSAYD_WEB_KNOWN_HOSTS: ${{ secrets.ASSAYD_WEB_KNOWN_HOSTS }}
+          ASSAYD_SITE_PATH: ${{ secrets.ASSAYD_SITE_PATH }}
+          ASSAYD_DOCS_PATH: ${{ secrets.ASSAYD_DOCS_PATH }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in ASSAYD_WEB_HOST ASSAYD_WEB_USER ASSAYD_WEB_SSH_KEY \
+                      ASSAYD_WEB_KNOWN_HOSTS ASSAYD_SITE_PATH ASSAYD_DOCS_PATH; do
+            if [ -z "${!name:-}" ]; then
+              echo "missing repository secret: ${name}"
+              missing=1
+            fi
+          done
+          [ "${missing}" -eq 0 ] || {
+            echo "refusing to continue: the secrets above are not set."
+            exit 1
+          }
+
+      - name: publish
+        run: |
+          set -euo pipefail
+          echo "Refusing to publish '${{ inputs.deploy }}'."
+          echo
+          echo "No publish command has ever been run against the host from this"
+          echo "repository, so there is nothing here that can honestly be called"
+          echo "a deploy path. web/README.md lists exactly what a human must"
+          echo "decide and supply before this job is allowed to do anything."
+          exit 1

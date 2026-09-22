@@ -1,0 +1,154 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Quinyte
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Element defaults derived from tokens.css. Import tokens.css first.
+ *
+ * This is deliberately thin. It sets the things that are wrong by default in
+ * every browser (box sizing, heading weight, focus visibility, motion) and
+ * stops. Page composition belongs to each target.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ax-background);
+  color: var(--ax-on-surface);
+  font-family: var(--ax-font-sans);
+  font-size: var(--ax-body-md);
+  font-weight: var(--ax-weight-regular);
+  line-height: var(--ax-leading-normal);
+  /* The geometric idiom wants the forms it was drawn with. */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/*
+ * Headings stay at 400. This block is the enforcement of that rule, not a
+ * restatement of it: the browser's own default is 700, so without this every
+ * heading on both targets would violate the design system.
+ */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+  font-weight: var(--ax-weight-regular);
+  letter-spacing: var(--ax-tracking-display);
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--ax-heading-lg);
+  line-height: var(--ax-leading-display);
+}
+h2 {
+  font-size: var(--ax-heading-md);
+  line-height: var(--ax-leading-display);
+}
+h3 {
+  font-size: var(--ax-heading-sm);
+  line-height: var(--ax-leading-tight);
+}
+h4 {
+  font-size: var(--ax-body-lg);
+  line-height: var(--ax-leading-snug);
+  letter-spacing: normal;
+}
+
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+/*
+ * Links are INK, not gold. Gold is never interactive — see tokens.css rule 1.
+ * The underline carries the affordance; colour is not doing that work alone.
+ */
+a {
+  color: var(--ax-ink);
+  text-decoration-line: underline;
+  text-decoration-thickness: var(--ax-hairline);
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+/*
+ * A visible focus ring on keyboard focus, in ink. :focus-visible rather than
+ * :focus so a mouse click does not leave a ring behind, and an outline rather
+ * than a shadow because the system has no shadow token.
+ */
+:focus-visible {
+  outline: 2px solid var(--ax-ink);
+  outline-offset: 2px;
+  border-radius: var(--ax-radius-sm);
+}
+
+img,
+svg,
+video {
+  max-width: 100%;
+  height: auto;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--ax-font-mono);
+  font-size: 0.9em;
+}
+
+hr {
+  border: 0;
+  border-top: var(--ax-hairline) solid var(--ax-outline-variant);
+  margin: var(--ax-space-5) 0;
+}
+
+/*
+ * Visually hidden, but read aloud. Used by ClaimClass to speak a whole
+ * sentence to a screen reader while the page shows a typeset annotation.
+ * Not `display: none` and not `visibility: hidden` — both of those remove the
+ * text from the accessibility tree, which is the opposite of the intent.
+ */
+.ax-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * Nothing in this scaffold animates. The guard is here so that the first
+ * animation someone adds is already covered, rather than shipping and being
+ * retrofitted after an accessibility pass.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

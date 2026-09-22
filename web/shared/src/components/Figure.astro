@@ -1,0 +1,212 @@
+---
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+import ClaimClass from "./ClaimClass.astro";
+import type { Claim } from "../claim-class.ts";
+
+export interface Props {
+  /** Served path to the `.webp` plate, e.g. "/diagrams/01-architecture.webp". */
+  src: string;
+  /**
+   * The diagram's text alternative. REQUIRED, and not optional by oversight:
+   * these plates carry load-bearing information — state machines, decision
+   * flows, which hop crosses the gateway — and a generated raster is invisible
+   * to a screen reader and to search without it. A caption is not a
+   * substitute. The caption says what the reader should take from the plate;
+   * the alt says what the plate actually shows.
+   */
+  alt: string;
+  /** Intrinsic pixel width of the file at `src`. Required. */
+  width: number;
+  /** Intrinsic pixel height of the file at `src`. Required. */
+  height: number;
+  /** Caption text. The default slot overrides this when both are given. */
+  caption?: string;
+  /**
+   * The version, tag or commit whose behaviour this plate depicts. A generated
+   * image cannot be checked against the code the way a diagram-as-code source
+   * could, so the staleness stamp is part of the figure, not decoration.
+   */
+  depicts?: string;
+  /** Evidence class for what the plate asserts. */
+  claim?: Claim;
+  /** Above-the-fold plates pass "eager"; everything else stays lazy. */
+  loading?: "lazy" | "eager";
+  /** Optional href to the full-resolution master, for detail work. */
+  full?: string;
+  class?: string;
+}
+
+const {
+  src,
+  alt,
+  width,
+  height,
+  caption,
+  depicts,
+  claim,
+  loading = "lazy",
+  full,
+  class: extraClass,
+} = Astro.props;
+
+// Fail the build rather than ship a plate nobody can read. Whether an alt is
+// MEANINGFUL is a human call; whether it is present, and whether someone has
+// pasted the filename into it, is not.
+const altText = (alt ?? "").trim();
+if (altText === "") {
+  throw new Error(
+    `Figure: "${src}" has no alt text. These plates carry load-bearing ` +
+      `information and an empty alt makes it unreachable, so this fails the ` +
+      `build. If a plate is genuinely decorative it does not belong in a ` +
+      `Figure.`,
+  );
+}
+const basename = src.split("/").pop() ?? src;
+if (altText === basename || altText === src) {
+  throw new Error(
+    `Figure: the alt text for "${src}" is its own filename. Describe what the ` +
+      `diagram shows.`,
+  );
+}
+if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+  throw new Error(
+    `Figure: "${src}" needs positive intrinsic width and height. They are what ` +
+      `reserve the box before the image loads; without them the page reflows ` +
+      `under the reader.`,
+  );
+}
+
+const hasCaption = Boolean(caption) || Boolean(Astro.slots.has("default"));
+const hasStamp = Boolean(claim) || Boolean(depicts) || Boolean(full);
+---
+
+<figure class:list={["fig", extraClass]}>
+  {
+    /*
+     * A scroll viewport, not a shrink-to-fit. A 1600px plate scaled into a
+     * 390px phone puts its labels at roughly 4px and is useless; the reader
+     * would have to pinch-zoom anyway, and pinch-zoom on a page-width image
+     * fights the page. So the plate keeps a legibility floor and the viewport
+     * pans instead.
+     *
+     * Rejected alternatives: a full-width breakout (1600 into 390 is still
+     * illegible), and a JS zoom/pan widget (a runtime dependency on a host
+     * with no runtime, plus a custom keyboard contract to get right).
+     *
+     * tabindex="0" is what makes the pan reachable without a mouse — a
+     * scrollable region that cannot be focused fails SC 2.1.1. It is set
+     * unconditionally because CSS cannot tell the template whether this
+     * particular viewport overflows at this particular width; the cost is one
+     * extra tab stop per figure on wide screens, which is the cheaper error.
+     */
+  }
+  <div
+    class="fig__plate"
+    role="group"
+    tabindex="0"
+    aria-label="Diagram viewport. Scroll or use the arrow keys to pan."
+  >
+    <img
+      class="fig__img"
+      src={src}
+      alt={altText}
+      width={width}
+      height={height}
+      loading={loading}
+      decoding="async"
+      style={`--fig-intrinsic: ${width}px;`}
+    />
+  </div>
+
+  {
+    (hasCaption || hasStamp) && (
+      <figcaption class="fig__caption">
+        {hasCaption && (
+          <div class="fig__text">
+            <slot>{caption}</slot>
+          </div>
+        )}
+        {hasStamp && (
+          <p class="fig__stamp">
+            {claim && <ClaimClass {...claim} />}
+            {depicts && (
+              <span class="fig__depicts">
+                depicts <span class="fig__rev">{depicts}</span>
+              </span>
+            )}
+            {full && (
+              <a class="fig__full" href={full}>
+                full-resolution plate
+              </a>
+            )}
+          </p>
+        )}
+      </figcaption>
+    )
+  }
+</figure>
+
+<style>
+  .fig {
+    margin: var(--ax-space-5, 48px) 0;
+  }
+
+  .fig__plate {
+    overflow-x: auto;
+    /* Panning the plate must not drag the page behind it. */
+    overscroll-behavior-x: contain;
+    border: var(--ax-hairline, 1px) solid var(--ax-outline-variant, #f3ecd9);
+    /* Cards are square on tinted grounds; the plate ground is the page. */
+    border-radius: var(--ax-radius-lg, 8px);
+    background: var(--ax-surface, #fafaf7);
+  }
+
+  .fig__plate:focus-visible {
+    outline: 2px solid var(--ax-ink, #14141a);
+    outline-offset: 2px;
+  }
+
+  .fig__img {
+    display: block;
+    /*
+     * width/height attributes are on the element, so with height:auto the
+     * browser derives the aspect ratio and reserves the box before a byte of
+     * image arrives. That is the whole anti-layout-shift mechanism; do not
+     * replace these with a fixed height.
+     */
+    width: 100%;
+    height: auto;
+    /* Never upscale past the file's own resolution. */
+    max-width: var(--fig-intrinsic);
+    /*
+     * The legibility floor. A plate narrower than the floor never forces a
+     * scrollbar, because min() takes its own width instead.
+     */
+    min-width: min(720px, var(--fig-intrinsic));
+  }
+
+  .fig__caption {
+    margin-top: var(--ax-space-2, 16px);
+    font-size: var(--ax-body-sm, 16px);
+    line-height: var(--ax-leading-normal, 1.5);
+    color: var(--ax-on-surface-variant, #666666);
+  }
+
+  .fig__text {
+    color: var(--ax-ink-soft, #2a2a33);
+  }
+
+  .fig__stamp {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--ax-space-1, 8px) var(--ax-space-2, 16px);
+    margin-top: var(--ax-space-1, 8px);
+  }
+
+  .fig__rev {
+    font-family: var(--ax-font-mono, ui-monospace, monospace);
+    color: var(--ax-ink-soft, #2a2a33);
+  }
+</style>

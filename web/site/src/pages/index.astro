@@ -1,0 +1,46 @@
+---
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+//
+// PLACEHOLDER. This page exists to prove the layout, the tokens and the
+// components render. It carries no product copy on purpose: the information
+// architecture and the landing narrative belong to another agent, and
+// inventing them here would collide with that work.
+import BaseLayout from "../layouts/BaseLayout.astro";
+import ClaimClass from "@assayd/web-shared/ClaimClass.astro";
+---
+
+<BaseLayout
+  title="assayd"
+  description="Scaffold placeholder for the assayd site."
+  current="/"
+>
+  <h1>Placeholder</h1>
+  <p class="lede">
+    This page proves the shell: tokens, type scale, navigation, and the shared
+    components. It is not the landing page and carries no product copy.
+  </p>
+
+  <p>
+    A claim can appear in a sentence — like this one <ClaimClass
+      claim="designed"
+      design="design 03"
+      section="§3.3.2"
+    /> — without breaking the line it sits in.
+  </p>
+</BaseLayout>
+
+<style>
+  .lede {
+    max-width: 62ch;
+    margin-top: var(--ax-space-3);
+    font-size: var(--ax-body-lg);
+    line-height: var(--ax-leading-snug);
+    color: var(--ax-ink-soft);
+  }
+
+  p + p {
+    max-width: 62ch;
+    margin-top: var(--ax-space-4);
+  }
+</style>

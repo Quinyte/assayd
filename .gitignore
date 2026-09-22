@@ -1,2 +1,12 @@
 .DS_Store
 *.swp
+
+# web/ — the assayd.io and assayd.dev workspace.
+# Installed trees, build output, and Astro's generated type cache. The
+# pnpm lockfile is NOT ignored: it is the pin that makes a build reproducible.
+web/**/node_modules/
+web/**/dist/
+web/**/.astro/
+node_modules/
+dist/
+.astro/

@@ -1,0 +1,177 @@
+---
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+import "@assayd/web-shared/tokens.css";
+import "@assayd/web-shared/base.css";
+
+export interface Props {
+  title: string;
+  description?: string;
+  /** The nav href this page owns, so the nav can mark it aria-current. */
+  current?: string;
+}
+
+const { title, description, current } = Astro.props;
+
+// Two entries is the whole navigation for a scaffold. The information
+// architecture belongs to whoever owns it; this exists to prove the shell.
+const nav = [
+  { href: "/", label: "Overview" },
+  { href: "/claim-classes.html", label: "Claim classes" },
+];
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    {description && <meta name="description" content={description} />}
+    {/* Ink, because the browser chrome should sit with the page, not against it. */}
+    <meta name="theme-color" content="#14141a" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    {/*
+      A skip link is the cheapest keyboard win there is: without it every
+      visitor tabbing in walks the whole navigation before reaching content.
+      It is visually hidden until focused, which is why it cannot simply be
+      display:none.
+    */}
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="masthead">
+      <div class="shell masthead__inner">
+        <a class="wordmark" href="/">assayd</a>
+        <nav aria-label="Primary">
+          <ul class="nav">
+            {
+              nav.map((item) => (
+                <li>
+                  <a
+                    href={item.href}
+                    aria-current={current === item.href ? "page" : undefined}
+                  >
+                    {item.label}
+                  </a>
+                </li>
+              ))
+            }
+          </ul>
+        </nav>
+      </div>
+      {/*
+        THE ONE GOLD BEAT. Every page of this target spends its single gold
+        allowance here, on the hairline under the masthead — which is why no
+        component below is permitted to reach for gold. It is a 2px rule and
+        not a link, a button or a state: gold is never interactive.
+      */}
+      <div class="masthead__beat" aria-hidden="true"></div>
+    </header>
+
+    <main id="main" class="shell">
+      <slot />
+    </main>
+
+    <footer class="footer">
+      <div class="shell">
+        <p>
+          assayd is a codename. Apache-2.0. <a
+            href="https://github.com/Quinyte/assayd">Source</a
+          >.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>
+
+<style>
+  .shell {
+    max-width: var(--ax-container);
+    margin-inline: auto;
+    padding-inline: var(--ax-gutter);
+  }
+
+  .skip {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 10;
+    background: var(--ax-ink);
+    color: var(--ax-on-ink);
+    padding: var(--ax-space-1) var(--ax-space-2);
+    text-decoration: none;
+  }
+
+  .skip:focus {
+    left: var(--ax-space-2);
+    top: var(--ax-space-2);
+  }
+
+  .masthead__inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--ax-space-2) var(--ax-space-4);
+    padding-block: var(--ax-space-3);
+  }
+
+  .wordmark {
+    font-size: var(--ax-body-lg);
+    line-height: var(--ax-leading-flat);
+    letter-spacing: var(--ax-tracking-label);
+    text-transform: lowercase;
+    text-decoration: none;
+    color: var(--ax-ink);
+  }
+
+  .masthead__beat {
+    height: 2px;
+    background: var(--ax-gold);
+  }
+
+  .nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ax-space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--ax-label-md);
+    line-height: var(--ax-leading-flat);
+    font-weight: var(--ax-weight-medium);
+    text-transform: uppercase;
+    letter-spacing: var(--ax-tracking-label);
+  }
+
+  .nav a {
+    text-decoration: none;
+    color: var(--ax-on-surface-variant);
+  }
+
+  .nav a:hover {
+    color: var(--ax-ink);
+  }
+
+  /*
+    The current page is marked by ink and a rule, not by colour alone, and
+    aria-current="page" says the same thing to a screen reader.
+  */
+  .nav a[aria-current="page"] {
+    color: var(--ax-ink);
+    border-bottom: var(--ax-hairline) solid var(--ax-ink);
+    padding-bottom: 2px;
+  }
+
+  main {
+    padding-block: var(--ax-section-y);
+  }
+
+  .footer {
+    border-top: var(--ax-hairline) solid var(--ax-outline-variant);
+    padding-block: var(--ax-space-4);
+    font-size: var(--ax-body-sm);
+    color: var(--ax-on-surface-variant);
+  }
+</style>
