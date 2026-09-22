@@ -921,9 +921,17 @@ func TestAnUnknownReadingHoldsAStandingReport(t *testing.T) {
 			// This pass DID read the policy — the reading was unknown, not
 			// absent — so §5's precondition is a fact it established and the
 			// judged note belongs. The errored hold below must not carry it.
-			"The policy is present")
+			"The policy is present",
+			// THE NOTE, and this row is the MIRROR of the unjudged one below.
+			// The selector that fixed MAJOR 1 had one arm pinned and one not:
+			// swapping heldNote for unjudgedNote HERE compiled and passed the
+			// whole suite, and put "this pass judged no policy, so nothing was
+			// re-read" into the same message as "The policy is present …",
+			// which is MAJOR 1 with the arms swapped, inside the code that
+			// fixed MAJOR 1. Both arms are pinned now, both ways.
+			"the Gateway has not reported since")
 		mustNotContain(t, c, "PolicyApplyIncomplete", "does not attach", "no credential required",
-			"but not the whole of it")
+			"but not the whole of it", "this pass judged no policy")
 		sameTransition(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, at)
 		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AuthPolicyNotAttached")
 	})
