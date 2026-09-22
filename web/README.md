@@ -26,9 +26,14 @@ cd web
 pnpm install --frozen-lockfile
 pnpm run build        # both targets -> site/dist and docs/dist
 pnpm run check        # astro check (typecheck) on both
+pnpm run check:links  # internal links + anchors, over the BUILT output
 pnpm run dev:site     # local preview of assayd.io
 pnpm run dev:docs     # local preview of assayd.dev
 ```
+
+`check:links` needs `lychee` on PATH (`brew install lychee`; CI pins the
+version and its sha256 in `.github/workflows/web.yml`). It runs after a build,
+because it checks `dist/`, not source.
 
 Node and pnpm are pinned exactly — `.nvmrc` and `package.json#packageManager` —
 and `.npmrc` sets `engine-strict`, so an install on a different Node is refused
@@ -53,10 +58,29 @@ Starlight rewrites **its own** navigation and canonical links, and does **not**
 rewrite links written in page prose. Of five link spellings tried in a page
 body, all five emitted verbatim — only `/guides/example.html` resolved.
 
-**Write every cross-reference with an explicit `.html`.** Nothing in this
-repository enforces that: there is no link check in CI. A link checker
-(`starlight-links-validator`, community, MIT) would close it and is not
-installed here, because adding a dependency is a decision for the human.
+**Write every cross-reference with an explicit `.html`.** This IS enforced:
+`pnpm run check:links` runs in CI over the built output and fails on it.
+
+`starlight-links-validator` — the obvious choice — **cannot catch this bug**.
+It validates Markdown/MDX source against Astro's route table, where
+`/guides/example` and `/guides/example.html` both resolve; it passes both
+spellings and cannot tell them apart. The check has to read the built HTML.
+
+The flags in `scripts/check-links.sh` are each load-bearing, and each default
+is a false pass. Measured, with a deliberately bad link in place:
+
+| Mutation | Result |
+|---|---|
+| add `--fallback-extensions html` | **0 errors** — the missing `.html` passes silently |
+| drop `--include-fragments` | **0 errors** — a dead `#anchor` passes silently |
+| drop `--root-dir` | 16 errors — every root-relative link breaks (false failure) |
+
+`--index-files index.html` models the host: `/` resolves because
+`dist/index.html` exists, `/guides/` does not because `dist/guides/` holds
+`figures.html` and no index. `--index-files ''` was tried and rejected — it
+fails the four `href="/"` links in the masthead, because it models a host with
+no directory index at all, and directory indexing is a different server
+feature from URL rewriting.
 
 ## Components
 
@@ -170,5 +194,10 @@ To publish, a human must:
   MkDocs + Material with `mike` is the mature answer.
 - `pnpm run build` for the docs target logs a Starlight warning that the `i18n`
   collection is empty. The site is monolingual; the warning is benign.
-- No link check, no accessibility check and no visual regression check runs in
-  CI. The build and the typecheck are the whole gate today.
+- No accessibility check and no visual regression check runs in CI. The build,
+  the typecheck and the link check are the gate today.
+- The link check covers **internal** links and anchors only. External links are
+  never fetched, so a link to a page that has since 404'd elsewhere on the web
+  will not be caught here. That is deliberate — a third-party outage must not
+  be able to fail this repository's CI — and it means external link rot is an
+  unguarded axis.

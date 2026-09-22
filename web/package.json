@@ -15,6 +15,7 @@
     "build:site": "pnpm --filter @assayd/site run build",
     "build:docs": "pnpm --filter @assayd/docs run build",
     "check": "pnpm -r --workspace-concurrency=1 run check",
+    "check:links": "./scripts/check-links.sh",
     "dev:site": "pnpm --filter @assayd/site run dev",
     "dev:docs": "pnpm --filter @assayd/docs run dev"
   }

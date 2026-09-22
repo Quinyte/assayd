@@ -29,9 +29,10 @@ export default defineConfig({
     // `./guides/example` did not. On a host with no rewrite rules a wrong link
     // is a hard 404, not a redirect.
     //
-    // So: write every cross-reference with an explicit `.html`. Nothing in
-    // this repository enforces that yet — there is no link check in CI — which
-    // is why it is written here as a hazard and not as a guarantee.
+    // So: write every cross-reference with an explicit `.html`. That is
+    // enforced — scripts/check-links.sh runs over the BUILT output in CI and
+    // fails on it — and the enforcement was demonstrated by planting the bad
+    // link and watching the gate go red while `astro build` stayed green.
     format: "file",
   },
 

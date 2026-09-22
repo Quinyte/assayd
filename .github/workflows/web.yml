@@ -40,6 +40,16 @@ concurrency:
   group: web-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Pinned by version AND by checksum, and fetched as a release binary rather
+  # than run as a third-party action — the same shape ci.yml already uses for
+  # kubeconform. lycheeverse/lychee-action would also work, but its default
+  # `args` check Markdown SOURCE, which is precisely the input that cannot see
+  # the bug this gate exists to catch; overriding them wholesale and pinning
+  # the action is more moving parts than fetching one verified tarball.
+  LYCHEE_VERSION: v0.24.2
+  LYCHEE_SHA256: 73657a111819a30c47c08352896796f23d64e4eb2b3ed39b6d32149241566fc5
+
 jobs:
   build:
     name: build both targets
@@ -97,6 +107,27 @@ jobs:
           test -f docs/dist/index.html
           test -f docs/dist/guides/figures.html
           echo "docs: $(find docs/dist -name '*.html' | wc -l) html file(s)"
+
+      - name: install lychee
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          asset="lychee-x86_64-unknown-linux-musl.tar.gz"
+          curl -sSLo "/tmp/${asset}" \
+            "https://github.com/lycheeverse/lychee/releases/download/lychee-${LYCHEE_VERSION}/${asset}"
+          echo "${LYCHEE_SHA256}  /tmp/${asset}" | sha256sum --check --strict
+          sudo tar -xzf "/tmp/${asset}" -C /usr/local/bin lychee
+          lychee --version
+
+      # Runs against the BUILT output of both targets, so it reproduces the
+      # rewrite-less host. Internal links and anchors only — external links are
+      # excluded by --offline inside the script, because a flaky third-party
+      # host must never be able to fail this repository's CI.
+      #
+      # The same script is what a person runs locally. One definition, so the
+      # gate and the local command cannot drift into disagreeing.
+      - name: internal links and anchors
+        run: ./scripts/check-links.sh
 
       - name: upload site artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
