@@ -46,7 +46,7 @@ func TestWriteStatusBoundsAConditionMessageTheAPIServerWouldRefuse(t *testing.T)
 	status.Conditions = []metav1.Condition{{
 		Type:               string(assaydv1alpha1.CondDegraded),
 		Status:             metav1.ConditionTrue,
-		Reason:             CondReasonServiceNotRendered,
+		Reason:             CondReasonServiceHeadless,
 		Message:            strings.Repeat("a", ConditionMessageMax+5000),
 		LastTransitionTime: metav1.Now(),
 	}}
@@ -109,7 +109,7 @@ func TestASecondWriteOfAnOverLongMessageIsANoOp(t *testing.T) {
 		return &assaydv1alpha1.AgentStatus{Conditions: []metav1.Condition{{
 			Type:               string(assaydv1alpha1.CondDegraded),
 			Status:             metav1.ConditionTrue,
-			Reason:             CondReasonServiceNotRendered,
+			Reason:             CondReasonServiceHeadless,
 			Message:            strings.Repeat("c", ConditionMessageMax+5000),
 			LastTransitionTime: metav1.NewTime(time.Unix(0, 0)),
 		}}}

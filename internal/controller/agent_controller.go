@@ -61,12 +61,15 @@ const (
 	// now so that agents created today do not need a migration to acquire it.
 	Finalizer = "assayd.dev/agent-teardown"
 
-	// CondReasonServiceNotRendered names a revision Service whose shape this
-	// operator never renders (design 02 §3.2, A77). Not "…NotClusterIP": one of
-	// the shapes it covers, a headless Service, IS of type ClusterIP, and a
-	// reason that contradicts the object an operator is looking at reads as the
-	// operator being broken. Rule 8 is about naming the real cause.
-	CondReasonServiceNotRendered = "RevisionServiceNotRendered"
+	// CondReasonServiceHeadless names the ONE shape fault this operator cannot
+	// converge away: `spec.clusterIP` is immutable, so a headless Service at a
+	// revision's name can never be given an address (design 02 §3.2, A77).
+	//
+	// It names the field rather than the class. An earlier cut refused four
+	// shapes under "RevisionServiceNotRendered"; three of those are now
+	// converged back, and a reason covering all four would name a rule that no
+	// longer exists. Rule 8 is about naming the real cause.
+	CondReasonServiceHeadless = "RevisionServiceHeadless"
 
 	// DefaultRevisionHistoryLimit is the number of revisions retained IN ADDITION
 	// TO the active one and any in-flight candidate (design 02 §3.3). Counting
@@ -609,8 +612,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				return ctrl.Result{RequeueAfter: RefusedServiceRecheck},
 					r.reportCollision(ctx, &agent, status, conds, collision)
 			}
-			// A Service shape the operator never renders. Reported under its own
-			// reason rather than folded into RevisionHashCollision: nothing
+			// The one shape fault convergence cannot repair. Reported under its
+			// own reason rather than folded into RevisionHashCollision: nothing
 			// collided, and a condition that names a cause nobody checked is the
 			// loud-and-wrong half of rule 8. Returning here is what keeps the
 			// revision unpromoted and reconcileGateway unreached, so no route is
@@ -627,8 +630,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 					// same words for the same reason (authtxn.go).
 					msg += servedRouteNote
 				}
-				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, CondReasonServiceNotRendered, msg)
-				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, CondReasonServiceNotRendered, msg)
+				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, CondReasonServiceHeadless, msg)
+				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, CondReasonServiceHeadless, msg)
 				// This exit returns BEFORE the -auth step, and design 03's two
 				// conditions are owned and not sticky, so merge would CLEAR them —
 				// retracting A81's announced fail-open on an Agent whose route is
@@ -643,14 +646,26 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 					r.writeStatus(ctx, &agent, status)
 			}
 			if apierrors.IsInvalid(err) {
-				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "ServiceRejected", err.Error())
-				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ServiceRejected", err.Error())
+				// A97's convergence made this exit reachable from a Service the
+				// operator OWNS: it asserts an enumerated set of shape fields, and
+				// Kubernetes couples some of them to the type being left, so a
+				// field outside the enumeration can make the repair itself
+				// invalid. The remedy is the same as every other Service refusal's
+				// and the message must say so, because the API server's own
+				// wording names a field and no action — and the exit requeues, or
+				// a `services/patch` principal wedges the Agent until the
+				// manager's resync.
+				msg := err.Error() + ". This operator could not repair its own Service in place. " +
+					"To recover: delete that Service and let the operator recreate it."
+				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "ServiceRejected", msg)
+				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ServiceRejected", msg)
 				// And another, eight lines from the one above: see carryGatewayReport.
 				r.carryGatewayReport(conds, &agent)
 				status.Phase = assaydv1alpha1.PhaseDegraded
 				status.Conditions = conds.merge(agent.Status.Conditions)
 				status.ObservedGeneration = agent.Generation
-				return ctrl.Result{}, r.writeStatus(ctx, &agent, status)
+				return ctrl.Result{RequeueAfter: RefusedServiceRecheck},
+					r.writeStatus(ctx, &agent, status)
 			}
 			return ctrl.Result{}, err
 		}
@@ -1075,6 +1090,14 @@ const RevisionDigestAnnotation = "assayd.dev/revision-digest"
 // workload name. It is terminal by design: see ensureWorkload.
 type revisionCollisionError struct {
 	name, existing, desired string
+	// shape is set on the Service paths when the refused object is ALSO a shape
+	// this operator never renders. It is detail, never the ground: provenance
+	// decides, and a wrong shape on an object that passes provenance is
+	// converged rather than refused. It is here because "a Service that is not
+	// this Agent's" is true and says nothing about urgency, where "and it is of
+	// type ExternalName, resolving to elsewhere.example.com" says what the
+	// object was for.
+	shape *serviceShapeError
 	// ns is the run namespace, set on the Service paths. The remedy every
 	// message ends with is "delete that Service", and the run namespace is a
 	// truncate-and-hash of the source namespace — nothing a human types from
@@ -1156,6 +1179,9 @@ func (e *revisionCollisionError) Error() string {
 		at := e.name
 		if e.ns != "" {
 			at = e.ns + "/" + e.name
+		}
+		if e.shape != nil {
+			remedy = e.shape.detail() + " " + remedy
 		}
 		switch e.existing {
 		case "(another agent's)":

@@ -471,6 +471,99 @@ func TestAnUnvouchedUnstampedWorkloadIsRefused(t *testing.T) {
 // WHICH revision?". A same-named Deployment created by anyone with
 // deployments/create is Available too, and promoting on replicas alone made the
 // attacker's object the operator's evidence.
+// Each collision GROUND under its own reason, on the WORKLOAD path.
+//
+// A77 gave `revisionCollisionError` a reason() so the Service path could stop
+// reporting `DigestMismatch` for grounds where nothing had collided — and
+// because reportCollision is the shared exit, the workload's two non-digest
+// grounds changed with it. Nothing pinned the workload reason before or after,
+// so an operator with an alert keyed on `DigestMismatch` would have found the
+// change in production. It is pinned here, in the amendment, and in design 02
+// §5.
+func TestEachWorkloadCollisionGroundReportsItsOwnReason(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		break_ func(t *testing.T, d *appsv1.Deployment, live *assaydv1alpha1.Agent)
+		reason string
+		says   string
+	}{{
+		// A60: an object under this name that does not carry this Agent's UID
+		// is someone else's, whatever else it says.
+		name: "a foreign workload", reason: "ForeignObject",
+		says: "does not carry this Agent's UID",
+		break_: func(t *testing.T, d *appsv1.Deployment, live *assaydv1alpha1.Agent) {
+			delete(d.Labels, controller.LabelAgentUID)
+		},
+	}, {
+		// Stamped with a different projection's digest: two projections claim
+		// one 40-bit name. The only ground that really is a digest mismatch.
+		name: "a different digest", reason: "DigestMismatch",
+		says: "two different projections share one 40-bit name",
+		break_: func(t *testing.T, d *appsv1.Deployment, live *assaydv1alpha1.Agent) {
+			d.Annotations[controller.RevisionDigestAnnotation] = "sha256:" + strings.Repeat("f", 64)
+		},
+	}, {
+		// No stamp and nothing in status vouching: provenance cannot be
+		// established at all.
+		name: "no stamp and no record", reason: "Unstamped",
+		says: "carries no assayd.dev/revision-digest",
+		break_: func(t *testing.T, d *appsv1.Deployment, live *assaydv1alpha1.Agent) {
+			delete(d.Annotations, controller.RevisionDigestAnnotation)
+			live.Status.ActiveRevision, live.Status.ActiveRevisionDigest = "", ""
+			live.Status.CandidateRevision, live.Status.CandidateRevisionDigest = "", ""
+			if err := k8s.Status().Update(context.Background(), live); err != nil {
+				t.Fatalf("wipe status: %v", err)
+			}
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := newNamespace(t)
+			a := mustCreateAgent(t, ns, "grounds", nil)
+			r := newReconciler(false)
+			settle(t, r, a)
+
+			name := controller.WorkloadName("grounds", revision.MustHash(a.Spec))
+			key := types.NamespacedName{Namespace: runNS(ns), Name: name}
+			var d appsv1.Deployment
+			if err := k8s.Get(context.Background(), key, &d); err != nil {
+				t.Fatalf("get workload: %v", err)
+			}
+			var live assaydv1alpha1.Agent
+			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &live); err != nil {
+				t.Fatalf("get agent: %v", err)
+			}
+			tc.break_(t, &d, &live)
+			if err := k8s.Update(context.Background(), &d); err != nil {
+				t.Fatalf("break the workload: %v", err)
+			}
+			reconcileOnce(t, r, a)
+
+			var after assaydv1alpha1.Agent
+			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &after); err != nil {
+				t.Fatalf("get agent: %v", err)
+			}
+			coll := condition(&after, assaydv1alpha1.CondRevisionHashCollision)
+			if coll == nil || coll.Status != metav1.ConditionTrue {
+				t.Fatalf("the workload was adopted: %v", after.Status.Conditions)
+			}
+			if coll.Reason != tc.reason {
+				t.Errorf("RevisionHashCollision reads reason %q, want %q. The reason is what an "+
+					"alert keys on; a ground reported under another ground's reason sends an "+
+					"operator to look for something that did not happen",
+					coll.Reason, tc.reason)
+			}
+			if !strings.Contains(coll.Message, tc.says) {
+				t.Errorf("the message does not say %q; it is: %s", tc.says, coll.Message)
+			}
+			// The workload path names no namespace, unlike the Service path —
+			// design 02 §5 records that asymmetry rather than hiding it.
+			if !strings.Contains(coll.Message, name) {
+				t.Errorf("the message does not name the workload %q: %s", name, coll.Message)
+			}
+		})
+	}
+}
+
 func TestAnUnstampedAvailableWorkloadDoesNotPromote(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "notmine", nil)

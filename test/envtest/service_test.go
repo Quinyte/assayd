@@ -269,7 +269,8 @@ func plantAndSettle(t *testing.T, name string, shape corev1.ServiceSpec) (assayd
 	return settle(t, r, a), ns, svcName
 }
 
-// A Service the operator never renders is REFUSED, not adopted.
+// A Service the operator never renders, PLANTED at a revision's name, is
+// refused — by provenance, with the shape named in the message.
 //
 // Reproduced before the refusal existed, on this exact fixture: ensureService
 // converged the fields it renders — labels, selector, ports — onto a planted
@@ -290,7 +291,7 @@ func plantAndSettle(t *testing.T, name string, shape corev1.ServiceSpec) (assayd
 // report the route healthy and serve nothing. Neither is measured by this
 // layer, which runs no gateway and no CoreDNS. What IS measured is the object
 // the operator writes.
-func TestAServiceTheOperatorNeverRendersIsRefusedRatherThanAdopted(t *testing.T) {
+func TestAPlantedServiceIsRefusedAndItsShapeIsNamed(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		agent  string
@@ -304,43 +305,48 @@ func TestAServiceTheOperatorNeverRendersIsRefusedRatherThanAdopted(t *testing.T)
 			Type:         corev1.ServiceTypeExternalName,
 			ExternalName: "elsewhere.example.com",
 		},
-		says: []string{"ExternalName", "elsewhere.example.com", "no endpoints", "CNAME",
-			"delete that Service"},
+		says: []string{"does not carry this Agent's UID", "ExternalName",
+			"elsewhere.example.com", "no endpoints", "CNAME", "delete that Service"},
 	}, {
-		name:   "NodePort",
-		agent:  "nodeport",
-		shape:  corev1.ServiceSpec{Type: corev1.ServiceTypeNodePort},
-		says:   []string{"NodePort", "outside the gateway", "delete that Service"},
+		name:  "NodePort",
+		agent: "nodeport",
+		shape: corev1.ServiceSpec{Type: corev1.ServiceTypeNodePort},
+		says: []string{"does not carry this Agent's UID", "NodePort", "outside the gateway",
+			"delete that Service"},
 		unsaid: "ExternalName",
 	}, {
-		name:   "LoadBalancer",
-		agent:  "lb",
-		shape:  corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
-		says:   []string{"LoadBalancer", "outside the gateway", "delete that Service"},
+		name:  "LoadBalancer",
+		agent: "lb",
+		shape: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+		says: []string{"does not carry this Agent's UID", "LoadBalancer", "outside the gateway",
+			"delete that Service"},
 		unsaid: "NodePort",
 	}, {
-		name:   "headless",
-		agent:  "headless",
-		shape:  corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone},
-		says:   []string{"headless", "spec.clusterIP: None", "immutable", "delete that Service"},
+		name:  "headless",
+		agent: "headless",
+		shape: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone},
+		says: []string{"does not carry this Agent's UID", "headless", "spec.clusterIP: None",
+			"immutable", "delete that Service"},
 		unsaid: "ExternalName",
 	}, {
 		// The finding is about spec.type; this field reaches the same outcome one
 		// field over, and the review of A77's first implementation measured it
 		// adopted, stamped, and named by the route. kube-proxy DNATs these
 		// addresses on every node straight to the revision's Pods.
-		name:   "externalIPs",
-		agent:  "extips",
-		shape:  corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ExternalIPs: []string{"198.51.100.7"}},
-		says:   []string{"spec.externalIPs", "198.51.100.7", "outside the gateway", "delete that Service"},
+		name:  "externalIPs",
+		agent: "extips",
+		shape: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ExternalIPs: []string{"198.51.100.7"}},
+		says: []string{"does not carry this Agent's UID", "spec.externalIPs", "198.51.100.7",
+			"outside the gateway", "delete that Service"},
 		unsaid: "ExternalName",
 	}, {
 		// Not an exposure but a gate bypass: promotion rests on readiness, and
 		// this field serves Pods that never reached it.
-		name:   "publishNotReadyAddresses",
-		agent:  "notready",
-		shape:  corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, PublishNotReadyAddresses: true},
-		says:   []string{"spec.publishNotReadyAddresses", "readiness", "delete that Service"},
+		name:  "publishNotReadyAddresses",
+		agent: "notready",
+		shape: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, PublishNotReadyAddresses: true},
+		says: []string{"does not carry this Agent's UID", "spec.publishNotReadyAddresses",
+			"readiness", "delete that Service"},
 		unsaid: "ExternalName",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -351,25 +357,21 @@ func TestAServiceTheOperatorNeverRendersIsRefusedRatherThanAdopted(t *testing.T)
 					"did not render is not serving anything it can vouch for", got.Status.Phase)
 			}
 			ready := condition(&got, assaydv1alpha1.CondReady)
-			if ready == nil || ready.Status != metav1.ConditionFalse ||
-				ready.Reason != controller.CondReasonServiceNotRendered {
-				t.Errorf("Ready is %+v, want False/RevisionServiceNotRendered", ready)
+			if ready == nil || ready.Status != metav1.ConditionFalse {
+				t.Errorf("Ready is %+v, want False", ready)
 			}
-			deg := condition(&got, assaydv1alpha1.CondDegraded)
-			if deg == nil || deg.Status != metav1.ConditionTrue ||
-				deg.Reason != controller.CondReasonServiceNotRendered {
-				t.Errorf("Degraded is %+v, want True/RevisionServiceNotRendered", deg)
+			// PROVENANCE is the ground: none of these objects carries this
+			// Agent's UID. The shape is detail on that refusal, not the reason
+			// for it — the human's call of 2026-09-22, because an object that
+			// does carry our stamp is ours and is converged instead.
+			coll := condition(&got, assaydv1alpha1.CondRevisionHashCollision)
+			if coll == nil || coll.Status != metav1.ConditionTrue || coll.Reason != "ForeignObject" {
+				t.Errorf("RevisionHashCollision is %+v, want True/ForeignObject: a planted object "+
+					"is refused on provenance, whatever its shape", coll)
 			}
-			// Nothing collided, so a condition saying something did would send an
-			// operator to look for a second projection that does not exist.
-			if meta.IsStatusConditionTrue(got.Status.Conditions,
-				string(assaydv1alpha1.CondRevisionHashCollision)) {
-				t.Errorf("RevisionHashCollision is True for a Service shape refusal: " +
-					"nothing collided, and a condition that names a cause nobody checked is worse " +
-					"than none")
-			}
-			// The message must name the cause AND the fix, or the Agent is stuck
-			// with no way out of it (NFR-8).
+			// The message must name the cause, the SHAPE and the fix, or the
+			// Agent is stuck with no way out of it (NFR-8) and the administrator
+			// cannot tell a name collision from a planted CNAME.
 			for _, want := range tc.says {
 				if ready == nil || !strings.Contains(ready.Message, want) {
 					t.Errorf("the Ready message does not contain %q; it is: %+v", want, ready)
@@ -443,7 +445,7 @@ func TestTheOperatorsOwnRevisionServiceIsNotRefused(t *testing.T) {
 	got := settle(t, r, a)
 
 	if d := condition(&got, assaydv1alpha1.CondDegraded); d != nil &&
-		d.Reason == controller.CondReasonServiceNotRendered {
+		d.Status == metav1.ConditionTrue {
 		t.Fatalf("the operator refused the Service it rendered itself: %s", d.Message)
 	}
 	if got.Status.ActiveRevision != rev {
@@ -451,14 +453,188 @@ func TestTheOperatorsOwnRevisionServiceIsNotRefused(t *testing.T) {
 	}
 }
 
-// The shape check is one of TWO refusals and it is not the load-bearing one for
-// a planted object. A perfectly ordinary ClusterIP Service passes it — and the
-// review of A77's first implementation measured such a Service adopted,
-// stamped, given this Agent's UID label and named by the emitted route, with
-// `publishNotReadyAddresses` and `sessionAffinity` riding along unconverged.
-// The provenance test is what refuses it, on the same three grounds
-// ensureWorkload has always used, and it refuses every field at once rather
-// than the enumerated few the shape check reads.
+// The operator's OWN Service, patched in place, is CONVERGED BACK — not
+// refused.
+//
+// The first cut of A77 refused it, and the human reversed that on 2026-09-22.
+// Provenance is what decides ownership: an object carrying our stamp is ours,
+// rewriting it is what ensureWorkload already does to the Deployment, and
+// "converging would rewrite a stranger's object" is not true of it. The wedge
+// decided it: refusing here handed anyone with `services/patch` in a run
+// namespace a permanent per-Agent outage, needing no ExternalName and no
+// cleverness — a worse failure than the one A77 closes. Converging also CLOSES
+// the off-gateway exposure instead of only reporting it.
+func TestTheOperatorsOwnServicePatchedInPlaceIsConvergedBack(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		patch func(*corev1.Service)
+		check func(*testing.T, *corev1.Service)
+	}{
+		{"externalIPs", func(s *corev1.Service) {
+			s.Spec.ExternalIPs = []string{"198.51.100.7"}
+		}, func(t *testing.T, s *corev1.Service) {
+			if len(s.Spec.ExternalIPs) != 0 {
+				t.Errorf("spec.externalIPs survived convergence as %v: every node still DNATs "+
+					"them to this revision's Pods, outside the gateway", s.Spec.ExternalIPs)
+			}
+		}},
+		{"publishNotReadyAddresses", func(s *corev1.Service) {
+			s.Spec.PublishNotReadyAddresses = true
+		}, func(t *testing.T, s *corev1.Service) {
+			if s.Spec.PublishNotReadyAddresses {
+				t.Errorf("spec.publishNotReadyAddresses survived convergence: the readiness gate " +
+					"promotion rests on is still answered by Pods that never passed it")
+			}
+		}},
+		{"ExternalName", func(s *corev1.Service) {
+			s.Spec.Type = corev1.ServiceTypeExternalName
+			s.Spec.ExternalName = "elsewhere.example.com"
+		}, func(t *testing.T, s *corev1.Service) {
+			if s.Spec.Type != corev1.ServiceTypeClusterIP || s.Spec.ExternalName != "" {
+				t.Errorf("the Service is still type=%q externalName=%q: cluster DNS goes on "+
+					"answering this revision's address with a CNAME to that host",
+					s.Spec.Type, s.Spec.ExternalName)
+			}
+			if s.Spec.ClusterIP == "" {
+				t.Errorf("the converged Service has no ClusterIP, so the card fetch can never " +
+					"reach it")
+			}
+		}},
+		{"NodePort", func(s *corev1.Service) {
+			s.Spec.Type = corev1.ServiceTypeNodePort
+		}, func(t *testing.T, s *corev1.Service) {
+			if s.Spec.Type != corev1.ServiceTypeClusterIP {
+				t.Errorf("the Service is still %q, so every node still publishes this revision's "+
+					"Pods outside the gateway", s.Spec.Type)
+			}
+		}},
+		// The COUPLED field, and the reason this case exists. Kubernetes
+		// auto-clears most fields that only exist under the type being left,
+		// but not loadBalancerSourceRanges — so asserting spec.type alone made
+		// the repair itself invalid, and a single `services/patch` left the
+		// Agent permanently Degraded with the exposure intact. That is the
+		// wedge converging exists to avoid, restored by the converge.
+		{"LoadBalancer with a source range", func(s *corev1.Service) {
+			s.Spec.Type = corev1.ServiceTypeLoadBalancer
+			s.Spec.LoadBalancerSourceRanges = []string{"10.0.0.0/8"}
+		}, func(t *testing.T, s *corev1.Service) {
+			if s.Spec.Type != corev1.ServiceTypeClusterIP {
+				t.Errorf("the Service is still %q: the repair was refused because it asserted "+
+					"spec.type without the fields that type owns, and the exposure survived",
+					s.Spec.Type)
+			}
+			if len(s.Spec.LoadBalancerSourceRanges) != 0 {
+				t.Errorf("spec.loadBalancerSourceRanges survived as %v, which the API server "+
+					"forbids under type ClusterIP — so every later converge of this object is "+
+					"rejected too", s.Spec.LoadBalancerSourceRanges)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := newNamespace(t)
+			a := noneAgent(t, ns, "patched")
+			r := newGatewayReconciler("assayd-gateway", "assayd")
+			rev := revision.MustHash(a.Spec)
+			svcName := controller.WorkloadName("patched", rev)
+			settle(t, r, a)
+			markAvailable(t, ns, svcName, 1)
+			settle(t, r, a)
+
+			var svc corev1.Service
+			key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+			if err := k8s.Get(context.Background(), key, &svc); err != nil {
+				t.Fatalf("get the operator's Service: %v", err)
+			}
+			if svc.Labels[controller.LabelAgentUID] != string(a.UID) {
+				t.Fatalf("setup: the operator's Service has no UID label, so provenance would "+
+					"refuse it and this test would not be about convergence: %v", svc.Labels)
+			}
+			if _, stamped := svc.Annotations[controller.RevisionDigestAnnotation]; !stamped {
+				t.Fatalf("setup: the operator's Service is unstamped: %v", svc.Annotations)
+			}
+			tc.patch(&svc)
+			if err := k8s.Update(context.Background(), &svc); err != nil {
+				t.Fatalf("patch the Service: %v", err)
+			}
+			reconcileOnce(t, r, a)
+
+			var after corev1.Service
+			if err := k8s.Get(context.Background(), key, &after); err != nil {
+				t.Fatalf("get after: %v", err)
+			}
+			tc.check(t, &after)
+
+			// And the Agent must not be degraded by its own object being
+			// repaired — the wedge is the whole reason this converges.
+			live := liveAgentPtr(t, a)
+			if c := condition(live, assaydv1alpha1.CondDegraded); c != nil &&
+				c.Status == metav1.ConditionTrue {
+				t.Errorf("the Agent is Degraded after the operator repaired its OWN Service: a "+
+					"principal with services/patch alone could then take any Agent down, which "+
+					"is the wedge converging exists to avoid: %+v", c)
+			}
+			if live.Status.ActiveRevision != rev {
+				t.Errorf("the revision left active revision %q after its Service was repaired",
+					live.Status.ActiveRevision)
+			}
+		})
+	}
+}
+
+// Convergence must not CHURN: a repaired Service compares equal on the next
+// pass, or the operator rewrites it forever and fights every other writer.
+func TestConvergingTheShapeSettles(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "settles")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("settles", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	var svc corev1.Service
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	if err := k8s.Get(context.Background(), key, &svc); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	svc.Spec.ExternalIPs = []string{"198.51.100.7"}
+	if err := k8s.Update(context.Background(), &svc); err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	reconcileOnce(t, r, a)
+
+	var repaired corev1.Service
+	if err := k8s.Get(context.Background(), key, &repaired); err != nil {
+		t.Fatalf("get repaired: %v", err)
+	}
+	counter := &countingClient{Client: k8s}
+	counting := newGatewayReconciler("assayd-gateway", "assayd")
+	counting.Client = counter
+	for i := 0; i < 5; i++ {
+		reconcileOnce(t, counting, a)
+	}
+	var settled corev1.Service
+	if err := k8s.Get(context.Background(), key, &settled); err != nil {
+		t.Fatalf("get settled: %v", err)
+	}
+	if settled.ResourceVersion != repaired.ResourceVersion {
+		t.Errorf("the repaired Service was rewritten again over five passes (%s → %s): a "+
+			"convergence that does not compare its own output churns the API server forever",
+			repaired.ResourceVersion, settled.ResourceVersion)
+	}
+	if n := counter.count(); n != 0 {
+		t.Errorf("five reconciles after the repair issued %d writes; want 0", n)
+	}
+}
+
+// The three provenance grounds, each under its own reason.
+//
+// The shape table above drives `ForeignObject` across six shapes; this drives
+// the ground a forged UID label falls to, which needs only `create` to write —
+// so the label is not the last line of defence, and the stamp is. All three
+// grounds used to report `DigestMismatch`, telling an operator two projections
+// had collided when nothing did.
 func TestAPlainServicePlantedAtARevisionsNameIsRefusedForWantOfProvenance(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -467,13 +643,9 @@ func TestAPlainServicePlantedAtARevisionsNameIsRefusedForWantOfProvenance(t *tes
 		says     string
 		reason   string
 	}{{
-		// No labels at all: the first of ensureWorkload's three grounds.
 		name: "no UID label", agent: "plain", forgeUID: false,
 		says: "does not carry this Agent's UID", reason: "ForeignObject",
 	}, {
-		// The UID label needs only `create` to write, so the planter forges it —
-		// which is why it is not the last line of defence. The object then falls
-		// to the third ground: no stamp, and nothing in status vouching.
 		name: "a forged UID label", agent: "forged", forgeUID: true,
 		says: "nothing in status vouches for it", reason: "Unstamped",
 	}} {
@@ -524,8 +696,7 @@ func TestAPlainServicePlantedAtARevisionsNameIsRefusedForWantOfProvenance(t *tes
 					"the revision's name; conditions: %v", got.Status.Conditions)
 			}
 			// The REASON is what an alert keys on, and all three grounds used to
-			// report DigestMismatch — telling an operator two projections had
-			// collided when what happened is that nothing vouched for the object.
+			// report DigestMismatch.
 			if coll.Reason != tc.reason {
 				t.Errorf("RevisionHashCollision reads reason %q, want %q: the reason must name "+
 					"the ground that refused it, not the one the other grounds share",
@@ -537,10 +708,14 @@ func TestAPlainServicePlantedAtARevisionsNameIsRefusedForWantOfProvenance(t *tes
 					"digest-mismatch prose, which would claim two projections collided when "+
 					"nothing did. Want %q in: %+v", tc.says, ready)
 			}
-			// This fixture never promotes and has no route — the two assertions
-			// below say so — so the consequence is hypothetical and the message
-			// must not state it as fact. Both grounds asserted it unconditionally,
-			// and the suite proved the claim false in the pass that wrote it.
+			// NAMESPACED: the remedy is "delete that Service" and the run
+			// namespace is a truncate-and-hash nobody types from memory.
+			if ready != nil && !strings.Contains(ready.Message, runNS(ns)+"/"+svcName) {
+				t.Errorf("the message names the Service without its run namespace: %s",
+					ready.Message)
+			}
+			// This fixture never promotes and has no route, so the consequence
+			// is hypothetical and the message must not state it as fact.
 			if ready != nil && strings.Contains(ready.Message, "backendRef names this object") {
 				t.Errorf("the message asserts that the serving route names this Service, on an "+
 					"Agent with no active revision and no route at all: %s", ready.Message)
@@ -587,28 +762,38 @@ func TestARefusedRevisionServiceIsRecheckedAndTheAgentHealsWhenItGoes(t *testing
 	// the shape exit left the provenance exit's requeue — and reportCollision's
 	// condition carry with it — unmeasured.
 	for _, tc := range []struct {
-		name   string
-		agent  string
-		shape  corev1.ServiceSpec
-		reason string
+		name     string
+		agent    string
+		shape    corev1.ServiceSpec
+		forgeUID bool
+		promoted bool
+		reason   string
 	}{{
+		// The one shape refusal left: a headless Service cannot be converged,
+		// because spec.clusterIP is immutable. Reaching it needs BOTH a forged
+		// UID label and a vouched revision — status is what admits an unstamped
+		// object — so this case promotes the revision first and then replaces
+		// the operator's own Service.
 		name: "shape", agent: "healshape",
 		shape: corev1.ServiceSpec{
-			Type: corev1.ServiceTypeExternalName, ExternalName: "elsewhere.example.com",
+			Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone,
 		},
-		reason: controller.CondReasonServiceNotRendered,
+		forgeUID: true,
+		promoted: true,
+		reason:   controller.CondReasonServiceHeadless,
 	}, {
 		name: "provenance", agent: "healprov",
 		shape:  corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP},
 		reason: "RevisionHashCollision",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
-			healsWhenTheServiceGoes(t, tc.agent, tc.shape, tc.reason)
+			healsWhenTheServiceGoes(t, tc.agent, tc.shape, tc.forgeUID, tc.promoted, tc.reason)
 		})
 	}
 }
 
-func healsWhenTheServiceGoes(t *testing.T, name string, shape corev1.ServiceSpec, reason string) {
+func healsWhenTheServiceGoes(t *testing.T, name string, shape corev1.ServiceSpec,
+	forgeUID, promoted bool, reason string) {
 	t.Helper()
 	ns := newNamespace(t)
 	r := newGatewayReconciler("assayd-gateway", "assayd")
@@ -618,8 +803,28 @@ func healsWhenTheServiceGoes(t *testing.T, name string, shape corev1.ServiceSpec
 	rev := revision.MustHash(a.Spec)
 	svcName := controller.WorkloadName(name, rev)
 	shape.Ports = []corev1.ServicePort{{Name: "a2a", Port: 8080, Protocol: corev1.ProtocolTCP}}
+	labels := map[string]string{}
+	if forgeUID {
+		labels[controller.LabelAgentUID] = string(a.UID)
+	}
+	if promoted {
+		// Let the operator build and promote the revision first, so `status`
+		// vouches for the name; then take its Service away and leave the
+		// planted one in its place.
+		settle(t, r, a)
+		markAvailable(t, ns, svcName, 1)
+		settle(t, r, a)
+		var mine corev1.Service
+		key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+		if err := k8s.Get(context.Background(), key, &mine); err != nil {
+			t.Fatalf("get the operator's Service: %v", err)
+		}
+		if err := k8s.Delete(context.Background(), &mine); err != nil {
+			t.Fatalf("delete the operator's Service: %v", err)
+		}
+	}
 	planted := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Namespace: runNS(ns), Name: svcName},
+		ObjectMeta: metav1.ObjectMeta{Namespace: runNS(ns), Name: svcName, Labels: labels},
 		Spec:       shape,
 	}
 	if err := k8s.Create(context.Background(), planted); err != nil {
@@ -685,19 +890,20 @@ func healsWhenTheServiceGoes(t *testing.T, name string, shape corev1.ServiceSpec
 // of them separately and a test of one measures nothing about the other.
 func TestARefusalDoesNotRetractTheGatewayReport(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		exit   func(t *testing.T, svc *corev1.Service)
-		reason string
+		name             string
+		exit             func(t *testing.T, svc *corev1.Service)
+		recreateHeadless bool
+		reason           string
 	}{{
-		// Only the SHAPE check can see the operator's own object: it keeps its
-		// UID label and its digest stamp, so provenance passes it untouched.
-		name: "the shape exit", reason: controller.CondReasonServiceNotRendered,
-		exit: func(t *testing.T, svc *corev1.Service) {
-			svc.Spec.Type = corev1.ServiceTypeNodePort
-		},
+		// The one shape fault convergence cannot repair. It needs the object
+		// replaced rather than patched, because spec.clusterIP is immutable —
+		// which is the whole reason this fault is refused and the others are
+		// converged. The forged UID label gets it past provenance.
+		name: "the shape exit", reason: controller.CondReasonServiceHeadless,
+		recreateHeadless: true,
 	}, {
-		// And only PROVENANCE sees a well-shaped object that is not ours. This
-		// exit reports through reportCollision, which carries separately.
+		// And PROVENANCE sees a well-shaped object that is not ours. This exit
+		// reports through reportCollision, which carries separately.
 		name: "the provenance exit", reason: "ForeignObject",
 		exit: func(t *testing.T, svc *corev1.Service) {
 			delete(svc.Labels, controller.LabelAgentUID)
@@ -749,9 +955,30 @@ func TestARefusalDoesNotRetractTheGatewayReport(t *testing.T) {
 			if err := k8s.Get(context.Background(), key, &svc); err != nil {
 				t.Fatalf("get the operator's Service: %v", err)
 			}
-			tc.exit(t, &svc)
-			if err := k8s.Update(context.Background(), &svc); err != nil {
-				t.Fatalf("patch the Service: %v", err)
+			if tc.recreateHeadless {
+				if err := k8s.Delete(context.Background(), &svc); err != nil {
+					t.Fatalf("delete: %v", err)
+				}
+				headless := &corev1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: runNS(ns), Name: svcName,
+						Labels: map[string]string{controller.LabelAgentUID: string(a.UID)},
+					},
+					Spec: corev1.ServiceSpec{
+						Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone,
+						Ports: []corev1.ServicePort{{
+							Name: "a2a", Port: 8080, Protocol: corev1.ProtocolTCP,
+						}},
+					},
+				}
+				if err := k8s.Create(context.Background(), headless); err != nil {
+					t.Fatalf("create headless: %v", err)
+				}
+			} else {
+				tc.exit(t, &svc)
+				if err := k8s.Update(context.Background(), &svc); err != nil {
+					t.Fatalf("patch the Service: %v", err)
+				}
 			}
 			reconcileOnce(t, r, a)
 
@@ -849,9 +1076,12 @@ func TestAStandingRefusalDoesNotGrowTheReportItCarries(t *testing.T) {
 	if err := k8s.Get(context.Background(), key, &svc); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	svc.Spec.Type = corev1.ServiceTypeNodePort
+	// A NodePort patch would now be CONVERGED back, so it degrades nothing.
+	// Stripping the UID label is the provenance ground, and a refusal is what
+	// these tests are about.
+	delete(svc.Labels, controller.LabelAgentUID)
 	if err := k8s.Update(context.Background(), &svc); err != nil {
-		t.Fatalf("patch: %v", err)
+		t.Fatalf("strip the UID label: %v", err)
 	}
 
 	reconcileOnce(t, r, a)
@@ -922,15 +1152,18 @@ func TestARefusalCarriesNoGatewayReportWhenTheGatewayIsOff(t *testing.T) {
 	if err := k8s.Get(context.Background(), key, &svc); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	svc.Spec.Type = corev1.ServiceTypeNodePort
+	// A NodePort patch would now be CONVERGED back, so it degrades nothing.
+	// Stripping the UID label is the provenance ground, and a refusal is what
+	// these tests are about.
+	delete(svc.Labels, controller.LabelAgentUID)
 	if err := k8s.Update(context.Background(), &svc); err != nil {
-		t.Fatalf("patch: %v", err)
+		t.Fatalf("strip the UID label: %v", err)
 	}
 	reconcileOnce(t, r, a)
 
 	got := liveAgentPtr(t, a)
 	if c := condition(got, assaydv1alpha1.CondReady); c == nil ||
-		c.Reason != controller.CondReasonServiceNotRendered {
+		c.Reason != "RevisionHashCollision" {
 		t.Fatalf("setup: the refusal did not fire, so the carry never ran: %+v", got.Status.Conditions)
 	}
 	if c := condition(got, assaydv1alpha1.CondPolicyApplyIncomplete); c != nil {
@@ -943,10 +1176,17 @@ func TestARefusalCarriesNoGatewayReportWhenTheGatewayIsOff(t *testing.T) {
 	// Service and carries traffic" on a tier where reconcileGateway emits no
 	// route at all — the reader sent to look for traffic that is not flowing,
 	// on the same object whose GovernanceSkipped says the gateway is disabled.
+	// The subjunctive ("converging it WOULD point the serving route's
+	// backendRef at this object") is fine and true. What must be absent is the
+	// present tense: a claim that traffic is flowing on a tier where
+	// reconcileGateway emits no route at all.
 	ready := condition(got, assaydv1alpha1.CondReady)
-	if ready != nil && strings.Contains(ready.Message, "serving route") {
-		t.Errorf("the refusal claims a serving route on an install with gateway.enabled=false, "+
-			"where none is ever emitted: %s", ready.Message)
+	for _, forbidden := range []string{"The route is not withdrawn", "backendRef names this object"} {
+		if ready != nil && strings.Contains(ready.Message, forbidden) {
+			t.Errorf("the refusal claims a serving route on an install with "+
+				"gateway.enabled=false, where none is ever emitted (%q): %s",
+				forbidden, ready.Message)
+		}
 	}
 	if servingRoute(t, ns, "gwoff") != nil {
 		t.Fatal("setup: a route exists with the gateway off, so this test proves nothing")
@@ -992,15 +1232,18 @@ func TestARefusalClaimsNoRouteForAPromotedAgentThatHasNone(t *testing.T) {
 	if err := k8s.Get(context.Background(), key, &svc); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	svc.Spec.Type = corev1.ServiceTypeNodePort
+	// A NodePort patch would now be CONVERGED back, so it degrades nothing.
+	// Stripping the UID label is the provenance ground, and a refusal is what
+	// these tests are about.
+	delete(svc.Labels, controller.LabelAgentUID)
 	if err := k8s.Update(context.Background(), &svc); err != nil {
-		t.Fatalf("patch: %v", err)
+		t.Fatalf("strip the UID label: %v", err)
 	}
 	reconcileOnce(t, r, a)
 
 	live := liveAgentPtr(t, a)
 	ready := condition(live, assaydv1alpha1.CondReady)
-	if ready == nil || ready.Reason != controller.CondReasonServiceNotRendered {
+	if ready == nil || ready.Reason != "RevisionHashCollision" {
 		t.Fatalf("setup: the refusal did not fire: %+v", live.Status.Conditions)
 	}
 	if strings.Contains(ready.Message, "The route is not withdrawn") {
@@ -1042,7 +1285,7 @@ func TestARefusalMessageCannotFreezeTheAgentsStatus(t *testing.T) {
 	})
 
 	ready := condition(&got, assaydv1alpha1.CondReady)
-	if ready == nil || ready.Reason != controller.CondReasonServiceNotRendered {
+	if ready == nil || ready.Reason != "RevisionHashCollision" {
 		t.Fatalf("the refusal was never written, so the Agent's status is frozen at whatever it "+
 			"last said while the planted Service stands: %+v", got.Status.Conditions)
 	}
@@ -1071,69 +1314,6 @@ func TestARefusalMessageCannotFreezeTheAgentsStatus(t *testing.T) {
 	}
 	if !strings.Contains(ready.Message, "198.51.0.0") {
 		t.Errorf("the bounded message names none of the addresses: %s", ready.Message)
-	}
-}
-
-// The shape check's unique job is the operator's OWN Service, patched in place:
-// that object keeps its UID label and its digest stamp, so provenance passes it
-// and only shape can see it. Every planted-object subcase above would be
-// refused by provenance even with its shape arm gone, so without this the
-// externalIPs arm — where the message bug above lived — is pinned only on a
-// path that does not need it.
-func TestTheOperatorsOwnServicePatchedInPlaceIsRefusedByShapeAlone(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		patch func(*corev1.Service)
-		says  string
-	}{
-		{"externalIPs", func(s *corev1.Service) {
-			s.Spec.ExternalIPs = []string{"198.51.100.7"}
-		}, "spec.externalIPs"},
-		{"publishNotReadyAddresses", func(s *corev1.Service) {
-			s.Spec.PublishNotReadyAddresses = true
-		}, "spec.publishNotReadyAddresses"},
-		{"ExternalName", func(s *corev1.Service) {
-			s.Spec.Type = corev1.ServiceTypeExternalName
-			s.Spec.ExternalName = "elsewhere.example.com"
-		}, "ExternalName"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ns := newNamespace(t)
-			a := noneAgent(t, ns, "patched")
-			r := newGatewayReconciler("assayd-gateway", "assayd")
-			rev := revision.MustHash(a.Spec)
-			svcName := controller.WorkloadName("patched", rev)
-			settle(t, r, a)
-			markAvailable(t, ns, svcName, 1)
-			settle(t, r, a)
-
-			var svc corev1.Service
-			key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
-			if err := k8s.Get(context.Background(), key, &svc); err != nil {
-				t.Fatalf("get the operator's Service: %v", err)
-			}
-			if svc.Labels[controller.LabelAgentUID] != string(a.UID) {
-				t.Fatalf("setup: the operator's Service has no UID label, so provenance would "+
-					"refuse it and this test would not be about shape: %v", svc.Labels)
-			}
-			if _, stamped := svc.Annotations[controller.RevisionDigestAnnotation]; !stamped {
-				t.Fatalf("setup: the operator's Service is unstamped: %v", svc.Annotations)
-			}
-			tc.patch(&svc)
-			if err := k8s.Update(context.Background(), &svc); err != nil {
-				t.Fatalf("patch the Service: %v", err)
-			}
-			reconcileOnce(t, r, a)
-
-			ready := condition(liveAgentPtr(t, a), assaydv1alpha1.CondReady)
-			if ready == nil || ready.Reason != controller.CondReasonServiceNotRendered {
-				t.Fatalf("the operator's own Service, patched, was not refused by the shape "+
-					"check — provenance cannot see it, so nothing else can: %+v", ready)
-			}
-			if !strings.Contains(ready.Message, tc.says) {
-				t.Errorf("the message does not name %q: %s", tc.says, ready.Message)
-			}
-		})
 	}
 }
 
@@ -1293,15 +1473,18 @@ func TestTheCarryDoesNotOverwriteWhatThisPassDerived(t *testing.T) {
 	if err := k8s.Get(context.Background(), key, &svc); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	svc.Spec.Type = corev1.ServiceTypeNodePort
+	// A NodePort patch would now be CONVERGED back, so it degrades nothing.
+	// Stripping the UID label is the provenance ground, and a refusal is what
+	// these tests are about.
+	delete(svc.Labels, controller.LabelAgentUID)
 	if err := k8s.Update(context.Background(), &svc); err != nil {
-		t.Fatalf("patch: %v", err)
+		t.Fatalf("strip the UID label: %v", err)
 	}
 	reconcileOnce(t, r, a)
 
 	got := liveAgentPtr(t, a)
 	if c := condition(got, assaydv1alpha1.CondReady); c == nil ||
-		c.Reason != controller.CondReasonServiceNotRendered {
+		c.Reason != "RevisionHashCollision" {
 		t.Fatalf("setup: the refusal did not fire, so the carry never ran: %+v", got.Status.Conditions)
 	}
 	held := condition(got, assaydv1alpha1.CondPolicyApplyIncomplete)
