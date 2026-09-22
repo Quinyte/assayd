@@ -132,41 +132,126 @@ func TestTheServedPolicyReportHasThreeAnswers(t *testing.T) {
 		"kind": "StatusSummary", "name": "StatusSummary"}, "conditions": []any{}})
 
 	for _, tc := range []struct {
-		name string
-		p    *unstructured.Unstructured
-		want gatewayReport
+		name   string
+		p      *unstructured.Unstructured
+		want   gatewayReport
+		clause policyClause
 	}{
 		{"accepted and attached at the current generation", policy(2, ours(
-			cond("Accepted", "True", "Valid", 2), cond("Attached", "True", "Attached", 2))), reportHolding},
+			cond("Accepted", "True", "Valid", 2), cond("Attached", "True", "Attached", 2))), reportHolding, clauseUnknown},
 		{"Attached=False at the current generation", policy(2, ours(
-			cond("Accepted", "True", "Valid", 2), cond("Attached", "False", "NotAttached", 2))), reportBroken},
+			cond("Accepted", "True", "Valid", 2), cond("Attached", "False", "NotAttached", 2))), reportBroken, clauseUnattached},
 		{"Accepted=False at the current generation", policy(2, ours(
-			cond("Accepted", "False", "Invalid", 2), cond("Attached", "True", "Attached", 2))), reportBroken},
+			cond("Accepted", "False", "Invalid", 2), cond("Attached", "True", "Attached", 2))), reportBroken, clauseRejected},
 		{"Accepted=True with a reason other than Valid", policy(2, ours(
-			cond("Accepted", "True", "Translated", 2), cond("Attached", "True", "Attached", 2))), reportBroken},
-		{"the synthetic StatusSummary ancestor", policy(2, summary), reportBroken},
+			cond("Accepted", "True", "Translated", 2), cond("Attached", "True", "Attached", 2))), reportBroken, clausePartlyValid},
+		{"the synthetic StatusSummary ancestor", policy(2, summary), reportBroken, clauseUnattached},
+		// A83's ranking, which is the whole of what splitting the message
+		// changes about the ANSWER: two clauses can fire on one policy, the
+		// report is broken either way, and the message must take the STRONGER
+		// claim. The loop reads Accepted first, so before A83 each of these
+		// would have named the weaker one and stopped short of saying the
+		// route may be answering with no credential required.
+		{"Attached=False beside a non-Valid Accepted outranks it", policy(2, ours(
+			cond("Accepted", "True", "PartiallyValid", 2), cond("Attached", "False", "Pending", 2))),
+			reportBroken, clauseUnattached},
+		{"Attached=False outranks Accepted=False", policy(2, ours(
+			cond("Accepted", "False", "Invalid", 2), cond("Attached", "False", "Pending", 2))),
+			reportBroken, clauseUnattached},
+		// The synthetic ancestor still short-circuits WHEREVER it appears,
+		// which is D5(c) and is deliberately NOT decided by A83: the human
+		// took (B4) for the message, and the fail-open alternative A82
+		// records — short-circuit only when no real ancestor reports
+		// Attached=True at the current generation — is still open (§9 D5).
+		{"the synthetic ancestor still outranks a real ancestor that holds", policy(2, summary, ours(
+			cond("Accepted", "True", "Valid", 2), cond("Attached", "True", "Attached", 2))),
+			reportBroken, clauseUnattached},
 		// THE ONE EXCEPTION to "at the object's current generation", and it is
 		// deliberate and stated in §3.3.3: the ancestor list is rewritten whole
 		// on every status write, so there is no generation to compare the
 		// synthetic ancestor's PRESENCE against, and §3.3.2 already calls that
 		// presence the signal. Fail-safe on the fail-OPEN half (A81, the
 		// review's MINOR 3).
-		{"the StatusSummary ancestor is not generation-gated", policy(5, summary), reportBroken},
+		{"the StatusSummary ancestor is not generation-gated", policy(5, summary), reportBroken, clauseUnattached},
 		{"a failure reported a generation behind", policy(3, ours(
-			cond("Accepted", "True", "Valid", 2), cond("Attached", "False", "NotAttached", 2))), reportUnknown},
-		{"an empty ancestor list", policy(2), reportUnknown},
+			cond("Accepted", "True", "Valid", 2), cond("Attached", "False", "NotAttached", 2))), reportUnknown, clauseUnknown},
+		{"an empty ancestor list", policy(2), reportUnknown, clauseUnknown},
 		{"no ancestor is the assayd Gateway", policy(2, map[string]any{
 			"ancestorRef": map[string]any{"group": gatewayv1.GroupName, "kind": "Gateway",
-				"name": "other", "namespace": "elsewhere"}}), reportUnknown},
-		{"no policy at all", nil, reportUnknown},
+				"name": "other", "namespace": "elsewhere"}}), reportUnknown, clauseUnknown},
+		{"no policy at all", nil, reportUnknown, clauseUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, why := policyReport(tc.p, gw)
+			got, clause, why := policyReport(tc.p, gw)
 			if got != tc.want {
 				t.Errorf("policyReport = %v, want %v (%s)", got, tc.want, why)
 			}
+			if clause != tc.clause {
+				t.Errorf("policyReport named clause %v, want %v; the clause is what the message "+
+					"branches on, and the wrong one names a cause that was never checked "+
+					"(design 03 A83, %s)", clause, tc.clause, why)
+			}
 			if tc.want == reportBroken && why == "" {
 				t.Error("a broken report names nothing")
+			}
+		})
+	}
+}
+
+// The four leads A83 splits policyBrokenMessage into, each asserted by what it
+// must NOT say as well as by what it must. The reason does not branch — (B1)
+// is kept — so what a clause says is the only thing that separates it, and a
+// test asserting only reasons would pass with A81's one lead for all four.
+func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		clause        policyClause
+		routeOK       bool
+		says, saysNot []string
+	}{
+		{"unattached on an accepted route", clauseUnattached, true,
+			[]string{"does not attach", "no credential required", "announced, not closed"},
+			[]string{"THIS PASS DID NOT READ IT AS ACCEPTED", "but not the whole of it"}},
+		{"unattached beside a route this pass did not read as accepted", clauseUnattached, false,
+			[]string{"does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED"},
+			[]string{"route is accepted and SERVING"}},
+		{"rejected outright", clauseRejected, true,
+			[]string{"REJECTED", "none of this Agent's authentication or authorization is in force",
+				"announced, not closed"},
+			[]string{"does not attach", "but not the whole of it"}},
+		// The shape A82 measured, and the one A83 exists for: the Gateway
+		// says Attached=True and the route is measured refusing, so a lead
+		// asserting non-attachment or an open route is rule 8.
+		{"accepted only in part", clausePartlyValid, true,
+			[]string{"but not the whole of it", "NOT reporting the policy unattached",
+				"makes no request of its own", "shared by every Agent in this run namespace"},
+			[]string{"does not attach", "no credential required", "REJECTED",
+				"announced, not closed"}},
+		// A held report has no clause to name, because the claim store is one
+		// boolean. Restating the unattached lead here would re-enter the
+		// defect one pass later for a claim that may have been partly-valid.
+		{"held, with no clause to re-derive", clauseUnknown, true,
+			[]string{"last reported", "not carried", "restates the claim and cannot narrow it"},
+			[]string{"does not attach", "no credential required", "REJECTED",
+				"but not the whole of it"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := policyBrokenMessage(tc.clause, "WHY", tc.routeOK)
+			for _, s := range tc.says {
+				if !strings.Contains(msg, s) {
+					t.Errorf("the message does not say %q: %s", s, msg)
+				}
+			}
+			for _, s := range tc.saysNot {
+				if strings.Contains(msg, s) {
+					t.Errorf("the message says %q, which this clause did not check: %s", s, msg)
+				}
+			}
+			if !strings.Contains(msg, "WHY") {
+				t.Errorf("the message drops the Gateway's own words: %s", msg)
+			}
+			if !strings.Contains(msg, "This is not AuthPolicyMissing") {
+				t.Errorf("every clause tells the reader which condition this is not: %s", msg)
 			}
 		})
 	}

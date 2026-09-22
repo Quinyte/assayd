@@ -366,7 +366,12 @@ func TestAServedNoneAgentIsDegradedOnARefusedRoute(t *testing.T) {
 // unconditionally rather than composing with a standing reason, which the
 // third half must fail.
 func TestAServedPolicyTheGatewayDoesNotAttachIsReported(t *testing.T) {
-	unattached := func(t *testing.T, a *assaydv1alpha1.Agent, r *controller.AgentReconciler, says string) {
+	// What every clause of this half SHARES: the two conditions, the reason,
+	// Ready, the phase, the route left published and the policy left alone.
+	// WHAT THE MESSAGE SAYS is each row's own, because A83 splits the message
+	// by which clause of policyReport's broken answer fired — the reason and
+	// the condition set do not move (the human's (B1)+(B4), 2026-09-23).
+	judged := func(t *testing.T, a *assaydv1alpha1.Agent, r *controller.AgentReconciler, says ...string) {
 		t.Helper()
 		// Writing the policy's STATUS perturbs no digest — compiler.Digest
 		// projects spec and three labels and never status — so the pass makes
@@ -375,7 +380,7 @@ func TestAServedPolicyTheGatewayDoesNotAttachIsReported(t *testing.T) {
 		rv := policyResourceVersion(t, a)
 		reconcileOnce(t, r, a)
 		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyNotAttached")
-		mustContain(t, c, "PolicyApplyIncomplete", says, "no credential required", "announced, not closed")
+		mustContain(t, c, "PolicyApplyIncomplete", says...)
 		condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
 		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AuthPolicyNotAttached")
 		if got := phaseOf(t, a); got != assaydv1alpha1.PhaseDegraded {
@@ -395,23 +400,40 @@ func TestAServedPolicyTheGatewayDoesNotAttachIsReported(t *testing.T) {
 		a, r, _ := servedAPIKeyAgent(t, "a80unattached")
 		acceptRoute(t, a.Namespace, a.Name)
 		unattachPolicy(t, a)
-		unattached(t, a, r, "Attached=False")
+		judged(t, a, r, "Attached=False", "does not attach", "no credential required",
+			"announced, not closed")
 	})
 	t.Run("the synthetic StatusSummary ancestor", func(t *testing.T) {
 		a, r, _ := servedAPIKeyAgent(t, "a80summary")
 		acceptRoute(t, a.Namespace, a.Name)
 		summarisePolicy(t, a)
-		unattached(t, a, r, "StatusSummary")
+		judged(t, a, r, "StatusSummary", "does not attach", "no credential required",
+			"announced, not closed")
 	})
 	// The shape A82 measured reachable on agentgateway 1.5.0 with a
-	// byte-unchanged policy. Until A82 this half was driven only by shapes
-	// 1.5.0 was measured not to produce, so the one an operator will actually
-	// meet was composed by nothing.
+	// byte-unchanged policy — a labelled key ConfigMap an administrator wrote
+	// holding an entry the controller rejects — and the shape A83 exists for.
+	// The Gateway reports Accepted=True/PartiallyValid beside Attached=True
+	// and the route is measured still refusing anonymous requests 401, so the
+	// lead A81 shipped named a cause that was never checked: rule 8.
+	//
+	// THE MESSAGE IS THE ASSERTION here, not the reason: under (B1)+(B4)
+	// neither the reason nor the condition set moves, so a row asserting only
+	// those passes with the old unconditional lead — which is what this row
+	// did before A83. Mutation: make policyBrokenMessage ignore its clause and
+	// return the unattached lead, and the forbidden fragments below must fail.
 	t.Run("Accepted=True with a reason other than Valid", func(t *testing.T) {
 		a, r, _ := servedAPIKeyAgent(t, "a80partial")
 		acceptRoute(t, a.Namespace, a.Name)
 		partiallyValidPolicy(t, a)
-		unattached(t, a, r, "PartiallyValid")
+		judged(t, a, r, "PartiallyValid",
+			"ACCEPTED this Agent's <agent>-auth policy but not the whole of it",
+			"NOT reporting the policy unattached", "makes no request of its own",
+			"shared by every Agent in this run namespace")
+		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyNotAttached")
+		mustNotContain(t, c, "PolicyApplyIncomplete", "does not attach", "no credential required")
+		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+		mustNotContain(t, g, "GovernanceSkipped", "does not attach", "no credential required")
 	})
 	// ENTERED, REPORTED, REPAIRED — the sequence A82's first draft got
 	// backwards, and the reason the measured bypass is not a standing hole.
@@ -521,7 +543,7 @@ func TestAServedPolicyTheGatewayDoesNotAttachIsReported(t *testing.T) {
 //
 // Mutations, each a single edit: put AuthPolicyNotAttached back before
 // ServingRouteNotAccepted in incompleteOrder, which the reason and phase
-// assertions must fail; and make policyUnattachedMessage ignore the route
+// assertions must fail; and make policyBrokenMessage ignore the route
 // reading, which the message assertions must fail.
 func TestBothHalvesOnOnePassNameTheRouteFirst(t *testing.T) {
 	a, r, _ := servedAPIKeyAgent(t, "a80bothhalves")
@@ -851,6 +873,33 @@ func TestAnUnknownReadingHoldsAStandingReport(t *testing.T) {
 		}
 		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available")
 	})
+	// A HELD policy claim names no clause, and must not invent one. A83 splits
+	// the raised message by which of policyReport's broken answers fired; the
+	// claim store on status.auth is ONE BOOLEAN and carries no clause, so a
+	// pass that re-derives nothing cannot say which answer produced the claim.
+	// Restating A81's non-attachment lead here would re-enter the rule-8
+	// defect one pass later, on a claim that was PartiallyValid — where the
+	// Gateway said Attached=True and the route was measured refusing.
+	//
+	// Mutation: pass clauseUnattached instead of clauseUnknown in
+	// judgeServed's unknown-reading branch, and the forbidden fragments fail.
+	t.Run("a held claim does not name a clause it did not re-derive", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "a80holdpartial")
+		acceptRoute(t, a.Namespace, a.Name)
+		partiallyValidPolicy(t, a)
+		reconcileOnce(t, r, a)
+		at := transitionedAt(t, a, assaydv1alpha1.CondPolicyApplyIncomplete)
+
+		driftPolicySpec(t, a)
+		reconcileOnce(t, r, a)
+		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyNotAttached")
+		mustContain(t, c, "PolicyApplyIncomplete", heldMark, "last reported",
+			"restates the claim and cannot narrow it")
+		mustNotContain(t, c, "PolicyApplyIncomplete", "does not attach", "no credential required",
+			"but not the whole of it")
+		sameTransition(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, at)
+		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AuthPolicyNotAttached")
+	})
 	// The third half: the CLAIM rather than the condition. In the composed
 	// state the stored condition's reason belongs to another cause, so a
 	// reason match finds nothing to restore — which is why the claim is a
@@ -1018,6 +1067,46 @@ func TestAnErroredPassHoldsAServedReport(t *testing.T) {
 			t.Errorf("the held message grew from %d to %d bytes between two failed writes; at "+
 				"~475 bytes a pass it reaches the API server's 32768-byte limit", lens[1], lens[2])
 		}
+	})
+	// The POLICY half of holdServedJudgement, which no row reached before A83:
+	// both arms above raise the route half, so the branch that re-asserts a
+	// standing AuthPolicyNotAttached across an errored pass was unpinned, and
+	// A83's clause argument there survived its mutation. Like the
+	// unknown-reading hold, an errored pass re-derived nothing and has no
+	// clause to name — and here the claim being restated was the PartiallyValid
+	// one, where the Gateway said Attached=True.
+	//
+	// Mutations, each a single edit: pass clauseUnattached instead of
+	// clauseUnknown in holdServedJudgement, which the forbidden fragments must
+	// fail; and delete the policy branch of holdServedJudgement outright,
+	// which drops the condition and Ready=False with it.
+	t.Run("the policy half of an errored pass", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "a80errpolicy")
+		acceptRoute(t, a.Namespace, a.Name)
+		partiallyValidPolicy(t, a)
+		reconcileOnce(t, r, a)
+		condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyNotAttached")
+		at := transitionedAt(t, a, assaydv1alpha1.CondPolicyApplyIncomplete)
+
+		base := r.Reader
+		if base == nil {
+			base = k8s
+		}
+		r.Reader = staleAgentReader{Reader: base}
+		err := reconcileErr(t, r, a)
+		r.Reader = base
+		if err == nil || !strings.Contains(err.Error(), "older than the live one") {
+			t.Fatalf("the injected stale read did not reach the caller: %v", err)
+		}
+		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyNotAttached")
+		mustContain(t, c, "PolicyApplyIncomplete", erroredMark, "last reported",
+			"restates the claim and cannot narrow it")
+		mustNotContain(t, c, "PolicyApplyIncomplete", "does not attach", "no credential required",
+			"but not the whole of it")
+		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+		mustNotContain(t, g, "GovernanceSkipped", "does not attach", "no credential required")
+		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AuthPolicyNotAttached")
+		sameTransition(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, at)
 	})
 }
 

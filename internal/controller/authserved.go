@@ -117,17 +117,54 @@ func routeReport(rt *gatewayv1.HTTPRoute, gw GatewayConfig) (gatewayReport, stri
 	return reportUnknown, ""
 }
 
+// policyClause names WHICH of policyReport's broken answers fired, so that
+// the message can say what the Gateway actually said rather than one sentence
+// for all four (design 03 A83, the human's (B4) on 2026-09-23).
+//
+// It does NOT reach the condition REASON, which stays AuthPolicyNotAttached on
+// every clause: (B1)'s condition set is kept, and D5(b) — whether the
+// partly-valid clause deserves a reason of its own — is left open, because the
+// claim store on status.auth is ONE BOOLEAN PER HALF and carries no clause, so
+// a second reason could not be re-asserted on a pass that re-derives nothing
+// (§3.3.3, §9 D5).
+type policyClause int
+
+const (
+	// clauseUnknown is "no clause was derived on this pass": a holding or
+	// unknown reading, and — the case that matters — a HELD report, which
+	// restates a claim it cannot narrow.
+	clauseUnknown policyClause = iota
+	// clauseUnattached is the synthetic StatusSummary ancestor, or an explicit
+	// Attached=False on the real Gateway ancestor. It is the only clause in
+	// which the Gateway itself says the policy is attached to nothing, and it
+	// is the one A81's message was written for.
+	clauseUnattached
+	// clauseRejected is Accepted=False: the Gateway refused the policy
+	// outright, so none of it is in force. Nothing tried has produced it on
+	// agentgateway 1.5.0 (A82), and the arm is live because the CRD asserts
+	// the shape.
+	clauseRejected
+	// clausePartlyValid is Accepted=True with a reason other than Valid —
+	// PartiallyValid on 1.5.0 — which is the ONE shape of this half A82
+	// measured reachable with a byte-unchanged policy, and in which the
+	// Gateway reports Attached=True and the route is measured still refusing.
+	clausePartlyValid
+)
+
 // policyReport is §3.3.2's policy tuple in the same three answers: an explicit
 // Accepted=False, an Accepted=True whose reason is not Valid, an
 // Attached=False — each at the policy's current generation — or agentgateway's
-// synthetic StatusSummary ancestor, is BROKEN.
+// synthetic StatusSummary ancestor, is BROKEN. It also says WHICH of those
+// fired, because they do not all mean the same thing and A81's one message for
+// all four named a cause that was never checked in the only one an
+// administrator reaches without editing anything assayd wrote (A82, A83).
 //
 // An EMPTY ancestor list is UNKNOWN here, where policyConverged calls it a
 // failure. That difference is deliberate and §5 states it: a transaction's
 // tuple must not pass on silence, and this judgement must not raise on it.
-func policyReport(p *unstructured.Unstructured, gw GatewayConfig) (gatewayReport, string) {
+func policyReport(p *unstructured.Unstructured, gw GatewayConfig) (gatewayReport, policyClause, string) {
 	if p == nil {
-		return reportUnknown, ""
+		return reportUnknown, clauseUnknown, ""
 	}
 	// THE ASYMMETRY WITH routeReport IS DELIBERATE AND IS STATED RATHER THAN
 	// TIDIED: an ancestor carries a controllerName and this function does not
@@ -140,7 +177,7 @@ func policyReport(p *unstructured.Unstructured, gw GatewayConfig) (gatewayReport
 	where := fmt.Sprintf("policy %s/%s at generation %d", p.GetNamespace(), p.GetName(), p.GetGeneration())
 	ancestors, _, _ := unstructured.NestedSlice(p.Object, "status", "ancestors")
 	if len(ancestors) == 0 {
-		return reportUnknown, ""
+		return reportUnknown, clauseUnknown, ""
 	}
 	var ours map[string]any
 	for _, a := range ancestors {
@@ -159,8 +196,8 @@ func policyReport(p *unstructured.Unstructured, gw GatewayConfig) (gatewayReport
 			// against. §3.3.2 already calls its presence the signal. It is the
 			// fail-safe direction on the fail-OPEN half: the last thing the
 			// Gateway said is that this policy attached to nothing (A81).
-			return reportBroken, where + ": it carries agentgateway's synthetic StatusSummary " +
-				"ancestor, which is written when the policy attached to nothing (" +
+			return reportBroken, clauseUnattached, where + ": it carries agentgateway's synthetic " +
+				"StatusSummary ancestor, which is written when the policy attached to nothing (" +
 				describeConditions(m) + ")"
 		}
 		if group == gatewayv1.GroupName && kind == "Gateway" && name == gw.Name && ns == gw.Namespace {
@@ -168,9 +205,20 @@ func policyReport(p *unstructured.Unstructured, gw GatewayConfig) (gatewayReport
 		}
 	}
 	if ours == nil {
-		return reportUnknown, ""
+		return reportUnknown, clauseUnknown, ""
 	}
-	known := 0
+	// Both conditions are read BEFORE any of them is answered, where an
+	// earlier cut returned on the first break it met. That is not tidying: the
+	// loop reads Accepted first, so a policy the Gateway reports BOTH
+	// partly-valid and Attached=False would have taken the partly-valid
+	// clause — the weaker claim — and its message would have stopped short of
+	// saying the route may be answering with no credential required. The
+	// answer is reportBroken either way, so only the message moves, and it
+	// moves towards the stronger claim (A83).
+	var (
+		known                          int
+		unattached, rejected, unwanted string
+	)
 	for _, want := range []struct{ typ, reason string }{{"Accepted", "Valid"}, {"Attached", ""}} {
 		c, ok := findUnstructuredCondition(ours, want.typ)
 		if !ok || c.ObservedGeneration != p.GetGeneration() {
@@ -178,18 +226,37 @@ func policyReport(p *unstructured.Unstructured, gw GatewayConfig) (gatewayReport
 		}
 		switch {
 		case c.Status == metav1.ConditionFalse:
-			return reportBroken, fmt.Sprintf("%s: Gateway %s/%s reports %s=False, reason %s: %s",
+			why := fmt.Sprintf("%s: Gateway %s/%s reports %s=False, reason %s: %s",
 				where, gw.Namespace, gw.Name, want.typ, c.Reason, c.Message)
+			if want.typ == "Attached" {
+				unattached = why
+			} else {
+				rejected = why
+			}
 		case want.reason != "" && c.Status == metav1.ConditionTrue && c.Reason != want.reason:
-			return reportBroken, fmt.Sprintf("%s: Gateway %s/%s reports %s=True with reason %s, not %s",
+			unwanted = fmt.Sprintf("%s: Gateway %s/%s reports %s=True with reason %s, not %s",
 				where, gw.Namespace, gw.Name, want.typ, c.Reason, want.reason)
+		default:
+			// Only a condition that broke NOTHING counts towards the good
+			// tuple, exactly as the returning cut counted it.
+			known++
 		}
-		known++
+	}
+	// Strongest claim first: non-attachment is the one that says the route may
+	// be unauthenticated, rejection the one that says none of the policy is in
+	// force, partial acceptance the one that says neither.
+	switch {
+	case unattached != "":
+		return reportBroken, clauseUnattached, unattached
+	case rejected != "":
+		return reportBroken, clauseRejected, rejected
+	case unwanted != "":
+		return reportBroken, clausePartlyValid, unwanted
 	}
 	if known == 2 {
-		return reportHolding, ""
+		return reportHolding, clauseUnknown, ""
 	}
-	return reportUnknown, ""
+	return reportUnknown, clauseUnknown, ""
 }
 
 // servedClaims is A80's claim store: which of the two reports is standing.
@@ -297,30 +364,109 @@ func routeRefusedMessage(why string) string {
 		"accept. Check the assayd Gateway's listener and this route's parentRef (design 03 §3.3.3, §5)"
 }
 
-// policyUnattachedMessage takes THE ROUTE'S READING, because the two halves
-// fire together in A80's own measured incident: renaming the Gateway's listener
-// detaches the route, and agentgateway then writes the synthetic StatusSummary
-// ancestor on <agent>-auth, so the same pass reports Accepted=False AND a
-// policy attached to nothing. Opening unconditionally with "accepted and
-// SERVING" then announces a security incident — a route answering with no
-// credential required — that the same pass has just refuted, when the real
-// incident is that nothing reaches the agent at all (A81).
-func policyUnattachedMessage(why string, routeOK bool) string {
-	lead := "this Agent's route is accepted and SERVING while the assayd Gateway reports that it " +
-		"does not attach the <agent>-auth policy, so the route may be answering with no credential " +
-		"required: "
-	if !routeOK {
-		lead = "the assayd Gateway reports that it does not attach this Agent's <agent>-auth " +
-			"policy. Whether the route is answering with no credential required depends on the " +
-			"route, and THIS PASS DID NOT READ IT AS ACCEPTED: PolicyApplyIncomplete names the " +
-			"route's own reading first, and if it says the route is refused then nothing is " +
-			"reaching this Agent at all and this half is the smaller of the two problems: "
+// policyBrokenTail is what is true of EVERY clause and of a held report:
+// nothing is touched, and the reader is told which condition this is not.
+// "the hole is announced, not closed" is NOT in it, because a hole is what
+// only two of the four clauses saw (A83).
+const policyBrokenTail = ". Nothing is withdrawn, deleted or rewritten — doing so would hand " +
+	"anyone who can edit the Gateway a switch that takes this Agent off the air. This is not " +
+	"AuthPolicyMissing: the policy is present, carries this Agent's UID and renders to " +
+	"status.auth.appliedDigest, and the operator is not re-creating it (design 03 §3.3.3, §5)"
+
+// announcedNotClosed is the clause-specific half of the tail, for the two
+// clauses in which the Gateway's own report is consistent with the route
+// answering unauthenticated.
+const announcedNotClosed = ". The hole is announced, not closed"
+
+// policyBrokenMessage says what the assayd Gateway ACTUALLY SAID about this
+// Agent's <agent>-auth, which is two branchings and not one.
+//
+// It takes THE ROUTE'S READING, because the two halves fire together in A80's
+// own measured incident: renaming the Gateway's listener detaches the route,
+// and agentgateway then writes the synthetic StatusSummary ancestor on
+// <agent>-auth, so the same pass reports Accepted=False AND a policy attached
+// to nothing. Opening unconditionally with "accepted and SERVING" then
+// announces a security incident — a route answering with no credential
+// required — that the same pass has just refuted, when the real incident is
+// that nothing reaches the agent at all (A81).
+//
+// And it takes THE CLAUSE, which is A83 and the human's (B4) of 2026-09-23.
+// A81's single lead asserted non-attachment for all four of policyReport's
+// broken answers. In the ONE of them A82 measured reachable with a
+// byte-unchanged policy — Accepted=True with reason PartiallyValid, because an
+// administrator put an entry the controller rejects in the labelled key
+// ConfigMap — the Gateway reports Attached=True, "Attached to all targets",
+// and the route is measured still refusing anonymous requests 401. So the lead
+// named a cause that was never checked and drove every served API-key Agent in
+// the run namespace, which shares one key source, to Ready=False and Degraded
+// with its authentication intact: AGENTS.md rule 8, one clause over from the
+// one A81 already fixed with routeOK.
+//
+// **This is a CONTROL-PLANE fix and the human took it knowing so.** It reads
+// the Gateway's report and makes no request, so it cannot tell a PartiallyValid
+// that left authentication working — as the measured one does — from a future
+// translation failure that reported the same way while disabling it. The
+// message therefore does not claim authentication is intact; it says the
+// judgement did not check. (B2)'s re-probe is the mechanism that could, and it
+// was offered and not taken (§9 D5, §11 A82/A83).
+//
+// The REASON does not branch. AuthPolicyNotAttached stays on both conditions
+// for every clause, which is (B1) kept, and D5(b) stays open: see policyClause.
+func policyBrokenMessage(clause policyClause, why string, routeOK bool) string {
+	var lead, consequence string
+	switch clause {
+	case clauseUnattached:
+		consequence = announcedNotClosed
+		lead = "this Agent's route is accepted and SERVING while the assayd Gateway reports that it " +
+			"does not attach the <agent>-auth policy, so the route may be answering with no credential " +
+			"required: "
+		if !routeOK {
+			lead = "the assayd Gateway reports that it does not attach this Agent's <agent>-auth " +
+				"policy. Whether the route is answering with no credential required depends on the " +
+				"route, and THIS PASS DID NOT READ IT AS ACCEPTED: PolicyApplyIncomplete names the " +
+				"route's own reading first, and if it says the route is refused then nothing is " +
+				"reaching this Agent at all and this half is the smaller of the two problems: "
+		}
+	case clauseRejected:
+		consequence = announcedNotClosed
+		lead = "this Agent's route is accepted and SERVING while the assayd Gateway reports that it " +
+			"REJECTED the <agent>-auth policy outright, so none of this Agent's authentication or " +
+			"authorization is in force at the gateway and the route may be answering with no " +
+			"credential required: "
+		if !routeOK {
+			lead = "the assayd Gateway reports that it REJECTED this Agent's <agent>-auth policy " +
+				"outright, so none of this Agent's authentication or authorization is in force at " +
+				"the gateway. Whether the route is answering with no credential required depends on " +
+				"the route, and THIS PASS DID NOT READ IT AS ACCEPTED: PolicyApplyIncomplete names " +
+				"the route's own reading first, and if it says the route is refused then nothing is " +
+				"reaching this Agent at all and this half is the smaller of the two problems: "
+		}
+	case clausePartlyValid:
+		// No routeOK branch, and its absence is the point rather than an
+		// omission: this lead makes no claim about the route at all, because
+		// the Gateway did not report non-attachment and the judgement issues
+		// no request, so neither reading of the route would let it say more.
+		lead = "the assayd Gateway ACCEPTED this Agent's <agent>-auth policy but not the whole of " +
+			"it, so a rule the compiler wrote may have been dropped in translation and this Agent's " +
+			"governance may be weaker than its spec asks for. The Gateway is NOT reporting the " +
+			"policy unattached on this pass, and this judgement reads the Gateway's report and " +
+			"makes no request of its own, so whether a credential is still required is not " +
+			"established here either way — the cause measured on agentgateway 1.5.0 is an entry " +
+			"the controller rejects in the API-key ConfigMap an administrator wrote, which leaves " +
+			"the route still refusing anonymous requests. That ConfigMap is shared by every Agent " +
+			"in this run namespace, so expect this on all of them at once. The Gateway's own " +
+			"reason names what it would not translate: "
+	default:
+		// A HELD report: this pass re-derived nothing, so it has no clause.
+		// Restating A81's non-attachment lead here would re-enter the defect
+		// one pass later, for a claim that may have been the partly-valid one.
+		lead = "the assayd Gateway last reported this Agent's <agent>-auth policy broken and has " +
+			"not reported at the policy's current generation since. WHICH of its answers produced " +
+			"that report is not carried — status.auth stores one flag for this half and not the " +
+			"clause — so this pass restates the claim and cannot narrow it, and it stands until " +
+			"the Gateway reports again: "
 	}
-	return lead + why + ". Nothing is withdrawn, deleted or rewritten — doing so would hand " +
-		"anyone who can edit the Gateway a switch that takes this Agent off the air — so the hole is " +
-		"announced, not closed. This is not AuthPolicyMissing: the policy is present, carries this " +
-		"Agent's UID and renders to status.auth.appliedDigest, and the operator is not re-creating " +
-		"it (design 03 §3.3.3, §5)"
+	return lead + why + consequence + policyBrokenTail
 }
 
 // judgeServed is A80's re-derivation, on a pass whose -auth step returned no
@@ -390,10 +536,10 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 	// and serving while its authentication is attached to nothing. Only a
 	// served apikey Agent has a policy, and out.judgePolicy is set only where
 	// §3.2's name-and-label rule and the appliedDigest comparison both passed.
-	switch rep, why := policyReport(out.judgePolicy, r.Gateway); rep {
+	switch rep, clause, why := policyReport(out.judgePolicy, r.Gateway); rep {
 	case reportBroken:
 		claims.policyUnattached = true
-		msg := policyUnattachedMessage(why, routeOK)
+		msg := policyBrokenMessage(clause, why, routeOK)
 		raiseIncomplete(conds, ReasonAuthPolicyNotAttached, msg)
 		appendGovernance(conds, ReasonAuthPolicyNotAttached, msg)
 		withholdInOrder(out, ReasonAuthPolicyNotAttached, msg)
@@ -402,7 +548,10 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 		claims.policyUnattached = false
 	default:
 		if stored.policyUnattached {
-			held := policyUnattachedMessage("the Gateway has not reported on it since", routeOK)
+			// clauseUnknown, and not the clause that raised it: the claim
+			// store is one boolean and does not carry which answer the
+			// Gateway gave (A83).
+			held := policyBrokenMessage(clauseUnknown, "the Gateway has not reported on it since", routeOK)
 			holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, heldNote)
 			holdGovernance(agent, conds, held, heldNote)
 		}
@@ -432,7 +581,7 @@ func (r *AgentReconciler) holdServedJudgement(agent *assaydv1alpha1.Agent,
 			routeRefusedMessage("this pass could not re-read it"), note)
 	}
 	if stored.policyUnattached {
-		held := policyUnattachedMessage("this pass could not re-read it", false)
+		held := policyBrokenMessage(clauseUnknown, "this pass could not re-read it", false)
 		holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, note)
 		holdGovernance(agent, conds, held, note)
 	}
