@@ -52,7 +52,15 @@ jobs:
 
       # Version comes from web/package.json#packageManager; naming it twice
       # would let the two drift.
+      #
+      # package_json_file is required and not optional polish: `defaults.run`
+      # applies to `run` steps only, so this action executes at the repository
+      # root, where there is no package.json at all — the workspace lives one
+      # level down. Without it the action fails with "No pnpm version is
+      # specified", which is how this line came to exist.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: web/package.json
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
