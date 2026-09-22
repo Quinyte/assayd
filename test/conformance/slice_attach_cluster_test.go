@@ -25,9 +25,12 @@
 //   - the route's `<agent>-auth` reported NOT ATTACHED, on the synthetic
 //     `StatusSummary` ancestor: the route answers 200 to an anonymous request.
 //     A live authentication bypass, which is what A80's fail-open half fears.
-//     Reaching it needs an EDIT to the policy's own spec, so the policy no
-//     longer renders to `status.auth.appliedDigest` and A80's own precondition
-//     excludes it.
+//     Reaching it needs an EDIT to the policy's own spec — which does NOT put
+//     it outside §5's precondition, because that comparison is render against
+//     render (`reassertServedPolicy` digests the compiler's output, never the
+//     stored object). The operator judges the state AND repairs it on the same
+//     pass, so this 200 is a window rather than a standing hole; §8.1 case 19
+//     (f) pins that sequence, where the operator runs and this suite's does not.
 //   - the policy reported `Accepted=True` with reason `PartiallyValid`, while
 //     it stays attached: the route keeps answering 401. Reaching it needs no
 //     edit to the policy at all — an administrator's key ConfigMap does it —
@@ -38,6 +41,8 @@
 package conformance
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -54,16 +59,21 @@ import (
 // carries only conditions observed at the policy's CURRENT generation and
 // `want` accepts the report, then returns it.
 //
-// The generation gate is statusIsCurrent's rule, applied here for the same
-// reason: a report read immediately after a patch is the previous reconcile's
-// verdict. It is applied per READ rather than once, because a policy whose
-// translation fails can leave one condition a generation behind the other —
-// measured on 1.5.0 for an unparseable CEL expression, where `Accepted` moved
-// to the new generation and `Attached` stayed on the old one. That is also why
-// the timeout prints the last RAW read, stale conditions and all: a case that
-// hits the split-generation hazard would otherwise time out reporting nothing
-// at all, which is the one failure mode this file documents and would then not
-// diagnose.
+// The generation gate here is statusIsCurrent's, and it is STRICTER than
+// `policyReport`'s on purpose: this reader rejects the whole read while ANY
+// condition on the chosen ancestor is at another generation, where
+// `policyReport` skips the stale condition, counts the rest, and does not gate
+// the synthetic ancestor at all. That is a test's choice, not a transcription
+// of the code — a case that measured a shape half of whose report was a
+// generation old would be measuring two moments — and it is why the rule lives
+// here rather than in ancestor.go beside the ones that ARE transcribed.
+//
+// It matters because a policy whose translation fails can leave one condition
+// a generation behind the other: measured on 1.5.0 for an unparseable CEL
+// expression, where `Accepted` moved to the new generation and `Attached`
+// stayed on the old one. That is also why the timeout prints the last RAW
+// read, stale conditions and all — a case that hit that hazard would otherwise
+// time out reporting nothing at all.
 func awaitPolicyAncestor(t *testing.T, name string, timeout time.Duration,
 	why string, want func(ancestorReport) bool) ancestorReport {
 	t.Helper()
@@ -116,6 +126,14 @@ func readPolicyAncestor(t *testing.T, name string) (rep ancestorReport, raw stri
 	if len(obj.Status.Ancestors) == 0 {
 		return ancestorReport{}, "the policy carries no ancestor at all", false
 	}
+	// policyReport's own scan, twice over: the synthetic ancestor wins wherever
+	// it appears and short-circuits, and among the real Gateway's entries the
+	// LAST one wins, because `ours = m` is re-assigned rather than guarded.
+	// Both details matter and one of them is measured: on a policy with two
+	// targetRefs of which one does not resolve, 1.5.0 writes BOTH ancestors at
+	// the current generation — the synthetic for the ref that did not resolve
+	// and the real Gateway, `Attached=True`, for the one that did
+	// (`research/a80-policy-half-conformance-2026-09.md`, row 15).
 	chosen := -1
 	for i, a := range obj.Status.Ancestors {
 		r := a.AncestorRef
@@ -123,7 +141,7 @@ func readPolicyAncestor(t *testing.T, name string) (rep ancestorReport, raw stri
 			chosen = i
 			break
 		}
-		if chosen < 0 && r.Group == "gateway.networking.k8s.io" && r.Kind == "Gateway" &&
+		if r.Group == "gateway.networking.k8s.io" && r.Kind == "Gateway" &&
 			r.Name == sliceGateway && r.Namespace == sliceGatewayNS {
 			chosen = i
 		}
@@ -138,8 +156,7 @@ func readPolicyAncestor(t *testing.T, name string) (rep ancestorReport, raw stri
 	rep = ancestorReport{
 		Group: a.AncestorRef.Group, Kind: a.AncestorRef.Kind,
 		Name: a.AncestorRef.Name, Namespace: a.AncestorRef.Namespace,
-		Synthetic: a.AncestorRef.Group == "agentgateway.dev" && a.AncestorRef.Name == "StatusSummary",
-		Conds:     map[string]ancestorCondition{},
+		Conds: map[string]ancestorCondition{},
 	}
 	stale := []string{}
 	for _, c := range a.Conditions {
@@ -226,6 +243,18 @@ func requireRouteAccepted(t *testing.T, route, why string) {
 		why, sliceNS, route, controller.AgentgatewayControllerName, sliceGatewayNS, sliceGateway)
 }
 
+// keyCanary is the freshness control for the key-set case: a VALID key, in a
+// group no `<agent>-auth` admits, written in the same ConfigMap as the entry
+// the controller rejects. Its 403 is what makes that ConfigMap's presence in
+// the data plane observable from a request.
+const keyCanary = "conf-canary-key"
+
+// sha256Hex is the hash form agentgateway reads a ConfigMap-sourced key in.
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
 // livePolicy reads one policy back as the unstructured object compiler.Digest
 // takes, so a digest can be computed over what the CLUSTER holds rather than
 // over what the test believes it wrote.
@@ -243,10 +272,15 @@ func livePolicy(t *testing.T, name, why string) *unstructured.Unstructured {
 }
 
 // requireDigestUnchanged requires that the policy AS THE CLUSTER HOLDS IT still
-// renders to the digest the compiler gave for this Agent — A80's precondition,
-// "renders to `status.auth.appliedDigest`", checked against the live object.
-// It is what separates a state the operator's judgement would enter from one
-// its own drift check would overwrite first.
+// renders to the digest the compiler gave for this Agent.
+//
+// It is NOT §5's precondition, and saying so is the correction A82's critique
+// forced: that precondition compares the compiler's render against
+// `appliedDigest`, which is a render digest too, so it is invariant under an
+// out-of-band edit and never excludes one. This checks the STORED object, which
+// is a different and narrower question — did the stimulus leave the policy
+// byte-identical to what the operator would write? — and it is what tells case
+// (A)'s administrator-caused break apart from case (B)'s hand edit.
 func requireDigestUnchanged(t *testing.T, agent, why string) {
 	t.Helper()
 	want, err := compiler.Digest(authPolicy(t, agent))
@@ -314,10 +348,11 @@ func TestSliceAPolicyBrokenByItsKeySetStaysAttachedAndKeepsRefusing(t *testing.T
 	// THE BLAST RADIUS IS THE WHOLE NAMESPACE while this exists. Every
 	// `<agent>-auth` in sliceNS selects key sets by the same constant label
 	// (compiler.APIKeySourceLabel), so one rejected entry puts every policy
-	// here at PartiallyValid until the Cleanup deletes it. That is safe only
-	// because nothing in this package calls t.Parallel(); adding it to any
-	// case in this namespace breaks that, and the same fan-out is the
-	// production consequence A82 records in §5.
+	// here at PartiallyValid until the Cleanup deletes it. Nothing enforces
+	// that no case here runs in parallel — Go runs them sequentially only
+	// because none calls t.Parallel(), and no gate would catch one that did —
+	// so this is a standing hazard for the next editor and not a guarantee.
+	// The same fan-out is the production consequence A82 records in §5.
 	badKeys := "conf-slice-rejected-keys-" + runID
 	if err := apply(t, fmt.Sprintf(`
 apiVersion: v1
@@ -327,8 +362,10 @@ metadata:
   namespace: %s
   labels: {%s: %q}
 data:
-  conf-rejected-entry: '{"key":"plaintext-not-a-hash"}'`,
-		badKeys, sliceNS, compiler.APIKeySourceLabel, compiler.APIKeySourceValue)); err != nil {
+  conf-rejected-entry: '{"key":"plaintext-not-a-hash"}'
+  %s: '{"keyHash":"sha256:%s","metadata":{"group":"conf-canary"}}'`,
+		badKeys, sliceNS, compiler.APIKeySourceLabel, compiler.APIKeySourceValue,
+		keyCanary, sha256Hex(keyCanary))); err != nil {
 		t.Fatal(err)
 	}
 	deleteAndWaitLater(t, "configmap", sliceNS, badKeys)
@@ -353,7 +390,7 @@ data:
 	// attached shape, not case (B)'s. All four ref fields, because
 	// policyReport compares all four and an upstream rename of any of them
 	// takes A80's policy half silent.
-	if rep.Synthetic || rep.Conds["Attached"].Status != "True" {
+	if rep.Synthetic() || rep.Conds["Attached"].Status != "True" {
 		t.Fatalf("this case is the ATTACHED break; agentgateway reported the unattached one "+
 			"instead, which is case (B)'s state: %s", rep)
 	}
@@ -372,6 +409,21 @@ data:
 	// The two facts that make this A80's POLICY half and not its route half.
 	requireRouteAccepted(t, route, "the key-set break")
 	requireDigestUnchanged(t, agent, "the key-set break")
+
+	// THE CONTROL, and the case says nothing without it. The three 401s below
+	// are measured through the data plane while the break is read from the
+	// CONTROL plane, so a 401 served from configuration the proxy loaded before
+	// the ConfigMap existed would be indistinguishable from a 401 served under
+	// it. `keyCanary` is a VALID entry in a group the policy does not admit,
+	// written in the SAME ConfigMap as the rejected one: 403 means the proxy
+	// authenticated it, which it can only do from that ConfigMap, so the
+	// ConfigMap is live and the 401s that follow are measured under it. 401
+	// here would mean the key is unknown — the ConfigMap not loaded — and the
+	// case would be measuring stale config.
+	awaitCode(t, gw, servingPort, host, cardPath, keyCanary, 403, []int{401},
+		2*time.Minute,
+		"a valid key in another group, written in the REJECTED ConfigMap: until this answers 403 "+
+			"the proxy has not loaded that ConfigMap and no 401 below is evidence about it")
 
 	// The number §8.1 asks this case to record.
 	for i := 0; i < 3; i++ {
@@ -395,8 +447,16 @@ data:
 	awaitPolicyAncestor(t, policy, 2*time.Minute,
 		"the report clearing once the rejected entry is gone",
 		func(a ancestorReport) bool { return a.converged() })
+	// Both numbers again, not only the admitted key: the case's claim is that
+	// the break changed what the Gateway REPORTS and not what the route DOES,
+	// and that is only shown by measuring the route on both sides of it.
+	expectCode(t, gw, servingPort, host, cardPath, "", 401,
+		"the anonymous request after the rejected key set is gone: unchanged, which is the point")
 	expectCode(t, gw, servingPort, host, cardPath, keyTeam, 200,
 		"the admitted key after the rejected key set is gone")
+	expectCode(t, gw, servingPort, host, cardPath, keyCanary, 401,
+		"the canary after its ConfigMap is gone: unknown again, so the control was measuring that "+
+			"ConfigMap and not something else")
 }
 
 // ---- (B) the break that is a bypass, and needs an edit to reach ------------
@@ -418,12 +478,20 @@ data:
 //   - The route is what serves it: the same request got 401 a moment earlier
 //     and gets 401 again when the `sectionName` is removed, so the 200 is the
 //     policy's absence and not a route the case knocked over.
-//   - Reaching it took an EDIT to the policy's spec, which no other stimulus
-//     tried avoided (docs/research/a80-policy-half-conformance-2026-09.md), so
-//     the live policy no longer renders to `status.auth.appliedDigest` and
-//     A80's own precondition would not judge it. The case asserts that too, as
-//     the finding it is: the state exists, and the operator's judgement of it
-//     is not reachable through this stimulus.
+//   - Reaching it took an EDIT to the policy's spec. That does NOT put the
+//     state beyond the operator: §5's precondition compares the compiler's
+//     RENDER against `appliedDigest`, itself a render digest, so an
+//     out-of-band edit is invisible to it. The operator judges this state and
+//     `writeAuthPolicy` repairs the spec on the same pass — entered, reported,
+//     repaired — which is why the case asserts the live digest has CHANGED and
+//     then, after the restore, that it is back. What the digest assertion pins
+//     here is that the stimulus really did drift the stored object, so the
+//     envtest row that measures the repair is measuring the same thing this
+//     case measured at the gateway.
+//   - Entering it needs an identity that can write a policy in a run
+//     namespace, which a chart install reserves to the operator and
+//     `admission.extraOperators`. This cluster installs no chart, so the case
+//     writes it as cluster-admin.
 func TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen(t *testing.T) {
 	gw := sliceFixture(t)
 	agent := agentName("unattached")
@@ -506,9 +574,9 @@ func TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got == want {
-		t.Fatalf("the edited policy still digests to the compiler's %s. If that ever becomes "+
-			"true, A80's policy half is reachable through this stimulus and the finding in "+
-			"docs/research/a80-policy-half-conformance-2026-09.md is stale", want)
+		t.Fatalf("the edited policy still digests to the compiler's %s, so the stimulus did not "+
+			"drift the stored object and this case is not the state §8.1 case 19 (f)'s repair row "+
+			"measures the operator against", want)
 	}
 
 	// Removing the sectionName restores the refusal, which is what makes the
@@ -523,4 +591,156 @@ func TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen(t *testing.T) {
 	awaitCode(t, gw, servingPort, host, cardPath, "", 401, []int{200}, 2*time.Minute,
 		"the anonymous request once <agent>-auth attaches again")
 	requireDigestUnchanged(t, agent, "the restored policy")
+}
+
+// ---- (C) both ancestors at once: the shape that breaks policyReport ---------
+
+// TestSliceAPartlyResolvedPolicyReportsBothAncestors measures a shape nobody
+// had recorded and that A82's critique found by asking the right question: what
+// does 1.5.0 write when a policy has SEVERAL targets and only some resolve?
+//
+// It writes BOTH ancestors, at the policy's current generation — the synthetic
+// `StatusSummary` for the ref that did not resolve, and the real Gateway's,
+// `Accepted=True`/`Valid` and **`Attached=True`**, for the one that did — and
+// the route the resolved ref names goes on refusing anonymous requests `401`.
+// So the synthetic ancestor does not mean "this policy attached to nothing"; it
+// means "at least one of its targets did not resolve".
+//
+// Two things follow, and the case exists for both.
+//
+//   - **The mechanism behind A82's negative result.** The compiler emits ONE
+//     `targetRef`, so for an `<agent>-auth` the synthetic ancestor and
+//     non-attachment do coincide — and the only way to make that one ref fail
+//     to resolve is to change the ref or remove the route, which is why every
+//     bypass stimulus had to edit the policy's spec. That is a reason, not a
+//     stimulus count.
+//   - **A second instance of the rule-8 defect, worse than the first.**
+//     `policyReport` short-circuits on the synthetic ancestor wherever it
+//     appears, so on this shape the operator would report
+//     `AuthPolicyNotAttached` against a contemporaneous `Attached=True` at the
+//     same generation, while the route is measured enforcing. The comment in
+//     `internal/controller/authserved.go` justifying the short-circuit — "the
+//     last thing the Gateway said is that this policy attached to nothing" — is
+//     measured FALSE here. Recorded in §5 and A82 as owed; not fixed in a
+//     measurement.
+//
+// It is out of the operator's reach today for the same reason as case (B): the
+// compiler emits one ref and repairs a second away. It is measured because the
+// design's reading of the synthetic ancestor rests on what it means, and it
+// means less than the code assumes.
+func TestSliceAPartlyResolvedPolicyReportsBothAncestors(t *testing.T) {
+	gw := sliceFixture(t)
+	agent := agentName("partlyresolved")
+	host := publishedWithAuth(t, gw, agent)
+	route, _ := compiler.ServingRouteName(agent)
+	policy, _ := compiler.AuthPolicyName(agent)
+
+	awaitPolicyAncestor(t, policy, 2*time.Minute,
+		"the served <agent>-auth before a second target is added",
+		func(a ancestorReport) bool { return a.converged() })
+
+	absent := route + "-absent"
+	patch := fmt.Sprintf(
+		`{"spec":{"targetRefs":[`+
+			`{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","name":%q},`+
+			`{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","name":%q}]}}`, route, absent)
+	if out, err := kubectl(t, "patch", "agentgatewaypolicy", policy, "-n", sliceNS,
+		"--type=merge", "-p", patch); err != nil {
+		t.Fatalf("give <agent>-auth a second target that does not resolve: %s", out)
+	}
+
+	// The reader takes the ancestor policyReport would take, which is the
+	// synthetic one; the raw list is read beside it, because the whole point is
+	// the OTHER entry the operator never looks at.
+	rep := awaitPolicyAncestor(t, policy, 2*time.Minute,
+		"a partly resolved <agent>-auth",
+		func(a ancestorReport) bool { return a.Synthetic() })
+	if got := rep.Conds["Attached"]; got.Status != "False" {
+		t.Errorf("the synthetic ancestor reads Attached=%s; 1.5.0 wrote False for the ref that "+
+			"did not resolve: %s", got.Status, rep)
+	}
+	if !strings.Contains(rep.Conds["Attached"].Message, absent) {
+		t.Errorf("the synthetic ancestor does not name the ref that did not resolve: %q",
+			rep.Conds["Attached"].Message)
+	}
+
+	real := requireRealGatewayAncestor(t, policy)
+	if real.Conds["Attached"].Status != "True" || real.Conds["Accepted"].Reason != "Valid" {
+		t.Fatalf("the real Gateway's ancestor reads %s; this case is about it saying the policy IS "+
+			"attached while the synthetic one says it is not", real)
+	}
+	if a, b := real.Conds["Attached"].ObservedGeneration,
+		rep.Conds["Attached"].ObservedGeneration; a != b {
+		t.Errorf("the two ancestors were observed at generations %d and %d; the finding is that they "+
+			"are CONTEMPORANEOUS, and at different generations it would be an ordinary lag", a, b)
+	}
+
+	requireRouteAccepted(t, route, "the partly resolved policy")
+	// And the route enforces. This is the number that makes the short-circuit
+	// wrong rather than merely imprecise.
+	for i := 0; i < 3; i++ {
+		expectCode(t, gw, servingPort, host, cardPath, "", 401,
+			"an anonymous request while the Gateway reports BOTH a synthetic Attached=False and a "+
+				"real Attached=True at the same generation: policyReport would call this "+
+				"AuthPolicyNotAttached, and the route is enforcing")
+	}
+	expectCode(t, gw, servingPort, host, cardPath, keyTeam, 200,
+		"the admitted key on a partly resolved policy")
+
+	if out, err := kubectl(t, "patch", "agentgatewaypolicy", policy, "-n", sliceNS,
+		"--type=json", "-p", `[{"op":"remove","path":"/spec/targetRefs/1"}]`); err != nil {
+		t.Fatalf("remove the second target: %s", out)
+	}
+	awaitPolicyAncestor(t, policy, 2*time.Minute,
+		"the synthetic ancestor going once the second target does",
+		func(a ancestorReport) bool { return a.converged() })
+	requireDigestUnchanged(t, agent, "the restored policy")
+}
+
+// requireRealGatewayAncestor reads the assayd Gateway's OWN ancestor entry,
+// which readPolicyAncestor deliberately does not return when the synthetic one
+// is present — because policyReport does not either. Only case (C) needs it,
+// and it needs it precisely to show what the operator cannot see.
+func requireRealGatewayAncestor(t *testing.T, name string) ancestorReport {
+	t.Helper()
+	out, err := kubectl(t, "get", "agentgatewaypolicy", name, "-n", sliceNS, "-o", "json")
+	if err != nil {
+		t.Fatalf("read policy %s/%s: %s", sliceNS, name, out)
+	}
+	var obj struct {
+		Metadata struct {
+			Generation int64 `json:"generation"`
+		} `json:"metadata"`
+		Status struct {
+			Ancestors []struct {
+				AncestorRef struct {
+					Group, Kind, Name, Namespace string
+				} `json:"ancestorRef"`
+				Conditions []struct {
+					Type, Status, Reason, Message string
+					ObservedGeneration            int64 `json:"observedGeneration"`
+				} `json:"conditions"`
+			} `json:"ancestors"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(out), &obj); err != nil {
+		t.Fatalf("parse policy %s/%s: %v", sliceNS, name, err)
+	}
+	for _, a := range obj.Status.Ancestors {
+		r := a.AncestorRef
+		if r.Group != "gateway.networking.k8s.io" || r.Kind != "Gateway" ||
+			r.Name != sliceGateway || r.Namespace != sliceGatewayNS {
+			continue
+		}
+		rep := ancestorReport{Group: r.Group, Kind: r.Kind, Name: r.Name, Namespace: r.Namespace,
+			Conds: map[string]ancestorCondition{}}
+		for _, c := range a.Conditions {
+			rep.Conds[c.Type] = ancestorCondition{Status: c.Status, Reason: c.Reason,
+				Message: c.Message, ObservedGeneration: c.ObservedGeneration}
+		}
+		return rep
+	}
+	t.Fatalf("policy %s/%s carries no ancestor for Gateway %s/%s beside the synthetic one, so this "+
+		"case has nothing to compare", sliceNS, name, sliceGatewayNS, sliceGateway)
+	return ancestorReport{}
 }

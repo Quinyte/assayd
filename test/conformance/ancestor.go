@@ -56,9 +56,15 @@ type ancestorCondition struct {
 type ancestorReport struct {
 	Group, Kind, Name, Namespace string
 	Conds                        map[string]ancestorCondition
-	// Synthetic is what policyReport keys the fail-open signal on, spelled the
-	// same way, so the two cannot drift apart silently.
-	Synthetic bool
+}
+
+// Synthetic is agentgateway's `StatusSummary` ancestor, spelled as
+// `policyReport` keys the fail-open signal on it: the GROUP and the NAME
+// together. It is DERIVED rather than stored, so a caller — a test table
+// included — cannot set it to something the two ref fields contradict, and the
+// rule is exercised by every row rather than asserted in one.
+func (a ancestorReport) Synthetic() bool {
+	return a.Group == "agentgateway.dev" && a.Name == "StatusSummary"
 }
 
 // policyAnswer is `policyReport`'s three answers, spelled as §3.3.3 spells
@@ -87,7 +93,7 @@ const (
 // The caller has already restricted this to conditions at the policy's current
 // generation, which is where `policyReport`'s generation gate lives.
 func (a ancestorReport) answer() policyAnswer {
-	if a.Synthetic {
+	if a.Synthetic() {
 		return answerBroken
 	}
 	known := 0
@@ -122,7 +128,7 @@ func (a ancestorReport) broken() bool { return a.answer() == answerBroken }
 func (a ancestorReport) converged() bool {
 	acc, hasAcc := a.Conds["Accepted"]
 	att, hasAtt := a.Conds["Attached"]
-	return !a.Synthetic && hasAcc && hasAtt &&
+	return !a.Synthetic() && hasAcc && hasAtt &&
 		acc.Status == "True" && acc.Reason == "Valid" && att.Status == "True"
 }
 

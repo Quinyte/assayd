@@ -99,9 +99,34 @@ shipped are built on rows 14 and 4, whose conditions move together.
 - **Row 4 — the break that is a bypass.** The Gateway attaches `<agent>-auth` to
   nothing, on the synthetic ancestor, while accepting the route. **The route
   answers 200, with the backend's own body.** A80's fail-open half is real at
-  the gateway. But reaching it took an edit to the policy's own `targetRefs`, so
-  the live policy no longer renders to `appliedDigest` — and A80's precondition
-  therefore excludes it. Rows 6 and 13 are the same shape and the same 200.
+  the gateway. Rows 6 and 13 are the same shape and the same 200.
+
+  Reaching it took an edit to the policy's own `targetRefs`, and this note's
+  first version read that as putting the state outside §5's precondition. **That
+  was backwards.** The precondition is render against render:
+  `reassertServedPolicy` digests what `compiler.AuthPolicy` renders and compares
+  it to `appliedDigest`, itself a render digest — §3.3.3 says "is not a digest of
+  the stored object" — so an out-of-band edit is invisible to it. The state IS
+  judged, and the sequence is **entered, reported, repaired on one pass**: the
+  guards pass, `writeAuthPolicy` overwrites the drifted `spec`, and the repaired
+  object is what `judgeServed` judges, on a status whose last word is still the
+  synthetic ancestor. So the same pass raises `AuthPolicyNotAttached` and closes
+  the hole it reports, and the 200 is a window, not a standing hole. Pinned in
+  envtest, where the operator runs (§8.1 case 19 (f)), with two mutations against
+  the operator itself. **A80's premise is satisfied, not falsified.**
+
+- **Row 15 — what the synthetic ancestor MEANS, and the mechanism behind the
+  negative result.** Give a policy two `targetRefs` of which one does not
+  resolve, and 1.5.0 writes BOTH ancestors at the policy's current generation:
+  the synthetic one, `Attached=False`, naming the ref that failed, and the real
+  Gateway's, `Accepted=True`/`Valid` and **`Attached=True`**, for the one that
+  did — with the route enforcing `401`. Nobody had recorded that. It means the
+  synthetic ancestor says "at least one target did not resolve", not "this
+  policy attached to nothing". An `<agent>-auth` has exactly ONE `targetRef`, so
+  for it the two coincide, and the only ways to make that ref fail are to remove
+  the route — which fires the route half — or to edit the ref, which the next
+  pass repairs. That is why no stimulus reached a standing bypass: a reason, not
+  an absence.
 
 ## What this shows
 
@@ -113,10 +138,12 @@ shipped are built on rows 14 and 4, whose conditions move together.
    reaches it.** In row 14 the route refuses anonymous requests. §5's
    "the route may be answering with no credential required" is a hedge that
    holds, but the reachable shape is the one where it is false.
-3. **The bypass is real, in the shape the precondition excludes.** A policy the
-   Gateway attaches to nothing leaves a published route wide open — 200 to
-   anyone. Nothing in this probe reached that shape with a policy the operator
-   would still recognise as its own.
+3. **The bypass is real, and the operator both reports it and closes it.** A
+   policy the Gateway attaches to nothing leaves a published route wide open —
+   200 to anyone — and the precondition does NOT exclude it, because the digest
+   comparison is render against render. One pass raises `AuthPolicyNotAttached`
+   and repairs the spec: entered, reported, repaired. The 200 is a window
+   between the edit and the next reconcile.
 4. **The operator's own report names the wrong cause in the reachable shape.**
    In row 14 the Gateway says `Attached=True`, reason `Attached`, "Attached to
    all targets". `internal/controller`'s `policyUnattachedMessage` opens "this
@@ -168,9 +195,29 @@ shipped are built on rows 14 and 4, whose conditions move together.
   what was tried, and what was tried is the table above.
 - **`Attached=False` on the REAL Gateway ancestor was produced by nothing
   tried**, the same standing `Accepted=False` has. It is the shape §8.1 case 19
-  (f)'s envtest fixture writes, so the primary fixture for the operator's policy
-  half drives a state 1.5.0 was measured not to produce, while the shape that IS
-  reachable is driven by no operator test at all.
+  (f)'s `unattachPolicy` writes, so that fixture drives a state 1.5.0 was
+  measured not to produce; `summarisePolicy` is the reachable sibling. The
+  fixture is kept — the arm is live and the CRD asserts the shape — and the
+  `PartiallyValid` row is added beside it. `policyReport`'s reason-mismatch arm
+  was never untested: `authserved_unit_test.go` drives it and `make unit` is in
+  CI. What was missing is an ENVTEST fixture, the layer where the reason, the
+  message and the conditions are composed.
+- **The bypass needs an identity that can write a policy in a run namespace.**
+  `assayd-gateway-policies` reserves that to the operator and
+  `admission.extraOperators` (design 07 A6.7). This cluster installs no chart
+  and no admission policy, so every stimulus here was applied as cluster-admin.
+  What is measured is agentgateway's behaviour; who can provoke it on a real
+  install is the chart's question and is not measured here.
+- **A second instance of the rule-8 defect, from row 15.** `policyReport`
+  short-circuits on the synthetic ancestor wherever it appears, so on that shape
+  the operator would report `AuthPolicyNotAttached` against a contemporaneous
+  `Attached=True` at the same generation, with the route measured enforcing. The
+  comment justifying the short-circuit — "the last thing the Gateway said is
+  that this policy attached to nothing" — is false there. Unreachable for a
+  one-`targetRef` `<agent>-auth` today; recorded as design 03 **D5(c)**.
+- **Certainty about the shapes still unproduced needs agentgateway's SOURCE**,
+  not more stimuli. Fifteen inputs bound the claim; the mechanism in row 15
+  explains it.
 - **It does not show what the OPERATOR does in either state.** No operator runs
   here. §8.1 case 19 (f) is still the only thing that measures the reaction, and
   it still writes the report rather than producing it.
@@ -188,7 +235,11 @@ shipped are built on rows 14 and 4, whose conditions move together.
   asserting the report, the accepted route, the unchanged digest, and 401.
 - `TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen` — row 4, asserting
   the synthetic ancestor, the accepted route, **200 with a body**, that the
-  digest has CHANGED, and that removing the `sectionName` restores the 401.
+  stimulus really drifted the stored object, and that removing the
+  `sectionName` restores the 401.
+- `TestSliceAPartlyResolvedPolicyReportsBothAncestors` — row 15, asserting both
+  ancestors at one generation, the real one reading `Attached=True`, and the
+  route enforcing `401`.
 
 Each mutation is one edit, rebuilt, run against both cases, and restored from a
 backup copy.
@@ -203,6 +254,9 @@ backup copy.
 | expect the synthetic ancestor under another `group` | KILLED — `policyReport` keys the fail-open signal on `group == "agentgateway.dev"` as well as the name, and an upstream rename of either takes A80's policy half silent while the bypass stays real |
 | expect the real Gateway ancestor in another `namespace` | KILLED — `policyReport` compares all four ref fields, so all four are asserted |
 | wrong `controllerName` in the route gate | KILLED — the gate's match on agentgateway's controller is live |
+| the canary's hash does not match its key | KILLED — the freshness control fires when the ConfigMap is not what the case thinks |
+| case (C) stops requiring the real ancestor to read `Attached=True` | KILLED |
+| case (C) expects a partly resolved policy to stop enforcing | KILLED — 29 consecutive 401s |
 
 Five more, against the untagged transcription in `ancestor.go`, run by `make conformance` with no cluster:
 
@@ -213,6 +267,16 @@ Five more, against the untagged transcription in `ancestor.go`, run by `make con
 | stop treating the synthetic ancestor as a break on its own | KILLED |
 | let `converged` accept a reason other than `Valid` | KILLED |
 | let `converged` accept the synthetic ancestor | KILLED |
+| read the synthetic signal from the GROUP alone | KILLED |
+| read the synthetic signal from the NAME alone | KILLED |
+
+And two against the OPERATOR, run in envtest against the repair row §8.1 case 19 (f)
+gains — the only mutations in this change that touch product code:
+
+| mutation | result |
+|---|---|
+| `reassertServedPolicy` digests the STORED object instead of the render — what A82's first draft believed the code did | KILLED: the guard rejects the edited policy and nothing is repaired |
+| `writeAuthPolicy` leaves a drifted `spec` alone | KILLED |
 
 Every mutation here edits the TEST, not product code — no operator runs in this
 suite — so what they pin is agentgateway's output and the cases' assertions.
@@ -233,10 +297,10 @@ where `policyReport` counts it as known and not broken, so a cluster case could
 have gone green on a state the operator treats as clearing. A real cross-check
 needs `policyReport` exported or moved, and is owed.
 
-All twelve `TestSlice` cases pass together on one cluster after these, and the
+All thirteen `TestSlice` cases pass together on one cluster after these, and the
 whole `make conformance-cluster` gate — both phases, both clusters provisioned
-from scratch — passes with no SKIP: phase 2 in 156 s, the two new cases at
-45.7 s and 2.1 s.
+from scratch — passes with no SKIP: phase 2 at 28 PASS, the three new cases at
+23.3 s, 2.1 s and 1.6 s.
 
 The `PartiallyValid` report appeared **26 ms** after the ConfigMap was written,
 on a warm cluster and on a cold one alike; the rest of the key-set case's 45.7 s

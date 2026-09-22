@@ -37,8 +37,7 @@ func TestAncestorReportTranscribesPolicyReport(t *testing.T) {
 	}
 	synthetic := func(conds map[string]ancestorCondition) ancestorReport {
 		return ancestorReport{
-			Group: "agentgateway.dev", Kind: "Gateway", Name: "StatusSummary",
-			Synthetic: true, Conds: conds,
+			Group: "agentgateway.dev", Kind: "Gateway", Name: "StatusSummary", Conds: conds,
 		}
 	}
 	for _, tc := range []struct {
@@ -101,6 +100,31 @@ func TestAncestorReportTranscribesPolicyReport(t *testing.T) {
 			name:   "Accepted=Unknown with the WRONG reason still holds: the reason arm needs an explicit True",
 			rep:    realGW(map[string]ancestorCondition{"Accepted": cond("Unknown", "PartiallyValid"), "Attached": cond("True", "Attached")}),
 			answer: answerHolding,
+		},
+		{
+			name: "a GATEWAY-API ancestor that happens to be named StatusSummary is not synthetic — " +
+				"a Gateway may carry any name, and reading the name alone would call a healthy " +
+				"report a break",
+			rep: ancestorReport{
+				Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "StatusSummary",
+				Namespace: "assayd-gateway",
+				Conds: map[string]ancestorCondition{
+					"Accepted": cond("True", "Valid"), "Attached": cond("True", "Attached")},
+			},
+			answer:    answerHolding,
+			converged: true,
+		},
+		{
+			name: "an agentgateway.dev ancestor that is NOT StatusSummary is not synthetic: the " +
+				"signal is the group AND the name, and dropping either half of that is the " +
+				"mutation this row exists for",
+			rep: ancestorReport{
+				Group: "agentgateway.dev", Kind: "Gateway", Name: "SomethingElse",
+				Conds: map[string]ancestorCondition{
+					"Accepted": cond("True", "Valid"), "Attached": cond("True", "Attached")},
+			},
+			answer:    answerHolding,
+			converged: true,
 		},
 		{
 			name:   "unknown: no conditions on the real Gateway's ancestor",

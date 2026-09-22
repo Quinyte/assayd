@@ -18,6 +18,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/compiler"
 	"github.com/Quinyte/assayd/internal/controller"
 )
 
@@ -118,6 +119,30 @@ func unattachPolicy(t *testing.T, a *assaydv1alpha1.Agent) {
 		"controllerName": "agentgateway.dev/agentgateway",
 		"conditions": []any{policyCondition("Accepted", "True", "Valid", gen),
 			policyCondition("Attached", "False", "NotAttached", gen)},
+	}})
+}
+
+// partiallyValidPolicy makes the assayd Gateway report the shape A82 measured
+// on agentgateway 1.5.0 and the ONE shape of this half known to be reachable
+// with a policy the operator still recognises as its own: `Accepted=True` with
+// a reason other than `Valid`, beside `Attached=True` on the real Gateway
+// ancestor. 1.5.0 writes it whenever the policy's translation partly fails —
+// a rejected entry in a key `ConfigMap` an administrator wrote does it, with
+// nothing in assayd edited (`research/a80-policy-half-conformance-2026-09.md`).
+//
+// It is the row that was missing: `unattachPolicy` writes `Attached=False` on
+// the real ancestor, which 1.5.0 was measured NOT to produce, and
+// `summarisePolicy` writes the synthetic one. This one is neither, and it is
+// the shape the measurement says an operator will actually meet.
+func partiallyValidPolicy(t *testing.T, a *assaydv1alpha1.Agent) {
+	t.Helper()
+	gen := policyExists(t, runNS(a.Namespace), policyNameOf(a)).GetGeneration()
+	reportPolicyAncestors(t, a, []any{map[string]any{
+		"ancestorRef": map[string]any{"group": gatewayv1.GroupName, "kind": "Gateway",
+			"name": "assayd", "namespace": "assayd-gateway"},
+		"controllerName": "agentgateway.dev/agentgateway",
+		"conditions": []any{policyCondition("Accepted", "True", "PartiallyValid", gen),
+			policyCondition("Attached", "True", "Attached", gen)},
 	}})
 }
 
@@ -377,6 +402,86 @@ func TestAServedPolicyTheGatewayDoesNotAttachIsReported(t *testing.T) {
 		acceptRoute(t, a.Namespace, a.Name)
 		summarisePolicy(t, a)
 		unattached(t, a, r, "StatusSummary")
+	})
+	// The shape A82 measured reachable on agentgateway 1.5.0 with a
+	// byte-unchanged policy. Until A82 this half was driven only by shapes
+	// 1.5.0 was measured not to produce, so the one an operator will actually
+	// meet was composed by nothing.
+	t.Run("Accepted=True with a reason other than Valid", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "a80partial")
+		acceptRoute(t, a.Namespace, a.Name)
+		partiallyValidPolicy(t, a)
+		unattached(t, a, r, "PartiallyValid")
+	})
+	// ENTERED, REPORTED, REPAIRED — the sequence A82's first draft got
+	// backwards, and the reason the measured bypass is not a standing hole.
+	//
+	// The precondition §5 states is render against render: reassertServedPolicy
+	// digests compiler.AuthPolicy's output, never the stored object, and
+	// compares that to status.auth.appliedDigest, which is itself a render
+	// digest (§3.3.3, "not a digest of the stored object"). An out-of-band edit
+	// to the policy's spec therefore does NOT take it out of the judgement. It
+	// does the opposite: the guards pass, writeAuthPolicy overwrites the spec
+	// wholesale, and the repaired object is what judgeServed then judges — with
+	// a status whose last word is still the Gateway's, which policyReport
+	// deliberately does not generation-gate for the synthetic ancestor.
+	//
+	// So the one pass both RAISES AuthPolicyNotAttached and CLOSES the hole it
+	// reports. Mutations: make reassertServedPolicy digest `existing` instead of
+	// `recorded`, and the repair assertion fails (the guard rejects the edited
+	// policy and nothing is written); make writeAuthPolicy return early on a
+	// spec mismatch, and it fails the same way.
+	t.Run("an out-of-band spec edit is judged AND repaired on the same pass", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "a80repair")
+		acceptRoute(t, a.Namespace, a.Name)
+		want, err := compiler.AuthPolicy(compiler.AuthInput{AgentName: a.Name,
+			AgentNamespace: a.Namespace, AgentUID: a.UID, RunNamespace: runNS(a.Namespace)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantDigest, err := compiler.Digest(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The edit that produced the measured bypass on a cluster: a
+		// sectionName the serving route has no rule for. The Gateway answers
+		// it with the synthetic ancestor, and the route stays accepted.
+		p := policyExists(t, runNS(a.Namespace), policyNameOf(a))
+		refs, _, err := unstructured.NestedSlice(p.Object, "spec", "targetRefs")
+		if err != nil || len(refs) != 1 {
+			t.Fatalf("read the policy's targetRefs: %v (%d refs)", err, len(refs))
+		}
+		refs[0].(map[string]any)["sectionName"] = "no-such-rule"
+		if err := unstructured.SetNestedSlice(p.Object, refs, "spec", "targetRefs"); err != nil {
+			t.Fatal(err)
+		}
+		if err := k8s.Update(context.Background(), p); err != nil {
+			t.Fatalf("point the policy at a rule the route does not have: %v", err)
+		}
+		if edited, err := compiler.Digest(policyExists(t, runNS(a.Namespace), policyNameOf(a))); err != nil {
+			t.Fatal(err)
+		} else if edited == wantDigest {
+			t.Fatalf("the edit did not change the stored policy's digest, so this row measures nothing")
+		}
+		summarisePolicy(t, a)
+
+		reconcileOnce(t, r, a)
+		// REPORTED: the guards did not exclude it.
+		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue,
+			"AuthPolicyNotAttached")
+		mustContain(t, c, "PolicyApplyIncomplete", "no credential required")
+		condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+		// REPAIRED: the same pass put the spec back, so the bypass measured on
+		// a cluster closes itself rather than standing.
+		got, err := compiler.Digest(policyExists(t, runNS(a.Namespace), policyNameOf(a)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != wantDigest {
+			t.Errorf("the pass left the edited policy in place (digest %s, want the compiler's %s); "+
+				"A82 rests on this pass repairing the spec it judges, which is what makes the "+
+				"measured 200 a window and not a standing hole", got, wantDigest)
+		}
 	})
 	t.Run("a standing ForeignTrafficPolicy keeps the reason", func(t *testing.T) {
 		a, r, _ := servedAPIKeyAgent(t, "a80compose")
