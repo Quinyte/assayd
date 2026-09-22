@@ -23,11 +23,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -58,6 +60,13 @@ const (
 	// the gateway and directory are not implemented; the finalizer is installed
 	// now so that agents created today do not need a migration to acquire it.
 	Finalizer = "assayd.dev/agent-teardown"
+
+	// CondReasonServiceNotRendered names a revision Service whose shape this
+	// operator never renders (design 02 §3.2, A77). Not "…NotClusterIP": one of
+	// the shapes it covers, a headless Service, IS of type ClusterIP, and a
+	// reason that contradicts the object an operator is looking at reads as the
+	// operator being broken. Rule 8 is about naming the real cause.
+	CondReasonServiceNotRendered = "RevisionServiceNotRendered"
 
 	// DefaultRevisionHistoryLimit is the number of revisions retained IN ADDITION
 	// TO the active one and any in-flight candidate (design 02 §3.3). Counting
@@ -570,6 +579,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				// only in operator logs. A rejected render is a spec the user can fix.
 				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "WorkloadRejected", err.Error())
 				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "WorkloadRejected", err.Error())
+				// Another exit before the -auth step: see carryGatewayReport.
+				r.carryGatewayReport(conds, &agent)
 				status.Phase = assaydv1alpha1.PhaseDegraded
 				status.Conditions = conds.merge(agent.Status.Conditions)
 				status.ObservedGeneration = agent.Generation
@@ -584,13 +595,58 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// backendRef names this object. It is created with the workload and before
 	// readiness is judged, so a revision is never "available" without one.
 	if pin == nil {
-		if err := r.ensureService(ctx, &agent, runNS, desired, desiredDigest); err != nil {
+		if err := r.ensureService(ctx, &agent, runNS, desired, desiredDigest, status); err != nil {
 			if collision := (*revisionCollisionError)(nil); errors.As(err, &collision) {
-				return ctrl.Result{}, r.reportCollision(ctx, &agent, status, conds, collision)
+				collision.servingNow = r.routeNames(status, desired)
+				// Requeued, unlike the workload's identical exit, because the remedy
+				// every one of these messages names — "delete that Service" — is an
+				// event nothing here watches. SetupWithManager watches no
+				// corev1.Service, and a refused object carries none of the labels
+				// byAgentLabels reads even if it did, so without this the Agent sat
+				// Degraded until the manager's ~10h resync and the message promised a
+				// recovery that did not arrive. The workload's exit has the same
+				// defect and design 02 §5 now says so.
+				return ctrl.Result{RequeueAfter: RefusedServiceRecheck},
+					r.reportCollision(ctx, &agent, status, conds, collision)
+			}
+			// A Service shape the operator never renders. Reported under its own
+			// reason rather than folded into RevisionHashCollision: nothing
+			// collided, and a condition that names a cause nobody checked is the
+			// loud-and-wrong half of rule 8. Returning here is what keeps the
+			// revision unpromoted and reconcileGateway unreached, so no route is
+			// ever emitted naming the object this refuses.
+			if shape := (*serviceShapeError)(nil); errors.As(err, &shape) {
+				msg := shape.Error()
+				if r.routeNames(status, desired) {
+					// The subjunctive in shape.Error() — "adopting it as it stands
+					// WOULD leave the route naming it" — is the wrong tense for a
+					// revision that is already serving: the route names it now, this
+					// refusal does not withdraw it, and a reader told only what
+					// adopting would cost concludes nothing is currently wrong. The
+					// missing-policy Lock says "The route is not withdrawn." in the
+					// same words for the same reason (authtxn.go).
+					msg += servedRouteNote
+				}
+				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, CondReasonServiceNotRendered, msg)
+				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, CondReasonServiceNotRendered, msg)
+				// This exit returns BEFORE the -auth step, and design 03's two
+				// conditions are owned and not sticky, so merge would CLEAR them —
+				// retracting A81's announced fail-open on an Agent whose route is
+				// still published and still serving. That is A47's defect, and this
+				// pass has checked nothing that would justify withdrawing either
+				// report.
+				r.carryGatewayReport(conds, &agent)
+				status.Phase = assaydv1alpha1.PhaseDegraded
+				status.Conditions = conds.merge(agent.Status.Conditions)
+				status.ObservedGeneration = agent.Generation
+				return ctrl.Result{RequeueAfter: RefusedServiceRecheck},
+					r.writeStatus(ctx, &agent, status)
 			}
 			if apierrors.IsInvalid(err) {
 				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "ServiceRejected", err.Error())
 				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ServiceRejected", err.Error())
+				// And another, eight lines from the one above: see carryGatewayReport.
+				r.carryGatewayReport(conds, &agent)
 				status.Phase = assaydv1alpha1.PhaseDegraded
 				status.Conditions = conds.merge(agent.Status.Conditions)
 				status.ObservedGeneration = agent.Generation
@@ -1019,6 +1075,12 @@ const RevisionDigestAnnotation = "assayd.dev/revision-digest"
 // workload name. It is terminal by design: see ensureWorkload.
 type revisionCollisionError struct {
 	name, existing, desired string
+	// ns is the run namespace, set on the Service paths. The remedy every
+	// message ends with is "delete that Service", and the run namespace is a
+	// truncate-and-hash of the source namespace — nothing a human types from
+	// memory — so a message that names only the object names half the command.
+	// The shape errors carry it; these did not.
+	ns string
 	// kind names the object when it is not a Deployment, so a Service collision
 	// does not report itself as a workload one and send an operator to the wrong
 	// object. Empty means workload.
@@ -1027,14 +1089,88 @@ type revisionCollisionError struct {
 	// workload, so the message can say "the active revision …" instead of
 	// rendering a role name into a "workload %s" slot.
 	role string
+	// servingNow says a serving route EXISTS and names this object, so the
+	// message can use the present tense and say the refusal withdraws nothing.
+	// It is two facts, not one: the object belongs to the ACTIVE revision AND
+	// the gateway is declared on. Gated on the revision alone it asserted a
+	// route on the chart's default tier, where gateway.enabled is false and
+	// reconcileGateway emits nothing — sending a reader to look for traffic
+	// that is not flowing, on an object whose own GovernanceSkipped says the
+	// gateway is disabled.
+	servingNow bool
 }
+
+// routeNames answers whether a serving route exists and names this revision's
+// Service — the condition under which a refusal's consequence is present tense
+// rather than hypothetical.
+//
+// THREE facts, and each was added because two were measured to be not enough.
+//   - The gateway is declared on. On the chart's default tier it is not,
+//     reconcileGateway emits no route at all, and a message asserting one sends
+//     the reader to look for traffic that is not flowing.
+//   - The object belongs to the ACTIVE revision. One that never promoted has no
+//     route whatever the gateway is doing — the fixture this amendment is built
+//     on.
+//   - `judgesServed`: design 03 has actually PUBLISHED a route. Promotion
+//     happens before the -auth step, so an Agent can be active with no route at
+//     all — an `oauth` Agent that never compiles is promoted and routeless, and
+//     its own PolicyCompileFailed says "No route is published for this Agent"
+//     while this claimed one carried traffic; an API-key `Create` still probing
+//     has a PREPARED route with no backendRefs, and A75's hold parks one there
+//     indefinitely, which is exactly when someone reads this. `judgesServed` is
+//     false for both and true for a served Agent and a refused `Adopt`.
+//
+// It still reads no route object, so it over-claims for a route a human
+// deleted; this refusal returns before the step that would rebuild it, and
+// design 02 §5 carries that residue rather than pretending otherwise.
+func (r *AgentReconciler) routeNames(status *assaydv1alpha1.AgentStatus, rev string) bool {
+	return r.Gateway.Enabled && status.ActiveRevision == rev && judgesServed(status)
+}
+
+// servedRouteNote is what both Service refusals append when the object they
+// refused belongs to the active revision. The missing-policy Lock says the same
+// thing in the same words (authtxn.go): a report that does not say what is
+// still flowing leaves the reader to guess.
+const servedRouteNote = " This revision is the ACTIVE one, so its serving route already names " +
+	"this Service and carries traffic to whatever it resolves to. The route is not withdrawn."
 
 func (e *revisionCollisionError) Error() string {
 	if e.kind == "service" {
+		remedy := "To recover: delete that Service and let the operator recreate it."
+		if e.servingNow {
+			remedy += servedRouteNote
+		}
+		// A77 gave the Service path the workload's other two refusals, so it needs
+		// the workload's other two messages. Rendering the digest-mismatch prose
+		// for all three would have told an operator that two projections collided
+		// when what actually happened is that nothing vouches for the object.
+		// Present tense ONLY when a route exists and names it. Both grounds
+		// asserted it unconditionally, and the fixture this amendment is built
+		// on — a Service planted at a revision that never promotes — proves the
+		// claim false in the same pass that writes it: the test asserts
+		// activeRevision is empty and that no route names the object.
+		names := "converging it WOULD point the serving route's backendRef at this object"
+		if e.servingNow {
+			names = "the serving route's backendRef names this object"
+		}
+		at := e.name
+		if e.ns != "" {
+			at = e.ns + "/" + e.name
+		}
+		switch e.existing {
+		case "(another agent's)":
+			return fmt.Sprintf("service %s exists in the run namespace and does not carry this "+
+				"Agent's UID, so this operator did not create it for this Agent. Refusing to "+
+				"converge, because %s. %s", at, names, remedy)
+		case "(no stamp)":
+			return fmt.Sprintf("service %s carries no assayd.dev/revision-digest and nothing in "+
+				"status vouches for it, so this operator cannot establish that it created it. "+
+				"Refusing to converge, because %s. %s", at, names, remedy)
+		}
 		return fmt.Sprintf("service %s carries revision digest %s and this revision is %s. Two "+
 			"different projections claim one revision name, so converging it would point this "+
-			"revision's route at another projection's Pods. Refusing. To recover: delete that "+
-			"Service and let the operator recreate it.", e.name, e.existing, e.desired)
+			"revision's route at another projection's Pods. Refusing. %s",
+			at, e.existing, e.desired, remedy)
 	}
 	if e.existing == "(another agent's)" {
 		return fmt.Sprintf("workload %s exists in the run namespace and does not carry this Agent's UID, "+
@@ -1059,6 +1195,23 @@ func (e *revisionCollisionError) Error() string {
 		"that Deployment and let the operator recreate it.", e.name, e.existing, e.desired)
 }
 
+// reason names which of the three grounds refused this object.
+//
+// A77: the reason is the field an alert or a dashboard keys on, and all three
+// grounds used to report `DigestMismatch` — so an operator whose object was
+// refused for carrying no stamp was told two projections had collided. That is
+// the same defect as rendering one ground's message for another, one field
+// over, and rule 8 is about the reason naming the real cause.
+func (e *revisionCollisionError) reason() string {
+	switch e.existing {
+	case "(another agent's)":
+		return "ForeignObject"
+	case "(no stamp)":
+		return "Unstamped"
+	}
+	return "DigestMismatch"
+}
+
 // collisionAgainstStatus reports a desired revision whose NAME matches a
 // recorded one while its identity does not. Status is written only by this
 // controller through the status subresource, so it is the non-forgeable side of
@@ -1075,11 +1228,114 @@ func collisionAgainstStatus(st *assaydv1alpha1.AgentStatus, rev, digest string) 
 	return nil
 }
 
+// RefusedServiceRecheck is how soon a revision Service the operator refused is
+// looked at again.
+//
+// It exists because the remedy every refusal message names is a human deleting
+// that Service, and nothing turns that deletion into a reconcile:
+// SetupWithManager watches no corev1.Service, and a refused object carries none
+// of the labels byAgentLabels maps on even if it did. Without a requeue the
+// Agent stayed Degraded until the manager's default resync — a message
+// promising a recovery that arrives hours later is the bound rule 7 forbids.
+const RefusedServiceRecheck = time.Minute
+
+// carryGatewayReport re-asserts design 03's two owned, non-sticky conditions
+// from what an earlier pass stored.
+//
+// Both are asserted only by the -auth step. An exit that returns BEFORE it
+// asserts neither, and merge then CLEARS an owned type this pass did not
+// assert — so a refusal unrelated to the gateway silently retracted A81's
+// announced fail-open (`PolicyApplyIncomplete=AuthPolicyNotAttached`) and
+// `PolicyCompileFailed`, on an Agent whose route is still published and still
+// carrying traffic. Measured on a served `auth: none` Agent whose own Service
+// was patched to NodePort. That is the A47 defect (§11), and these exits have
+// checked nothing that would justify withdrawing either report.
+// GovernanceSkipped needs no carry: it is sticky.
+//
+// Marked `carried`, for the reason carriedNote gives: a pass that returns here
+// re-read nothing, so what it re-asserts can outlive its cause.
+//
+// WHY THIS IS NOT FOLDED INTO seedStoredAbove, which is the obvious home and
+// was proposed in review. That function runs on EVERY pass, including the ones
+// that go on to the -auth step, and the step withdraws only the reasons
+// carriedReason lists — a one-direction invariant `a80Carried` documents and
+// TestSeedAndWithdrawAreTheSameSet pins. Seeding `PolicyCompileFailed` there
+// would never be withdrawn at all (nothing before the step sets it and the step
+// only ever sets it on a FAILING compile), so a stale True would survive the
+// pass that should have cleared it and never clear again — exactly the silent
+// failure that invariant exists to prevent. Broadening the seed to any reason
+// means broadening the withdrawal, which is design 03's approved-slice
+// machinery (A75, A80, A81). This helper is safe precisely because it is called
+// only from exits that RETURN immediately, so nothing it asserts is ever seen
+// by the -auth step in the same pass. The cost is that it covers the exits it
+// is called from and no others; design 02 §5 names the ones still uncovered.
+func (r *AgentReconciler) carryGatewayReport(conds *conditionSet, agent *assaydv1alpha1.Agent) {
+	// Nothing to carry with the gateway off: neither condition is raised there,
+	// and re-asserting a stale one from an install that was flipped off would
+	// keep a report a normal pass clears. seedStoredAbove returns here too.
+	if !r.Gateway.Enabled {
+		return
+	}
+	for _, t := range []assaydv1alpha1.ConditionType{
+		assaydv1alpha1.CondPolicyApplyIncomplete,
+		assaydv1alpha1.CondPolicyCompileFailed,
+	} {
+		// Never over a value THIS pass derived, matching every carry in
+		// seedStoredAbove. assessGovernance raises PolicyApplyIncomplete for a
+		// Lock in flight before this runs, and carry() bypasses raiseIncomplete's
+		// precedence order entirely, so an unguarded carry can demote a live
+		// assertion to a stored one.
+		if _, set := conds.get(t); set {
+			continue
+		}
+		c := meta.FindStatusCondition(agent.Status.Conditions, string(t))
+		if c == nil {
+			continue
+		}
+		// Each half gets the note that is TRUE of it. carriedNote says the pass
+		// did not read the Gateway again, which is the right account of
+		// PolicyApplyIncomplete's reasons and the wrong one for a compile: the
+		// compiler reads the spec and status.auth, not the Gateway.
+		note := carriedNote
+		if t == assaydv1alpha1.CondPolicyCompileFailed {
+			note = compileCarriedNote
+		}
+		// ONCE. `c` is what the LAST refusing pass wrote, note included, and a
+		// refusal requeues every minute while also re-enqueuing itself — the
+		// status write is its own trigger, since SetupWithManager takes
+		// For(&Agent{}) with no generation predicate. Appending unconditionally
+		// grew the message by the note's length every pass until the backstop
+		// truncated it: A81's own shipped bug, in new code, reproduced by the
+		// fourth review at 142 copies of one sentence in a 32768-rune condition
+		// whose real cause was its first thirty bytes. carried() guards the same
+		// way twenty lines away, and this is why.
+		held := *c
+		if !strings.HasSuffix(held.Message, note) {
+			held.Message += note
+		}
+		conds.carry(held)
+	}
+}
+
+// compileCarriedNote is carryGatewayReport's note for PolicyCompileFailed.
+//
+// The compile is a pure function of the spec and status.auth, both available
+// before the -auth step — so unlike PolicyApplyIncomplete this is not "the
+// Gateway was not read again". It is that the step which compiles did not run,
+// which has a consequence worth stating to whoever is looking: an owner who
+// fixes the spec cannot clear this while the refusal stands, because the
+// refusal returns before the compiler. Design 02 §5 carries it.
+const compileCarriedNote = " | carried as the last pass that compiled the policy stored it; this " +
+	"pass returned before the -auth step, so a spec fixed since then has not been compiled and " +
+	"this will not clear until the refusal above is resolved (design 02 A77)"
+
 // reportCollision is the single exit for every collision path, so none of them
 // can drift into asserting a different set of conditions than the others.
 func (r *AgentReconciler) reportCollision(ctx context.Context, agent *assaydv1alpha1.Agent,
 	status *assaydv1alpha1.AgentStatus, conds *conditionSet, c *revisionCollisionError) error {
-	conds.set(assaydv1alpha1.CondRevisionHashCollision, metav1.ConditionTrue, "DigestMismatch", c.Error())
+	// Same reason as the shape refusal's: this exit precedes the -auth step.
+	r.carryGatewayReport(conds, agent)
+	conds.set(assaydv1alpha1.CondRevisionHashCollision, metav1.ConditionTrue, c.reason(), c.Error())
 	conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "RevisionHashCollision", c.Error())
 	// Degraded is asserted, not merely implied by the phase. CondDegraded is
 	// owned and non-sticky, so a path that sets the phase and stays silent
@@ -1805,6 +2061,10 @@ func (r *AgentReconciler) finalize(ctx context.Context, agent *assaydv1alpha1.Ag
 }
 
 func (r *AgentReconciler) writeStatus(ctx context.Context, agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus) error {
+	// Bound every message before comparing, so an over-long one cannot reach the
+	// API server and cannot churn either (the truncation is deterministic, so a
+	// converged Agent still compares equal).
+	boundConditionMessages(status.Conditions)
 	if equalStatus(&agent.Status, status) {
 		return nil // no-op writes churn the API server and fight other controllers
 	}
@@ -1813,6 +2073,43 @@ func (r *AgentReconciler) writeStatus(ctx context.Context, agent *assaydv1alpha1
 		return fmt.Errorf("update status of %s/%s: %w", agent.Namespace, agent.Name, err)
 	}
 	return nil
+}
+
+// ConditionMessageMax is the cap apimachinery puts on metav1.Condition.Message
+// and the generated CRD therefore carries. Exceed it and the API server refuses
+// the whole status write, not just that condition.
+//
+// The API server counts it in RUNES (apiextensions validates `maxLength` with
+// utf8.RuneCount), which is why the bound below is applied to runes and not to
+// bytes. Counting bytes would be safe — bytes are never fewer than runes — but
+// it would cut messages the API server would have taken, and a byte slice can
+// split a rune and leave the encoder to replace it with U+FFFD.
+const ConditionMessageMax = 32768
+
+// conditionMessageTruncated marks a message this operator shortened, so a
+// reader knows the text ends because of the cap and not because the operator
+// had nothing more to say.
+const conditionMessageTruncated = "… (message truncated at the API server's limit)"
+
+// boundConditionMessages is the backstop for the cap.
+//
+// It exists because this has now happened twice. A81 grew a held report by a
+// few hundred bytes a pass until every status write for that Agent failed, and
+// A77's first implementation rendered an unbounded `spec.externalIPs` into a
+// refusal message with the same result — and the failure mode is the worst one
+// this controller has: the whole status frozen at its pre-incident value, so an
+// Agent reports Ready=True with its route published while the incident the
+// message describes goes unwritten. Every individual message should be bounded
+// where it is composed, and each one that is has its own reason for the bound;
+// this is what makes the class non-fatal when the next one is not.
+func boundConditionMessages(conds []metav1.Condition) {
+	for i := range conds {
+		if utf8.RuneCountInString(conds[i].Message) <= ConditionMessageMax {
+			continue
+		}
+		keep := ConditionMessageMax - utf8.RuneCountInString(conditionMessageTruncated)
+		conds[i].Message = string([]rune(conds[i].Message)[:keep]) + conditionMessageTruncated
+	}
 }
 
 // WorkloadName is the Deployment name for one revision of one agent. Agent names

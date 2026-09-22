@@ -89,7 +89,12 @@ func (r *AgentReconciler) serviceFor(agent *assaydv1alpha1.Agent, runNS, rev str
 // as its workload: a Service that exists under this name but was rendered from a
 // DIFFERENT projection is a 40-bit name collision, and converging it would point
 // the safe revision's route at the attacker's Pods. Stop instead.
-func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alpha1.Agent, runNS, rev, digest string) error {
+//
+// `status` is read, never written: it is the non-forgeable half of the
+// provenance test below, because this controller is its only author and writes
+// it through the status subresource.
+func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alpha1.Agent,
+	runNS, rev, digest string, status *assaydv1alpha1.AgentStatus) error {
 	desired := r.serviceFor(agent, runNS, rev)
 	desired.Annotations = map[string]string{RevisionDigestAnnotation: digest}
 
@@ -111,13 +116,58 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 		return fmt.Errorf("get service %s: %w", desired.Name, err)
 	}
 
-	// An absent annotation is adoption, not collision — a Service created before
-	// this field existed carries none. Same rule as the workload's.
-	if d, ok := existing.Annotations[RevisionDigestAnnotation]; ok && d != digest {
+	// TWO refusals, in this order, and each catches a case the other cannot.
+	//
+	// SHAPE first, because it is the more specific evidence and names the more
+	// specific cause. serviceFor renders a ClusterIP Service with an allocated
+	// address and no off-gateway publication, ever, so a revision Service that
+	// is not that shape was not written by this operator's renderer — and this
+	// is the ONLY check that catches the operator's OWN Service patched in
+	// place, which keeps its UID label and its digest stamp and therefore
+	// passes the provenance test below untouched.
+	//
+	// Refused rather than converged. Converging would rewrite a stranger's
+	// object and destroy the only evidence it was ever planted, and it cannot
+	// cover the shape that most needs covering: `spec.clusterIP` is immutable,
+	// so a headless Service can never be converged back and would need a
+	// refusal anyway. One rule beats one rule with an exception.
+	//
+	// What an ExternalName backendRef does at the GATEWAY is agentgateway's
+	// choice, not a property this refusal may assume. Gateway API v1.6.0 says
+	// implementations SHOULD NOT support one (`BackendObjectReference.Kind`,
+	// CVE-2021-25740) and leaves it implementation-specific; agentgateway 1.5.0
+	// resolves Service backends from EndpointSlices, of which an ExternalName
+	// Service has none, so the route is reported Accepted and ResolvedRefs and
+	// then serves nothing. The refusal rests on neither behaviour. It rests on
+	// cluster DNS, which is the same everywhere: the revision's own address
+	// answers with a CNAME to the planter's host.
+	if terr := serviceNotRendered(&existing); terr != nil {
+		return terr
+	}
+
+	// PROVENANCE second, the same three ways ensureWorkload establishes it. The
+	// Service path had only the middle one — a stamped-and-mismatched digest —
+	// so an unstamped Service at a revision's name was adopted whatever else it
+	// said, and every field the renderer does not own rode along: a plain
+	// ClusterIP Service carrying `publishNotReadyAddresses: true` was adopted,
+	// stamped, given this Agent's UID label and named by the emitted route.
+	// `status` is the non-forgeable side, as it is for the workload.
+	vouched := (status.ActiveRevision == rev && status.ActiveRevisionDigest == digest) ||
+		(status.CandidateRevision == rev && status.CandidateRevisionDigest == digest)
+	existingDigest, stamped := existing.Annotations[RevisionDigestAnnotation]
+	switch {
+	case existing.Labels[LabelAgentUID] != string(agent.UID):
+		return &revisionCollisionError{name: desired.Name, ns: runNS, existing: "(another agent's)",
+			desired: digest, kind: "service"}
+	case stamped && existingDigest != digest:
 		// Typed, so reconcile reports RevisionHashCollision rather than returning a
 		// bare error. A bare one retried forever and wrote no status — the silent
 		// degraded path NFR-8 forbids, and the same defect ensureWorkload records.
-		return &revisionCollisionError{name: desired.Name, existing: d, desired: digest, kind: "service"}
+		return &revisionCollisionError{name: desired.Name, ns: runNS, existing: existingDigest,
+			desired: digest, kind: "service"}
+	case !stamped && !vouched:
+		return &revisionCollisionError{name: desired.Name, ns: runNS, existing: "(no stamp)",
+			desired: digest, kind: "service"}
 	}
 
 	// ClusterIP is assigned by the API server and must survive the update, as
@@ -138,6 +188,118 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 		return fmt.Errorf("converge service %s: %w", desired.Name, err)
 	}
 	return nil
+}
+
+// serviceShapeError is a revision Service whose shape this operator never
+// renders. It is terminal by design, exactly as a revision collision is: the
+// remedy is a human deleting the object, and retrying quietly would leave the
+// Agent saying nothing while the route it already has keeps its backendRef.
+type serviceShapeError struct {
+	ns, name     string
+	what         shapeFault
+	typ          corev1.ServiceType
+	externalName string
+	externalIPs  []string
+}
+
+type shapeFault int
+
+const (
+	faultType shapeFault = iota
+	faultHeadless
+	faultExternalIPs
+	faultNotReady
+)
+
+func (e *serviceShapeError) Error() string {
+	const render = "The operator renders a revision's Service as a ClusterIP Service with an " +
+		"allocated address, selecting that revision's Pods, publishing nothing outside the " +
+		"gateway and no address of its own, so this object is not one it created."
+	const remedy = "To recover: delete that Service and let the operator recreate it."
+	switch e.what {
+	case faultHeadless:
+		return fmt.Sprintf("service %s/%s is headless (spec.clusterIP: None). %s spec.clusterIP is "+
+			"immutable, so it cannot be repaired in place either, and the card fetch — which "+
+			"addresses the Service by its ClusterIP — can never succeed against it. Refusing. %s",
+			e.ns, e.name, render, remedy)
+	case faultExternalIPs:
+		// BOUNDED, because the value is the planter's and `spec.externalIPs` has
+		// no item cap in Kubernetes validation while metav1.Condition.Message is
+		// capped at 32768 RUNES. Rendered whole, a Service carrying a few
+		// thousand addresses made every status write for that Agent fail with
+		// `Too long`, freezing its whole status at the pre-incident value —
+		// Ready=True, route published — while the refusal it was reporting went
+		// unwritten. That is A81's incident class through a different door, and
+		// it made this Agent QUIETER than before the refusal existed. Three
+		// addresses name the object well enough for an operator to find it.
+		return fmt.Sprintf("service %s/%s carries %d spec.externalIPs, beginning %v. %s Every node "+
+			"DNATs those addresses to this revision's Pods, so the agent answers outside the "+
+			"gateway, which is the one way in this platform claims to have on its governed tier "+
+			"(CVE-2020-8554 is this "+
+			"field). Refusing — but refusing is not closing: this operator declines to adopt the "+
+			"object, and the Pods it selects go on answering those addresses until it is "+
+			"deleted. %s",
+			e.ns, e.name, len(e.externalIPs), e.externalIPs[:min(len(e.externalIPs), 3)], render, remedy)
+	case faultNotReady:
+		return fmt.Sprintf("service %s/%s sets spec.publishNotReadyAddresses. %s It sends traffic "+
+			"to Pods that have not passed readiness, and readiness is what this operator promotes "+
+			"a revision on, so the gate the rollout rests on would be answered by Pods that never "+
+			"passed it. Refusing. %s", e.ns, e.name, render, remedy)
+	case faultType:
+		if e.typ == corev1.ServiceTypeExternalName {
+			return fmt.Sprintf("service %s/%s is of type ExternalName and resolves to %q. %s "+
+				"Adopting it as it stands would leave the serving route's backendRef — which this "+
+				"operator writes, onto the assayd Gateway — naming a Service that has no endpoints "+
+				"and can serve nothing, while every in-cluster DNS lookup of this revision's "+
+				"address is answered with a CNAME to that host instead of the agent. Refusing. %s",
+				e.ns, e.name, e.externalName, render, remedy)
+		}
+		// "Refusing" is declining to ADOPT, and a reader must not take it for
+		// closing. ensureWorkload runs before ensureService, so the Deployment
+		// exists by the time this fires, and a Service carrying the revision's
+		// selector reaches those Pods whether this operator adopts it or not —
+		// which is true of any name, not just this one, for anyone who can
+		// create a Service here. Say so rather than let "Refusing." imply
+		// otherwise.
+		return fmt.Sprintf("service %s/%s is of type %s. %s A %s Service publishes this "+
+			"revision's Pods outside the gateway, which is the one way in this platform claims "+
+			"to have on its governed tier. Refusing — but refusing is not closing: this operator "+
+			"declines to adopt "+
+			"the object, and the Pods it selects go on running and go on answering it. Only "+
+			"deleting it stops that. %s", e.ns, e.name, e.typ, render, e.typ, remedy)
+	}
+	// Unreachable: every shapeFault serviceNotRendered can return is above. A
+	// bare panic here would take the manager down for a formatting bug.
+	return fmt.Sprintf("service %s/%s is not a shape this operator renders. Refusing. %s",
+		e.ns, e.name, remedy)
+}
+
+// serviceNotRendered answers whether an existing revision Service has a shape
+// serviceFor never produces.
+//
+// It is an ENUMERATION of the fields whose value is security-bearing here, not
+// a whitelist of the whole spec, and design 02 §5 carries what it does not
+// read. A whitelist is the stronger shape and is not what this is.
+//
+// `spec.type` is defaulted to ClusterIP by the API server, so a stored Service
+// always carries one and an empty value is not a case this can see;
+// `spec.clusterIP: None` is the headless shape, which is a ClusterIP Service by
+// type and still not one this operator writes.
+func serviceNotRendered(existing *corev1.Service) *serviceShapeError {
+	e := &serviceShapeError{ns: existing.Namespace, name: existing.Name, typ: existing.Spec.Type}
+	switch {
+	case existing.Spec.Type != corev1.ServiceTypeClusterIP:
+		e.what, e.externalName = faultType, existing.Spec.ExternalName
+	case existing.Spec.ClusterIP == corev1.ClusterIPNone:
+		e.what = faultHeadless
+	case len(existing.Spec.ExternalIPs) > 0:
+		e.what, e.externalIPs = faultExternalIPs, existing.Spec.ExternalIPs
+	case existing.Spec.PublishNotReadyAddresses:
+		e.what = faultNotReady
+	default:
+		return nil
+	}
+	return e
 }
 
 func equalService(a, b *corev1.Service) bool {
