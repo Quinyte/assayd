@@ -107,13 +107,20 @@ shipped are built on rows 14 and 4, whose conditions move together.
   `reassertServedPolicy` digests what `compiler.AuthPolicy` renders and compares
   it to `appliedDigest`, itself a render digest — §3.3.3 says "is not a digest of
   the stored object" — so an out-of-band edit is invisible to it. The state IS
-  judged, and the sequence is **entered, reported, repaired on one pass**: the
-  guards pass, `writeAuthPolicy` overwrites the drifted `spec`, and the repaired
-  object is what `judgeServed` judges, on a status whose last word is still the
-  synthetic ancestor. So the same pass raises `AuthPolicyNotAttached` and closes
-  the hole it reports, and the 200 is a window, not a standing hole. Pinned in
-  envtest, where the operator runs (§8.1 case 19 (f)), with two mutations against
-  the operator itself. **A80's premise is satisfied, not falsified.**
+  judged: it is entered, **repaired on the first pass after the edit**, and
+  **reported on whichever pass first reads the synthetic ancestor** — which may
+  be before that pass, with it, or after it, because `policyReport` does not
+  generation-gate that ancestor. On a cluster the edit's own event usually lands
+  first, so the earliest pass repairs while raising nothing and a later one
+  reports about a state already repaired. The envtest row writes the ancestor
+  BEFORE reconciling and so pins the CO-LOCATION — one pass doing both — which is
+  the property the conclusion needs; it does not pin an ordering, and this note
+  claimed one in its first version. **The window is one watch round-trip**: the
+  policy watch is label-selected with no predicate
+  (`internal/controller/gatewaywiring.go`), so the edit itself enqueues the
+  Agent. Pinned in envtest, where the operator runs (§8.1 case 19 (f)), with two
+  mutations against the operator itself. **A80's premise is satisfied, not
+  falsified.**
 
 - **Row 15 — what the synthetic ancestor MEANS, and the mechanism behind the
   negative result.** Give a policy two `targetRefs` of which one does not
@@ -124,9 +131,20 @@ shipped are built on rows 14 and 4, whose conditions move together.
   synthetic ancestor says "at least one target did not resolve", not "this
   policy attached to nothing". An `<agent>-auth` has exactly ONE `targetRef`, so
   for it the two coincide, and the only ways to make that ref fail are to remove
-  the route — which fires the route half — or to edit the ref, which the next
-  pass repairs. That is why no stimulus reached a standing bypass: a reason, not
-  an absence.
+  the route — which does NOT fire the route half, since `recreateRoute` puts a
+  `Create` in the slot and the served judgement runs only on an empty slot or a
+  refused `Adopt`; the `Create` path is the way out — or to edit the ref, which
+  the first pass after the edit repairs. That is why no stimulus reached a
+  standing bypass: a reason, not an absence.
+
+  **The bound, because a reader would otherwise act on the sentence above.** An
+  identity that can write the policy can strip `assayd.dev/agent-uid` and
+  repoint `targetRefs` in ONE patch. §3.2's name-and-label rule then makes the
+  object not this Agent's, the operator neither judges nor repairs it, and the
+  route serves unauthenticated **standing, not a window**. That is the rule
+  working as designed and is not introduced by anything here; it is recorded as
+  a follow-up, and the repair claim above holds only of an edit that leaves the
+  UID in place.
 
 ## What this shows
 
@@ -141,9 +159,10 @@ shipped are built on rows 14 and 4, whose conditions move together.
 3. **The bypass is real, and the operator both reports it and closes it.** A
    policy the Gateway attaches to nothing leaves a published route wide open —
    200 to anyone — and the precondition does NOT exclude it, because the digest
-   comparison is render against render. One pass raises `AuthPolicyNotAttached`
-   and repairs the spec: entered, reported, repaired. The 200 is a window
-   between the edit and the next reconcile.
+   comparison is render against render. The repair lands on the first pass after
+   the edit; the report lands on whichever pass first reads the synthetic
+   ancestor, which may be before, with or after it. The 200 is a window closed by
+   that first pass, bounded by one watch round-trip.
 4. **The operator's own report names the wrong cause in the reachable shape.**
    In row 14 the Gateway says `Attached=True`, reason `Attached`, "Attached to
    all targets". `internal/controller`'s `policyUnattachedMessage` opens "this
@@ -228,7 +247,7 @@ shipped are built on rows 14 and 4, whose conditions move together.
 
 ## The cases, and their mutations
 
-`test/conformance/slice_attach_cluster_test.go`, run by
+`test/conformance/slice_attach_cluster_test.go`, three cases run by
 `make conformance-cluster`'s phase 2:
 
 - `TestSliceAPolicyBrokenByItsKeySetStaysAttachedAndKeepsRefusing` — row 14,
@@ -241,8 +260,8 @@ shipped are built on rows 14 and 4, whose conditions move together.
   ancestors at one generation, the real one reading `Attached=True`, and the
   route enforcing `401`.
 
-Each mutation is one edit, rebuilt, run against both cases, and restored from a
-backup copy.
+Each mutation is one edit, rebuilt, run against all three cases, and restored
+from a backup copy.
 
 | mutation | result |
 |---|---|
@@ -258,7 +277,7 @@ backup copy.
 | case (C) stops requiring the real ancestor to read `Attached=True` | KILLED |
 | case (C) expects a partly resolved policy to stop enforcing | KILLED — 29 consecutive 401s |
 
-Five more, against the untagged transcription in `ancestor.go`, run by `make conformance` with no cluster:
+Seven more, against the untagged transcription in `ancestor.go`, run by `make conformance` with no cluster:
 
 | mutation | result |
 |---|---|
@@ -276,7 +295,7 @@ gains — the only mutations in this change that touch product code:
 | mutation | result |
 |---|---|
 | `reassertServedPolicy` digests the STORED object instead of the render — what A82's first draft believed the code did | KILLED: the guard rejects the edited policy and nothing is repaired |
-| `writeAuthPolicy` leaves a drifted `spec` alone | KILLED |
+| `writeAuthPolicy` leaves a drifted `spec` alone — the assignment is INVERTED to a discard, not deleted, so the function still writes and the row fails on the digest rather than on a build error | KILLED |
 
 Every mutation here edits the TEST, not product code — no operator runs in this
 suite — so what they pin is agentgateway's output and the cases' assertions.
@@ -284,9 +303,11 @@ Nothing here fails if `policyReport` changes.
 
 The report's three answers — broken, holding, and the unknown between them — and
 §3.3.2's stricter converged tuple are pinned by
-`test/conformance/ancestor_test.go`, untagged and inside `make test`, **which no
-CI job runs**: `.github/workflows/ci.yml` runs `verify`, `vet`, `unit`, `race`,
-`envtest`, `chart`, `chart-conform` and `e2e`. The rows exist for the reason
+`test/conformance/ancestor_test.go`, untagged and inside `make test`. `make test`
+itself runs in no CI job, which lists its targets one by one — but this change
+adds `make conformance` and `make docs` to the verify job, so from here this
+table is gated. It was not before, which is part of why the transcription could
+drift unnoticed. The rows exist for the reason
 `statusIsCurrent` gives in `status.go`: the `Unknown` and absent-condition arms
 are unreachable on 1.5.0, which writes both conditions with a `True`/`False`
 status, so a cluster run can never exercise them and they would otherwise be

@@ -23,8 +23,9 @@ import "testing"
 // absent-condition rows are unreachable on agentgateway 1.5.0, which writes
 // both conditions with a `True`/`False` status, so nothing a cluster can do
 // would exercise the arms that handle them and they would be defensive code no
-// test can pin (rule 5). Note that `make test` carries this file and no CI job
-// carries `make test`.
+// test can pin (rule 5). `make test` carries this file, and A82 also added
+// `make conformance` to CI's verify job, so it is gated there — it was not
+// before, which is part of why the transcription could drift unnoticed.
 func TestAncestorReportTranscribesPolicyReport(t *testing.T) {
 	cond := func(status, reason string) ancestorCondition {
 		return ancestorCondition{Status: status, Reason: reason}

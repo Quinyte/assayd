@@ -16,7 +16,7 @@
 // halves, because renaming the listener detaches the route AND the policy in
 // one breath.
 //
-// These two cases separate them. Both start from a SERVED Agent — route
+// These cases separate them. The first two start from a SERVED Agent — route
 // published on a backend, `<agent>-auth` attached, anonymous requests refused —
 // and break the policy alone, leaving the route accepted at its current
 // generation. They differ in which of §3.3.2's tuple breaks they produce, and
@@ -320,9 +320,11 @@ func requireDigestUnchanged(t *testing.T, agent, why string) {
 //
 // The number the case exists for: the route still answers **401** to an
 // anonymous request, and still answers 200 to the admitted key. So in the state
-// A80's precondition admits, the report is a reporting event and NOT the live
-// authentication bypass its message announces. The bypass is case (B) below,
-// which the same precondition excludes.
+// an administrator reaches without touching anything assayd wrote, the report is
+// a reporting event and NOT the live authentication bypass its message
+// announces. Case (B) below is the shape that IS a bypass; the precondition does
+// not exclude it either — it is judged, and repaired — and what separates the two
+// is who can cause them and what the route then does, not the digest.
 func TestSliceAPolicyBrokenByItsKeySetStaysAttachedAndKeepsRefusing(t *testing.T) {
 	gw := sliceFixture(t)
 	agent := agentName("brokenkeys")
@@ -562,9 +564,11 @@ func TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen(t *testing.T) {
 			"reached the agent's backend")
 	}
 
-	// A80's precondition, checked against the live object: this state is NOT
-	// one the operator's policy half would judge, because reaching it changed
-	// the policy's spec.
+	// The stored object really drifted — which is what makes this the state the
+	// envtest repair row measures the operator against, and NOT a reason the
+	// operator would skip it. §5's precondition compares the compiler's RENDER to
+	// `appliedDigest`, itself a render digest, so this drift is invisible to it:
+	// the policy half judges this state and `writeAuthPolicy` repairs the spec.
 	want, err := compiler.Digest(authPolicy(t, agent))
 	if err != nil {
 		t.Fatal(err)
@@ -613,7 +617,14 @@ func TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen(t *testing.T) {
 //     non-attachment do coincide — and the only way to make that one ref fail
 //     to resolve is to change the ref or remove the route, which is why every
 //     bypass stimulus had to edit the policy's spec. That is a reason, not a
-//     stimulus count.
+//     stimulus count. Removing the route does NOT fire the route half:
+//     recreateRoute puts a Create in the slot, and the served judgement runs
+//     only on an empty slot or a refused Adopt, so the Create path is the way
+//     out. And the bound, because a reader would otherwise act on this: an
+//     identity that can write the policy can strip assayd.dev/agent-uid and
+//     repoint targetRefs in ONE patch, after which §3.2's name-and-label rule
+//     means the operator neither judges nor repairs it and the route serves
+//     unauthenticated STANDING, not for a window.
 //   - **A second instance of the rule-8 defect, worse than the first.**
 //     `policyReport` short-circuits on the synthetic ancestor wherever it
 //     appears, so on this shape the operator would report

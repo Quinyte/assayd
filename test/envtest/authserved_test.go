@@ -426,8 +426,19 @@ func TestAServedPolicyTheGatewayDoesNotAttachIsReported(t *testing.T) {
 	// a status whose last word is still the Gateway's, which policyReport
 	// deliberately does not generation-gate for the synthetic ancestor.
 	//
-	// So the one pass both RAISES AuthPolicyNotAttached and CLOSES the hole it
-	// reports. Mutations: make reassertServedPolicy digest `existing` instead of
+	// So one pass can both RAISE AuthPolicyNotAttached and CLOSE the hole it
+	// reports, and THAT CO-LOCATION is what this row pins — not an ordering. It
+	// writes the ancestor before reconciling, which is one interleaving of
+	// several: on a cluster the spec edit fires its own watch event first, so the
+	// earliest pass reads conditions at the old generation, sees no synthetic
+	// ancestor, repairs and raises nothing; agentgateway then writes the ancestor
+	// for the superseded generation and a later pass raises about a state already
+	// repaired, because the synthetic ancestor is not generation-gated. The repair
+	// is on the first pass after the edit either way, and the window is one watch
+	// round-trip: the policy watch is label-selected with no predicate
+	// (gatewaywiring.go), so the edit enqueues the Agent itself.
+	//
+	// Mutations: make reassertServedPolicy digest `existing` instead of
 	// `recorded`, and the repair assertion fails (the guard rejects the edited
 	// policy and nothing is written); make writeAuthPolicy return early on a
 	// spec mismatch, and it fails the same way.
