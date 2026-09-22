@@ -246,12 +246,17 @@ func policyReport(p *unstructured.Unstructured, gw GatewayConfig) (gatewayReport
 			unwanted = fmt.Sprintf("%s: Gateway %s/%s reports %s=True with reason %s, not %s: %s",
 				where, gw.Namespace, gw.Name, want.typ, c.Reason, want.reason, c.Message)
 		default:
-			// known counts the conditions that broke nothing. It is read ONLY
-			// where neither iteration set a clause, because the ranking switch
-			// below returns first on every other path — so its placement
-			// cannot change the answer, and this arm is here to keep the
-			// counter's meaning obvious rather than because anything depends
-			// on it (A83's review, MINOR 2).
+			// known counts the conditions that broke nothing. Its PLACEMENT in
+			// this arm cannot change the answer — the ranking switch below
+			// returns first on every path where a clause fired, so nothing
+			// ever reads the counter there.
+			//
+			// THE COUNTER ITSELF IS LOAD-BEARING, and an earlier version of
+			// this comment said otherwise by generalising from the placement.
+			// `known == 2` is the ONLY path that reaches reportHolding, and
+			// reportHolding is the only thing that clears a standing
+			// AuthPolicyNotAttached: `_ = known` compiles and fails a unit row
+			// at once (A83's second review, MINOR 1).
 			known++
 		}
 	}
@@ -357,7 +362,23 @@ const heldMark = " | carried from the last pass that got a report at this object
 // has not reported at the object's current generation. It is NOT carriedNote,
 // whose words say the pass returned before the -auth step: this pass reached
 // the step and read the object.
+//
+// "READ THE OBJECT" IS WHY THIS NOTE IS NOT THE ONLY ONE. On the policy half
+// A83 added a third held path, in which §5's precondition excluded the policy
+// and the pass read no policy status at all — and this note, appended
+// unconditionally, then put "the Gateway has not reported since" into the same
+// message as a `why` saying nothing here will ever clear the claim. One
+// message, two contradictory claims, and the second was never checked: the
+// same rule-8 shape A83 exists to remove, surviving in the note after being
+// removed from the lead (A83's second review, MAJOR 1). The route half has
+// only the one path and keeps this note.
 const heldNote = heldMark + "; the Gateway has not reported since (design 03 A80)"
+
+// unjudgedNote is heldNote for the path that read NOTHING to re-derive from:
+// the policy is not this Agent's by §3.2's name-and-label rule, or this build
+// renders a digest status.auth does not record. It claims nothing about what
+// the Gateway has or has not done, because this pass did not look.
+const unjudgedNote = heldMark + "; this pass judged no policy, so nothing was re-read (design 03 A83)"
 
 const erroredMark = " | carried across a pass whose -auth step could not complete"
 
@@ -621,12 +642,18 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 				"status.auth.appliedDigest does not record, so §5's precondition excludes it and " +
 				"NOTHING here will clear this claim until that changes — see GovernanceSkipped " +
 				"and any ForeignTrafficPolicy report"
+			// THE NOTE MOVES WITH THE WHY, and leaving it behind was the
+			// defect: heldNote says "the Gateway has not reported since",
+			// which on this path contradicts the why in the same message and
+			// was never checked (A83's second review, MAJOR 1).
+			note := unjudgedNote
 			if judged {
 				why = "the Gateway has not reported on it at its current generation since"
+				note = heldNote
 			}
 			held := policyBrokenMessage(clauseUnknown, why, routeOK, judged)
-			holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, heldNote)
-			holdGovernance(agent, conds, held, heldNote)
+			holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, note)
+			holdGovernance(agent, conds, held, note)
 		}
 	}
 	claims.writeTo(status)

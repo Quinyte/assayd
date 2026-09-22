@@ -772,9 +772,17 @@ type AuthStatus struct {
 	// +optional
 	RouteRefused bool `json:"routeRefused,omitempty"`
 	// PolicyUnattached is RouteRefused's other half: the last report at the
-	// served <agent>-auth's own generation said the Gateway does not attach it,
-	// so PolicyApplyIncomplete and GovernanceSkipped stand under
+	// served <agent>-auth's own generation found the Gateway's tuple for it
+	// BROKEN, so PolicyApplyIncomplete and GovernanceSkipped stand under
 	// AuthPolicyNotAttached (design 03 A80).
+	//
+	// Broken is four different answers and this flag is ONE BOOLEAN, so it
+	// does not record which: the Gateway may have said it attached the policy
+	// to nothing, or rejected it outright, or accepted only part of it while
+	// reporting it ATTACHED. The field name predates that split and is API, so
+	// it stays; read it as "the tuple was broken", never as "the Gateway says
+	// it is unattached". The condition message names what the Gateway actually
+	// said; a pass that re-derives nothing cannot, and says so (design 03 A83).
 	// +optional
 	PolicyUnattached bool `json:"policyUnattached,omitempty"`
 }

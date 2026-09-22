@@ -244,8 +244,17 @@ func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
 		// A held report has no clause to name, because the claim store is one
 		// boolean. Restating the unattached lead here would re-enter the
 		// defect one pass later for a claim that may have been partly-valid.
-		// It also says NOTHING about what the Gateway has done since or about
-		// what would clear it: neither held path checked either.
+		//
+		// THE LEAD says nothing about what the Gateway has done since or
+		// about what would clear it. The NOTE the caller appends is a
+		// separate string and is not scoped by this table: THREE held paths
+		// reach this lead and two of them — the Gateway gone quiet at this
+		// object's generation, and an errored step — do say it, correctly,
+		// through heldNote and erroredNote. Only the third, where §5's
+		// precondition excluded the policy, must not, and it gets
+		// unjudgedNote. Saying "neither held path checked either" here was
+		// wrong twice over: there are three, and the claim belongs to the
+		// lead alone (A83's second review, MAJOR 1).
 		{"held over a pass that still judged the policy", clauseUnknown, true, true,
 			[]string{"re-derived nothing", "restates the claim and cannot narrow it",
 				"The policy is present"},

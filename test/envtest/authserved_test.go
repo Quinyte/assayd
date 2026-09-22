@@ -437,6 +437,13 @@ func TestAServedPolicyTheGatewayDoesNotAttachIsReported(t *testing.T) {
 		judged(t, a, r, "PartiallyValid",
 			"ACCEPTED this Agent's <agent>-auth policy but not the whole of it",
 			"NOT reporting the policy unattached", "makes no request of its own",
+			// The `judged` ARGUMENT at the RAISING call site, which the unit
+			// table cannot reach: it pins the function for both readings, and
+			// flipping judgeServed's literal to false compiled and passed the
+			// whole suite — every raised report silently losing the sentence
+			// that separates this Agent's own policy from AuthPolicyMissing
+			// and ForeignTrafficPolicy (A83's second review, MAJOR 2).
+			"The policy is present",
 			// The Gateway's own MESSAGE, which is the only field naming WHICH
 			// translation failed, and which this fixture deliberately sets to
 			// a cause that is not the key ConfigMap. Without it the condition
@@ -956,9 +963,21 @@ func TestAnUnknownReadingHoldsAStandingReport(t *testing.T) {
 
 		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "AuthPolicyNotAttached")
 		mustContain(t, c, "PolicyApplyIncomplete", "did not judge a policy at all",
-			"NOTHING here will clear this claim", "restates the claim and cannot narrow it")
+			"NOTHING here will clear this claim", "restates the claim and cannot narrow it",
+			// The NOTE, not just the why. heldNote's "the Gateway has not
+			// reported since" was appended unconditionally and put that claim
+			// back into the same message as "nothing here will clear this
+			// claim" — one message, two claims, the second never checked.
+			"this pass judged no policy, so nothing was re-read")
+		// The forbidden list carries BOTH wordings, because the near-miss is
+		// what let the defect survive: the guard forbade the `why`'s
+		// "...at its current generation since" while the live contradiction
+		// was heldNote's shorter "the Gateway has not reported since", and a
+		// row that forbids only the long form reads as mutation-proof and is
+		// not (A83's second review, MAJOR 1).
 		mustNotContain(t, c, "PolicyApplyIncomplete", "The policy is present",
 			"the Gateway has not reported on it at its current generation since",
+			"the Gateway has not reported since",
 			"does not attach", "but not the whole of it")
 		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AuthPolicyNotAttached")
 	})
