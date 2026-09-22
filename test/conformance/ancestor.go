@@ -9,16 +9,27 @@ import (
 )
 
 // The reading of an `AgentgatewayPolicy`'s status that design 03 §3.3.2's
-// convergence tuple and §5's policy row rest on, and that A80's policy half
-// is judged by.
+// convergence tuple and §5's policy row rest on, and that A80's policy half is
+// judged by.
 //
 // It lives in an UNTAGGED file, separate from the cluster suite it serves, for
 // statusIsCurrent's reason (status.go): the rules below decide what a report
 // MEANS, and a rule only a `cluster`-tagged run can exercise is pinned by
-// nothing that CI runs. agentgateway 1.5.0 writes both conditions on every
-// ancestor, so the "one of them is absent" arm is unreachable from a cluster
-// and would otherwise be defensive code no test can pin — rule 5. It is
-// pinned by ancestor_test.go instead.
+// nothing that `make test` runs. agentgateway 1.5.0 writes both conditions
+// with a `True`/`False` status on every ancestor, so the arms for an absent
+// condition and for `Unknown` are unreachable from a cluster and would
+// otherwise be defensive code no test can pin (rule 5). They are pinned by
+// ancestor_test.go instead.
+//
+// **This is a TRANSCRIPTION of `internal/controller`'s `policyReport`, not a
+// call into it**, because that function is unexported and exporting it is a
+// production change to an approved slice. A transcription can drift, and one
+// already had: an earlier version of `broken` called `Accepted=Unknown` a
+// break where `policyReport` counts it as known and not broken, so a cluster
+// case could have gone green on a state the operator treats as CLEARING. The
+// table in ancestor_test.go is the code's own cases, row by row, for that
+// reason. A real cross-check needs `policyReport` exported or moved to a
+// shared package, and is owed (design 03 A82).
 
 // ancestorCondition is one condition on one policy ancestor, carrying the two
 // fields §3.3.2's tuple reads beyond the status: the REASON, which separates
@@ -32,16 +43,16 @@ type ancestorCondition struct {
 	ObservedGeneration int64
 }
 
-// ancestorReport is the ancestor of a policy's status that internal/controller's
-// policyReport would read, and its conditions.
+// ancestorReport is the ancestor of a policy's status that `policyReport`
+// would read, and its conditions.
 //
-// The four ref fields are all carried because `policyReport` compares all four
-// (`internal/controller/authserved.go`): the synthetic ancestor on
-// `group == "agentgateway.dev" && name == "StatusSummary"`, and the real one on
-// `group`, `kind`, `name` AND `namespace`. A case that asserted only the name
-// would stay green through an upstream rename of either, while the operator's
-// policy half went silent — no `AuthPolicyNotAttached`, ever — which is the
-// regression this suite exists to catch and the exact claim A82 merges.
+// The four ref fields are all carried because `policyReport` compares all
+// four: the synthetic ancestor on `group == "agentgateway.dev"` AND
+// `name == "StatusSummary"`, and the real one on `group`, `kind`, `name` and
+// `namespace`. A case that asserted only the name would stay green through an
+// upstream rename of either, while the operator's policy half went silent —
+// no `AuthPolicyNotAttached`, ever — which is the regression this suite exists
+// to catch and the exact claim A82 merges.
 type ancestorReport struct {
 	Group, Kind, Name, Namespace string
 	Conds                        map[string]ancestorCondition
@@ -50,37 +61,69 @@ type ancestorReport struct {
 	Synthetic bool
 }
 
-// broken says whether this report is one of the four §5 calls a broken tuple:
-// `Accepted=False`, `Accepted=True` with a reason other than `Valid`,
-// `Attached=False`, or the synthetic `StatusSummary` ancestor.
+// policyAnswer is `policyReport`'s three answers, spelled as §3.3.3 spells
+// them: an explicit failure, an explicit not-failure, and everything else.
+type policyAnswer int
+
+const (
+	// answerUnknown raises nothing and clears nothing (§3.3.3).
+	answerUnknown policyAnswer = iota
+	// answerBroken is one of §5's four shapes.
+	answerBroken
+	// answerHolding is the explicit not-broken reading that CLEARS a standing
+	// claim. It is weaker than §3.3.2's convergence tuple: `policyReport`
+	// counts a condition whose status is neither `True` nor `False` as known
+	// and not broken, so an `Accepted=Unknown` beside `Attached=True` holds
+	// rather than converges. `converged` is the stricter reading.
+	answerHolding
+)
+
+// answer transcribes `policyReport`'s decision, including the order it takes
+// it in: the synthetic ancestor first, whatever its conditions say, because
+// the ancestor list is rewritten whole and its presence is the signal; then
+// the two conditions, each counted only if present, each broken only on an
+// explicit `False` or on an explicit `True` with the wrong reason.
 //
-// A MISSING condition is not one of them. `policyReport` counts the two it
-// knows and answers `reportUnknown` unless it has both, and §5's four shapes
-// are all explicit reports; treating absence as breakage would make this
-// helper stricter than the code it models, in the fail-open direction, on the
-// fail-open half. `healthy` is its complement with the same rule, so an
-// ancestor that carries neither condition is neither broken nor healthy and a
-// wait on either keeps waiting.
-func (a ancestorReport) broken() bool {
-	if !a.complete() {
-		return a.Synthetic
+// The caller has already restricted this to conditions at the policy's current
+// generation, which is where `policyReport`'s generation gate lives.
+func (a ancestorReport) answer() policyAnswer {
+	if a.Synthetic {
+		return answerBroken
 	}
-	return a.Synthetic || a.Conds["Accepted"].Status != "True" ||
-		a.Conds["Accepted"].Reason != "Valid" || a.Conds["Attached"].Status != "True"
+	known := 0
+	for _, want := range []struct{ typ, reason string }{{"Accepted", "Valid"}, {"Attached", ""}} {
+		c, ok := a.Conds[want.typ]
+		if !ok {
+			continue
+		}
+		switch {
+		case c.Status == "False":
+			return answerBroken
+		case want.reason != "" && c.Status == "True" && c.Reason != want.reason:
+			return answerBroken
+		}
+		known++
+	}
+	if known == 2 {
+		return answerHolding
+	}
+	return answerUnknown
 }
 
-// healthy is §3.3.2's convergence tuple for an `AgentgatewayPolicy`: the real
-// Gateway ancestor, `Accepted=True` with reason `Valid`, and `Attached=True`.
-func (a ancestorReport) healthy() bool {
-	return a.complete() && !a.Synthetic &&
-		a.Conds["Accepted"].Status == "True" && a.Conds["Accepted"].Reason == "Valid" &&
-		a.Conds["Attached"].Status == "True"
-}
+// broken is §5's four shapes: `Accepted=False`, `Accepted=True` with a reason
+// other than `Valid`, `Attached=False`, or the synthetic ancestor.
+func (a ancestorReport) broken() bool { return a.answer() == answerBroken }
 
-func (a ancestorReport) complete() bool {
-	_, acc := a.Conds["Accepted"]
-	_, att := a.Conds["Attached"]
-	return acc && att
+// converged is §3.3.2's tuple for an `AgentgatewayPolicy`: the real Gateway
+// ancestor, `Accepted=True` with reason `Valid`, and `Attached=True`. It is
+// what a case waits for when it wants the policy actually working, and it is
+// deliberately stricter than answerHolding, which is only "not an explicit
+// failure".
+func (a ancestorReport) converged() bool {
+	acc, hasAcc := a.Conds["Accepted"]
+	att, hasAtt := a.Conds["Attached"]
+	return !a.Synthetic && hasAcc && hasAtt &&
+		acc.Status == "True" && acc.Reason == "Valid" && att.Status == "True"
 }
 
 func (a ancestorReport) String() string {

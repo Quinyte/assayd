@@ -296,20 +296,28 @@ func TestSliceAPolicyBrokenByItsKeySetStaysAttachedAndKeepsRefusing(t *testing.T
 	route, _ := compiler.ServingRouteName(agent)
 	policy, _ := compiler.AuthPolicyName(agent)
 
-	// The policy is healthy BEFORE the stimulus. Without this the case would
-	// pass having caused nothing on a KEEP=1 cluster where an earlier run left
-	// a rejected key set behind: the first read would already be
-	// `PartiallyValid` and every check below would hold.
-	if base := awaitPolicyAncestor(t, policy, 2*time.Minute,
+	// §3.3.2's whole tuple holds BEFORE the stimulus. Without this the case
+	// would pass having caused nothing on a KEEP=1 cluster where an earlier run
+	// left a rejected key set behind: the first read would already be
+	// `PartiallyValid` and every check below would hold. `converged` covers the
+	// ancestor as well as the two conditions, so there is nothing left to
+	// assert beside it.
+	awaitPolicyAncestor(t, policy, 2*time.Minute,
 		"the served <agent>-auth before anything is broken",
-		func(a ancestorReport) bool { return a.healthy() }); base.Synthetic {
-		t.Fatalf("the baseline is already the synthetic ancestor: %s", base)
-	}
+		func(a ancestorReport) bool { return a.converged() })
 
 	// A second labelled key set, never the shared one: the shared one is every
 	// other slice case's, and a json-patch that half-failed would leave it
 	// broken for them. runID, as everything else here is named, so a run on a
 	// kept cluster never meets the ConfigMap a previous one left.
+	//
+	// THE BLAST RADIUS IS THE WHOLE NAMESPACE while this exists. Every
+	// `<agent>-auth` in sliceNS selects key sets by the same constant label
+	// (compiler.APIKeySourceLabel), so one rejected entry puts every policy
+	// here at PartiallyValid until the Cleanup deletes it. That is safe only
+	// because nothing in this package calls t.Parallel(); adding it to any
+	// case in this namespace breaks that, and the same fan-out is the
+	// production consequence A82 records in §5.
 	badKeys := "conf-slice-rejected-keys-" + runID
 	if err := apply(t, fmt.Sprintf(`
 apiVersion: v1
@@ -386,7 +394,7 @@ data:
 	}
 	awaitPolicyAncestor(t, policy, 2*time.Minute,
 		"the report clearing once the rejected entry is gone",
-		func(a ancestorReport) bool { return a.healthy() })
+		func(a ancestorReport) bool { return a.converged() })
 	expectCode(t, gw, servingPort, host, cardPath, keyTeam, 200,
 		"the admitted key after the rejected key set is gone")
 }
@@ -428,7 +436,7 @@ func TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen(t *testing.T) {
 	// could start from a policy that was already reported broken.
 	awaitPolicyAncestor(t, policy, 2*time.Minute,
 		"the served <agent>-auth before its target is broken",
-		func(a ancestorReport) bool { return a.healthy() })
+		func(a ancestorReport) bool { return a.converged() })
 
 	patch := fmt.Sprintf(
 		`{"spec":{"targetRefs":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute",`+
@@ -446,7 +454,7 @@ func TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen(t *testing.T) {
 	// `group == "agentgateway.dev"` AND `name == "StatusSummary"`, so a rename
 	// of either takes A80's policy half silent while the bypass below stays
 	// real, and asserting the name alone would not see it.
-	if rep.Group != "agentgateway.dev" || rep.Name != "StatusSummary" || !rep.Synthetic {
+	if rep.Group != "agentgateway.dev" || rep.Name != "StatusSummary" {
 		t.Errorf("§3.3.2 says a failure emits the synthetic ancestor {group: agentgateway.dev, "+
 			"name: StatusSummary}, which is what policyReport matches on, and agentgateway wrote "+
 			"%s; on an install where that is what it writes, the policy half raises nothing while "+
@@ -473,6 +481,11 @@ func TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen(t *testing.T) {
 		"an anonymous request while the Gateway reports <agent>-auth attached to nothing on an "+
 			"ACCEPTED route: §5's policy row says the route may be answering with no credential "+
 			"required, and it is")
+	// Again AFTER the 200, not only before it. The wait above can take up to
+	// two minutes, and "the route is accepted on the same pass" is a claim
+	// about the moment the 200 was served, not about the moment the case
+	// started waiting for it.
+	requireRouteAccepted(t, route, "the unattached policy, beside the anonymous 200")
 	body := expectCode(t, gw, servingPort, host, cardPath, "", 200,
 		"the anonymous request again, for the body: the 200 must be the BACKEND answering and "+
 			"not the gateway").body
@@ -506,7 +519,7 @@ func TestSliceAnUnattachedAuthPolicyLeavesAnAcceptedRouteOpen(t *testing.T) {
 	}
 	awaitPolicyAncestor(t, policy, 2*time.Minute,
 		"the policy attaching again once its target resolves",
-		func(a ancestorReport) bool { return a.healthy() })
+		func(a ancestorReport) bool { return a.converged() })
 	awaitCode(t, gw, servingPort, host, cardPath, "", 401, []int{200}, 2*time.Minute,
 		"the anonymous request once <agent>-auth attaches again")
 	requireDigestUnchanged(t, agent, "the restored policy")

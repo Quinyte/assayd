@@ -131,7 +131,22 @@ shipped are built on rows 14 and 4, whose conditions move together.
    branch. Recorded as **OWED** in design 03 §5 and A82, not fixed here: the
    message needs a third lead and the `PartiallyValid` clause probably needs a
    reason of its own, and both add user-facing vocabulary to an approved slice.
-5. **The two halves could not be separated in the other direction either.**
+5. **Row 3 is a silent total outage, and nothing in the design reports it.**
+   Deleting the selected key `ConfigMap` — external, digest-equal, an
+   administrator's action — takes EVERY key to `401` while the policy reports
+   `Accepted=True`/`Valid`, `Attached=True` and the route reports accepted. So
+   `policyReport` holds, `routeReport` holds, `judgeServed` raises nothing, and
+   every served Agent in the namespace stays `Ready=True` through a complete
+   authentication outage for every principal. That is the degraded-and-silent
+   path NFR-8 and rule 8 forbid, and §3.4.4's "the key set is outside every
+   gate" is about widening, not outage. Recorded in design 03 §5 as **owed**.
+6. **One rejected entry breaks every Agent in the run namespace.** Every
+   `<agent>-auth` selects key sets by the same constant label, and a run
+   namespace is shared, so rows 10 and 14 are namespace-wide events, not
+   per-Agent ones. With finding 4 that means one administrator's typo can put
+   every served API-key Agent in a namespace into `Degraded`, each announcing a
+   bypass that is not happening.
+7. **The two halves could not be separated in the other direction either.**
    Renaming the Gateway's listener, run again here, reproduces the walkthrough:
    `StatusSummary`, `Attached=False`, and the route `Accepted=False` on the same
    pass. That is the conflated state A81 ordered route-first, and it is the
@@ -140,12 +155,22 @@ shipped are built on rows 14 and 4, whose conditions move together.
 ## What it does not show
 
 - **It does not show that no input reaches an unattached, digest-equal policy on
-  an accepted route.** It shows that four stimuli that reach non-attachment all
-  change the policy's spec, and that the two external changes tried (deleting
-  the key set; deleting and re-creating the route) do not. A fifth input could
-  exist — an agentgateway upgrade that resolves targets differently, a second
-  controller, a partial write. The claim is bounded by what was tried, and what
-  was tried is the table above.
+  an accepted route.** THREE stimuli reached non-attachment by editing the
+  policy's spec — rows 4, 6 and 13. A fourth reached it with the policy
+  byte-unchanged: **row 9**, deleting the route. What keeps row 9 out of §5's
+  policy row is the route's ABSENCE, not the digest, and `policyReport`
+  deliberately does not generation-gate the synthetic ancestor, so an HTTPRoute
+  deletion is an ordinary event that passes through this state. On re-creation
+  the first 0.5 s sample already read the route accepted and the policy attached
+  together, so no window was OBSERVED — at that cadence, which is not a proof of
+  none. A fifth input could exist: an agentgateway upgrade that resolves targets
+  differently, a second controller, a partial write. The claim is bounded by
+  what was tried, and what was tried is the table above.
+- **`Attached=False` on the REAL Gateway ancestor was produced by nothing
+  tried**, the same standing `Accepted=False` has. It is the shape §8.1 case 19
+  (f)'s envtest fixture writes, so the primary fixture for the operator's policy
+  half drives a state 1.5.0 was measured not to produce, while the shape that IS
+  reachable is driven by no operator test at all.
 - **It does not show what the OPERATOR does in either state.** No operator runs
   here. §8.1 case 19 (f) is still the only thing that measures the reaction, and
   it still writes the report rather than producing it.
@@ -179,14 +204,34 @@ backup copy.
 | expect the real Gateway ancestor in another `namespace` | KILLED — `policyReport` compares all four ref fields, so all four are asserted |
 | wrong `controllerName` in the route gate | KILLED — the gate's match on agentgateway's controller is live |
 
-The report's three answers — broken, healthy, and the unknown between them —
-are pinned by `test/conformance/ancestor_test.go`, untagged and inside
-`make test`, for the reason `statusIsCurrent` gives in `status.go`: the arm
-where an ancestor carries only one of the two conditions is unreachable on
-1.5.0, which writes both, so a cluster run can never exercise it and it would
-otherwise be defensive code no test can pin. The rule it encodes is
-`policyReport`'s: an absent condition is **unknown**, not one of §5's four
-breaks.
+Five more, against the untagged transcription in `ancestor.go`, run by `make conformance` with no cluster:
+
+| mutation | result |
+|---|---|
+| call `Accepted=Unknown` a break — the drift the transcription actually had | KILLED |
+| count an absent condition as known | KILLED |
+| stop treating the synthetic ancestor as a break on its own | KILLED |
+| let `converged` accept a reason other than `Valid` | KILLED |
+| let `converged` accept the synthetic ancestor | KILLED |
+
+Every mutation here edits the TEST, not product code — no operator runs in this
+suite — so what they pin is agentgateway's output and the cases' assertions.
+Nothing here fails if `policyReport` changes.
+
+The report's three answers — broken, holding, and the unknown between them — and
+§3.3.2's stricter converged tuple are pinned by
+`test/conformance/ancestor_test.go`, untagged and inside `make test`, **which no
+CI job runs**: `.github/workflows/ci.yml` runs `verify`, `vet`, `unit`, `race`,
+`envtest`, `chart`, `chart-conform` and `e2e`. The rows exist for the reason
+`statusIsCurrent` gives in `status.go`: the `Unknown` and absent-condition arms
+are unreachable on 1.5.0, which writes both conditions with a `True`/`False`
+status, so a cluster run can never exercise them and they would otherwise be
+defensive code no test can pin. They are a TRANSCRIPTION of `policyReport`, not
+a call into it — that function is unexported — and **the transcription had
+already drifted once**: an earlier `broken` called `Accepted=Unknown` a break
+where `policyReport` counts it as known and not broken, so a cluster case could
+have gone green on a state the operator treats as clearing. A real cross-check
+needs `policyReport` exported or moved, and is owed.
 
 All twelve `TestSlice` cases pass together on one cluster after these, and the
 whole `make conformance-cluster` gate — both phases, both clusters provisioned
