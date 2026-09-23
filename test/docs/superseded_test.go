@@ -383,13 +383,41 @@ var frozenDocuments = []string{
 	"docs/HANDOFF.md",
 }
 
+// relToRepo renders a path the way frozenDocuments spells one: relative to the
+// repository root, forward slashes.
+func relToRepo(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(rel)
+}
+
 // isFrozen reports whether this path is one of the named frozen documents.
-// Matched on suffix so the fixture corpora, which live under a temp directory,
-// can never accidentally match.
+//
+// EXACT, not a suffix. The suffix form was reachable around: a file at
+// `docs/designs/docs/HANDOFF.md` ends with a listed path and was skipped
+// silently, which is the trapdoor again in the mechanism that replaced it. And
+// the forward check in TestEveryDocumentDeclaringItselfSupersededIsListed
+// already compared exact relative paths, so one list had two matchers and only
+// one of them could be reached around.
+//
+// Anchoring to repoRoot is also what makes a temp-directory collision
+// impossible — a fixture at `<tmp>/docs/HANDOFF.md` does not resolve to
+// `docs/HANDOFF.md` relative to this repository. The comment here used to claim
+// the opposite, crediting the suffix match for the property the anchor provides.
 func isFrozen(path string) bool {
-	p := filepath.ToSlash(path)
+	rel := relToRepo(path)
 	for _, f := range frozenDocuments {
-		if strings.HasSuffix(p, f) {
+		if rel == f {
 			return true
 		}
 	}
@@ -800,6 +828,37 @@ func TestEveryFrozenDocumentSaysSo(t *testing.T) {
 	}
 }
 
+// TestTheFrozenListIsMatchedExactly pins MINOR E: the skip list is compared by
+// exact repository-relative path, not by suffix.
+//
+// Measured: under the suffix form, a document at `docs/designs/docs/HANDOFF.md`
+// ends with a listed path, was skipped silently, and carried two banned claims
+// past a green run. That is the same trapdoor the list replaced, reopened inside
+// the replacement — and the forward consistency check already used exact paths,
+// so one list had two matchers and only one could be reached around.
+func TestTheFrozenListIsMatchedExactly(t *testing.T) {
+	if !isFrozen(filepath.Join(repoRoot, "docs/HANDOFF.md")) {
+		t.Fatal("the genuinely frozen document is no longer matched at all; this test would " +
+			"then pass for the wrong reason")
+	}
+	for _, reachAround := range []string{
+		"docs/designs/docs/HANDOFF.md",
+		"docs/decisions/copy/docs/decisions/0020-policy-compiler.md",
+	} {
+		if isFrozen(filepath.Join(repoRoot, reachAround)) {
+			t.Errorf("%s is treated as frozen because its path ENDS with a listed one. A skip "+
+				"decided by suffix can be reached around, which is the defect the list "+
+				"replaced", reachAround)
+		}
+	}
+	// And a fixture corpus must never collide with the list, whatever it is named.
+	dir := t.TempDir()
+	if isFrozen(filepath.Join(dir, "docs/HANDOFF.md")) {
+		t.Error("a temp-directory fixture matched the frozen list; anchoring to repoRoot is " +
+			"what is supposed to make that impossible")
+	}
+}
+
 // TestEveryDocumentDeclaringItselfSupersededIsListed is the other direction, and
 // it is the one that fails LOUDLY when someone supersedes an ADR and forgets.
 //
@@ -821,7 +880,7 @@ func TestEveryDocumentDeclaringItselfSupersededIsListed(t *testing.T) {
 		if !declaresItselfSuperseded.MatchString(headOf(string(b))) {
 			return
 		}
-		rel := strings.TrimPrefix(filepath.ToSlash(path), filepath.ToSlash(repoRoot)+"/")
+		rel := relToRepo(path)
 		if !listed[rel] {
 			t.Errorf("%s declares itself superseded and is not on frozenDocuments. Its body "+
 				"may no longer be edited, so this gate must not read it: add the path to "+
@@ -856,8 +915,11 @@ func TestEveryDocumentDeclaringItselfSupersededIsListed(t *testing.T) {
 // pattern that used to decide freezing read that as "superseded" and dropped the
 // canonical document from the gate. Narrowing the pattern fixed that one
 // sentence; a live design whose Status said "Replaces the superseded design 09"
-// left the corpus through the same trapdoor with a different trigger word. A
-// list cannot be reached that way at all.
+// left the corpus through the same trapdoor with a different trigger word. No
+// phrasing reaches a list of names — but a list is only as tight as the matcher
+// that reads it, and the first version of this one matched by SUFFIX and was
+// reachable around by a path ending in a listed one. TestTheFrozenListIsMatchedExactly
+// pins the exact comparison that closed it.
 func TestTheCanonicalDocumentIsNotFrozen(t *testing.T) {
 	for _, p := range []string{"docs/architecture.md", "docs/architecture.html", "AGENTS.md", "CLAUDE.md"} {
 		if isFrozen(filepath.Join(repoRoot, p)) {

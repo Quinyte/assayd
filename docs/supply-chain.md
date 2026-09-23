@@ -1,6 +1,10 @@
 # Supply chain
 
-assayd's admission rejects agent images that are not cosign-signed (ADR-0019), and design 07 §4 says the platform ships "as a cosign-signed OCI chart, all images pinned by digest, SBOM attached — **the same admission story agents get**." This page is how you check that assayd holds itself to it, without taking our word for anything.
+ADR-0019 says agent images must be cosign-signed and design 07 §4 says the platform ships "as a cosign-signed OCI chart, all images pinned by digest, SBOM attached — **the same admission story agents get**." This page is how you check that assayd holds itself to the half that exists, without taking our word for anything.
+
+**One correction before anything else, because it was the first sentence of this page.** It read: *"assayd's admission rejects agent images that are not cosign-signed (ADR-0019)"*. **Admission does no such thing.** What admission enforces is **digest-pinning** — a CEL rule on `spec.runtime.image` — and **nothing in this repository verifies any signature on an agent image or an agent card**. Signature verification arrives with the Sigstore policy-controller binding design 07 A2 chose, and digest-pinning is its precondition, because a signature is verified against a digest. The same false claim was corrected in the CRD comment and in the chart's `_helpers.tpl`; it survived here, in the opening line of the document about signatures, which is the worst place in the repository for it to survive.
+
+So read what follows as a claim about **assayd's own released artifacts**, which are signed and verifiable, and not as a claim about what assayd enforces on yours.
 
 ## What is published, and where
 
@@ -13,9 +17,30 @@ assayd's admission rejects agent images that are not cosign-signed (ADR-0019), a
 
 Both are published by `.github/workflows/release.yml`. **Two things trigger it, not one**, and this page said "only … on a `v*` tag": a push of a `v*` tag, **and `workflow_dispatch` with a `tag` input**.
 
-**A dispatch is NOT equivalent to a tag push, and treating it as one is the hazard.** Only the version *string* comes from the input — `github.event.inputs.tag || github.ref_name` — and **neither job's checkout takes a `ref:`** (`release.yml:53`, `:170`). So a dispatch builds whatever ref it was launched from, and publishes it under the name you typed: **dispatching `tag: v0.4.1` from `main` publishes `main`'s code as `0.4.1`**, signs it, and attests it. Nothing downstream can tell. The signature is honest about what it signed — Fulcio binds the workflow, repository and **commit** — so `cosign verify` of the certificate's commit against the `v0.4.1` tag is the check that would catch it, and nothing in the workflow performs it.
+**A dispatch is NOT equivalent to a tag push, and treating it as one is the hazard.** Only the version *string* comes from the input — `github.event.inputs.tag || github.ref_name` — and **neither job's checkout takes a `ref:`** (`release.yml:53`, `:170`). So a dispatch builds whatever ref it was launched from, and publishes it under the name you typed: **dispatching `tag: v0.4.1` from `main` publishes `main`'s code as `0.4.1`**, signs it, and attests it.
 
-Use a tag push. If you must dispatch, verify afterwards that the certificate's `Subject`/`githubWorkflowSha` is the commit the tag names.
+**The certificate can tell you, and the default verification command does not ask.** An earlier version of this paragraph said "nothing downstream can tell" and then told you to check the certificate's `Subject` for the commit. Both were wrong, and the second more dangerously: the **Subject (SAN) is the workflow identity, and it ends in a `ref`, not a commit** — `https://github.com/Quinyte/assayd/.github/workflows/release.yml@refs/tags/v0.4.1` for a tag build, `…@refs/heads/main` for a dispatch from `main`. Someone following that instruction would read a ref and believe they had checked a commit. The **commit** lives in a different claim, which cosign exposes as its own flag.
+
+Two claims, two flags — ask for the one you mean:
+
+```bash
+# Was it built from the TAG? (this is what tells a tag push from a dispatch)
+cosign verify "${IMAGE}@${DIGEST}" \
+  --certificate-identity "https://github.com/Quinyte/assayd/.github/workflows/release.yml@refs/tags/v0.4.0" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# Was it built from a specific COMMIT? (the sha claim, not the Subject)
+cosign verify "${IMAGE}@${DIGEST}" \
+  --certificate-identity-regexp '^https://github.com/Quinyte/assayd/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-sha "$(git rev-parse v0.4.0^{commit})"
+```
+
+**The workflow's own verification does not make either check, and one line would.** All three of its `cosign verify` invocations pass only `--certificate-identity-regexp '^https://github.com/<owner>/<repo>/'` and the issuer. That regexp is anchored at the start only, so it matches **any** ref — a dispatch from `main` satisfies it exactly as a tag push does. Replacing it with an exact `--certificate-identity …@refs/tags/v${version}`, or adding `--certificate-github-workflow-ref refs/tags/v${version}`, closes it in one line per job and fails closed.
+
+**That change is not made here, deliberately.** It alters release behaviour and cannot be exercised without cutting a release; getting the claim string wrong would fail *after* the artifact had been pushed and signed, which is precisely the v0.2.0 shape this page documents below. It is recorded as owed rather than slipped into a documentation change.
+
+Until then: **use a tag push**, and if you must dispatch, run the first command above against the version you published.
 
 **What the workflow verifies of itself, and what it does not.** Before it finishes, the image job runs `cosign verify` and `cosign verify-attestation --type spdxjson` against the digest it just pushed, and the chart job runs `cosign verify` against the chart digest. It **never** runs `cosign verify-attestation --type slsaprovenance1` and **never** runs `gh attestation verify`. So the signature and the SBOM attestation are checked by the release itself; **the SLSA provenance is not** — every provenance claim on this page comes from a dated manual check, named as such below.
 
