@@ -266,6 +266,17 @@ func DeadAnchors(body string) []string {
 // disambiguates the second with a `-1` suffix, so the links still land, but the
 // generator has no business emitting a collision it can simply not emit — and
 // the first attempt at the CEL section collided with seven of crdoc's headings.
+//
+// WHAT THIS DOES NOT CATCH, stated because it is the same shape two other gates
+// here were found in: anchor() is used both to emit a link and to compute the
+// set this checks against, so an anchor() that disagreed with a real renderer
+// would produce links that land here and are dead in a browser. The check that
+// parts them is TestABrokenAnchorIsRefusedRatherThanWritten, which pins one
+// known-good slug (`gateway.enabled` → `gatewayenabled`) against github-slugger's
+// documented behaviour rather than against this function. Beyond that the
+// evidence is external: an independent review ran its own slugger over the
+// committed pages (148 links, 0 dead) and built them into the docs site (756
+// links, 0 errors).
 func checkAnchors(name, body string) error {
 	_, dupes := pageAnchors(body)
 	dead := DeadAnchors(body)
