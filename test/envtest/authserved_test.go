@@ -769,7 +769,8 @@ func TestTheHedgeSaysWhatWasReadOfTheRoute(t *testing.T) {
 			for what, cond := range map[string]*metav1.Condition{
 				"PolicyApplyIncomplete": c, "GovernanceSkipped": g, "Ready": ready} {
 				mustContain(t, cond, what, tc.says, "THIS PASS DID NOT READ IT AS ACCEPTED",
-					"the route's reading at its current generation is unknown")
+					"the route's reading at its current generation is unknown",
+					"controllerName agentgateway.dev/agentgateway, the only one assayd reads")
 				// Both wordings of the routeNamed sentence: A81's "… first", and
 				// item 12's "also carries …", neither of which is true here.
 				mustNotContain(t, cond, what, "names the route's own reading first",
@@ -1307,6 +1308,72 @@ func TestAHeldPolicyClaimKeepsTheReasonAboveIt(t *testing.T) {
 		mustContain(t, c, "PolicyApplyIncomplete", "AuthPolicyNotAttached")
 		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
 		mustContain(t, g, "GovernanceSkipped", key.String(), "AuthPolicyNotAttached", heldMark)
+	})
+	// The ERRORED path: a pass whose -auth step fails transiently still runs
+	// reportAboveServed, so W1's GatewayAuthPolicy stands on it, and
+	// holdServedJudgement then holds the policy claim through holdGovernance.
+	// The item-9 composition must reach this call site too — A85's critique
+	// (N7) reverted only it and the whole suite stayed green.
+	//
+	// Mutation, one edit (N7): at holdServedJudgement's call, restore the
+	// pre-A85 whole-restore regardless of what this pass asserted. It
+	// compiles, and this must fail.
+	t.Run("a GatewayAuthPolicy on an errored pass", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "a85heldaboveerr")
+		acceptRoute(t, a.Namespace, a.Name)
+		unattachPolicy(t, a)
+		reconcileOnce(t, r, a)
+		condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+
+		key := gatewayPolicy(t, "gw-"+a.Name, map[string]any{
+			"targetRefs": onGateway(suiteGatewayName, ""), "traffic": apiKeyTraffic(t, a)})
+		base := r.Reader
+		if base == nil {
+			base = k8s
+		}
+		r.Reader = staleAgentReader{Reader: base}
+		err := reconcileErr(t, r, a)
+		r.Reader = base
+		if err == nil || !strings.Contains(err.Error(), "older than the live one") {
+			t.Fatalf("the injected stale read did not reach the caller: %v", err)
+		}
+		if auth := authOf(t, a); auth == nil || !auth.PolicyUnattached {
+			t.Fatalf("this row needs the policy claim HELD, not cleared: %+v", auth)
+		}
+		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
+		mustContain(t, g, "GovernanceSkipped", key.String(), "AuthPolicyNotAttached", erroredMark)
+	})
+	// W1's OTHER arm: the Gateway-level policy list fails, which is transient
+	// and does not page. On a held pass A85 makes its GatewayAuthPolicy keep
+	// GovernanceSkipped's reason, with the held claim appended — before A85
+	// the whole-restore replaced it with AuthPolicyNotAttached and the list
+	// failure was dropped. The next pass whose list succeeds reads
+	// AuthPolicyNotAttached again. Recorded in A85 and §8.1 item 9.
+	t.Run("a Gateway-level policy list that fails", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "a85heldunlisted")
+		acceptRoute(t, a.Namespace, a.Name)
+		unattachPolicy(t, a)
+		reconcileOnce(t, r, a)
+		condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+
+		driftPolicySpec(t, a)
+		base := r.Reader
+		if base == nil {
+			base = k8s
+		}
+		r.Reader = policiesUnlistable{Reader: base}
+		reconcileOnce(t, r, a)
+		r.Reader = base
+		if auth := authOf(t, a); auth == nil || !auth.PolicyUnattached {
+			t.Fatalf("this row needs the policy claim HELD, not cleared: %+v", auth)
+		}
+		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
+		mustContain(t, g, "GovernanceSkipped", "could not be listed", "AuthPolicyNotAttached", heldMark)
+
+		driftPolicySpec(t, a)
+		reconcileOnce(t, r, a)
+		g = condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+		mustNotContain(t, g, "GovernanceSkipped", "could not be listed")
 	})
 }
 

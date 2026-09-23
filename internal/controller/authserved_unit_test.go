@@ -250,7 +250,10 @@ func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
 		// to one. It keeps "THIS PASS DID NOT READ IT AS ACCEPTED".
 		{"unattached beside a route this pass read as unknown", clauseUnattached, routeUnread, true,
 			[]string{"does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED",
-				"reading at its current generation is unknown", "announced, not closed"},
+				"reading at its current generation is unknown", "announced, not closed",
+				// The one controllerName assayd reads, which is what points an
+				// operator on a renamed-controller cluster at the real cause.
+				"controllerName agentgateway.dev/agentgateway, the only one assayd reads"},
 			[]string{"route is accepted and SERVING", "names the route's own reading first"}},
 		{"rejected outright on an accepted route", clauseRejected, routeServing, true,
 			[]string{"REJECTED", "none of this Agent's authentication or authorization is in force",
@@ -270,7 +273,10 @@ func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
 				"names the route's own reading first"}},
 		{"rejected beside a route this pass read as unknown", clauseRejected, routeUnread, true,
 			[]string{"REJECTED", "THIS PASS DID NOT READ IT AS ACCEPTED",
-				"reading at its current generation is unknown", "announced, not closed"},
+				"reading at its current generation is unknown", "announced, not closed",
+				// The one controllerName assayd reads, which is what points an
+				// operator on a renamed-controller cluster at the real cause.
+				"controllerName agentgateway.dev/agentgateway, the only one assayd reads"},
 			[]string{"route is accepted and SERVING", "names the route's own reading first"}},
 		// The shape A82 measured, and the one A83 exists for: the Gateway
 		// says Attached=True and the route is measured refusing, so a lead
