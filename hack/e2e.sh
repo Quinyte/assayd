@@ -74,7 +74,10 @@ cleanup() {
     local net="k3d-${OWNED_CLUSTER}"
     if docker network inspect "${net}" >/dev/null 2>&1; then
       docker network disconnect "${net}" "k3d-${REG_NAME:-assayd-e2e-registry}" >/dev/null 2>&1 || true
-      docker network rm "${net}" >/dev/null 2>&1 || true
+      # Not fatal — cleanup must not fail the run — but never silent: a
+      # network this cannot remove is the leak this block exists to stop.
+      docker network rm "${net}" >/dev/null 2>&1 \
+        || echo "WARNING: could not remove docker network ${net}; remove it by hand, or Docker will run out of address pools" >&2
     fi
   fi
 }
