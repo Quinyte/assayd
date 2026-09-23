@@ -105,7 +105,7 @@ print-crdoc-version: ## the pinned crdoc version, for CI to key a cache on
 	@echo $(CRDOC_VERSION)
 
 ## ---------- the loop ----------
-.PHONY: fmt vet unit envtest docs conformance conformance-cluster chart chart-conform test race cover e2e verify
+.PHONY: fmt vet unit envtest docs conformance conformance-cluster chart chart-conform release-workflow test race cover e2e verify
 fmt: ; go fmt ./...
 vet: ; go vet ./...
 unit: ## pure logic, no cluster
@@ -129,6 +129,9 @@ chart: ## render the chart and hold it to the doctrine (pods, stateful deps, RBA
 	helm lint charts/assayd
 	go test ./test/chart/... -count=1
 
+release-workflow: ## a dispatch publishes only the tag it was started from; nothing publishes after a refusal
+	go test ./test/release/... -count=1
+
 chart-conform: ## validate rendered manifests against the k8s schemas we support
 	@for v in 1.34.0 1.35.0 1.36.0; do \
 		echo "==> kubeconform $$v"; \
@@ -136,7 +139,7 @@ chart-conform: ## validate rendered manifests against the k8s schemas we support
 			-kubernetes-version $$v -ignore-missing-schemas || exit 1; \
 	done
 
-test: fmt vet unit docs conformance envtest chart ## the pre-commit gate
+test: fmt vet unit docs conformance envtest chart release-workflow ## the pre-commit gate
 e2e: ## real cluster path on k3d (design 07's matrix, locally)
 	./hack/e2e.sh
 verify: ## what CI runs — generation must be reproducible

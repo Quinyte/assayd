@@ -436,8 +436,15 @@ func toNum(v any) int {
 
 // A digest pins content; a tag pins a name that can be moved to point at other
 // content after it was signed. assayd's own admission rejects agent images that
-// are not digest-pinned and cosign-signed (ADR-0019), so the chart has to be
-// able to express the same thing about the operator.
+// are not digest-pinned, so the chart has to be able to express the same thing
+// about the operator.
+//
+// It does NOT reject unsigned ones: this comment used to say "digest-pinned and
+// cosign-signed (ADR-0019)", and nothing in this repository verifies any
+// signature — CEL cannot, and the chart ships no policy that does. ADR-0019
+// states the requirement; design 07 A2's Sigstore policy-controller binding is
+// what would enforce it, and digest-pinning is its precondition rather than a
+// weaker version of it.
 func TestChartSupportsDigestPinning(t *testing.T) {
 	const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 	docs := render(t, "--set", "operator.image.digest="+digest)

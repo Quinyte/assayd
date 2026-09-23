@@ -65,8 +65,16 @@ The operator image reference.
 A digest wins when set, and the tag is dropped rather than carried alongside it:
 `repo:tag@digest` is legal, but the digest decides and the tag then reads as
 though it mattered. assayd's own admission requires agent images to be
-digest-pinned and cosign-signed (ADR-0019); the release workflow pins this to
-the digest it published and signed, so the platform meets the bar it sets.
+digest-pinned (CEL on spec.runtime.image), and the release workflow pins this
+image to the digest it published and signed, so the platform meets that bar for
+itself. It does NOT require them to be cosign-signed — this comment said it did,
+which is the same false claim the CRD comment on spec.runtime.image was
+corrected for. No AGENT image's signature is verified anywhere in this
+repository, at admission or after it: CEL cannot, and the chart ships no policy
+that does. That arrives with the Sigstore policy-controller binding design 07 A2
+chose. assayd's OWN released artifacts are a different matter and are signed and
+verified — the release workflow runs cosign verify against what it publishes,
+which docs/supply-chain.md documents and bounds.
 */}}
 {{- define "assayd.operator.image" -}}
 {{- $img := .Values.operator.image -}}

@@ -93,6 +93,12 @@ jobs:
       - name: docs do not carry a superseded guarantee
         run: make docs
 
+      # release.yml's version step refuses a dispatch not started from the tag
+      # it names, and nothing after it may publish once it has. No release is
+      # cut to test that, so this is the only thing that fails if it breaks.
+      - name: release workflow refuses a dispatch from the wrong ref
+        run: make release-workflow
+
       - name: unit (race)
         run: make race
 

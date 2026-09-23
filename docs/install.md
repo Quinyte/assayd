@@ -12,7 +12,7 @@ These are the versions the e2e suite runs against. They are what has been measur
 |---|---|---|
 | Gateway API CRDs | `v1.6.0`, standard channel | `hack/e2e.sh` (`GWAPI_VERSION`) |
 | agentgateway (CRDs and controller) | `1.5.0` | `hack/e2e.sh` (`AGW_VERSION`) |
-| assayd chart | `0.4.0`, `oci://ghcr.io/quinyte/charts/assayd`. Section 6's `admission.toolRouteWriters` arrived in it (section 6.2). | `docs/supply-chain.md` |
+| assayd chart | `0.4.0`, `oci://ghcr.io/quinyte/charts/assayd`. Section 6's `admission.toolRouteWriters` arrived in it (section 6.2). **`v0.4.1` is tagged and this walkthrough has not been re-run against it**, so the pinned version here is the last one verified end to end, not the newest. | `docs/supply-chain.md` |
 | Kubernetes | k3d (k3s). The chart requires `>=1.30.0` | `charts/assayd/Chart.yaml` |
 
 The e2e runs its gateway tests on k3d only. The kind lane skips them and reports the gateway path as unverified.
@@ -143,6 +143,8 @@ The chart takes two URLs, and they name different listeners:
 ## 2. Install the chart
 
 Install the published, signed chart. It pins the operator image by digest; `docs/supply-chain.md` shows how to verify both.
+
+**`0.4.0` is deliberate, not stale-by-accident.** A newer tag, `v0.4.1`, exists; nobody has verified its published artifacts or re-run this walkthrough against it, so it is not pinned here. Raising the version is a change to make after checking, not before — `docs/supply-chain.md` records what has actually been verified from outside and what has not.
 
 ```bash
 helm install assayd oci://ghcr.io/quinyte/charts/assayd --version 0.4.0 \
@@ -297,7 +299,7 @@ While it is not yet served, `Ready` is `False`, reason `AuthEnforcementPending`.
 |---|---|---|---|
 | `GovernanceSkipped` | `False` | `AuthVerifiedOnOneReplica` | One probe proves one gateway replica, and no replica count is declared. |
 | `Registered` | `True` | `CardValidated` | The operator fetched and validated the card. |
-| `CardUnsigned` | `True` | `NoSigningConfigured` | Nothing verifies card signatures yet. This is true for every Agent. |
+| `CardUnsigned` | `True` | `NoSigningConfigured` | Nothing verifies card signatures yet. Raised on a managed Agent once its card has been fetched — **not** on an Agent that never became ready, and never on an external one, which returns before any card handling. Absence of this condition is not evidence that a card was checked. |
 
 ### 5.4 Write two keys
 

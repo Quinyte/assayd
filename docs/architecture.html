@@ -348,15 +348,15 @@
         <circle cx="300" cy="130" r="2.5"/>
       </g>
     </svg>
-    <p class="doc-kicker">Architecture · v1.0 · superseded in part — designs 02 and 03 are not approved; delivery is narrowed to one slice (ADR-0030). Most sections describe the designed system, not the shipped one; each such section opens with a “Designed, not shipped” note, copied from architecture.md</p>
+    <p class="doc-kicker">Architecture · v1.0 · superseded in part — design 02 is not approved, and designs 03 and 16 approve only their first slice; delivery is narrowed to one slice (ADR-0030). Most sections describe the designed system, not the shipped one; each such section opens with a “Designed, not shipped” note, copied from architecture.md</p>
     <p class="not-shipped"><b>assayd</b> is the project's permanent name, not a codename. ADR-0001 Amendment 1 records the rename from the “plume” working title (and “graphene” before that) as <b>done</b>, with <code>assayd.dev</code> authoritative and the API group. This page kept the old name throughout until 2026-09-11, including a CRD example whose <code>apiVersion</code> named an API group that does not exist; it was renamed then to match architecture.md and the code.</p>
     <h1 class="title">assayd<span class="hex"> ⬡</span></h1>
     <p class="subtitle">A radically lightweight, Kubernetes-native agent platform. The domain is a pluggable knowledge graph; everything else is an open standard with a thin binding.</p>
-    <p class="subtitle" style="font-size:16px;margin-top:-14px;">Every component below is designed, adversarially critiqued, and approved — including the places the design phase <em>corrected</em> the original strategy. Those corrections are listed first.</p>
+    <p class="subtitle" style="font-size:16px;margin-top:-14px;">Every component below is <em>designed</em>, and most were adversarially critiqued — but <b>not every one is approved, and this line used to say they all were.</b> Design 02’s own header says it is not approved and must not be cited as such; designs 03 and 16 approve only their <em>first slice</em> (2026-09-12 and 2026-09-14). <code>docs/designs/README.md</code> arbitrates, and a design’s own Status line beats any summary — including this one. The places the design phase <em>corrected</em> the original strategy are listed first.</p>
     <div class="meta-row">
       <span><b>version</b> 1.0</span>
       <span><b>date</b> 2026-08-20</span>
-      <span><b>status</b> 27/27 designs approved · 26 ADRs</span>
+      <span><b>status</b> superseded in part · 27 designs, <b>not 27 approved</b> · 34 ADRs (0020 and 0033 superseded)</span>
       <span><b>audience</b> author · future contributors</span>
     </div>
   </div>
@@ -402,9 +402,9 @@
   <div class="tablewrap"><table>
     <thead><tr><th>v0.1 said</th><th>v1.0 says</th><th>Where</th></tr></thead>
     <tbody>
-      <tr><td>Subgraph scoping is <b>enforced at the gateway</b></td><td><b>Gateway-injected, provider-enforced</b> — the gateway never parses MCP bodies, so providers carry scope and the conformance suite gains a scope battery</td><td>design 01 A1 · ADR-0020</td></tr>
+      <tr><td>Subgraph scoping is <b>enforced at the gateway</b></td><td><b>Gateway-injected, provider-enforced</b> — the gateway never parses MCP bodies, so providers carry scope and the conformance suite gains a scope battery</td><td>design 01 A1 · ADR-0028</td></tr>
       <tr><td>An approval-gated tool pauses and "the agent just sees a slow tool"</td><td>A typed, retryable <code>APPROVAL_PENDING</code> the caller must handle — protection is fail-closed either way, but black-box agents treating it as fatal will fail the task, documented rather than hidden</td><td>ADR-0025</td></tr>
-      <tr><td>Budgets are enforced at the gateway</td><td><b>Two tiers, stated</b>: the gateway is a conservative <em>local approximation</em> (rate ÷ replicas, priced at the max model); the <b>receipt backstop is exact</b> and trails by one reconcile interval</td><td>ADR-0020</td></tr>
+      <tr><td>Budgets are enforced at the gateway</td><td><b>Two tiers, and neither is a ceiling</b> (ADR-0028, correcting ADR-0020). The gateway bounds <em>sustained rate</em> per replica but <b>cannot stop the request that crosses the budget</b> — token counts are not known until a request completes. The receipt tier was described here as <em>exact</em>; it is not. It sums the same <code>usd_est</code> estimates the gateway uses, priced from the same table, so it is neither exact in USD nor independent. <b>No bound is published</b>: 100 concurrent requests admitted 100× a one-replica budget in a measured spike</td><td>ADR-0028</td></tr>
       <tr><td>Six CRDs</td><td>Six <em>core</em> CRDs plus <code>Connector</code>, <code>Pack</code>, <code>Grant</code>, <code>Tenant</code></td><td>§03</td></tr>
     </tbody>
   </table></div>
@@ -437,8 +437,8 @@
     <div class="rule"><span class="rn">RULE 2</span><h3>Two stateful deps, ever</h3><p>Postgres + NATS. Durability, eval results, audit, KV, object store, queues — all in those two. No Kafka, no Redis, no Temporal cluster.</p></div>
     <div class="rule"><span class="rn">RULE 3</span><h3>Library over server</h3><p>If a capability can run as a library inside an existing pod (DBOS, DeepEval, OTel SDK), it never becomes a service.</p></div>
     <div class="rule"><span class="rn">RULE 4</span><h3>The reconcile loop is the product</h3><p>Versioning = CR generations + GitOps. Self-healing = conditions + controllers. assayd adds <em>semantic</em> health to machinery Kubernetes already has.</p></div>
-    <div class="rule"><span class="rn">RULE 5</span><h3>Weight budget is a spec</h3><p>Core control plane ≤ 8 pods. One <code>helm install</code> on any conformant cluster — <strong>minikube, k3d, kind, k3s</strong> included. Local distros are a CI target, not a courtesy. Every added pod needs a written justification.</p></div>
-    <div class="rule"><span class="rn">RULE 6</span><h3>Tiered install</h3><p><code>core</code> (agents + KG + security + traces) → <code>plus</code> (evals, drift, modelhub). Each tier independently removable.</p></div>
+    <div class="rule"><span class="rn">RULE 5</span><h3>Weight budget is a spec</h3><p>Core control plane ≤ 8 pods — arithmetic, enforced by <code>TestCorePodBudget</code> (§17). One <code>helm install</code> on any conformant cluster. <strong>Two distros are a CI target, not four</strong>: <code>hack/e2e.sh</code> accepts <code>DISTRO=k3d</code> and <code>DISTRO=kind</code> and exits non-zero on anything else, and CI runs both on every merge. NFR-3 also names <strong>minikube and k3s</strong>; nothing runs them, so they are intended and untested. This rule used to list all four as though they were the CI target, not a courtesy. Every added pod needs a written justification.</p></div>
+    <div class="rule"><span class="rn">RULE 6</span><h3>Tiered install</h3><p><code>core</code> (agents + KG + security + traces) → <code>plus</code> (evals, drift, modelhub). Each tier is <em>designed</em> to be independently removable, and <strong>removability is untested because only one tier renders</strong>: <code>charts/assayd/templates/_helpers.tpl</code> calls <code>fail</code> on <code>tier: plus</code>, which would add Argo Workflows, Phoenix, OpenFGA and eval-runner images that are not built. NFR-7 asks for both; only <code>core</code> installs.</p></div>
   </div>
 </section>
 
@@ -864,13 +864,13 @@
 <!-- ══════════════════════ 07 HARNESS ══════════════════════ -->
 <section id="harness">
   <div class="sec-head"><span class="n">07</span><h2>Harness &amp; observability</h2></div>
-  <p class="not-shipped"><b>Designed, not shipped.</b> No receipt pipeline, OTel export, OpenObserve or alert rules exist in the repository. The clause below saying alert rules are "shipped in the chart, each fixture-tested in CI" is false today and stands only as the target.</p>
+  <p class="not-shipped"><b>Designed, not shipped — and that applies to every bullet below, not to one clause in one of them.</b> Nothing in this section exists: <code>go.mod</code> requires no OTel SDK and no NATS client, and <code>api/ internal/ cmd/ charts/ config/</code> contain no span export, no JetStream writer, no OpenObserve, and no <code>PrometheusRule</code> or <code>ServiceMonitor</code>. An earlier version of this note singled out the alert-rule clause, which left the receipt stream and the gateway’s spans reading as facts by omission. They are not facts.</p>
   <div class="prose">
     <p>The harness is a proven pattern promoted to platform level and made SDK-agnostic — because it lives in the <em>data plane</em>, not in the agent:</p>
     <ul class="tight">
-      <li><strong>Sessions &amp; receipts.</strong> Every A2A task through the gateway is recorded to a JetStream stream: full request/response, tool calls, model calls, cost, identity chain. Every agent action is <strong>replayable</strong>. One stream is simultaneously the audit log, the debugging substrate, and the eval-data collector (§08).</li>
-      <li><strong>Traces.</strong> OpenTelemetry <strong>GenAI semantic conventions</strong> — adopted now, <em>pinned to a commit SHA</em> — the conventions moved to an unreleased repo, so there is no version number to pin — since they remain pre-stable in mid-2026 (shape settled, names may churn). The gateway emits spans for every agent/tool/LLM hop, so even uninstrumented agents get traces; instrumented agents (OpenLLMetry SDKs) add interior reasoning spans.</li>
-      <li><strong>Backend.</strong> <strong>OpenObserve</strong> — metrics, logs, and traces in a single binary on object storage. The Prometheus + Grafana + Tempo + Loki equivalent is 6+ pods; this is one. <strong>Arize Phoenix</strong> is an optional <code>plus</code> pod for LLM-native trace views and embedding-drift visuals.</li>
+      <li><strong>Sessions &amp; receipts</strong> <em>(intended — no receipt is written today, and the chart deploys no NATS)</em><strong>.</strong> Every A2A task through the gateway would be recorded to a JetStream stream: full request/response, tool calls, model calls, cost, identity chain. Every agent action is <strong>replayable</strong>. One stream is simultaneously the audit log, the debugging substrate, and the eval-data collector (§08).</li>
+      <li><strong>Traces</strong> <em>(intended — the operator emits no spans and exports nothing)</em><strong>.</strong> OpenTelemetry <strong>GenAI semantic conventions</strong> — adopted now, <em>pinned to a commit SHA</em> — the conventions moved to an unreleased repo, so there is no version number to pin — since they remain pre-stable in mid-2026 (shape settled, names may churn). The gateway emits spans for every agent/tool/LLM hop, so even uninstrumented agents get traces; instrumented agents (OpenLLMetry SDKs) add interior reasoning spans.</li>
+      <li><strong>Backend</strong> <em>(intended — the chart deploys neither)</em><strong>.</strong> <strong>OpenObserve</strong> — metrics, logs, and traces in a single binary on object storage. The Prometheus + Grafana + Tempo + Loki equivalent is 6+ pods; this is one. <strong>Arize Phoenix</strong> is an optional <code>plus</code> pod for LLM-native trace views and embedding-drift visuals.</li>
       <li><strong>Golden signals for agents</strong>, designed to export as real metrics with alert rules in the Helm chart (none exist yet): task success rate, tool-error rate, tokens/task, cost/task, latency per hop, loop depth, handoff count.</li>
     </ul>
   </div>
@@ -1777,10 +1777,11 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
     <tbody>
       <tr><td>The full loop for one team: runtime, KG + knowledge patterns, evals + gating, drift, receipts, packs, CLI, exposure, Apps — single-tenant, one cluster</td><td><code>Tenant</code> CR + hard multi-tenancy fan-out (vCluster automation, NATS accounts, RLS roles, IdP orgs, gateway partitions)</td></tr>
       <tr><td>Security fundamentals: SPIRE identity, signing, budgets, basic RBAC/admission policies</td><td>Compliance profiles (HIPAA / SOC 2 / GDPR packs), access-review + audit reporting, 6-year retention tooling</td></tr>
-      <tr><td>Community knowledge packs</td><td>SSO/SCIM &amp; directory sync, fleet management across clusters/environments, advanced governance (approval workflows, policy packs), support/SLA</td></tr>
+      <tr><td>Community knowledge packs, <b>and SSO</b></td><td><b>SCIM</b> &amp; directory sync, fleet management across clusters/environments, advanced governance (approval workflows, policy packs), support/SLA</td></tr>
     </tbody>
   </table></div>
   <div class="prose">
+    <p class="soft"><b>This table read “SSO/SCIM” on the enterprise side until 2026-09-23, and the SSO half is withdrawn.</b> ADR-0015’s Decision says “never paywall correctness or safety” and then listed SSO among the enterprise modules — a contradiction inside one paragraph. <b>Amendment 1 (2026-09-10) settled it against the list</b>: CISA’s Secure-by-Design guidance puts single sign-on in the base offering with no SSO tax, and paywalling authentication is now the practice being named rather than a neutral default. SSO is free core; SCIM, fleet management, hard multi-tenancy and compliance reporting stay paid, because they are scale rather than safety.</p>
     <p class="soft">One rule held absolutely: <em>never paywall correctness or safety</em> — evals, receipts, signing, drift stay open. They are why anyone trusts the platform; trust is the funnel. What's paid is running it for a hundred teams instead of one.</p>
   </div>
 </section>
@@ -1790,7 +1791,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
   <div class="sec-head"><span class="n">17</span><h2>Weight budget — core tier</h2></div>
   <p class="not-shipped"><b>Designed, not shipped.</b> The chart deploys one workload today — <code>assayd-agent-operator</code>. The budget below is the target.</p>
   <div class="podrow">
-    <div class="pod own"><b>agent-operator</b>1 pod · assayd</div>
+    <div class="pod own"><b>agent-operator</b>2 pods · assayd</div>
     <div class="pod"><b>agentgateway</b>1–2 pods</div>
     <div class="pod"><b>SPIRE</b>2 pods (server + DS)</div>
     <div class="pod"><b>Zitadel</b>1 pod · on our Postgres</div>
@@ -1798,7 +1799,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
     <div class="pod"><b>Postgres</b>1 pod</div>
     <div class="pod"><b>OpenObserve</b>1 pod</div>
   </div>
-  <p class="pod-total">Total: <b>≈ 8 pods</b> — one <code>helm install</code>. Rossoctl's dev setup asks for 16 GB / 4 cores <em>with flags</em>; assayd should demo on half that. Exactly one pod in the core tier is assayd's own code.</p>
+  <p class="pod-total">Total: <b>9 pods at the low end and 10 at the high end</b> — one <code>helm install</code>; 8 and 9 at <code>profile: local</code>, which collapses replicas to 1. <b>The “≈ 8 pods” this line used to print was arithmetic it does not do, and a first attempt at this correction got it wrong in the flattering direction</b>: it said the operator was one pod. <code>operator.replicas: 2</code> under the default <code>profile: prod</code> renders <b>two</b> — one active, one never-Ready standby holding the lease — so the target ledger is over rule 5’s budget of 8 before the gateway’s second replica is counted at all. The gate never read the prose — <code>TestCorePodBudget</code> sums <code>spec.replicas</code> over the rendered workloads against <code>const budget = 8</code> (<code>test/chart/chart_test.go</code>), so what is enforced is whatever the chart renders, and the chart renders no gateway at all today. Rossoctl's dev setup asks for 16 GB / 4 cores <em>with flags</em>; assayd should demo on half that. Exactly one <b>workload</b> in the core tier is assayd's own code, and at the default profile that workload is <b>two pods</b> — this line said "exactly one pod", which is the same substitution the ledger above was corrected for.</p>
   <h3>Beyond core</h3>
   <div class="prose"><p><code>plus</code> adds workflow-operator + workflow-runtime (+2, scaling 0→N with trigger registrations), OpenFGA with its co-located ext-authz adapter (+1), model-operator (+1), optionally Argo and Phoenix. Enterprise adds tenant-operator (+1). Each managed knowledge graph costs 2 workload pods (adapter + backend); generative serving adds KServe's <code>llmisvc</code> controller at plus tier and <b>+1 endpoint-picker per inference pool</b> alongside the vLLM pods (design 25 A1). A hard-isolated tenant is ~4–5 pods core-only — NATS, Postgres, Zitadel, OpenObserve and the gateway stay shared — and +2–3 at plus. <b>The budget is CI-enforced</b>: one job counts rendered pods against a ledger, another checks stateful workloads against a reasoned allowlist; a PR that adds either fails unless it edits the ledger in the same commit.</p></div>
   <h3>Runs anywhere — local distros are a CI target</h3>
@@ -1862,8 +1863,8 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
       <tr><td>kro is young</td><td>The App layer is last in the build order; plain CRs + GitOps work without it</td></tr>
       <tr><td>Rossoctl convergence</td><td>If its security layer stabilizes, compose it — the moat is §04 + §08 + §09, not the intercept</td></tr>
       <tr><td>Two reviews not fully independent</td><td>Designs 01 and 02 were critiqued in the session that authored them; both carry the caveat and are flagged for re-critique before implementation</td></tr>
-      <tr><td>Research has a shelf life</td><td>Notes are dated 2026-08 with re-verify dates; pinned versions will move — open item R1 tracks the gateway version wording</td></tr>
-      <tr><td>Design ≠ validated</td><td>These plans survived adversarial review, not execution — the first implementation will test agentgateway policy-overlap behavior, DBOS-in-Job resume, and interpreter determinism</td></tr>
+      <tr><td>Research has a shelf life</td><td>Notes are dated 2026-08 and 2026-09 with re-verify dates; pinned versions will move. <b>R1 is not what tracks that, and this row used to say it did</b> — R1 is the policy-overlap question and it is CLOSED (see the open-items table below). The gateway version was settled separately by ADR-0028</td></tr>
+      <tr><td>Design ≠ validated</td><td>These plans survived adversarial review, not execution. <b>The gateway half of this row is out of date</b>: policy-overlap behaviour is no longer waiting on a first implementation — R1 was answered from agentgateway’s source and closed on 2026-08-27, and <code>make conformance</code> plus <code>make conformance-cluster</code> now measure the dependency against real gateways. Still untested by execution: DBOS-in-Job resume and interpreter determinism, neither of which exists in code</td></tr>
       <tr><td>DBOS ceiling</td><td>If cross-service orchestration outgrows a Postgres library, Temporal remains the known escape hatch — a wall to hit, not to pre-build for</td></tr>
     </tbody>
   </table></div>
@@ -1874,7 +1875,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
 <section id="record">
   <div class="sec-head"><span class="n">20</span><h2>The decision record</h2></div>
   <div class="prose">
-    <p>Every claim in this document is backed by an ADR and a critique-passed design. The corpus lives in the repository: <code>docs/decisions/</code> (26 ADRs), <code>docs/designs/</code> (27 designs and their reviews), <code>docs/research/</code> (12 dated notes), <code>docs/diagrams/</code> (8 plates).</p>
+    <p><b>“Every claim in this document is backed by an ADR and a critique-passed design” is what this line used to say, and it is withdrawn.</b> Critique-passed is not approved, and no central design is approved whole: 02 is not approved, and 03 and 16 approve only their first slices. Most claims above describe the <em>designed</em> system; each such section opens with a “Designed, not shipped” note. The corpus lives in the repository: <code>docs/decisions/</code> (<b>34 ADRs</b>, 0001–0034, of which 0020 and 0033 are superseded), <code>docs/designs/</code> (27 designs and their reviews), <code>docs/research/</code> (<b>33 dated notes</b> plus the <code>paper/</code> set), <code>docs/diagrams/</code> (8 plates). The counts here last read 26 and 12.</p>
     <h3>Three views the prose can't give you</h3>
   </div>
 
@@ -1894,22 +1895,44 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
   </figure>
 
   <h3>ADRs</h3>
+  <div class="prose"><p>Rebuilt from <code>docs/decisions/</code> rather than patched, because the version this replaced <b>stopped at 0027</b>: it omitted <b>seven</b> ADRs, 0028 through 0034, and went on listing 0020 as live while 0028 had superseded it since 2026-08-27. An earlier version of this note said three, naming only the ones cited elsewhere on this page; it omitted every ADR recorded after it was last touched. An index that names a superseded decision and not the one replacing it is worse than no index — it answers the question, wrongly. Every file in <code>docs/decisions/</code> has a row; Status is read from each ADR’s own Status line.</p></div>
   <div class="tablewrap"><table>
-    <thead><tr><th>#</th><th>Decision</th><th>#</th><th>Decision</th></tr></thead>
+    <thead><tr><th>#</th><th>Decision</th><th>Status</th></tr></thead>
     <tbody>
-      <tr><td>0001</td><td>Neutral codename; rename before release</td><td>0014</td><td>Compliance as profiles; HIPAA first</td></tr>
-      <tr><td>0002</td><td>The lightweight doctrine (six rules)</td><td>0015</td><td>Apache 2.0 core; open-core by component</td></tr>
-      <tr><td>0003</td><td>Open standards only; thin bindings</td><td>0016</td><td>Apps are shippable products; BFF-less</td></tr>
-      <tr><td>0004</td><td>Postgres + NATS; DBOS not Temporal</td><td>0017</td><td><code>kgp/v1alpha1</code> — the KG provider contract</td></tr>
-      <tr><td>0005</td><td>The domain is a versioned KG contract</td><td>0018</td><td>FalkorDB managed default (SSPL caveat)</td></tr>
-      <tr><td>0006</td><td>Eval-gated progressive delivery</td><td>0019</td><td>Agent revisions, card SoT, materialization</td></tr>
-      <tr><td>0007</td><td>Drift is a controller concern</td><td>0020</td><td>Policy compiler: fail-closed, two-tier budgets</td></tr>
-      <tr><td>0008</td><td>The extension pattern charter</td><td>0021</td><td><code>receipt/v1</code> — derived identity, tenant streams</td></tr>
-      <tr><td>0009</td><td>Connectors — MCP-only agent-facing</td><td>0022</td><td>P1 infrastructure (designs 05–10)</td></tr>
-      <tr><td>0010</td><td>Identity slot; Zitadel default</td><td>0023</td><td>P2 knowledge layer (designs 11–15, 19)</td></tr>
-      <tr><td>0011</td><td>Three authz layers; ReBAC slot</td><td>0024</td><td>P3 semantic admission (designs 16–18)</td></tr>
-      <tr><td>0012</td><td>No mesh in core; ambient profile</td><td>0025</td><td>P4 governance (designs 20–24)</td></tr>
-      <tr><td>0013</td><td>Layered tenancy; Tenant CR fan-out</td><td>0026</td><td>P5 + enterprise (designs 25–27)</td></tr>
+      <tr><td>0001</td><td>Neutral codename; rename before release</td><td>accepted; Amendment 1 (2026-09-09) records the rename to <b>assayd</b> as done</td></tr>
+      <tr><td>0002</td><td>The lightweight doctrine (six rules)</td><td>accepted</td></tr>
+      <tr><td>0003</td><td>Open standards only; thin bindings</td><td>accepted</td></tr>
+      <tr><td>0004</td><td>Postgres + NATS; DBOS not Temporal</td><td>accepted</td></tr>
+      <tr><td>0005</td><td>The domain is a versioned KG contract</td><td>accepted</td></tr>
+      <tr><td>0006</td><td>Eval-gated progressive delivery</td><td>accepted; <b>context corrected 2026-08-22</b> — the first-mover window it had claimed is retracted (§16, §19)</td></tr>
+      <tr><td>0007</td><td>Drift is a controller concern</td><td>accepted</td></tr>
+      <tr><td>0008</td><td>The extension pattern charter</td><td>accepted</td></tr>
+      <tr><td>0009</td><td>Connectors — MCP-only agent-facing</td><td>accepted</td></tr>
+      <tr><td>0010</td><td>Identity slot; Zitadel default</td><td>accepted</td></tr>
+      <tr><td>0011</td><td>Three authz layers; ReBAC slot</td><td>accepted</td></tr>
+      <tr><td>0012</td><td>No mesh in core; ambient profile</td><td>accepted</td></tr>
+      <tr><td>0013</td><td>Layered tenancy; Tenant CR fan-out</td><td>accepted</td></tr>
+      <tr><td>0014</td><td>Compliance as profiles; HIPAA first</td><td>accepted; Amendment 1 (2026-09-04)</td></tr>
+      <tr><td>0015</td><td>Apache 2.0 core; open-core by component</td><td>accepted; Amendment 1 (2026-09-10) — SSO moves to the free core, foundation target is AAIF</td></tr>
+      <tr><td>0016</td><td>Apps are shippable products; BFF-less</td><td>accepted</td></tr>
+      <tr><td>0017</td><td><code>kgp/v1alpha1</code> — the KG provider contract</td><td>accepted; amended 2026-08-22 (6 query + 7 admin tools)</td></tr>
+      <tr><td>0018</td><td>FalkorDB managed default (SSPL caveat)</td><td>accepted</td></tr>
+      <tr><td>0019</td><td>Agent revisions, card SoT, materialization</td><td>accepted</td></tr>
+      <tr><td>0020</td><td>Policy compiler: fail-closed, two-tier budgets</td><td><b>superseded by ADR-0028</b> (2026-08-27). Content frozen; cite the live one</td></tr>
+      <tr><td>0021</td><td><code>receipt/v1</code> — derived identity, tenant streams</td><td>accepted</td></tr>
+      <tr><td>0022</td><td>P1 infrastructure (designs 05–10)</td><td>accepted</td></tr>
+      <tr><td>0023</td><td>P2 knowledge layer (designs 11–15, 19)</td><td>accepted</td></tr>
+      <tr><td>0024</td><td>P3 semantic admission (designs 16–18)</td><td>accepted; Amendment 1 (2026-09-14) — the human approved design 16’s <b>first slice</b> only</td></tr>
+      <tr><td>0025</td><td>P4 governance (designs 20–24)</td><td>accepted</td></tr>
+      <tr><td>0026</td><td>P5 + enterprise (designs 25–27)</td><td>accepted; Amendment 1 (2026-09-04); <b>Amendment 2 (2026-09-23) withdraws its “27/27 approved · implementation may begin” consequence</b></td></tr>
+      <tr><td>0027</td><td>CRD ergonomics: nesting must discriminate</td><td>accepted, r2 after an independent critique returned REVISE</td></tr>
+      <tr><td>0028</td><td>The policy compiler binds agentgateway v1.4.1, proves convergence rather than enforcement, and publishes no budget bound</td><td>accepted 2026-08-27, <b>supersedes ADR-0020</b>; Amendment 1 the same day — decision 3 was written before the execution spike and the spike refuted it</td></tr>
+      <tr><td>0029</td><td>An Agent’s workload and revision material live in an operator-owned run namespace</td><td>accepted 2026-09-04</td></tr>
+      <tr><td>0030</td><td>Narrow delivery to one end-to-end slice; the other designs become hypotheses</td><td>accepted 2026-09-05. <b>This is the ADR that governs what may be claimed anywhere on this page</b></td></tr>
+      <tr><td>0031</td><td>Gate surface — resources, rollback, and where external Agents’ resources live</td><td>accepted 2026-09-05; two of its three are contracts design 02 still owes</td></tr>
+      <tr><td>0032</td><td>A tool allowlist is required, not optional — the mistake is rejected at apply time</td><td>accepted 2026-09-10</td></tr>
+      <tr><td>0033</td><td>Slice auth: API keys per Agent, no live tightening</td><td><b>superseded by ADR-0034</b> (2026-09-11). Content frozen</td></tr>
+      <tr><td>0034</td><td>Slice auth follows the current spec and narrows in place only on a probe</td><td>accepted 2026-09-11, <b>supersedes ADR-0033</b>; Amendments 1–6 (2026-09-11 → 2026-09-15)</td></tr>
     </tbody>
   </table></div>
 
@@ -1930,15 +1953,15 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
   <div class="tablewrap"><table>
     <thead><tr><th>Item</th><th>Nature</th></tr></thead>
     <tbody>
-      <tr><td>Research item R1</td><td>agentgateway same-level policy-overlap semantics undocumented; a reproducing test ships with the compiler. The one-concern rule holds either way</td></tr>
-      <tr><td>Re-critique of designs 01 and 02</td><td>Both were critiqued in the session that authored them; flagged for independent re-critique before implementation</td></tr>
-      <tr><td>Pinned third-party versions</td><td>agentgateway minimum, semconv commit SHA, Unsloth BuiltinTrainer status, and the <code>LLMInferenceService</code>/<code>InferencePool</code> contracts (the fastest mover) — all will move; research notes carry re-verify dates</td></tr>
-      <tr><td>Nothing is execution-validated</td><td>Plans survived adversarial review, not running code — DBOS-in-Job resume, interpreter determinism, gateway policy behaviour remain to be proven</td></tr>
+      <tr><td><s>Research item R1</s> — <b>CLOSED 2026-08-27, by source</b></td><td>Same-level conflicts iterate a randomly-seeded <code>HashSet</code>, so the winning policy varies <b>per replica and per restart</b> while both report <code>Accepted</code>+<code>Attached</code>. Worse than “not crisply documented”: it is nondeterministic by construction. One-concern-per-policy is therefore <b>load-bearing</b>, not a diffability preference, and needs <b>no reproducing test</b> — this row used to promise one (<code>research/agentgateway-v1.4.1-2026-08.md</code> §7)</td></tr>
+      <tr><td><s>Re-critique of designs 01 and 02</s> — <b>CLOSED 2026-08-22</b></td><td>Both were independently re-critiqued: <code>01: PASS — 1 outstanding</code>, <code>02: PASS — 2 outstanding</code>, all three residuals since cleared. Designs that had passed self-review still yielded one blocker and 19 findings</td></tr>
+      <tr><td>Pinned third-party versions</td><td><b>agentgateway is settled and was wrong</b>: there is no 2.x — the compiler’s floor is <b>v1.4.1</b> (ADR-0028). <b>A floor is not the only version that runs</b>: <code>hack/conformance-cluster.sh</code> provisions <code>AGW_VERSION</code> (<b>1.4.1</b>) for design 03’s cases and <code>SLICE_AGW_VERSION</code> (<b>1.5.0</b>) for the slice cases, and <code>hack/e2e.sh</code> runs the operator’s e2e on <b>1.5.0</b>. Still moving: the semconv commit SHA, Unsloth’s BuiltinTrainer status, and the <code>LLMInferenceService</code>/<code>InferencePool</code> contracts (the fastest mover); research notes carry re-verify dates</td></tr>
+      <tr><td>Partly execution-validated (2026-08-29)</td><td><b>“Nothing is execution-validated” is no longer true, and this row used to say it.</b> Gateway policy behaviour <b>is</b> measured: <code>make conformance</code> pins the dependency’s schema from the digest-vendored chart, and <code>make conformance-cluster</code> measures apply/attach status, negative burst, the unit enum, the inert-route 500 and NACK-retains-old-config against a real v1.4.1 gateway, plus the slice cases against a real v1.5.0 one. Still untested by execution: DBOS-in-Job resume, interpreter determinism, and every mechanism in designs 02/03’s amendment set that does not exist in code</td></tr>
     </tbody>
   </table></div>
 
   <h3>How these were produced</h3>
-    <p>Each design ran draft → <strong>independent adversarial critique</strong> → revision → re-critique → approval; nothing reached approved status on a single pass. Roughly 150 findings were raised and fixed. Three were blockers that would otherwise have shipped as real defects: <em>non-atomic policy apply</em> (fail-open windows where a route could serve before its auth policy was accepted — the origin of ADR-0020's fail-closed ordering), a <em>circular revision hash</em> (a content hash depending on a value only knowable after the workload it identifies had already run) and <em>non-deterministic receipt IDs</em> (which silently defeated the deduplication that audit integrity rests on). Where one design amended an already-approved one, the delta is recorded as a numbered amendment in the amended design — design 02 carries eight.</p>
+    <p>Each design ran draft → <strong>independent adversarial critique</strong> → revision → re-critique → approval; nothing reached approved status on a single pass — and <b>“approved” here means the prose survived a review, not that the component is settled</b> (§18, ADR-0030). Roughly 150 findings were raised and fixed. Three were blockers that would otherwise have shipped as real defects: <em>non-atomic policy apply</em> (fail-open windows where a route could serve before its auth policy was accepted — the origin of the fail-closed apply ordering in ADR-0020, itself since superseded by ADR-0028, which found the barrier it specified proved parsing rather than attachment), a <em>circular revision hash</em> (a content hash depending on a value only knowable after the workload it identifies had already run) and <em>non-deterministic receipt IDs</em> (which silently defeated the deduplication that audit integrity rests on). Where one design amended an already-approved one, the delta is recorded as a numbered amendment in the amended design — design 02 carries <b>seventy-six</b>, A1–A76, the tip dated 2026-09-16. This sentence read “eight”.</p>
   </div>
 </section>
 
