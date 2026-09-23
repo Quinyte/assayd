@@ -1,6 +1,6 @@
 ---
-title: Chart values
-description: Every key in the assayd chart's values.yaml, its default, and the chart's own note on it.
+title: "Chart values"
+description: "Every key in the assayd chart's values.yaml, its default, and the chart's own note on it."
 ---
 
 <!-- GENERATED FILE — DO NOT EDIT.

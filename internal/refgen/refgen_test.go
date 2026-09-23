@@ -404,6 +404,126 @@ func TestTheHonestyMechanismsAreRendered(t *testing.T) {
 	}
 }
 
+// The front matter of every committed page must PARSE, and carry a title.
+//
+// The first attempt at front matter emitted bare scalars, and one description
+// contains ": " — YAML reads that as a nested mapping key. `make reference`,
+// `make verify` and `make unit` were all green on a page no site could load,
+// because reproducible invalid YAML is still reproducible; the only thing that
+// caught it was a docs-site build in another repository. Nothing in this one
+// had ever parsed what it wrote.
+func TestTheFrontMatterOfEveryPageIsValidYAML(t *testing.T) {
+	dir := filepath.Join(repoRoot, "docs", "reference")
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v — run `make reference`", dir, err)
+	}
+	var seen int
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		seen++
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fm, err := FrontMatter(string(b))
+		if err != nil {
+			t.Errorf("%s: %v", e.Name(), err)
+			continue
+		}
+		title, _ := fm["title"].(string)
+		if strings.TrimSpace(title) == "" {
+			t.Errorf("%s has no `title`, which is the one field an Astro content collection requires",
+				e.Name())
+		}
+	}
+	if seen < 3 {
+		t.Fatalf("found %d page(s) under docs/reference; expected the three the generator writes", seen)
+	}
+
+	// And the emitter must survive the characters that broke it, plus the ones
+	// that would break it next.
+	for _, s := range []string{
+		`a: b`, `he said "hi"`, `back\slash`, "line\nbreak", `#hash`, `- dash`, `{brace}`, `[bracket]`,
+	} {
+		page := frontMatter(s, s) + "\nbody\n"
+		fm, err := FrontMatter(page)
+		if err != nil {
+			t.Errorf("front matter with title %q does not parse: %v", s, err)
+			continue
+		}
+		if got, _ := fm["title"].(string); got != s {
+			t.Errorf("title round-tripped as %q, want %q", got, s)
+		}
+	}
+}
+
+// The CRD page must carry every rule UNDER THE NODE IT BELONGS TO.
+//
+// Agent.spec.llm.fallback and Agent.spec.llm.providers[index] are the same Go
+// struct, so their rules are byte-identical. A gate that asked whether a rule
+// appeared anywhere on the page passed with every `providers` node deleted —
+// the twin's text satisfied it — and the page then announced a rule count that
+// was false about the CRD. That duplication is what hid the original blocker,
+// so this drives the mutation that defeated the first gate.
+func TestARuleMissingFromItsOwnNodeIsRefused(t *testing.T) {
+	src := filepath.Join(repoRoot, CRDSource)
+	rules, err := celRules(src)
+	if err != nil {
+		t.Fatalf("read the CRD: %v", err)
+	}
+	if len(rules) == 0 {
+		t.Fatal("no CEL rules found in the CRD; this test would pass by having nothing to check")
+	}
+
+	page, err := os.ReadFile(filepath.Join(repoRoot, "docs", "reference", "crd-agent.md"))
+	if err != nil {
+		t.Fatalf("read the committed page: %v — run `make reference`", err)
+	}
+	if err := verifyEveryRuleIsPublished(string(page), src); err != nil {
+		t.Fatalf("the committed CRD reference does not publish every rule under its own node:\n%v", err)
+	}
+
+	// Delete one node's section and the gate must object, even though its twin
+	// still carries identical text elsewhere on the page.
+	var twin string
+	for _, r := range rules {
+		if strings.Contains(r.Node, "providers") {
+			twin = r.Node
+			break
+		}
+	}
+	if twin == "" {
+		t.Skip("no providers node in this CRD; the duplication this guards is not present")
+	}
+	cut := dropSection(string(page), celHeading(twin))
+	if cut == string(page) {
+		t.Fatalf("could not find %q to remove; this test is not testing what it says", celHeading(twin))
+	}
+	if err := verifyEveryRuleIsPublished(cut, src); err == nil {
+		t.Errorf("a page with %s removed entirely passed the gate — its rules are byte-identical to "+
+			"another node's, which is exactly how the original omission hid", twin)
+	}
+}
+
+// dropSection removes one `### ` section, heading and body.
+func dropSection(page, heading string) string {
+	i := strings.Index(page, heading)
+	if i < 0 {
+		return page
+	}
+	rest := page[i+len(heading):]
+	end := len(rest)
+	for _, mark := range []string{"\n### ", "\n## ", "\n# "} {
+		if j := strings.Index(rest, mark); j >= 0 && j < end {
+			end = j
+		}
+	}
+	return page[:i] + rest[end:]
+}
+
 func conditionsPage(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

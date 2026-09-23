@@ -1,6 +1,6 @@
 ---
-title: Conditions and reasons
-description: Every condition the assayd operator writes and every reason string it can set, with what produces it, what the operator does, and whether traffic is withdrawn.
+title: "Conditions and reasons"
+description: "Every condition the assayd operator writes and every reason string it can set, with what produces it, what the operator does, and whether traffic is withdrawn."
 ---
 
 <!-- GENERATED FILE — DO NOT EDIT.
@@ -34,7 +34,9 @@ answers are still true of the code: behaviour can change under a reason whose na
 covers that is weaker and indirect. Each reason's own constant doc comment is reproduced below, so
 when the code's comment moves the page moves, `make verify` fails, and a human reads the diff — which is
 how the annotation for `AuthPolicyNotAttached` was found stale after design 03 A83 landed. That is a
-prompt to look, not a proof.
+prompt to look, not a proof, and it has one hole it cannot cover: behaviour that changes while the
+reason's constant AND its doc comment both stay put. A83 is that shape minus one edit — it happened
+to reword the comment. Nothing on this page would have caught it if it had not.
 
 ## Phases
 
@@ -372,7 +374,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
-**Code and design disagree:** Design 03 §5 still frames this row as firing "on a pass that also read the route ACCEPTED at its current generation". The code raises it on the policy report alone; whether the route read accepted only selects which opening the message uses, and for the partly-valid answer it is deliberately not consulted at all. A83 rewrote the surrounding bullet and left that clause byte-identical, and the bullet before it says the opposite — that the fail-open reaches the policy half "in the message rather than in what is raised". So one row reads as a precondition the code does not implement while its neighbour describes what the code does. A second disagreement this page carried is now RESOLVED and is recorded here because the record of it is not: A83 fixed the rule-8 defect where this reason's message named non-attachment in a state the Gateway reported `Attached=True`, and design 03 §5 no longer calls it owed — but A82's amendment entry in §11 still reads "The fix is OWED", with no forward pointer to the amendment that made it, so a reader arriving at §11 first is told a fixed defect is open. What genuinely remains: the REASON still names non-attachment for a clause where the Gateway says the opposite, and only the message says otherwise — as does the `status.auth.policyUnattached` field name. And a policy carrying the synthetic ancestor beside a real one reporting `Attached=True` still takes the non-attachment lead, which design 03 records as owed.
+**Code and design disagree:** Design 03 §5 still frames this row as firing "on a pass that also read the route ACCEPTED at its current generation". The code raises it on the policy report alone; whether the route read accepted only selects which opening the message uses, and for the partly-valid answer it is deliberately not consulted at all. A83 rewrote the surrounding bullet and left that clause byte-identical, and the bullet before it says the opposite — that the fail-open reaches the policy half "in the message rather than in what is raised". So one row reads as a precondition the code does not implement while its neighbour describes what the code does. A second disagreement this page carried is now RESOLVED: A83 fixed the rule-8 defect where this reason's message named non-attachment in a state the Gateway reported `Attached=True`, and design 03 §5 no longer calls it owed. What is left of it is one stale SENTENCE, not a stale record — A82's amendment entry still contains the bullet "The fix is OWED", though A83 delivered it. The entry around that bullet names A83 repeatedly, including the human's decision in bold, so a reader of the entry is not misled; a reader who greps for "OWED" is. What genuinely remains: the REASON still names non-attachment for a clause where the Gateway says the opposite, and only the message says otherwise — as does the `status.auth.policyUnattached` field name. And a policy carrying the synthetic ancestor beside a real one reporting `Attached=True` still takes the non-attachment lead, which design 03 records as owed.
 
 **Note:** Nothing is withdrawn, deleted or rewritten: this is the fail-open half, ANNOUNCED AND NOT CLOSED. Since design 03 A83 the MESSAGE says which of the four answers the Gateway gave, and the partly-valid one — the only shape a cluster measurement on agentgateway 1.5.0 has reached with a byte-unchanged policy, where the route was still answering `401` — no longer claims the policy is unattached or that a credential may not be required. It says instead that the judgement reads the Gateway's report, issues no request, and so did not check. The REASON does not branch: one string covers all four answers.
 

@@ -52,9 +52,10 @@ ENVTEST_VERSION          ?= release-0.24
 # those graphs means minimum version selection builds crdoc against libraries it
 # was never tested with, to make a docs generator cheaper. Not worth it.
 #
-# The cheap fix is to cache the BINARY in CI, keyed on this version — which is
-# what `make print-crdoc-version` exists for. Not wired here: ci.yml pins its
-# actions by commit SHA and this change does not add one it cannot verify.
+# So ci.yml caches the BINARY instead, keyed on this version, which is what
+# `make print-crdoc-version` exists for. The $(CRDOC) rule below is a file
+# target, so a restored binary skips the install entirely. Bump this version and
+# the cache key changes with it.
 CRDOC_VERSION            ?= v0.6.4
 
 .PHONY: help

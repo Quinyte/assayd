@@ -1,6 +1,6 @@
 ---
-title: The Agent CRD
-description: Every field of the Agent custom resource: type, required, default, CEL validation and doc text.
+title: "The Agent CRD"
+description: "Every field of the Agent custom resource: type, required, default, CEL validation and doc text."
 ---
 
 <!-- GENERATED FILE — DO NOT EDIT.
@@ -39,7 +39,7 @@ page is checked before the page is written.
 
 ---
 
-# assayd.dev/v1alpha1
+## assayd.dev/v1alpha1
 
 Resource Types:
 
@@ -48,7 +48,7 @@ Resource Types:
 
 
 
-## Agent
+### Agent
 <sup><sup>[↩ Parent](#assayddevv1alpha1 )</sup></sup>
 
 
@@ -107,7 +107,7 @@ Design 02 §3.1 (r3, integrated). Exactly one of Runtime or External is set.<br/
 </table>
 
 
-### Agent.spec
+#### Agent.spec
 <sup><sup>[↩ Parent](#agent)</sup></sup>
 
 
@@ -230,7 +230,7 @@ surface (ADR-0009).<br/>
 </table>
 
 
-### Agent.spec.budget
+#### Agent.spec.budget
 <sup><sup>[↩ Parent](#agentspec)</sup></sup>
 
 
@@ -306,7 +306,7 @@ from this comment, is what surfaced it.<br/>
 </table>
 
 
-### Agent.spec.card
+#### Agent.spec.card
 <sup><sup>[↩ Parent](#agentspec)</sup></sup>
 
 
@@ -373,7 +373,7 @@ measured at Kubernetes 1.36.2).<br/>
 </table>
 
 
-### Agent.spec.expose
+#### Agent.spec.expose
 <sup><sup>[↩ Parent](#agentspec)</sup></sup>
 
 
@@ -410,7 +410,7 @@ auth still defaults to oauth and apikey is refused.<br/>
 </table>
 
 
-### Agent.spec.expose.a2a
+#### Agent.spec.expose.a2a
 <sup><sup>[↩ Parent](#agentspecexpose)</sup></sup>
 
 
@@ -475,7 +475,7 @@ chose it: removing a default migrates nothing.<br/>
 </table>
 
 
-### Agent.spec.external
+#### Agent.spec.external
 <sup><sup>[↩ Parent](#agentspec)</sup></sup>
 
 
@@ -517,7 +517,7 @@ SVID; it authenticates to the gateway with OAuth client credentials.
 </table>
 
 
-### Agent.spec.gates[index]
+#### Agent.spec.gates[index]
 <sup><sup>[↩ Parent](#agentspec)</sup></sup>
 
 
@@ -544,7 +544,7 @@ SVID; it authenticates to the gateway with OAuth client credentials.
 </table>
 
 
-### Agent.spec.knowledge[index]
+#### Agent.spec.knowledge[index]
 <sup><sup>[↩ Parent](#agentspec)</sup></sup>
 
 
@@ -592,7 +592,7 @@ by the provider (design 01 A1).<br/>
 </table>
 
 
-### Agent.spec.knowledge[index].scope
+#### Agent.spec.knowledge[index].scope
 <sup><sup>[↩ Parent](#agentspecknowledgeindex)</sup></sup>
 
 
@@ -620,7 +620,7 @@ by the provider (design 01 A1).
 </table>
 
 
-### Agent.spec.llm
+#### Agent.spec.llm
 <sup><sup>[↩ Parent](#agentspec)</sup></sup>
 
 
@@ -667,7 +667,7 @@ the one that was actually drifting.<br/>
 </table>
 
 
-### Agent.spec.llm.egressAllowlist[index]
+#### Agent.spec.llm.egressAllowlist[index]
 <sup><sup>[↩ Parent](#agentspecllm)</sup></sup>
 
 
@@ -741,7 +741,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.<br/>
 </table>
 
 
-### Agent.spec.llm.egressAllowlist[index].azureopenai
+#### Agent.spec.llm.egressAllowlist[index].azureopenai
 <sup><sup>[↩ Parent](#agentspecllmegressallowlistindex)</sup></sup>
 
 
@@ -785,7 +785,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 </table>
 
 
-### Agent.spec.llm.egressAllowlist[index].bedrock
+#### Agent.spec.llm.egressAllowlist[index].bedrock
 <sup><sup>[↩ Parent](#agentspecllmegressallowlistindex)</sup></sup>
 
 
@@ -819,7 +819,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 </table>
 
 
-### Agent.spec.llm.egressAllowlist[index].custom
+#### Agent.spec.llm.egressAllowlist[index].custom
 <sup><sup>[↩ Parent](#agentspecllmegressallowlistindex)</sup></sup>
 
 
@@ -862,7 +862,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 </table>
 
 
-### Agent.spec.llm.egressAllowlist[index].vertexai
+#### Agent.spec.llm.egressAllowlist[index].vertexai
 <sup><sup>[↩ Parent](#agentspecllmegressallowlistindex)</sup></sup>
 
 
@@ -896,7 +896,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 </table>
 
 
-### Agent.spec.llm.fallback
+#### Agent.spec.llm.fallback
 <sup><sup>[↩ Parent](#agentspecllm)</sup></sup>
 
 
@@ -973,7 +973,7 @@ azureopenai does not have one — see the CEL rule above.<br/>
 </table>
 
 
-### Agent.spec.llm.fallback.azureopenai
+#### Agent.spec.llm.fallback.azureopenai
 <sup><sup>[↩ Parent](#agentspecllmfallback)</sup></sup>
 
 
@@ -1017,7 +1017,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 </table>
 
 
-### Agent.spec.llm.fallback.bedrock
+#### Agent.spec.llm.fallback.bedrock
 <sup><sup>[↩ Parent](#agentspecllmfallback)</sup></sup>
 
 
@@ -1051,7 +1051,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 </table>
 
 
-### Agent.spec.llm.fallback.custom
+#### Agent.spec.llm.fallback.custom
 <sup><sup>[↩ Parent](#agentspecllmfallback)</sup></sup>
 
 
@@ -1094,7 +1094,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 </table>
 
 
-### Agent.spec.llm.fallback.vertexai
+#### Agent.spec.llm.fallback.vertexai
 <sup><sup>[↩ Parent](#agentspecllmfallback)</sup></sup>
 
 
@@ -1128,7 +1128,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 </table>
 
 
-### Agent.spec.llm.providers[index]
+#### Agent.spec.llm.providers[index]
 <sup><sup>[↩ Parent](#agentspecllm)</sup></sup>
 
 
@@ -1207,7 +1207,7 @@ azureopenai does not have one — see the CEL rule above.<br/>
 </table>
 
 
-### Agent.spec.llm.providers[index].azureopenai
+#### Agent.spec.llm.providers[index].azureopenai
 <sup><sup>[↩ Parent](#agentspecllmprovidersindex)</sup></sup>
 
 
@@ -1251,7 +1251,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 </table>
 
 
-### Agent.spec.llm.providers[index].bedrock
+#### Agent.spec.llm.providers[index].bedrock
 <sup><sup>[↩ Parent](#agentspecllmprovidersindex)</sup></sup>
 
 
@@ -1285,7 +1285,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 </table>
 
 
-### Agent.spec.llm.providers[index].custom
+#### Agent.spec.llm.providers[index].custom
 <sup><sup>[↩ Parent](#agentspecllmprovidersindex)</sup></sup>
 
 
@@ -1328,7 +1328,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 </table>
 
 
-### Agent.spec.llm.providers[index].vertexai
+#### Agent.spec.llm.providers[index].vertexai
 <sup><sup>[↩ Parent](#agentspecllmprovidersindex)</sup></sup>
 
 
@@ -1362,7 +1362,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 </table>
 
 
-### Agent.spec.loop
+#### Agent.spec.loop
 <sup><sup>[↩ Parent](#agentspec)</sup></sup>
 
 
@@ -1401,7 +1401,7 @@ over a gateway-owned lineage header (design 22).
 </table>
 
 
-### Agent.spec.release
+#### Agent.spec.release
 <sup><sup>[↩ Parent](#agentspec)</sup></sup>
 
 
@@ -1435,7 +1435,7 @@ point under source drift.<br/>
 </table>
 
 
-### Agent.spec.runtime
+#### Agent.spec.runtime
 <sup><sup>[↩ Parent](#agentspec)</sup></sup>
 
 
@@ -1533,7 +1533,7 @@ hardened Deployment and sets SandboxDowngraded — never silently.<br/>
 </table>
 
 
-### Agent.spec.runtime.env[index]
+#### Agent.spec.runtime.env[index]
 <sup><sup>[↩ Parent](#agentspecruntime)</sup></sup>
 
 
@@ -1583,7 +1583,7 @@ Defaults to "".<br/>
 </table>
 
 
-### Agent.spec.runtime.env[index].valueFrom
+#### Agent.spec.runtime.env[index].valueFrom
 <sup><sup>[↩ Parent](#agentspecruntimeenvindex)</sup></sup>
 
 
@@ -1641,7 +1641,7 @@ Requires the EnvFiles feature gate to be enabled.<br/>
 </table>
 
 
-### Agent.spec.runtime.env[index].valueFrom.configMapKeyRef
+#### Agent.spec.runtime.env[index].valueFrom.configMapKeyRef
 <sup><sup>[↩ Parent](#agentspecruntimeenvindexvaluefrom)</sup></sup>
 
 
@@ -1688,7 +1688,7 @@ More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/nam
 </table>
 
 
-### Agent.spec.runtime.env[index].valueFrom.fieldRef
+#### Agent.spec.runtime.env[index].valueFrom.fieldRef
 <sup><sup>[↩ Parent](#agentspecruntimeenvindexvaluefrom)</sup></sup>
 
 
@@ -1723,7 +1723,7 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
 </table>
 
 
-### Agent.spec.runtime.env[index].valueFrom.fileKeyRef
+#### Agent.spec.runtime.env[index].valueFrom.fileKeyRef
 <sup><sup>[↩ Parent](#agentspecruntimeenvindexvaluefrom)</sup></sup>
 
 
@@ -1783,7 +1783,7 @@ an error will be returned during Pod creation.<br/>
 </table>
 
 
-### Agent.spec.runtime.env[index].valueFrom.resourceFieldRef
+#### Agent.spec.runtime.env[index].valueFrom.resourceFieldRef
 <sup><sup>[↩ Parent](#agentspecruntimeenvindexvaluefrom)</sup></sup>
 
 
@@ -1825,7 +1825,7 @@ Selects a resource of the container: only resources limits and requests
 </table>
 
 
-### Agent.spec.runtime.env[index].valueFrom.secretKeyRef
+#### Agent.spec.runtime.env[index].valueFrom.secretKeyRef
 <sup><sup>[↩ Parent](#agentspecruntimeenvindexvaluefrom)</sup></sup>
 
 
@@ -1872,7 +1872,7 @@ More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/nam
 </table>
 
 
-### Agent.spec.runtime.envFrom[index]
+#### Agent.spec.runtime.envFrom[index]
 <sup><sup>[↩ Parent](#agentspecruntime)</sup></sup>
 
 
@@ -1914,7 +1914,7 @@ May consist of any printable ASCII characters except '='.<br/>
 </table>
 
 
-### Agent.spec.runtime.envFrom[index].configMapRef
+#### Agent.spec.runtime.envFrom[index].configMapRef
 <sup><sup>[↩ Parent](#agentspecruntimeenvfromindex)</sup></sup>
 
 
@@ -1954,7 +1954,7 @@ More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/nam
 </table>
 
 
-### Agent.spec.runtime.envFrom[index].secretRef
+#### Agent.spec.runtime.envFrom[index].secretRef
 <sup><sup>[↩ Parent](#agentspecruntimeenvfromindex)</sup></sup>
 
 
@@ -1994,7 +1994,7 @@ More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/nam
 </table>
 
 
-### Agent.spec.runtime.resources
+#### Agent.spec.runtime.resources
 <sup><sup>[↩ Parent](#agentspecruntime)</sup></sup>
 
 
@@ -2045,7 +2045,7 @@ More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-co
 </table>
 
 
-### Agent.spec.runtime.resources.claims[index]
+#### Agent.spec.runtime.resources.claims[index]
 <sup><sup>[↩ Parent](#agentspecruntimeresources)</sup></sup>
 
 
@@ -2083,7 +2083,7 @@ only the result of this request.<br/>
 </table>
 
 
-### Agent.spec.runtime.sandbox
+#### Agent.spec.runtime.sandbox
 <sup><sup>[↩ Parent](#agentspecruntime)</sup></sup>
 
 
@@ -2114,7 +2114,7 @@ hardened Deployment and sets SandboxDowngraded — never silently.
 </table>
 
 
-### Agent.spec.tools[index]
+#### Agent.spec.tools[index]
 <sup><sup>[↩ Parent](#agentspec)</sup></sup>
 
 
@@ -2160,7 +2160,7 @@ gateway consumes (design 22).<br/>
 </table>
 
 
-### Agent.status
+#### Agent.status
 <sup><sup>[↩ Parent](#agent)</sup></sup>
 
 
@@ -2308,7 +2308,7 @@ from the one that superseded it.<br/>
 </table>
 
 
-### Agent.status.auth
+#### Agent.status.auth
 <sup><sup>[↩ Parent](#agentstatus)</sup></sup>
 
 
@@ -2425,7 +2425,7 @@ Present exactly when Mode is apikey.<br/>
 </table>
 
 
-### Agent.status.auth.transaction
+#### Agent.status.auth.transaction
 <sup><sup>[↩ Parent](#agentstatusauth)</sup></sup>
 
 
@@ -2551,7 +2551,7 @@ re-entry then repeats the write, which is idempotent (design 03 §3.3.3).<br/>
 </table>
 
 
-### Agent.status.auth.transaction.probe
+#### Agent.status.auth.transaction.probe
 <sup><sup>[↩ Parent](#agentstatusauthtransaction)</sup></sup>
 
 
@@ -2593,7 +2593,7 @@ on it.<br/>
 </table>
 
 
-### Agent.status.auth.verified
+#### Agent.status.auth.verified
 <sup><sup>[↩ Parent](#agentstatusauth)</sup></sup>
 
 
@@ -2637,7 +2637,7 @@ reached.<br/>
 </table>
 
 
-### Agent.status.budget
+#### Agent.status.budget
 <sup><sup>[↩ Parent](#agentstatus)</sup></sup>
 
 
@@ -2690,7 +2690,7 @@ scans a namespace for; remaining is what an agent is throttled on.<br/>
 </table>
 
 
-### Agent.status.cards[index]
+#### Agent.status.cards[index]
 <sup><sup>[↩ Parent](#agentstatus)</sup></sup>
 
 
@@ -2772,7 +2772,7 @@ condition that claims to key on it must have something to read.<br/>
 </table>
 
 
-### Agent.status.conditions[index]
+#### Agent.status.conditions[index]
 <sup><sup>[↩ Parent](#agentstatus)</sup></sup>
 
 
@@ -2849,7 +2849,7 @@ with respect to the current state of the instance.<br/>
 </table>
 
 
-### Agent.status.eval
+#### Agent.status.eval
 <sup><sup>[↩ Parent](#agentstatus)</sup></sup>
 
 

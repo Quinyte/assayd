@@ -669,13 +669,14 @@ reasons:
       fail-open reaches the policy half "in the message rather than in what is
       raised". So one row reads as a precondition the code does not implement
       while its neighbour describes what the code does.
-      A second disagreement this page carried is now RESOLVED and is recorded
-      here because the record of it is not: A83 fixed the rule-8 defect where
-      this reason's message named non-attachment in a state the Gateway reported
-      `Attached=True`, and design 03 §5 no longer calls it owed — but A82's
-      amendment entry in §11 still reads "The fix is OWED", with no forward
-      pointer to the amendment that made it, so a reader arriving at §11 first is
-      told a fixed defect is open.
+      A second disagreement this page carried is now RESOLVED: A83 fixed the
+      rule-8 defect where this reason's message named non-attachment in a state
+      the Gateway reported `Attached=True`, and design 03 §5 no longer calls it
+      owed. What is left of it is one stale SENTENCE, not a stale record — A82's
+      amendment entry still contains the bullet "The fix is OWED", though A83
+      delivered it. The entry around that bullet names A83 repeatedly, including
+      the human's decision in bold, so a reader of the entry is not misled; a
+      reader who greps for "OWED" is.
       What genuinely remains: the REASON still names non-attachment for a clause
       where the Gateway says the opposite, and only the message says otherwise —
       as does the `status.auth.policyUnattached` field name. And a policy

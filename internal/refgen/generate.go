@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // Generate writes the three reference pages.
@@ -73,8 +75,34 @@ func checkSingleCRD(root string) error {
 // renders the front-matter title as the page's heading, and a body H1 would
 // show twice. GitHub renders the block itself, so the page is still titled when
 // it is read in the repository.
+// It is QUOTED, and that is the whole of the second attempt at this. The first
+// emitted the description as a bare scalar, and one of the three descriptions
+// contains ": " — "…custom resource: type, required…" — which YAML reads as a
+// nested mapping key. The page parsed as invalid YAML and the site build failed
+// on it, while `make reference`, `make verify` and `make unit` were all green,
+// because reproducible invalid YAML is still reproducible. The interaction
+// problem had moved from "no front matter" to "invalid front matter", which
+// reads as fixed and is worse. TestTheFrontMatterIsValidYAML now parses it.
 func frontMatter(title, description string) string {
-	return fmt.Sprintf("---\ntitle: %s\ndescription: %s\n---\n", title, description)
+	return fmt.Sprintf("---\ntitle: %s\ndescription: %s\n---\n",
+		yamlScalar(title), yamlScalar(description))
+}
+
+// yamlScalar renders a string as a YAML double-quoted scalar.
+//
+// Double quotes rather than single, so that a backslash and an embedded quote
+// have defined escapes and nothing in a generated title can end the scalar
+// early. Newlines and tabs are escaped rather than emitted, because a literal
+// newline inside a quoted scalar changes what the document means.
+func yamlScalar(s string) string {
+	r := strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+	)
+	return `"` + r.Replace(s) + `"`
 }
 
 // generatedNotice tells a reader, and an editor, where the words actually come
@@ -96,7 +124,11 @@ func write(path, body string) error {
 	if !strings.HasSuffix(body, "\n") {
 		body += "\n"
 	}
-	if err := checkAnchors(filepath.Base(path), body); err != nil {
+	name := filepath.Base(path)
+	if err := checkFrontMatter(name, body); err != nil {
+		return err
+	}
+	if err := checkAnchors(name, body); err != nil {
 		return err
 	}
 	return os.WriteFile(path, []byte(body), 0o644)
@@ -127,6 +159,47 @@ var (
 	inlineFormat = regexp.MustCompile("[`*_]")
 	fencedBlock  = regexp.MustCompile("(?s)```.*?```")
 )
+
+// FrontMatter parses a page's YAML front matter, the way a static site
+// generator's content loader does.
+//
+// It is exported so that the gate inside the generator and any check outside it
+// are the same parse, and it returns the decoded map so a caller can ask what
+// is in it rather than only whether it scanned.
+func FrontMatter(body string) (map[string]any, error) {
+	const fence = "---\n"
+	if !strings.HasPrefix(body, fence) {
+		return nil, fmt.Errorf("the page has no front matter: an Astro content collection — " +
+			"Starlight's schema among them — refuses a Markdown file without one")
+	}
+	rest := body[len(fence):]
+	end := strings.Index(rest, "\n"+fence)
+	if end < 0 {
+		return nil, fmt.Errorf("the front matter block is never closed by a `---` line")
+	}
+	var out map[string]any
+	if err := yaml.Unmarshal([]byte(rest[:end+1]), &out); err != nil {
+		return nil, fmt.Errorf("the front matter is not valid YAML: %w", err)
+	}
+	return out, nil
+}
+
+// checkFrontMatter refuses to write a page whose front matter a site cannot
+// load. Reproducible invalid YAML is still invalid: nothing else in this
+// repository parses it, so without this the only thing that catches it is a
+// docs-site build in another repository.
+func checkFrontMatter(name, body string) error {
+	fm, err := FrontMatter(body)
+	if err != nil {
+		return fmt.Errorf("%s would have been written with front matter no site can load: %w", name, err)
+	}
+	title, _ := fm["title"].(string)
+	if strings.TrimSpace(title) == "" {
+		return fmt.Errorf("%s would have been written with no `title` in its front matter, which is "+
+			"the one field an Astro content collection requires", name)
+	}
+	return nil
+}
 
 // pageAnchors is every in-page target a renderer would create for a document:
 // a slug per heading, plus any explicit HTML id. A heading whose slug is already

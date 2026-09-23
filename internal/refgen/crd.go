@@ -73,6 +73,7 @@ func renderCRD(root, out string) error {
 	if i := strings.Index(text, "# assayd.dev/v1alpha1"); i >= 0 {
 		text = text[i:]
 	}
+	text = demoteHeadings(text)
 
 	var sb strings.Builder
 	sb.WriteString(frontMatter("The Agent CRD",
@@ -115,10 +116,36 @@ page is checked before the page is written.
 	sb.WriteString(renderCELSection(rules, text))
 
 	page := sb.String()
-	if err := verifyEveryRuleIsPublished(page, rules); err != nil {
+	// The gate re-reads the CRD itself; `rules` above is the render input and
+	// deliberately not what it is checked against.
+	if err := verifyEveryRuleIsPublished(page, src); err != nil {
 		return err
 	}
 	return write(filepath.Join(out, "crd-agent.md"), page)
+}
+
+// demoteHeadings pushes the table renderer's headings down one level.
+//
+// Its top heading is an H1, and the front matter already gives the page one:
+// a site that renders the front-matter title emits two `<h1>` elements, which
+// is a document-outline defect and an accessibility one. Demoting also puts its
+// sections at the same depth as this generator's own, so the page has one
+// hierarchy rather than two interleaved.
+//
+// Heading ANCHORS are unaffected — a slug comes from a heading's text, not its
+// level — so the several hundred internal links in the field tables keep
+// landing. The deepest heading it emits is H3, so nothing is pushed past H6;
+// the guard is here anyway, because silently clamping would merge two levels.
+func demoteHeadings(md string) string {
+	var out []string
+	for _, line := range strings.Split(md, "\n") {
+		if m := headingLine.FindStringSubmatch(line); m != nil && len(m[1]) < 6 {
+			out = append(out, "#"+line)
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 // renderedValidationNodes counts the Validations blocks the table renderer

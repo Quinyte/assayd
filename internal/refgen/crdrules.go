@@ -91,13 +91,38 @@ func collectRules(node string, s *apiextv1.JSONSchemaProps, out *[]CELRule) {
 		p := s.Properties[name]
 		collectRules(node+"."+name, &p, out)
 	}
-	if s.Items != nil && s.Items.Schema != nil {
+	if s.Items != nil {
 		// crdoc titles an array item section "<field>[index]"; matching that
 		// spelling is what lets a rule link to the table it constrains.
-		collectRules(node+"[index]", s.Items.Schema, out)
+		if s.Items.Schema != nil {
+			collectRules(node+"[index]", s.Items.Schema, out)
+		}
+		// A tuple-typed array. controller-gen emits no such schema today, so
+		// this arm is unreachable from the markers — it is here because the
+		// alternative is a traversal that silently skips a branch of the schema
+		// it claims to read completely, and "completely" is this file's whole
+		// claim.
+		for i := range s.Items.JSONSchemas {
+			collectRules(fmt.Sprintf("%s[%d]", node, i), &s.Items.JSONSchemas[i], out)
+		}
 	}
 	if s.AdditionalProperties != nil && s.AdditionalProperties.Schema != nil {
 		collectRules(node+"[key]", s.AdditionalProperties.Schema, out)
+	}
+	// Likewise unreachable from controller-gen's markers today, and likewise
+	// traversed rather than assumed away. A rule under one of these would be
+	// enforced by the API server whether or not this generator went looking.
+	for i := range s.AllOf {
+		collectRules(fmt.Sprintf("%s{allOf %d}", node, i), &s.AllOf[i], out)
+	}
+	for i := range s.AnyOf {
+		collectRules(fmt.Sprintf("%s{anyOf %d}", node, i), &s.AnyOf[i], out)
+	}
+	for i := range s.OneOf {
+		collectRules(fmt.Sprintf("%s{oneOf %d}", node, i), &s.OneOf[i], out)
+	}
+	if s.Not != nil {
+		collectRules(node+"{not}", s.Not, out)
 	}
 }
 
@@ -143,13 +168,13 @@ REFUSED with the message beside it. `+"`self`"+` is the node the rule sits on.
 			// "Rules on X" rather than "X": the field tables already have a
 			// heading per node, and two headings that slug alike send every
 			// link to whichever came first.
-			sb.WriteString(fmt.Sprintf("### Rules on `%s`\n\n", node))
+			sb.WriteString(celHeading(node) + "\n\n")
 			if target, label := nearestSection(node, haveSection); target != "" {
 				sb.WriteString(fmt.Sprintf("[Fields of `%s`](#%s)\n\n", label, target))
 			}
 		}
 		sb.WriteString("```cel\n" + r.Rule + "\n```\n\n")
-		sb.WriteString("> " + strings.ReplaceAll(escapeMD(r.Message), "\n", " ") + "\n\n")
+		sb.WriteString("> " + renderedMessage(r.Message) + "\n\n")
 		if r.Reason != "" || r.FieldPath != "" {
 			var extra []string
 			if r.Reason != "" {
@@ -162,6 +187,16 @@ REFUSED with the message beside it. `+"`self`"+` is the node the rule sits on.
 		}
 	}
 	return sb.String()
+}
+
+func rulesOn(rules []CELRule, node string) int {
+	n := 0
+	for _, r := range rules {
+		if r.Node == node {
+			n++
+		}
+	}
+	return n
 }
 
 func countNodes(rules []CELRule) int {
@@ -188,34 +223,116 @@ func nearestSection(node string, have map[string]bool) (target, label string) {
 	return "", ""
 }
 
-// verifyEveryRuleIsPublished is the gate the blocker asked for.
+// verifyEveryRuleIsPublished is the gate on the CRD page, and it re-reads the
+// CRD to get its own answer.
 //
-// It holds the page to the CRD rather than to the renderer: every rule and every
-// message must appear in the bytes that are about to be written. If a future
-// template change, or a crdoc upgrade, drops one, `make reference` fails and
-// says which — instead of publishing a page that quietly under-reports what the
-// API server enforces.
-func verifyEveryRuleIsPublished(page string, rules []CELRule) error {
-	var missing []string
-	for _, r := range rules {
-		if !strings.Contains(page, r.Rule) {
-			missing = append(missing, fmt.Sprintf("%s: rule %q", r.Node, r.Rule))
-			continue
-		}
-		if r.Message != "" && !strings.Contains(page, escapeMD(r.Message)) {
-			missing = append(missing, fmt.Sprintf("%s: the message for %q", r.Node, r.Rule))
-		}
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("the CRD reference would have been written with %d of the CRD's %d "+
-			"validation rule(s) missing, so a reader would conclude the API server enforces less "+
-			"than it does:\n  %s", len(missing), len(rules), strings.Join(missing, "\n  "))
+// Two things were wrong with the first version, and both are the same mistake
+// in different places.
+//
+// It asked whether each rule appeared ANYWHERE on the page. Agent.spec.llm
+// .fallback and Agent.spec.llm.providers[index] are the same Go struct, so
+// their five rules and five messages are byte-identical — and an independent
+// review deleted every `providers` node from the render and the gate passed,
+// because the twin's text was still there. The page then announced "All 20
+// rules on 8 nodes", a false sentence about the CRD. That duplication is what
+// hid the ORIGINAL blocker too, and the reviewer had been caught by it once
+// itself. So the check is now PER NODE: the node's own heading must exist, and
+// the rule and its message must be inside that heading's section.
+//
+// And its truth came from the same slice the renderer was handed, so a filter
+// applied before both would have been invisible to it. It now parses the CRD
+// again. One extra YAML parse buys a gate whose input no part of the render
+// path can touch.
+func verifyEveryRuleIsPublished(page, crdPath string) error {
+	rules, err := celRules(crdPath)
+	if err != nil {
+		return fmt.Errorf("re-read %s to check the page against it: %w", crdPath, err)
 	}
 	if len(rules) == 0 {
 		return fmt.Errorf("no validation rules were found in %s at all; the CRD carries CEL and "+
 			"the extractor is not reading it", CRDSource)
 	}
+	sections := ruleSections(page)
+
+	var missing []string
+	reportedNode := map[string]bool{}
+	for _, r := range rules {
+		body, ok := sections[r.Node]
+		if !ok {
+			// Once per node, not once per rule: a node dropped whole is one
+			// fact, and five copies of it buries the other four causes.
+			if !reportedNode[r.Node] {
+				reportedNode[r.Node] = true
+				missing = append(missing, fmt.Sprintf("%s: the whole node, %d rule(s) — no %q "+
+					"heading on the page", r.Node, rulesOn(rules, r.Node), celHeading(r.Node)))
+			}
+			continue
+		}
+		if !strings.Contains(body, r.Rule) {
+			missing = append(missing, fmt.Sprintf("%s: rule %q", r.Node, r.Rule))
+			continue
+		}
+		if r.Message != "" && !strings.Contains(body, renderedMessage(r.Message)) {
+			missing = append(missing, fmt.Sprintf("%s: the message for %q", r.Node, r.Rule))
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("the CRD reference would have been written with %d of the CRD's %d "+
+			"validation rule(s) missing from the node they belong to, so a reader would conclude "+
+			"the API server enforces less than it does:\n  %s",
+			len(missing), len(rules), strings.Join(missing, "\n  "))
+	}
 	return nil
+}
+
+// celHeading is the heading renderCELSection writes for a node.
+func celHeading(node string) string { return "### Rules on `" + node + "`" }
+
+// ruleSections slices the page into the body under each `### Rules on ...`
+// heading, so a rule can be looked for where it is supposed to be rather than
+// wherever its twin happens to appear.
+func ruleSections(page string) map[string]string {
+	out := map[string]string{}
+	const prefix = "### Rules on `"
+	for idx := 0; ; {
+		i := strings.Index(page[idx:], prefix)
+		if i < 0 {
+			return out
+		}
+		start := idx + i
+		nameStart := start + len(prefix)
+		nameEnd := strings.Index(page[nameStart:], "`")
+		if nameEnd < 0 {
+			return out
+		}
+		node := page[nameStart : nameStart+nameEnd]
+		bodyStart := nameStart + nameEnd
+		// The section runs to the next heading of this level or shallower.
+		rest := page[bodyStart:]
+		end := len(rest)
+		for _, mark := range []string{"\n### ", "\n## ", "\n# "} {
+			if j := strings.Index(rest, mark); j >= 0 && j < end {
+				end = j
+			}
+		}
+		out[node] = rest[:end]
+		idx = bodyStart + end
+		if end == 0 {
+			idx = bodyStart + 1
+		}
+	}
+}
+
+// renderedMessage is how a CRD message appears on the page. ONE function, used
+// by the renderer and by the gate.
+//
+// They diverged in the first version: the renderer escaped the message and then
+// flattened its newlines, while the gate only escaped it. A message containing
+// a newline would have failed the gate for a page that published it correctly —
+// a check that is loud and wrong, which is the operator defect this generator
+// exists to report, committed by the generator itself.
+func renderedMessage(msg string) string {
+	return strings.ReplaceAll(escapeMD(msg), "\n", " ")
 }
 
 // escapeMD keeps a CRD message from being read as Markdown or HTML. The

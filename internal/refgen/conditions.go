@@ -360,7 +360,9 @@ answers are still true of the code: behaviour can change under a reason whose na
 covers that is weaker and indirect. Each reason's own constant doc comment is reproduced below, so
 when the code's comment moves the page moves, `+"`make verify`"+` fails, and a human reads the diff — which is
 how the annotation for `+"`AuthPolicyNotAttached`"+` was found stale after design 03 A83 landed. That is a
-prompt to look, not a proof.
+prompt to look, not a proof, and it has one hole it cannot cover: behaviour that changes while the
+reason's constant AND its doc comment both stay put. A83 is that shape minus one edit — it happened
+to reword the comment. Nothing on this page would have caught it if it had not.
 
 `, len(v.Conditions), len(v.ReasonsByName), AnnotationsSource)
 }
