@@ -949,6 +949,49 @@ func TestTheApprovalRuleIsExemptOnlyInDecisions(t *testing.T) {
 	}
 }
 
+// TestACorrectedPillDoesNotRescueTheOneBesideIt pins the narrowed rescue clause
+// on blanket-approval-claim, and it is the only thing standing between that
+// clause and a plausible tidy-up.
+//
+// This is the page's own header shape: a `<div class="meta-row">` of `<span>`
+// pills. `<span>` is inline, so the whole row renders as ONE block — and the
+// corrected pill next door says "superseded in part". Every other rule here
+// carries a bare `supersed` in its rescue clause, so adding one back to this
+// rule reads like harmonisation and is a silent reopening: the claim this gate
+// exists for goes back to passing.
+//
+// Measured, not theorised. Re-planting the real header sentence beside the real
+// corrected one did NOT fail the gate while that clause was broad; it is what
+// sent the clause back to explicit retractions only. A later mutation run found
+// nothing catching it, which is this test.
+func TestACorrectedPillDoesNotRescueTheOneBesideIt(t *testing.T) {
+	row := `<div class="meta-row">` +
+		`<span><b>status</b> superseded in part · 34 ADRs</span>` + "\n" +
+		`<span><b>status</b> 27/27 designs approved · 26 ADRs</span>` +
+		`</div>`
+	// Vacuity guard, checked at the layer that actually joins: renderHTML emits
+	// a line per pill and blocks() is what merges them, because no blank line
+	// separates them. If they ever became two blocks the per-block rescue would
+	// make this fixture prove nothing, and it would pass for the wrong reason.
+	rendered := renderHTML(row)
+	var merged string
+	for _, b := range blocks(rendered) {
+		if strings.Contains(b, "27/27") {
+			merged = b
+		}
+	}
+	if !strings.Contains(merged, "superseded in part") {
+		t.Fatalf("fixture is vacuous: the two pills are not in one block, so a per-block "+
+			"rescue could not reach across them and this proves nothing:\n%q", blocks(rendered))
+	}
+	if !caughtHTML(t, "blanket-approval-claim", htmlPage(row)) {
+		t.Errorf("the corrected pill rescued the claim beside it. The rescue clause on "+
+			"blanket-approval-claim must not accept a bare \"supersed\": an inline-only "+
+			"container renders as one block, so a retraction anywhere in the row would "+
+			"launder every claim in it.\n    rendered: %q", rendered)
+	}
+}
+
 // TestARenderedCellIsItsOwnBlock is the HTML twin of the Markdown per-cell
 // rescue rule, and it is what pins htmlBlockTag. A page's §00 corrections table
 // and §20 ADR index are both two-column tables where one side ASSERTS and the
