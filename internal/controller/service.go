@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -106,8 +107,22 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 	desired := r.serviceFor(agent, runNS, rev)
 	desired.Annotations = map[string]string{RevisionDigestAnnotation: digest}
 
+	// READ LIVE, not from the manager's cache.
+	//
+	// This object's read authorises two things the cache must not be trusted
+	// for: rewriting it, and — for the one unrepairable shape — DELETING it.
+	// main.go uncaches ConfigMap, Secret and Namespace for A60/A61 in exactly
+	// these words: "a comparison against a cached object that a recreate has
+	// already replaced is no proof at all". A Service this operator destroys is
+	// a strictly stronger case, and a stale read could authorise the delete of
+	// an object that no longer looks the way the decision was made on. The UID
+	// precondition on the Delete then narrows the consequence to a refusal
+	// rather than a wrong deletion, but the decision itself must be live.
+	//
+	// No test here can see the difference: envtest's client is uncached, so
+	// r.reader() is r.Client and both paths read the same object.
 	var existing corev1.Service
-	err := r.Get(ctx, client.ObjectKeyFromObject(desired), &existing)
+	err := r.reader().Get(ctx, client.ObjectKeyFromObject(desired), &existing)
 	switch {
 	case apierrors.IsNotFound(err):
 		if err := r.Create(ctx, desired); err != nil {
@@ -117,7 +132,10 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 				return fmt.Errorf("service %s appeared between the read and the create; "+
 					"requeueing to validate it: %w", desired.Name, err)
 			}
-			return fmt.Errorf("create service %s: %w", desired.Name, err)
+			// Marked, so the caller's ServiceRejected message can say which
+			// write was refused: "delete that Service" names nothing on this
+			// path, because the object was never created.
+			return fmt.Errorf("create service %s: %w: %w", desired.Name, errServiceCreate, err)
 		}
 		return nil
 	case err != nil:
@@ -177,7 +195,18 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 	// replace as much as it is ours to rewrite. **The ordering is the safety
 	// property**, not an accident of where the code sits: a foreign or
 	// unstamped object never reaches this line, because every ground above
-	// returns. Nothing this operator did not create is ever deleted here.
+	// returns.
+	//
+	// What that buys is stated exactly, because the obvious sentence —
+	// "nothing this operator did not create is ever deleted here" — was
+	// measured FALSE: every element of the gate is forgeable by a principal who
+	// can create a Service in this namespace, and a plant carrying a forged UID
+	// label AND a forged digest is deleted and replaced. What the gate buys is
+	// that an object which merely SITS at the name, unstamped or stamped for
+	// another revision, is never destroyed, and that an adversary who forges
+	// the whole set gets their own plant repaired — strictly worse for them
+	// than leaving it unstamped, which buys a wedge. Design 02 §5 says it in
+	// those terms.
 	//
 	// Refusing instead was measured to be a wedge, and the premise that made it
 	// look narrow was false. `spec.clusterIP` is immutable EXCEPT across
@@ -195,15 +224,25 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 	// repaired in place, because a delete is strictly more destructive and the
 	// replacement gets a new ClusterIP — design 02 §5 states the gap.
 	if shape != nil && shape.what == faultHeadless {
-		// STAMPED, and with THIS revision's digest. Not merely "provenance
-		// admitted it": the third provenance ground adopts an unstamped object
-		// while `status` vouches for the name, and a forged `agent-uid` label
-		// needs only `create` — so that object is one the operator cannot
-		// establish it created, and the claim above would be false of it if it
-		// were deleted. It is adopted (rewritten) but never destroyed. The
-		// narrower rule is the one the absolute claim needs.
+		// STAMPED, and with THIS revision's digest — the strongest evidence
+		// available, and NOT a proof of creation.
+		//
+		// Every element of it is forgeable by a principal who can `create` a
+		// Service here: the name is derived from the Agent's name and a public
+		// revision hash, the `agent-uid` label is readable off any object in the
+		// namespace, and the digest is a pure function of the spec that is also
+		// stamped on the Deployment. routeCollision says the same of its own
+		// labels and does not pretend otherwise. What this gate buys is that an
+		// object which merely SITS at the name — unstamped, or stamped for a
+		// different revision — is never destroyed, and that an adversary who
+		// forges the whole set gets their own plant repaired. Design 02 §5
+		// states it in those terms rather than as "nothing this operator did not
+		// create is ever deleted", which was measured false.
 		if !stamped || existingDigest != digest {
-			return shape
+			return &serviceShapeError{
+				ns: existing.Namespace, name: existing.Name,
+				what: faultHeadless, unowned: true,
+			}
 		}
 		return r.replaceUnrepairableService(ctx, &existing, desired, rev, status)
 	}
@@ -414,6 +453,11 @@ func (e *serviceReplaceError) Error() string {
 
 func (e *serviceReplaceError) Unwrap() error { return e.cause }
 
+// errServiceCreate marks an error from the CREATE of a revision Service, as
+// opposed to the update of one that already exists. The two have different
+// remedies and the message said the same thing for both.
+var errServiceCreate = errors.New("the revision Service could not be created")
+
 // serviceShapeError is a revision Service whose shape this operator never
 // renders.
 //
@@ -431,6 +475,16 @@ type serviceShapeError struct {
 	// performed: the object was replaced at this time and is unrepairable
 	// again, so replacing it once more would be a loop.
 	heldSince time.Time
+	// unowned is set when the object was refused because this operator cannot
+	// establish it created it. It is a DIFFERENT SITUATION from a held replace,
+	// and the type carried both: the message described a replace that never
+	// happened, at a zero `heldSince`, and — worse, because it is what an alert
+	// keys on — the caller set one reason for either. A77 makes this exact
+	// argument one type over for revisionCollisionError, where "an operator
+	// whose object was refused for carrying no stamp was told two projections
+	// had collided"; shipping it here would be that defect with its own fix as
+	// the indictment.
+	unowned bool
 }
 
 type shapeFault int
@@ -487,9 +541,36 @@ func (e *serviceShapeError) detail() string {
 	return "Its shape is not one this operator renders."
 }
 
+// reason is what the caller reports. It lives on the error because the error
+// is what knows which situation it is: guarding only the prose would leave
+// `Ready.Reason` claiming a cooldown on an object that was never held, and no
+// cooldown will ever run on it — the operator has committed to never replacing
+// it.
+//
+// `Unstamped` is reused rather than minted. It is already this repo's word for
+// "provenance could not be established", which is exactly why the operator will
+// not act, and a new string is a vocabulary change with a cost (PR #59
+// enumerates 64 reasons across 83 call sites). The state it names on the
+// collision path — an object at a revision's name that nothing vouches for —
+// is the same state, reached one branch over.
+func (e *serviceShapeError) reason() string {
+	if e.unowned {
+		return "Unstamped"
+	}
+	return CondReasonServiceReplaceHeld
+}
+
 func (e *serviceShapeError) Error() string {
-	// Reached only when the replace was HELD: every other unrepairable Service
-	// is deleted and recreated rather than reported.
+	if e.unowned {
+		return fmt.Sprintf("service %s/%s cannot be repaired in place. %s This operator will "+
+			"not delete and recreate it either, because it cannot establish that it created "+
+			"it: the object carries no assayd.dev/revision-digest for this revision. An object "+
+			"it merely finds at this name is rewritten, never destroyed. To recover: delete "+
+			"that Service yourself and let the operator recreate it.",
+			e.ns, e.name, e.detail())
+	}
+	// Otherwise the replace was HELD: every other unrepairable Service this
+	// operator owns is deleted and recreated rather than reported.
 	return fmt.Sprintf("service %s/%s cannot be repaired in place. %s This operator already "+
 		"deleted and recreated it at %s and it is unrepairable again, so it is being left alone "+
 		"rather than replaced a second time inside %s — replacing it on every pass would be a "+
@@ -510,7 +591,13 @@ func (e *serviceShapeError) Error() string {
 // `spec.type` is defaulted to ClusterIP by the API server, so a stored Service
 // always carries one and an empty value is not a case this can see;
 // `spec.clusterIP: None` is the headless shape, which is a ClusterIP Service by
-// type and still not one this operator writes.
+// type and still not one this operator writes — and the one fault no Update can
+// repair, so it is the only one whose caller deletes rather than converges.
+//
+// This function is a SHAPE CLASSIFIER and knows nothing about the cooldown or
+// about ownership: the fields those decisions need are set by the callers that
+// make them. It returns a zero `heldSince` and a false `unowned` because it
+// has no business setting either.
 func serviceNotRendered(existing *corev1.Service) *serviceShapeError {
 	e := &serviceShapeError{ns: existing.Namespace, name: existing.Name, typ: existing.Spec.Type}
 	switch {

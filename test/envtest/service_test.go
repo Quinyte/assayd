@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -499,6 +500,22 @@ func TestTheOperatorsOwnServicePatchedInPlaceIsConvergedBack(t *testing.T) {
 			if s.Spec.ClusterIP == "" {
 				t.Errorf("the converged Service has no ClusterIP, so the card fetch can never " +
 					"reach it")
+			}
+		}},
+		// `Local` is not a steering preference: a Service served only by
+		// endpoints on the caller's node DROPS the request when there are none,
+		// so one patch black-holes the gateway's hop to the agent on any
+		// multi-node cluster while the Agent reads Ready=True. It was added to
+		// the enumeration and held there by nothing until this case existed.
+		{"internalTrafficPolicy", func(s *corev1.Service) {
+			s.Spec.InternalTrafficPolicy = ptrTo(corev1.ServiceInternalTrafficPolicyLocal)
+		}, func(t *testing.T, s *corev1.Service) {
+			if p := s.Spec.InternalTrafficPolicy; p == nil ||
+				*p != corev1.ServiceInternalTrafficPolicyCluster {
+				t.Errorf("spec.internalTrafficPolicy survived convergence as %v: the Service is "+
+					"served only by endpoints on the caller's node and DROPS the request when "+
+					"there are none, so the gateway's hop to the agent black-holes with nothing "+
+					"reported", p)
 			}
 		}},
 		{"NodePort", func(s *corev1.Service) {
@@ -1623,6 +1640,11 @@ func TestASecondUnrepairableServiceInsideTheWindowIsHeldNotReplacedAgain(t *test
 	if ready == nil || ready.Reason != controller.CondReasonServiceReplaceHeld {
 		t.Fatalf("the held replace is not reported: %+v", got.Status.Conditions)
 	}
+	// And the not-ours case must NOT share this reason — the same error type
+	// carried both until the reason moved onto it.
+	if strings.Contains(ready.Message, "cannot establish that it created it") {
+		t.Errorf("a held replace is reported with the not-ours prose: %s", ready.Message)
+	}
 	for _, want := range []string{"already deleted and recreated it", "services/patch",
 		"delete that Service"} {
 		if !strings.Contains(ready.Message, want) {
@@ -1697,35 +1719,31 @@ func TestAnUnrepairableServiceThatIsNotOursIsRefusedAndNeverDeleted(t *testing.T
 	}
 }
 
-// The ESCAPE path, MEASURED AND NOT FIXED. Design 02 §5 carries it.
+// The ESCAPE path: REPORTED, not repaired. Design 02 §5 carries both halves.
 //
 // An owner whose revision Service has been broken edits the spec to recover.
-// The edit mints a new DESIRED revision, and `ensureService` converges only the
-// desired one — so the pass that would have replaced the broken Service never
-// looks at it again. The old revision stays ACTIVE, its workload is still
-// Available, and the Agent reads `Ready=True/Available` while the Service its
-// serving route names has no address at all.
+// The edit mints a new DESIRED revision, and `ensureService` converges only
+// the desired one — so the pass that would have replaced the broken Service
+// never looks at it again. The old revision stays ACTIVE and its Service, the
+// one the serving route names, keeps no address.
 //
-// Measured on 2026-09-22:
+// Measured on 2026-09-22, before this was reported:
 //
 //	activeRevision="126eb2a71a"  candidate="e75424173f"
 //	phase="Ready"  Ready=True/Available  clusterIP="None"
 //
-// Delete-and-recreate does NOT remove this: it removes the wedge for an Agent
-// whose broken Service is still the desired one, which is every case where the
-// owner does nothing. The owner's own recovery attempt is what walks past it.
+// The repair and the report are separable and only the report is taken here.
+// Repairing it would mean either converging a revision other than the desired
+// one — which reverses the property design 16's A10 and A11 critiques rest on
+// — or making readiness depend on the serving revision's Service, which
+// changes what `Ready` means. Widening the delete's reach on the same change
+// that introduces the delete is the wrong order.
 //
-// It is not fixed here because both fixes reach past this change. Making
-// `ensureService` look at the active revision as well as the desired one
-// reverses the property design 16's A10 and A11 critiques rest on — "once C is
-// desired, a Service of R that the test deletes is not re-created" — and making
-// readiness depend on the serving revision's Service changes what `Ready`
-// means. Either is its own change with its own review.
-//
-// THIS TEST ASSERTS THE DEFECT. That is deliberate: a fix flips it, and
-// whoever flips it must come here, and from here to §5, rather than quietly
-// leaving the record saying something that is no longer true.
-func TestAnOwnerEditEscapesOverABrokenActiveRevision(t *testing.T) {
+// So the operator now READS the active revision's Service and reports an
+// unusable one. It writes nothing, re-creates nothing, and says nothing about
+// a MISSING Service — that last is design 16's own fixture, which deletes a
+// retired revision's Service and expects no fuss.
+func TestAnOwnerEditOverABrokenActiveRevisionIsReported(t *testing.T) {
 	ns := newNamespace(t)
 	a := noneAgent(t, ns, "escape")
 	r := newGatewayReconciler("assayd-gateway", "assayd")
@@ -1744,8 +1762,7 @@ func TestAnOwnerEditEscapesOverABrokenActiveRevision(t *testing.T) {
 	if err := k8s.Update(context.Background(), live); err != nil {
 		t.Fatalf("edit the spec: %v", err)
 	}
-	newRev := revision.MustHash(live.Spec)
-	if newRev == rev {
+	if revision.MustHash(live.Spec) == rev {
 		t.Fatalf("setup: the edit did not mint a new revision")
 	}
 	for i := 0; i < 6; i++ {
@@ -1767,24 +1784,76 @@ func TestAnOwnerEditEscapesOverABrokenActiveRevision(t *testing.T) {
 
 	if got.Status.ActiveRevision != rev {
 		t.Fatalf("the edit promoted a new active revision (%q), which would take the route with "+
-			"it and make this defect unreachable. Re-derive §5 rather than deleting this test",
+			"it and make this state unreachable. Re-derive §5 rather than deleting this test",
 			got.Status.ActiveRevision)
 	}
+	// NOT repaired — that is the deferred half, and §5 names the fix to take.
 	if active.Spec.ClusterIP != corev1.ClusterIPNone {
 		t.Fatalf("the ACTIVE revision's Service was repaired (clusterIP=%q). If something now "+
 			"converges a revision other than the desired one, design 02 §5's escape row and "+
-			"design 16's A10/A11 premise are both out of date — fix the record, then delete "+
-			"this test", active.Spec.ClusterIP)
+			"design 16's A10/A11 premise are both out of date — fix the record first",
+			active.Spec.ClusterIP)
 	}
-	if ready.Status != metav1.ConditionTrue {
-		t.Fatalf("the Agent no longer reads Ready=True over a broken active revision (%v/%v). "+
-			"That is the DEFECT being fixed, not a regression — update design 02 §5's escape "+
-			"row and delete this test", ready.Status, ready.Reason)
+	// REPORTED — which is the half this change takes.
+	if ready.Status != metav1.ConditionFalse ||
+		ready.Reason != controller.CondReasonActiveServiceUnaddressable {
+		t.Fatalf("the Agent reads %v/%v while the ACTIVE revision %s — the one its serving route "+
+			"names — has no ClusterIP. Nothing reaches it and nothing says so",
+			ready.Status, ready.Reason, got.Status.ActiveRevision)
 	}
-	// The defect, stated: Ready=True and the address the serving route resolves
-	// to is gone.
-	t.Logf("DEFECT (design 02 §5): Ready=True/%s while the active revision %s, which the serving "+
-		"route names, has no ClusterIP", ready.Reason, got.Status.ActiveRevision)
+	if got.Status.Phase != assaydv1alpha1.PhaseDegraded {
+		t.Errorf("phase is %q, want Degraded", got.Status.Phase)
+	}
+	for _, want := range []string{"has no ClusterIP", "only the DESIRED revision", "To recover"} {
+		if !strings.Contains(ready.Message, want) {
+			t.Errorf("the message does not contain %q; it is: %s", want, ready.Message)
+		}
+	}
+}
+
+// A MISSING Service on a retired active revision raises nothing. That is design
+// 16's A10/A11 fixture — it deletes R's Service once C is desired and expects
+// `EvalWaitingForAuth` to go on naming R — and the report above must not turn
+// it into an incident.
+func TestAMissingActiveRevisionServiceIsNotReported(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "gonesvc")
+	// Gateway OFF, so the pass completes and persists status. With it on, the
+	// route emitter has no port to read for a Service that is gone and the pass
+	// errors before writing anything — which hides whatever this check said.
+	r := newReconciler(false)
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("gonesvc", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	live := liveAgentPtr(t, a)
+	live.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:" + strings.Repeat("b", 64)
+	if err := k8s.Update(context.Background(), live); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	reconcileOnce(t, r, live)
+
+	var doomed corev1.Service
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	if err := k8s.Get(context.Background(), key, &doomed); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if err := k8s.Delete(context.Background(), &doomed); err != nil {
+		t.Fatalf("delete the retired revision's Service: %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		reconcileOnce(t, r, live)
+	}
+
+	got := liveAgentPtr(t, a)
+	if c := condition(got, assaydv1alpha1.CondReady); c != nil &&
+		c.Reason == controller.CondReasonActiveServiceUnaddressable {
+		t.Errorf("a MISSING Service on the active revision was reported as unaddressable. That "+
+			"is design 16's own fixture, which deletes a retired revision's Service and expects "+
+			"no fuss: %+v", c)
+	}
 }
 
 // swapBeforeDelete replaces the revision Service with a DIFFERENT object under
@@ -1873,6 +1942,23 @@ func TestTheReplaceDeletesTheObjectItReadAndNotTheName(t *testing.T) {
 	}
 	if !swapper.done {
 		t.Fatal("setup: no delete was issued, so the race never happened")
+	}
+
+	// AND the pass must not have gone on as if nothing happened. Returning
+	// success here let the operator promote, route and report Ready=True over
+	// an object it never established — the bystander credited with the Agent's
+	// traffic. "A lost race never returns nil" was stated three times and
+	// measured on one of its three arms.
+	lost := liveAgentPtr(t, a)
+	lostReady := condition(lost, assaydv1alpha1.CondReady)
+	if lostReady == nil || lostReady.Status != metav1.ConditionFalse {
+		t.Errorf("the Agent reads %+v after a lost UID precondition. The pass could not "+
+			"establish its Service and must not go on to promote and route over whatever "+
+			"holds the name", lostReady)
+	}
+	if lostReady != nil && lostReady.Reason != controller.CondReasonServiceReplaceFailed {
+		t.Errorf("Ready reason is %q, want %s", lostReady.Reason,
+			controller.CondReasonServiceReplaceFailed)
 	}
 
 	var after corev1.Service
@@ -2132,8 +2218,13 @@ func (c *refuseCreate) Create(ctx context.Context, obj client.Object, opts ...cl
 //
 // The third provenance ground adopts an unstamped object while status vouches
 // for the name, and a forged agent-uid label needs only `create`. Such an
-// object is rewritten but must never be destroyed, or the claim "nothing this
-// operator did not create is ever deleted here" is false.
+// object is rewritten but never destroyed.
+//
+// This test pins THAT and only that. It does not pin "nothing this operator
+// did not create is ever deleted here", which is false and which an earlier
+// version of this comment asserted while measuring one arm of it: the digest
+// is forgeable too, and TestAFullyForgedStampIsDeletedAndTheDesignSaysSo
+// measures the object that carries both and IS deleted.
 func TestAnUnstampedVouchedServiceIsRefusedNotDeleted(t *testing.T) {
 	ns := newNamespace(t)
 	a := noneAgent(t, ns, "vouchdel")
@@ -2182,8 +2273,320 @@ func TestAnUnstampedVouchedServiceIsRefusedNotDeleted(t *testing.T) {
 	if after.UID != uid {
 		t.Fatalf("the unstamped object was replaced (%s -> %s)", uid, after.UID)
 	}
+	// Its OWN reason, and its own message. A held-replace reason on an object
+	// that was never held — and never will be, because the operator has
+	// committed to not replacing it — sends an operator looking for a cooldown
+	// that does not exist. The reason is what an alert keys on.
 	ready := condition(liveAgentPtr(t, a), assaydv1alpha1.CondReady)
-	if ready == nil || ready.Reason != controller.CondReasonServiceReplaceHeld {
-		t.Errorf("the refusal is not reported: %+v", ready)
+	if ready == nil || ready.Reason != "Unstamped" {
+		t.Fatalf("the refusal reads %+v, want Unstamped — the operator will not delete this "+
+			"object because it cannot prove it created it, which is what Unstamped names", ready)
+	}
+	if !strings.Contains(ready.Message, "cannot establish that it created it") {
+		t.Errorf("the message does not say WHY the object is left alone: %s", ready.Message)
+	}
+	for _, forbidden := range []string{"already deleted and recreated it", "0001-01-01",
+		"Something is putting it back"} {
+		if strings.Contains(ready.Message, forbidden) {
+			t.Errorf("the message describes a held replace that never happened (%q): %s",
+				forbidden, ready.Message)
+		}
+	}
+}
+
+// vanishBeforeDelete removes the Service just before the operator's own delete
+// reaches the API server, so that delete returns NotFound.
+type vanishBeforeDelete struct {
+	client.Client
+	t    *testing.T
+	at   types.NamespacedName
+	done bool
+}
+
+func (c *vanishBeforeDelete) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if !c.done {
+		if svc, ok := obj.(*corev1.Service); ok && svc.Name == c.at.Name && svc.Namespace == c.at.Namespace {
+			c.done = true
+			var live corev1.Service
+			if err := c.Client.Get(ctx, c.at, &live); err == nil {
+				if derr := c.Client.Delete(ctx, &live); derr != nil {
+					c.t.Fatalf("vanish: %v", derr)
+				}
+			}
+		}
+	}
+	return c.Client.Delete(ctx, obj, opts...)
+}
+
+// The third arm of "a lost race never returns nil": the object is gone before
+// the delete lands.
+//
+// Returning success there let the pass promote and route on the strength of a
+// Service it had neither repaired nor replaced — and on this path there is no
+// object at the name at all.
+func TestAVanishedServiceDoesNotLetTheReplacePassAsSuccess(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "vanish")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("vanish", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	headlessByPatchAlone(t, key)
+
+	vanisher := &vanishBeforeDelete{Client: k8s, t: t, at: key}
+	racing := newGatewayReconciler("assayd-gateway", "assayd")
+	racing.Client = vanisher
+	if _, err := racing.Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)}); err != nil {
+		t.Logf("reconcile: %v", err)
+	}
+	if !vanisher.done {
+		t.Fatal("setup: no delete was issued, so the arm was not exercised")
+	}
+
+	got := liveAgentPtr(t, a)
+	ready := condition(got, assaydv1alpha1.CondReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse {
+		t.Fatalf("the Agent reads %+v after its Service vanished mid-replace. The pass "+
+			"established no Service and must not report Ready over one", ready)
+	}
+	if ready.Reason != controller.CondReasonServiceReplaceFailed {
+		t.Errorf("Ready reason is %q, want %s", ready.Reason,
+			controller.CondReasonServiceReplaceFailed)
+	}
+}
+
+// A fully forged object IS deleted, and the design says so rather than claiming
+// otherwise.
+//
+// The digest is a pure function of the spec and is also stamped on the
+// Deployment, so forging it needs only `create` — exactly like the UID label.
+// "Nothing this operator did not create is ever deleted here" was therefore
+// false, and the sentence is now accurate instead: what the gate buys is that
+// an object which merely SITS at the name is never destroyed, and an adversary
+// who forges the whole set gets their own plant repaired.
+func TestAFullyForgedStampIsDeletedAndTheDesignSaysSo(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "forged")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	digest := revision.MustDigest(a.Spec)
+	svcName := controller.WorkloadName("forged", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	var mine corev1.Service
+	if err := k8s.Get(context.Background(), key, &mine); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if err := k8s.Delete(context.Background(), &mine); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	planted := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: runNS(ns), Name: svcName,
+			Labels:      map[string]string{controller.LabelAgentUID: string(a.UID)},
+			Annotations: map[string]string{controller.RevisionDigestAnnotation: digest},
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone,
+			Ports: []corev1.ServicePort{{Name: "a2a", Port: 8080, Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	if err := k8s.Create(context.Background(), planted); err != nil {
+		t.Fatalf("plant: %v", err)
+	}
+	uid := planted.UID
+	reconcileOnce(t, r, a)
+
+	var after corev1.Service
+	if err := k8s.Get(context.Background(), key, &after); err != nil {
+		t.Fatalf("get after: %v", err)
+	}
+	if after.UID == uid {
+		t.Fatalf("the forged object was NOT replaced. That is a stronger rule than the one " +
+			"design 02 §5 records — update the record rather than leaving it understated")
+	}
+	// Recorded for what it is: the adversary's own plant is repaired, which is
+	// the whole consequence, and the sentence in §5 says so.
+	t.Logf("MEASURED (design 02 §5): a Service carrying a forged agent-uid AND a forged "+
+		"revision-digest is deleted and replaced (%s -> %s). Every element of the gate is "+
+		"forgeable by a principal who can create a Service here; what it buys is that an "+
+		"object merely sitting at the name is never destroyed", uid, after.UID)
+}
+
+// The not-ours refusal must name the real cause, not describe itself as a held
+// replace that never happened.
+func TestTheNotOursRefusalSaysItCannotEstablishItCreatedTheObject(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "notmine")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("notmine", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	var mine corev1.Service
+	if err := k8s.Get(context.Background(), key, &mine); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if err := k8s.Delete(context.Background(), &mine); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	planted := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: runNS(ns), Name: svcName,
+			Labels: map[string]string{controller.LabelAgentUID: string(a.UID)},
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone,
+			Ports: []corev1.ServicePort{{Name: "a2a", Port: 8080, Protocol: corev1.ProtocolTCP}},
+		},
+	}
+	if err := k8s.Create(context.Background(), planted); err != nil {
+		t.Fatalf("plant: %v", err)
+	}
+	reconcileOnce(t, r, a)
+
+	ready := condition(liveAgentPtr(t, a), assaydv1alpha1.CondReady)
+	if ready == nil {
+		t.Fatal("no Ready condition")
+	}
+	if !strings.Contains(ready.Message, "cannot establish that it created it") {
+		t.Errorf("the message does not say WHY the object is left alone: %s", ready.Message)
+	}
+	for _, forbidden := range []string{"already deleted and recreated it", "0001-01-01"} {
+		if strings.Contains(ready.Message, forbidden) {
+			t.Errorf("the message describes a held replace that never happened (%q): %s",
+				forbidden, ready.Message)
+		}
+	}
+}
+
+// A replace time in the FUTURE does not hold the replace.
+//
+// `time.Since` of a future instant is negative, and negative is less than the
+// cooldown, so a naive comparison holds forever. status is only this
+// controller's to write, but a clock that jumped — or a restore from a backup
+// taken on a machine whose clock was ahead — puts one there without any
+// adversary. The guard is `since >= 0`, and nothing held it until this.
+func TestAFutureReplaceTimeDoesNotHoldTheReplace(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "skew")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("skew", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	live := liveAgentPtr(t, a)
+	ahead := metav1.NewTime(time.Now().Add(72 * time.Hour))
+	live.Status.ServiceReplacedRevision, live.Status.ServiceReplacedAt = rev, &ahead
+	if err := k8s.Status().Update(context.Background(), live); err != nil {
+		t.Fatalf("seed a future replace time: %v", err)
+	}
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	var before corev1.Service
+	if err := k8s.Get(context.Background(), key, &before); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	headlessByPatchAlone(t, key)
+	reconcileOnce(t, r, a)
+
+	var after corev1.Service
+	if err := k8s.Get(context.Background(), key, &after); err != nil {
+		t.Fatalf("get after: %v", err)
+	}
+	if after.UID == before.UID {
+		t.Fatalf("a replace time %s in the future held the repair off. time.Since of a future "+
+			"instant is negative, and negative is inside any window, so the Agent stays wedged "+
+			"until that time passes: Ready=%+v", ahead,
+			condition(liveAgentPtr(t, a), assaydv1alpha1.CondReady))
+	}
+}
+
+// The revision is part of the bound: a NEW revision gets a NEW Service, which
+// the last revision's cooldown must not hold.
+func TestACooldownOnAnotherRevisionDoesNotHoldThisOne(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "otherrev")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("otherrev", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	armReplaceCooldown(t, a, "someotherrevision")
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	var before corev1.Service
+	if err := k8s.Get(context.Background(), key, &before); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	headlessByPatchAlone(t, key)
+	reconcileOnce(t, r, a)
+
+	var after corev1.Service
+	if err := k8s.Get(context.Background(), key, &after); err != nil {
+		t.Fatalf("get after: %v", err)
+	}
+	if after.UID == before.UID {
+		t.Errorf("a cooldown recorded for a DIFFERENT revision held this one's repair: each " +
+			"revision has its own Service and the bound is per revision")
+	}
+}
+
+// The CREATE path reaches `ServiceRejected` too, and its remedy must not name
+// an object that was never created.
+//
+// An earlier mutation row claimed nothing reaches that exit. An ordinary
+// ValidatingAdmissionPolicy over `services` — "every Service must carry a
+// cost-centre label" — reaches it on the first pass of a new Agent, before any
+// Service exists, and the message said "delete that Service". Rule 8.
+func TestARefusedServiceCreateSaysThereIsNothingToDelete(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "nocreate")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("nocreate", rev)
+
+	refusing := &refuseCreate{
+		Client: k8s,
+		at:     types.NamespacedName{Namespace: runNS(ns), Name: svcName},
+	}
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	r.Client = refusing
+	for i := 0; i < 4; i++ {
+		if _, err := r.Reconcile(context.Background(),
+			ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)}); err != nil {
+			t.Logf("reconcile: %v", err)
+		}
+	}
+
+	var svc corev1.Service
+	if err := k8s.Get(context.Background(),
+		types.NamespacedName{Namespace: runNS(ns), Name: svcName}, &svc); err == nil {
+		t.Fatalf("setup: the Service exists, so the create was not refused")
+	}
+	got := liveAgentPtr(t, a)
+	ready := condition(got, assaydv1alpha1.CondReady)
+	if ready == nil || ready.Reason != "ServiceRejected" {
+		t.Fatalf("a refused Service CREATE is not reported: %+v", got.Status.Conditions)
+	}
+	if !strings.Contains(ready.Message, "no such object to delete") {
+		t.Errorf("the message tells the reader to delete a Service that was never created: %s",
+			ready.Message)
+	}
+	if strings.Contains(ready.Message, "repair its own Service in place") {
+		t.Errorf("the create path reports the update path's remedy: %s", ready.Message)
 	}
 }

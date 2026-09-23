@@ -61,6 +61,16 @@ const (
 	// now so that agents created today do not need a migration to acquire it.
 	Finalizer = "assayd.dev/agent-teardown"
 
+	// CondReasonActiveServiceUnaddressable names an Agent whose ACTIVE
+	// revision — the one its serving route points at — has a Service that
+	// exists and cannot carry traffic (design 02 §5, A77).
+	//
+	// It is reported and not repaired. ensureService converges only the desired
+	// revision, so once an owner's recovery edit mints a new one the broken
+	// Service is out of its reach; the repair is a separate change and the
+	// silence was not.
+	CondReasonActiveServiceUnaddressable = "ActiveRevisionServiceUnaddressable"
+
 	// CondReasonServiceReplaceFailed names a replace that did not complete: the
 	// operator could not repair its revision Service in place and could not put
 	// a replacement in its stead (design 02 §3.2, A77).
@@ -660,8 +670,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 					// same words for the same reason (authtxn.go).
 					msg += servedRouteNote
 				}
-				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, CondReasonServiceReplaceHeld, msg)
-				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, CondReasonServiceReplaceHeld, msg)
+				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, shape.reason(), msg)
+				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, shape.reason(), msg)
 				// This exit returns BEFORE the -auth step, and design 03's two
 				// conditions are owned and not sticky, so merge would CLEAR them —
 				// retracting A81's announced fail-open on an Agent whose route is
@@ -676,6 +686,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 					r.writeStatus(ctx, &agent, status)
 			}
 			if rejectedByAPIServer(err) {
+				created := errors.Is(err, errServiceCreate)
 				// A77's convergence made this exit reachable from a Service the
 				// operator OWNS, and by more than one route: it asserts an
 				// enumerated set of shape fields, so a field Kubernetes couples to
@@ -690,10 +701,23 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				// status, requeued at zero and left the Agent reading
 				// `Ready=True/Available` with the off-gateway exposure standing.
 				// NFR-8's silent degraded path, on the exit that exists to report.
-				msg := err.Error() + ". This operator could not repair its own Service in place. " +
-					"To recover: delete that Service and let the operator recreate it — and if " +
-					"an admission policy refused the repair, that policy will refuse the " +
-					"re-creation too, so fix or exempt it first."
+				// The remedy depends on WHICH write was refused, and the message
+				// said "delete that Service" for both — naming an object that,
+				// on the create path, does not exist. Measured by the second
+				// independent review; rule 8.
+				msg := err.Error() + ". "
+				if created {
+					msg += "This operator could not CREATE this revision's Service, so there is " +
+						"no such object to delete. Something is refusing the write — look for an " +
+						"admission policy or webhook over services in this namespace — and until " +
+						"it is fixed or exempted, this revision has no address and nothing " +
+						"reaches it."
+				} else {
+					msg += "This operator could not repair its own Service in place. To recover: " +
+						"delete that Service and let the operator recreate it — and if an " +
+						"admission policy refused the repair, that policy will refuse the " +
+						"re-creation too, so fix or exempt it first."
+				}
 				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "ServiceRejected", msg)
 				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ServiceRejected", msg)
 				// And another, eight lines from the one above: see carryGatewayReport.
@@ -913,6 +937,30 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			fmt.Sprintf("revision %s is the active revision", desired))
 		conds.set(assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", desired))
+	}
+
+	// The ACTIVE revision's Service is READ here — never converged, never
+	// deleted — and an unusable one is reported.
+	//
+	// ensureService converges only the DESIRED revision, which is the property
+	// design 16's A10 and A11 critiques rest on, and this does not change it:
+	// nothing is written, nothing is re-created. What it closes is the
+	// measured escape. An owner whose Service was broken edits the spec to
+	// recover; the edit mints a new desired revision; the pass that would have
+	// repaired the old one never looks at it again — and the Agent read
+	// `Ready=True/Available` while the revision its serving route names had no
+	// address at all. Repairing it is a separate change with its own review
+	// (design 02 §5); saying so is not.
+	//
+	// A MISSING Service is deliberately not reported: that is design 16's own
+	// fixture, which deletes a retired revision's Service and expects no fuss.
+	// Only one that EXISTS and cannot carry traffic raises anything.
+	if unusable := r.activeRevisionUnaddressable(ctx, &agent, runNS, status, desired); unusable != "" {
+		conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse,
+			CondReasonActiveServiceUnaddressable, unusable)
+		conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue,
+			CondReasonActiveServiceUnaddressable, unusable)
+		status.Phase = assaydv1alpha1.PhaseDegraded
 	}
 
 	// The route and its -auth are converged AFTER the switch above, from
@@ -1315,6 +1363,38 @@ func rejectedByAPIServer(err error) bool {
 	// transport failure carries no status and is left to the caller's retry.
 	var status apierrors.APIStatus
 	return errors.As(err, &status)
+}
+
+// activeRevisionUnaddressable returns a message when the ACTIVE revision is not
+// the desired one and its Service exists but can carry no traffic, and "" in
+// every other case. It READS and reports; it writes nothing.
+//
+// Anything it cannot establish is not reported: a read error, a missing
+// Service, or an active revision that is also the desired one — that last is
+// ensureService's own business and has already been converged or refused on
+// this pass.
+func (r *AgentReconciler) activeRevisionUnaddressable(ctx context.Context,
+	agent *assaydv1alpha1.Agent, runNS string, status *assaydv1alpha1.AgentStatus, desired string,
+) string {
+	active := status.ActiveRevision
+	if active == "" || active == desired {
+		return ""
+	}
+	name := WorkloadName(agent.Name, active)
+	var svc corev1.Service
+	if err := r.reader().Get(ctx, types.NamespacedName{Namespace: runNS, Name: name}, &svc); err != nil {
+		return ""
+	}
+	if svc.Spec.ClusterIP != "" && svc.Spec.ClusterIP != corev1.ClusterIPNone {
+		return ""
+	}
+	return fmt.Sprintf("the ACTIVE revision %s is serving, and its Service %s/%s has no "+
+		"ClusterIP, so nothing the serving route sends to it arrives. This operator converges "+
+		"only the DESIRED revision (%s), so it will not repair that object: an edit to the spec "+
+		"moved the desired revision on and left this one behind. To recover: delete %s/%s — the "+
+		"operator recreates it only while it is the desired revision, so revert the spec edit "+
+		"first, or promote a new revision and let the route follow it.",
+		active, runNS, name, desired, runNS, name)
 }
 
 // RefusedServiceRecheck is how soon a revision Service the operator refused is
