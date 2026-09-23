@@ -77,7 +77,7 @@ export default defineConfig({
         },
         // Generated. The pages under reference/ are NOT in git here: they are
         // docs/reference/*.md, written by cmd/refgen and held to the code by
-        // `make verify`, and web/scripts/build.sh copies them in before the
+        // `make verify`, and web/scripts/copy-reference.sh copies them in before the
         // build so the link gate reads them. Edit the generator, never the copy.
         {
           label: "Reference",

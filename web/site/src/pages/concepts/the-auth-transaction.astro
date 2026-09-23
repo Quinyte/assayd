@@ -26,7 +26,7 @@ const design03 =
 
 <BaseLayout
   title="The auth transaction — assayd"
-  description="What the assayd operator does between an Agent being created and traffic reaching it: a resumable transaction that publishes a route only after an anonymous request has been refused."
+  description="What the assayd operator does between an Agent being created and traffic reaching it: for an API-key Agent, a resumable transaction that publishes its route only after an anonymous request has been refused."
   current="/concepts/the-auth-transaction.html"
 >
   <article class="concept">
@@ -38,7 +38,7 @@ const design03 =
     </p>
 
     <p class="thesis">
-      A new Agent’s authentication is applied as a resumable transaction that
+      A new API-key Agent’s authentication is applied as a resumable transaction that
       publishes its route only after an anonymous request through it has
       actually been refused. <ClaimClass claim="measured" test="TestCreatePublishesOnlyOnA401" />
     </p>
@@ -61,8 +61,7 @@ const design03 =
     <h2 id="stages">The stages</h2>
     <p>
       The transaction is recorded at <code>status.auth.transaction</code>. Its
-      stage values are the seven that <code>internal/controller/authtxn.go</code> defines, read for this page at <code>main</code> <code>{DEPICTS}</code>. Nothing fails if one is added, renamed or removed:
-      the CRD field carries no enum, and no test pins the list. <ClaimClass claim="not-built" note="no test or schema pins the stage vocabulary" />
+      stage values are the seven that <code>internal/controller/authtxn.go</code> defines, read for this page at <code>main</code> <code>{DEPICTS}</code>. Nothing fails if one is added: the CRD field carries no enum, and no test enumerates the list. <ClaimClass claim="not-built" note="no test or schema pins the stage vocabulary" />
     </p>
 
     <dl class="stages">
@@ -88,9 +87,8 @@ const design03 =
 
       <dt><code>Converging</code></dt>
       <dd>
-        The transaction waits until the Gateway reports both the route and the
-        policy converged. With the route accepted and the policy not yet
-        reported, it sends no request and publishes nothing. <ClaimClass claim="measured" test="TestACreateWaitsInConvergingUntilThePolicyConverges" />
+        <p>With the route accepted and the policy not yet reported, the transaction stays here: it sends no request and publishes nothing. <ClaimClass claim="measured" test="TestACreateWaitsInConvergingUntilThePolicyConverges" /></p>
+        <p>With the policy reported and the route not yet accepted, it stays here too. It moves on only when the Gateway reports both. <ClaimClass claim="measured" test="TestACreateWaitsInConvergingUntilTheRouteConverges" /></p>
       </dd>
 
       <dt><code>ProbingAfter</code></dt>
@@ -151,7 +149,7 @@ const design03 =
         of lock. <ClaimClass claim="measured" test="TestK2AnOwnersEditEndsTheRefusal" />
       </li>
       <li>
-        An API-key Agent that reached <code>Served</code> and then lost its policy gets it back by a <code>Lock</code>. The policy is rebuilt from the recorded status and trusted again only after a <code>401</code> that can be attributed to it. The route is not withdrawn meanwhile, so until then it serves without authentication, and the Agent reports <code>GovernanceSkipped=True</code> with reason <code>AuthPolicyMissing</code>. <ClaimClass claim="measured" test="TestADeletedPolicyIsRecreatedAndTrustedOnlyOnAnAttributed401" />
+        An API-key Agent that reached <code>Served</code> and then lost its policy gets it back by a <code>Lock</code>. The policy is rebuilt from the recorded status and trusted again only after a <code>401</code> that can be attributed to it, and the Agent reports <code>GovernanceSkipped=True</code> with reason <code>AuthPolicyMissing</code> until then. The route is not withdrawn meanwhile. <ClaimClass claim="measured" test="TestADeletedPolicyIsRecreatedAndTrustedOnlyOnAnAttributed401" />
       </li>
     </ul>
 
@@ -170,9 +168,7 @@ const design03 =
         while that NACK stands. <ClaimClass claim="measured" test="TestANackReturnsALockToConverging" />
       </li>
       <li>
-        A transaction’s deadline is a condition, not a timeout. Past it, a <code>Create</code> reads <code>PolicyApplyIncomplete=True</code> with a
-        message naming the stage it waits in, and <code>Ready=False</code>, and
-        stays where it is, unpublished. <ClaimClass claim="measured" test="TestACreateHasADeadlineOutcomeInEveryStage" />
+        A transaction’s deadline is a condition, not a timeout. Past it, a <code>Create</code> still waiting in <code>Converging</code> reads <code>PolicyApplyIncomplete=True</code> with a message naming that stage, and <code>Ready=False</code>, and stays unpublished; one waiting in <code>Publishing</code> reads the same condition naming <code>Publishing</code>, and stays where it is. <ClaimClass claim="measured" test="TestACreateHasADeadlineOutcomeInEveryStage" />
       </li>
     </ul>
 
@@ -195,10 +191,13 @@ const design03 =
         Nothing shows that the gateway’s proxy has applied a policy. The operator reads the Gateway’s control-plane status, which the proxy may lag, so its checks narrow that window and do not close it (<a href={`${design03}#332-what-the-barrier-can-and-cannot-prove`}>design 03 §3.3.2</a>). <ClaimClass claim="not-built" note="no check reads the proxy's own configuration" />
       </li>
       <li>
+        While a deleted policy is being rebuilt, its route keeps serving, and until the gateway applies the rebuilt policy it may serve without authentication (<a href={`${design03}#333-in-place-tightening-is-trusted-only-on-a-probe`}>design 03 §3.3.3</a>). Withdrawing the route instead would let anyone who can delete a policy take the Agent off the air. <ClaimClass claim="not-built" note="nothing closes this window; design 03 §3.3.3 records it" />
+      </li>
+      <li>
         A policy deleted in the short interval between a pass’s check and its route write leaves the route published without it until the next pass (<a href={`${design03}#333-in-place-tightening-is-trusted-only-on-a-probe`}>design 03 §3.3.3</a>). <ClaimClass claim="not-built" note="design 03 §3.3.3 records the window; nothing closes it" />
       </li>
       <li>
-        Design 03 §3.4 maps token and USD budgets, rate limits and a tool allowlist onto the gateway (<a href={`${design03}#34-concern-mapping`}>design 03 §3.4</a>). <ClaimClass claim="designed" design="design 03" section="§3.4" />
+        Design 03 §3.4 maps token and USD budgets, rate limits and a tool allowlist onto the gateway (<a href={`${design03}#34-concern-mapping`}>design 03 §3.4</a>). None of that is in design 03’s approved first slice. <ClaimClass claim="designed" design="design 03" section="§3.4" />
       </li>
       <li>
         None of them is compiled: the only policy the operator writes to the gateway is <code>&lt;agent&gt;-auth</code>, which authenticates and authorizes callers. <ClaimClass claim="not-built" note="no AgentgatewayBackend and no rate-limit or allowlist policy is emitted" />
@@ -263,6 +262,14 @@ const design03 =
   .stages dt {
     padding-top: var(--ax-space-3);
     font-size: var(--ax-body-md);
+  }
+
+  .stages dd p {
+    margin-top: 0;
+  }
+
+  .stages dd p + p {
+    margin-top: var(--ax-space-1);
   }
 
   .stages dd {

@@ -4,11 +4,12 @@
 #
 # Fail on any build warning that is not a known one.
 #
-# The build emits four warnings and exits 0, and the PR that introduced it
-# reported "0 errors, 0 warnings" — which was `astro check`'s number, not the
-# build's. Rather than restate that more carefully, this makes the set of
-# tolerated warnings an explicit list: the four below are accounted for, and a
-# fifth fails CI until someone accounts for it too.
+# The build emits warnings and exits 0, and the PR that introduced it reported
+# "0 errors, 0 warnings" — which was `astro check`'s number, not the build's.
+# Rather than restate that more carefully, this makes the set of tolerated
+# warning KINDS an explicit list: the four below are accounted for, and a
+# warning matching none of them fails CI until someone accounts for it too.
+# It bounds the kinds, not the count: entry 1 is emitted once per MDX page.
 #
 # Usage:  web/scripts/check-warnings.sh          # reads web/.build.log
 #         web/scripts/check-warnings.sh <log>

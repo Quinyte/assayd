@@ -50,9 +50,9 @@ Turning the gateway on adds two Roles and two RoleBindings and no workload: the
 same single Deployment, at the same two replicas, and still no Gateway object of
 any kind. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
 
-The chart refuses to render `gateway.enabled=true` without `gateway.servingUrl`:
-the operator publishes a new Agent's route only after an anonymous request to
-that address is refused, so it needs the address. <ClaimClass claim="measured" test="TestAnEnabledGatewayWithNoServingURLDoesNotRender" />
+The chart refuses to render `gateway.enabled=true` without `gateway.servingUrl`,
+the address of the Gateway listener the operator sends its anonymous requests
+to. <ClaimClass claim="measured" test="TestAnEnabledGatewayWithNoServingURLDoesNotRender" />
 
 ## What the test harness adds, and assayd does not
 

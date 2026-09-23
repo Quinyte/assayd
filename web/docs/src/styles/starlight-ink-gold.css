@@ -31,6 +31,12 @@
 
   --sl-color-text: var(--ax-on-surface);
   --sl-color-text-accent: var(--ax-ink);
+  /*
+   * Text drawn ON the accent — the current page's sidebar link, which
+   * Starlight fills with the accent. Left unset it resolved to the accent
+   * itself, ink on ink, 1:1, so the current page's own name was invisible.
+   */
+  --sl-color-text-invert: var(--ax-on-ink);
   --sl-color-bg: var(--ax-background);
   --sl-color-bg-nav: var(--ax-background);
   --sl-color-bg-sidebar: var(--ax-background);
@@ -49,6 +55,24 @@
  * sections; this is the one place it stands in as a ground.
  */
 :root[data-theme="dark"] {
+  /*
+   * The whole grey ramp is redefined, not only the text and ground. The light
+   * block above sets it on :root, which the dark theme also matches, so a dark
+   * block that left it alone inherited ink greys on an ink-dark ground: the
+   * site title, the sidebar and the theme picker measured 1.04:1 to 1.34:1.
+   * The ramp runs light to dark here, as Starlight's own dark ramp does.
+   */
+  --sl-color-white: var(--ax-on-ink);
+  --sl-color-gray-1: var(--ax-on-ink);
+  --sl-color-gray-2: var(--ax-on-ink);
+  --sl-color-gray-3: var(--ax-outline);
+  --sl-color-gray-4: var(--ax-on-surface-variant);
+  --sl-color-gray-5: var(--ax-ink-soft);
+  --sl-color-gray-6: var(--ax-ink);
+  --sl-color-gray-7: var(--ax-ink-dark);
+  --sl-color-black: var(--ax-ink-dark);
+  --sl-color-text-invert: var(--ax-ink-dark);
+
   --sl-color-accent: var(--ax-on-ink);
   --sl-color-accent-low: var(--ax-ink-soft);
   --sl-color-accent-high: var(--ax-on-ink);
@@ -88,4 +112,51 @@
  */
 .header {
   border-bottom: 2px solid var(--ax-gold);
+}
+
+/*
+ * Hand link colour back to Starlight. shared/base.css sets `a { color: ink }`
+ * for the site target, and it is unlayered, so here it beat every one of
+ * Starlight's own (layered) link colours: the current page's sidebar link was
+ * ink on an ink fill, and in dark mode every sidebar link was ink on ink-dark,
+ * 1.04:1. `revert-layer` drops this origin's value and lets Starlight's layered
+ * rules, which read the --sl-color-* tokens above, decide. The underline and
+ * the focus ring from base.css are untouched.
+ */
+a {
+  color: revert-layer;
+}
+
+/*
+ * The same for the page ground and body text, which base.css also sets
+ * unlayered: in dark mode they kept the content column off-white under ink
+ * text while Starlight's own chrome went dark around it.
+ */
+body {
+  background: revert-layer;
+  color: revert-layer;
+}
+
+/* base.css's focus ring is ink; on the dark ground it would be invisible. */
+:root[data-theme="dark"] :focus-visible {
+  outline-color: var(--ax-on-ink);
+}
+
+/*
+ * The shared ClaimClass badge (.cc) and Figure caption (.fig) are drawn in the
+ * light-ground ink tokens. On the dark ground those measured 1.34:1 (ink-soft)
+ * and 3.33:1 (#666), so inside those two components only, and only in dark,
+ * the ink tokens are swapped with their dark-ground counterparts. Custom
+ * properties inherit, so the components pick this up without a second copy of
+ * their styles. The plate itself keeps its off-white frame: it is a light
+ * raster in either theme.
+ */
+:root[data-theme="dark"] :is(.cc, .fig__caption) {
+  /* Swapped, so a filled badge stays readable: light fill, dark type. Each
+     value names a token this rule does not itself redefine, so nothing here
+     refers to itself. */
+  --ax-ink: var(--ax-background);
+  --ax-ink-soft: var(--ax-background);
+  --ax-on-ink: var(--ax-ink-dark);
+  --ax-on-surface-variant: var(--ax-outline);
 }
