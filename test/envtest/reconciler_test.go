@@ -6,6 +6,7 @@ package envtest
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -388,6 +389,21 @@ func TestRetentionNeverCollectsTheRollbackTarget(t *testing.T) {
 	key := types.NamespacedName{Namespace: runNS(ns), Name: controller.WorkloadName("retain", revs[0])}
 	if err := k8s.Get(context.Background(), key, &d); !apierrors.IsNotFound(err) {
 		t.Errorf("revision %s is outside the retention window but was not collected", revs[0])
+	}
+	// The Service record leaves with its revision (design 02 A77), or
+	// status.revisionServices grows one entry per revision the Agent ever had.
+	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	var recorded []string
+	for _, rec := range got.Status.RevisionServices {
+		recorded = append(recorded, rec.Revision)
+	}
+	if slices.Contains(recorded, revs[0]) {
+		t.Errorf("revision %s was collected and its Service record was not: %v", revs[0], recorded)
+	}
+	if !slices.Contains(recorded, active) {
+		t.Errorf("the active revision %s has no Service record: %v", active, recorded)
 	}
 }
 

@@ -968,6 +968,9 @@ func TestARefusalDoesNotRetractTheGatewayReport(t *testing.T) {
 				armReplaceCooldown(t, a, rev)
 				headlessByPatchAlone(t, key)
 			} else {
+				// Without a record, as the fixtures below: a recorded UID admits
+				// the operator's own object whatever its labels say.
+				forgetServiceRecords(t, a)
 				tc.exit(t, &svc)
 				if err := k8s.Update(context.Background(), &svc); err != nil {
 					t.Fatalf("patch the Service: %v", err)
@@ -1071,7 +1074,11 @@ func TestAStandingRefusalDoesNotGrowTheReportItCarries(t *testing.T) {
 	}
 	// A NodePort patch would now be CONVERGED back, so it degrades nothing.
 	// Stripping the UID label is the provenance ground, and a refusal is what
-	// these tests are about.
+	// these tests are about — but only for an object this operator has no
+	// RECORD of creating: a recorded UID admits its own object whatever its
+	// labels say, which is what heals the label-strip wedge. So the record is
+	// forgotten first, which is the state of an Agent created before it.
+	forgetServiceRecords(t, a)
 	delete(svc.Labels, controller.LabelAgentUID)
 	if err := k8s.Update(context.Background(), &svc); err != nil {
 		t.Fatalf("strip the UID label: %v", err)
@@ -1147,7 +1154,11 @@ func TestARefusalCarriesNoGatewayReportWhenTheGatewayIsOff(t *testing.T) {
 	}
 	// A NodePort patch would now be CONVERGED back, so it degrades nothing.
 	// Stripping the UID label is the provenance ground, and a refusal is what
-	// these tests are about.
+	// these tests are about — but only for an object this operator has no
+	// RECORD of creating: a recorded UID admits its own object whatever its
+	// labels say, which is what heals the label-strip wedge. So the record is
+	// forgotten first, which is the state of an Agent created before it.
+	forgetServiceRecords(t, a)
 	delete(svc.Labels, controller.LabelAgentUID)
 	if err := k8s.Update(context.Background(), &svc); err != nil {
 		t.Fatalf("strip the UID label: %v", err)
@@ -1227,7 +1238,11 @@ func TestARefusalClaimsNoRouteForAPromotedAgentThatHasNone(t *testing.T) {
 	}
 	// A NodePort patch would now be CONVERGED back, so it degrades nothing.
 	// Stripping the UID label is the provenance ground, and a refusal is what
-	// these tests are about.
+	// these tests are about — but only for an object this operator has no
+	// RECORD of creating: a recorded UID admits its own object whatever its
+	// labels say, which is what heals the label-strip wedge. So the record is
+	// forgotten first, which is the state of an Agent created before it.
+	forgetServiceRecords(t, a)
 	delete(svc.Labels, controller.LabelAgentUID)
 	if err := k8s.Update(context.Background(), &svc); err != nil {
 		t.Fatalf("strip the UID label: %v", err)
@@ -1318,6 +1333,11 @@ func TestARefusalMessageCannotFreezeTheAgentsStatus(t *testing.T) {
 // disjunct buys, and design 02 §5 records what it costs: while status vouches
 // for the name, an unstamped object at that name is adopted, so provenance is
 // not the whole bound the shape enumeration rests on.
+//
+// The record is forgotten first. With a record, the UID match admits the
+// operator's own object before provenance runs, so this fixture would pass
+// with the disjunct deleted; the disjunct is what admits an object this
+// operator has no record of — an Agent created before the record existed.
 func TestAnUnstampedServiceAtAVouchedRevisionIsAdoptedAndRestamped(t *testing.T) {
 	ns := newNamespace(t)
 	a := noneAgent(t, ns, "restamp")
@@ -1332,6 +1352,7 @@ func TestAnUnstampedServiceAtAVouchedRevisionIsAdoptedAndRestamped(t *testing.T)
 			got.Status)
 	}
 
+	forgetServiceRecords(t, a)
 	var svc corev1.Service
 	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
 	if err := k8s.Get(context.Background(), key, &svc); err != nil {
@@ -1368,8 +1389,8 @@ func TestAnUnstampedServiceAtAVouchedRevisionIsAdoptedAndRestamped(t *testing.T)
 // passes the CRD (which validates quantities, not their relation) and is
 // refused by the API server when the Deployment is written. ServiceRejected has
 // no such input — every Service this operator renders is valid by construction
-// — so its carry rides the same helper and is measured by nothing; design 02 §5
-// says so rather than claiming it.
+// — so its carry is measured through a real admission policy instead, in
+// TestServiceRejectedByAnAdmissionPolicyOnBothArms.
 func TestARejectedRenderDoesNotRetractTheGatewayReport(t *testing.T) {
 	ns := newNamespace(t)
 	a := noneAgent(t, ns, "rejects")
@@ -1468,7 +1489,11 @@ func TestTheCarryDoesNotOverwriteWhatThisPassDerived(t *testing.T) {
 	}
 	// A NodePort patch would now be CONVERGED back, so it degrades nothing.
 	// Stripping the UID label is the provenance ground, and a refusal is what
-	// these tests are about.
+	// these tests are about — but only for an object this operator has no
+	// RECORD of creating: a recorded UID admits its own object whatever its
+	// labels say, which is what heals the label-strip wedge. So the record is
+	// forgotten first, which is the state of an Agent created before it.
+	forgetServiceRecords(t, a)
 	delete(svc.Labels, controller.LabelAgentUID)
 	if err := k8s.Update(context.Background(), &svc); err != nil {
 		t.Fatalf("strip the UID label: %v", err)
@@ -1663,9 +1688,9 @@ func TestAnUnrepairableServiceThatIsNotOursIsRefusedAndNeverDeleted(t *testing.T
 		reason   string
 	}{
 		{"a foreign object", false, "ForeignObject"},
-		// A forged UID label needs only `create` — so the stamp is what decides,
-		// and an unstamped object at a revision status does NOT vouch for is
-		// refused too.
+		// A forged UID label needs only `create`, so the label does not decide:
+		// an unstamped object at a revision status does NOT vouch for is refused
+		// by provenance too, before the record or the shape is consulted.
 		{"a forged UID label", true, "Unstamped"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1744,70 +1769,96 @@ func TestAnUnrepairableServiceThatIsNotOursIsRefusedAndNeverDeleted(t *testing.T
 // a MISSING Service — that last is design 16's own fixture, which deletes a
 // retired revision's Service and expects no fuss.
 func TestAnOwnerEditOverABrokenActiveRevisionIsReported(t *testing.T) {
-	ns := newNamespace(t)
-	a := noneAgent(t, ns, "escape")
-	r := newGatewayReconciler("assayd-gateway", "assayd")
-	rev := revision.MustHash(a.Spec)
-	svcName := controller.WorkloadName("escape", rev)
-	settle(t, r, a)
-	markAvailable(t, ns, svcName, 1)
-	settle(t, r, a)
+	for _, tc := range []struct {
+		name string
+		// breakIt leaves the ACTIVE revision's Service with no usable
+		// ClusterIP. The check reads two values, and each row reaches one.
+		breakIt   func(t *testing.T, key types.NamespacedName)
+		clusterIP string
+	}{
+		{"headless", headlessByPatchAlone, corev1.ClusterIPNone},
+		{"ExternalName, which has no ClusterIP at all", func(t *testing.T, key types.NamespacedName) {
+			patchService(t, key, `{"spec":{"type":"ExternalName","externalName":"elsewhere.example.com"}}`)
+		}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := newNamespace(t)
+			a := noneAgent(t, ns, "escape")
+			r := newGatewayReconciler("assayd-gateway", "assayd")
+			rev := revision.MustHash(a.Spec)
+			svcName := controller.WorkloadName("escape", rev)
+			settle(t, r, a)
+			markAvailable(t, ns, svcName, 1)
+			settle(t, r, a)
 
-	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
-	headlessByPatchAlone(t, key)
+			key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+			tc.breakIt(t, key)
 
-	// The owner's recovery attempt: edit the spec, minting a new revision.
-	live := liveAgentPtr(t, a)
-	live.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:" + strings.Repeat("a", 64)
-	if err := k8s.Update(context.Background(), live); err != nil {
-		t.Fatalf("edit the spec: %v", err)
-	}
-	if revision.MustHash(live.Spec) == rev {
-		t.Fatalf("setup: the edit did not mint a new revision")
-	}
-	for i := 0; i < 6; i++ {
-		reconcileOnce(t, r, live)
-	}
+			// The owner's recovery attempt: edit the spec, minting a new revision.
+			live := liveAgentPtr(t, a)
+			live.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:" + strings.Repeat("a", 64)
+			if err := k8s.Update(context.Background(), live); err != nil {
+				t.Fatalf("edit the spec: %v", err)
+			}
+			if revision.MustHash(live.Spec) == rev {
+				t.Fatalf("setup: the edit did not mint a new revision")
+			}
+			for i := 0; i < 6; i++ {
+				reconcileOnce(t, r, live)
+			}
 
-	var active corev1.Service
-	if err := k8s.Get(context.Background(), key, &active); err != nil {
-		t.Fatalf("the active revision's Service is gone: %v", err)
-	}
-	got := liveAgentPtr(t, a)
-	ready := condition(got, assaydv1alpha1.CondReady)
-	if ready == nil {
-		t.Fatal("no Ready condition")
-	}
-	t.Logf("measured: activeRevision=%q candidate=%q phase=%q ready=%v/%v clusterIP=%q",
-		got.Status.ActiveRevision, got.Status.CandidateRevision, got.Status.Phase,
-		ready.Status, ready.Reason, active.Spec.ClusterIP)
+			active := liveService(t, key)
+			got := liveAgentPtr(t, a)
+			ready := condition(got, assaydv1alpha1.CondReady)
+			if ready == nil {
+				t.Fatal("no Ready condition")
+			}
+			t.Logf("measured: activeRevision=%q candidate=%q phase=%q ready=%v/%v clusterIP=%q",
+				got.Status.ActiveRevision, got.Status.CandidateRevision, got.Status.Phase,
+				ready.Status, ready.Reason, active.Spec.ClusterIP)
 
-	if got.Status.ActiveRevision != rev {
-		t.Fatalf("the edit promoted a new active revision (%q), which would take the route with "+
-			"it and make this state unreachable. Re-derive §5 rather than deleting this test",
-			got.Status.ActiveRevision)
-	}
-	// NOT repaired — that is the deferred half, and §5 names the fix to take.
-	if active.Spec.ClusterIP != corev1.ClusterIPNone {
-		t.Fatalf("the ACTIVE revision's Service was repaired (clusterIP=%q). If something now "+
-			"converges a revision other than the desired one, design 02 §5's escape row and "+
-			"design 16's A10/A11 premise are both out of date — fix the record first",
-			active.Spec.ClusterIP)
-	}
-	// REPORTED — which is the half this change takes.
-	if ready.Status != metav1.ConditionFalse ||
-		ready.Reason != controller.CondReasonActiveServiceUnaddressable {
-		t.Fatalf("the Agent reads %v/%v while the ACTIVE revision %s — the one its serving route "+
-			"names — has no ClusterIP. Nothing reaches it and nothing says so",
-			ready.Status, ready.Reason, got.Status.ActiveRevision)
-	}
-	if got.Status.Phase != assaydv1alpha1.PhaseDegraded {
-		t.Errorf("phase is %q, want Degraded", got.Status.Phase)
-	}
-	for _, want := range []string{"has no ClusterIP", "only the DESIRED revision", "To recover"} {
-		if !strings.Contains(ready.Message, want) {
-			t.Errorf("the message does not contain %q; it is: %s", want, ready.Message)
-		}
+			if got.Status.ActiveRevision != rev {
+				t.Fatalf("the edit promoted a new active revision (%q), which would take the route "+
+					"with it and make this state unreachable. Re-derive §5 rather than deleting "+
+					"this test", got.Status.ActiveRevision)
+			}
+			// NOT repaired — that is the deferred half, and §5 names the fix to take.
+			if active.Spec.ClusterIP != tc.clusterIP {
+				t.Fatalf("the ACTIVE revision's Service was repaired (clusterIP=%q). If something "+
+					"now converges a revision other than the desired one, design 02 §5's escape "+
+					"row and design 16's A10/A11 premise are both out of date — fix the record first",
+					active.Spec.ClusterIP)
+			}
+			// REPORTED — which is the half this change takes.
+			if ready.Status != metav1.ConditionFalse ||
+				ready.Reason != controller.CondReasonActiveServiceUnaddressable {
+				t.Fatalf("the Agent reads %v/%v while the ACTIVE revision %s — the one its serving "+
+					"route names — has no ClusterIP, and nothing says so",
+					ready.Status, ready.Reason, got.Status.ActiveRevision)
+			}
+			if d := condition(got, assaydv1alpha1.CondDegraded); d == nil ||
+				d.Status != metav1.ConditionTrue || d.Reason != controller.CondReasonActiveServiceUnaddressable {
+				t.Errorf("Degraded is %+v: an alert keyed on the condition, not the phase, misses "+
+					"this", d)
+			}
+			if got.Status.Phase != assaydv1alpha1.PhaseDegraded {
+				t.Errorf("phase is %q, want Degraded", got.Status.Phase)
+			}
+			for _, want := range []string{"has no ClusterIP", "only the DESIRED revision",
+				"To recover", "revert that spec edit"} {
+				if !strings.Contains(ready.Message, want) {
+					t.Errorf("the message does not contain %q; it is: %s", want, ready.Message)
+				}
+			}
+			// Round three FOLLOWED an earlier remedy that said to remove the
+			// Service: with the gateway on the route then named nothing and the
+			// Agent read Pending/RouteApplyFailed on every pass; with it off it
+			// read Ready=True with no Service at all and nothing reporting it.
+			if strings.Contains(strings.ToLower(ready.Message), "delete") {
+				t.Errorf("the remedy tells the reader to delete the active revision's Service, "+
+					"which leaves the route naming nothing: %s", ready.Message)
+			}
+		})
 	}
 }
 
@@ -2213,18 +2264,14 @@ func (c *refuseCreate) Create(ctx context.Context, obj client.Object, opts ...cl
 	return c.Client.Create(ctx, obj, opts...)
 }
 
-// The delete is reachable only for an object carrying this operator's STAMP for
-// this revision — not merely one provenance admitted.
+// The delete is reachable only for the object whose UID status records — not
+// for one provenance merely admitted.
 //
 // The third provenance ground adopts an unstamped object while status vouches
 // for the name, and a forged agent-uid label needs only `create`. Such an
-// object is rewritten but never destroyed.
-//
-// This test pins THAT and only that. It does not pin "nothing this operator
-// did not create is ever deleted here", which is false and which an earlier
-// version of this comment asserted while measuring one arm of it: the digest
-// is forgeable too, and TestAFullyForgedStampIsDeletedAndTheDesignSaysSo
-// measures the object that carries both and IS deleted.
+// object is rewritten but never destroyed. The same holds for one that forges
+// the digest as well: TestAForgedStampOnAnotherUIDIsRefusedAndNeverDeleted
+// measures that object, which the stamp-gated delete this replaced destroyed.
 func TestAnUnstampedVouchedServiceIsRefusedNotDeleted(t *testing.T) {
 	ns := newNamespace(t)
 	a := noneAgent(t, ns, "vouchdel")
@@ -2278,9 +2325,10 @@ func TestAnUnstampedVouchedServiceIsRefusedNotDeleted(t *testing.T) {
 	// committed to not replacing it — sends an operator looking for a cooldown
 	// that does not exist. The reason is what an alert keys on.
 	ready := condition(liveAgentPtr(t, a), assaydv1alpha1.CondReady)
-	if ready == nil || ready.Reason != "Unstamped" {
-		t.Fatalf("the refusal reads %+v, want Unstamped — the operator will not delete this "+
-			"object because it cannot prove it created it, which is what Unstamped names", ready)
+	if ready == nil || ready.Reason != controller.CondReasonServiceNotRecorded {
+		t.Fatalf("the refusal reads %+v, want %s — the operator will not delete this object "+
+			"because its UID is not the one it recorded creating", ready,
+			controller.CondReasonServiceNotRecorded)
 	}
 	if !strings.Contains(ready.Message, "cannot establish that it created it") {
 		t.Errorf("the message does not say WHY the object is left alone: %s", ready.Message)
@@ -2358,67 +2406,6 @@ func TestAVanishedServiceDoesNotLetTheReplacePassAsSuccess(t *testing.T) {
 		t.Errorf("Ready reason is %q, want %s", ready.Reason,
 			controller.CondReasonServiceReplaceFailed)
 	}
-}
-
-// A fully forged object IS deleted, and the design says so rather than claiming
-// otherwise.
-//
-// The digest is a pure function of the spec and is also stamped on the
-// Deployment, so forging it needs only `create` — exactly like the UID label.
-// "Nothing this operator did not create is ever deleted here" was therefore
-// false, and the sentence is now accurate instead: what the gate buys is that
-// an object which merely SITS at the name is never destroyed, and an adversary
-// who forges the whole set gets their own plant repaired.
-func TestAFullyForgedStampIsDeletedAndTheDesignSaysSo(t *testing.T) {
-	ns := newNamespace(t)
-	a := noneAgent(t, ns, "forged")
-	r := newGatewayReconciler("assayd-gateway", "assayd")
-	rev := revision.MustHash(a.Spec)
-	digest := revision.MustDigest(a.Spec)
-	svcName := controller.WorkloadName("forged", rev)
-	settle(t, r, a)
-	markAvailable(t, ns, svcName, 1)
-	settle(t, r, a)
-
-	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
-	var mine corev1.Service
-	if err := k8s.Get(context.Background(), key, &mine); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if err := k8s.Delete(context.Background(), &mine); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	planted := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: runNS(ns), Name: svcName,
-			Labels:      map[string]string{controller.LabelAgentUID: string(a.UID)},
-			Annotations: map[string]string{controller.RevisionDigestAnnotation: digest},
-		},
-		Spec: corev1.ServiceSpec{
-			Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone,
-			Ports: []corev1.ServicePort{{Name: "a2a", Port: 8080, Protocol: corev1.ProtocolTCP}},
-		},
-	}
-	if err := k8s.Create(context.Background(), planted); err != nil {
-		t.Fatalf("plant: %v", err)
-	}
-	uid := planted.UID
-	reconcileOnce(t, r, a)
-
-	var after corev1.Service
-	if err := k8s.Get(context.Background(), key, &after); err != nil {
-		t.Fatalf("get after: %v", err)
-	}
-	if after.UID == uid {
-		t.Fatalf("the forged object was NOT replaced. That is a stronger rule than the one " +
-			"design 02 §5 records — update the record rather than leaving it understated")
-	}
-	// Recorded for what it is: the adversary's own plant is repaired, which is
-	// the whole consequence, and the sentence in §5 says so.
-	t.Logf("MEASURED (design 02 §5): a Service carrying a forged agent-uid AND a forged "+
-		"revision-digest is deleted and replaced (%s -> %s). Every element of the gate is "+
-		"forgeable by a principal who can create a Service here; what it buys is that an "+
-		"object merely sitting at the name is never destroyed", uid, after.UID)
 }
 
 // The not-ours refusal must name the real cause, not describe itself as a held

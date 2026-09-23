@@ -2290,10 +2290,35 @@ win over rollout states.<br/>
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b><a href="#agentstatusrevisionservicesindex">revisionServices</a></b></td>
+        <td>[]object</td>
+        <td>
+          RevisionServices records the UID of each revision Service this operator
+CREATED, per revision (design 02 §3.2, A77). It is the authority for the
+one destructive act on a Service outside teardown: a revision Service
+that cannot be repaired in place is deleted and recreated only when its
+UID equals the one recorded here, whatever its labels or annotations say.
+
+A UID is assigned by the API server and cannot be chosen by whoever
+creates an object, so it is the one fact about a Service that proves this
+operator created it. The labels and annotations the operator also stamps
+are forgeable by any principal who can create a Service in the run
+namespace, and strippable by any who can patch one.
+
+An entry is also written for an existing Service that passes provenance
+and is addressable when no entry exists for its revision, which is how an
+Agent created before this field acquires one. A headless Service is never
+recorded that way. Entries leave with their revision.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>serviceReplacedAt</b></td>
         <td>string</td>
         <td>
-          <br/>
+          ServiceReplacedAt is when this operator last deleted and recreated the
+revision Service named by serviceReplacedRevision because it could not
+repair it in place. A second replace of that revision's Service is held
+until ten minutes after this time (design 02 §3.2, A77).<br/>
           <br/>
             <i>Format</i>: date-time<br/>
         </td>
@@ -2941,6 +2966,52 @@ Eval printer column.<br/>
           <br/>
         </td>
         <td>false</td>
+      </tr></tbody>
+</table>
+
+
+#### Agent.status.revisionServices[index]
+<sup><sup>[↩ Parent](#agentstatus)</sup></sup>
+
+
+
+RevisionServiceRecord is one revision Service this operator created.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>revision</b></td>
+        <td>string</td>
+        <td>
+          Revision is the revision the Service belongs to; its name is
+`<agent>-<revision>`.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>revisionDigest</b></td>
+        <td>string</td>
+        <td>
+          RevisionDigest is the full digest of that revision's projection. The
+record matches only while the desired revision carries this digest, so a
+40-bit name collision between two projections cannot borrow the other's
+record.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>uid</b></td>
+        <td>string</td>
+        <td>
+          UID is the Service's metadata.uid as the API server returned it on the
+create.<br/>
+        </td>
+        <td>true</td>
       </tr></tbody>
 </table>
 

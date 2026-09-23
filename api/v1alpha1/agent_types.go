@@ -6,6 +6,7 @@ package v1alpha1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // AgentSpec is the platform's front door: it turns a container that speaks A2A
@@ -620,8 +621,30 @@ type AgentStatus struct {
 	// new Service, which the last revision's cooldown must not hold.
 	// +optional
 	ServiceReplacedRevision string `json:"serviceReplacedRevision,omitempty"`
+	// ServiceReplacedAt is when this operator last deleted and recreated the
+	// revision Service named by serviceReplacedRevision because it could not
+	// repair it in place. A second replace of that revision's Service is held
+	// until ten minutes after this time (design 02 §3.2, A77).
 	// +optional
 	ServiceReplacedAt *metav1.Time `json:"serviceReplacedAt,omitempty"`
+	// RevisionServices records the UID of each revision Service this operator
+	// CREATED, per revision (design 02 §3.2, A77). It is the authority for the
+	// one destructive act on a Service outside teardown: a revision Service
+	// that cannot be repaired in place is deleted and recreated only when its
+	// UID equals the one recorded here, whatever its labels or annotations say.
+	//
+	// A UID is assigned by the API server and cannot be chosen by whoever
+	// creates an object, so it is the one fact about a Service that proves this
+	// operator created it. The labels and annotations the operator also stamps
+	// are forgeable by any principal who can create a Service in the run
+	// namespace, and strippable by any who can patch one.
+	//
+	// An entry is also written for an existing Service that passes provenance
+	// and is addressable when no entry exists for its revision, which is how an
+	// Agent created before this field acquires one. A headless Service is never
+	// recorded that way. Entries leave with their revision.
+	// +optional
+	RevisionServices []RevisionServiceRecord `json:"revisionServices,omitempty"`
 	// SupersededCandidates records abandoned in-flight candidates so the
 	// transition is auditable rather than silent. It is capped: the audit trail
 	// belongs in events and receipts, which are durable, whereas an unbounded
@@ -674,6 +697,21 @@ type AgentStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+}
+
+// RevisionServiceRecord is one revision Service this operator created.
+type RevisionServiceRecord struct {
+	// Revision is the revision the Service belongs to; its name is
+	// `<agent>-<revision>`.
+	Revision string `json:"revision"`
+	// RevisionDigest is the full digest of that revision's projection. The
+	// record matches only while the desired revision carries this digest, so a
+	// 40-bit name collision between two projections cannot borrow the other's
+	// record.
+	RevisionDigest string `json:"revisionDigest"`
+	// UID is the Service's metadata.uid as the API server returned it on the
+	// create.
+	UID types.UID `json:"uid"`
 }
 
 type CardStatus struct {

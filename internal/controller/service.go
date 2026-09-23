@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -114,13 +115,13 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 	// main.go uncaches ConfigMap, Secret and Namespace for A60/A61 in exactly
 	// these words: "a comparison against a cached object that a recreate has
 	// already replaced is no proof at all". A Service this operator destroys is
-	// a strictly stronger case, and a stale read could authorise the delete of
-	// an object that no longer looks the way the decision was made on. The UID
-	// precondition on the Delete then narrows the consequence to a refusal
-	// rather than a wrong deletion, but the decision itself must be live.
-	//
-	// No test here can see the difference: envtest's client is uncached, so
-	// r.reader() is r.Client and both paths read the same object.
+	// a strictly stronger case. The UID precondition on the Delete protects a
+	// DIFFERENT object at the name, and does nothing for a stale read of the
+	// SAME one: a human who repaired our headless Service in place keeps its
+	// UID, and a cached copy from before the repair would authorise deleting
+	// the repair. TestAStaleCachedReadDoesNotDeleteAnInPlaceRepair measures
+	// exactly that, with a client that answers from a stale snapshot beside a
+	// live Reader.
 	var existing corev1.Service
 	err := r.reader().Get(ctx, client.ObjectKeyFromObject(desired), &existing)
 	switch {
@@ -137,16 +138,40 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 			// path, because the object was never created.
 			return fmt.Errorf("create service %s: %w: %w", desired.Name, errServiceCreate, err)
 		}
+		// The API server's answer to OUR create is the one proof of creation
+		// there is: nobody chooses a UID.
+		recordServiceUID(status, rev, digest, desired.UID)
 		return nil
 	case err != nil:
-		return fmt.Errorf("get service %s: %w", desired.Name, err)
+		// Not a Service fault, and not reported as one. The live read needs RBAC
+		// `get` on services, where the informer needed only list and watch, so a
+		// Forbidden here is this operator's own permissions — and the remedy the
+		// ServiceRejected update arm names, "delete that Service", would change
+		// nothing: the operator still could not read what it recreated.
+		return &serviceReadError{ns: runNS, name: desired.Name, cause: err}
 	}
 
-	// PROVENANCE decides, and it decides FIRST. The three grounds are
-	// ensureWorkload's, unchanged: the `assayd.dev/agent-uid` label is not this
-	// Agent's, the digest is stamped and differs, or it is unstamped and
-	// `status` vouches for no such revision. `status` is the non-forgeable
-	// side, written only by this controller through the status subresource.
+	// A RECORDED UID DECIDES FIRST, and it decides ownership outright.
+	//
+	// The UID is assigned by the API server and cannot be chosen by whoever
+	// creates the object, so an object whose UID equals the one this operator
+	// recorded when it created it IS that object — whatever a patch has since
+	// done to its labels and annotations. The three provenance grounds below
+	// read only labels and annotations: every one is forgeable by a principal
+	// who can `create` a Service here, and strippable by one who can `patch`
+	// it. Round three of A77's review measured the second: stripping the digest
+	// annotation on the way to headless — `services/patch` and nothing else —
+	// left the operator's OWN Service, same UID, refused as Unstamped on every
+	// pass, which is the per-Agent wedge the human's decision exists to remove.
+	// Stripping the agent-uid label reached the same wedge through the first
+	// ground. Neither survives a UID match.
+	recorded := recordedServiceUID(status, rev, digest)
+	ours := recorded != "" && existing.UID == recorded
+
+	// PROVENANCE, for an object this operator has no record of creating. The
+	// three grounds are ensureWorkload's, unchanged: the `assayd.dev/agent-uid`
+	// label is not this Agent's, the digest is stamped and differs, or it is
+	// unstamped and `status` vouches for no such revision.
 	//
 	// The Service path had only the middle one, so an unstamped Service at a
 	// revision's name was adopted whatever else it said, and every field the
@@ -159,92 +184,70 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 	// is what makes "someone else's object" actionable rather than merely
 	// true, and below as the one thing convergence cannot repair.
 	shape := serviceNotRendered(&existing)
-	switch {
-	case existing.Labels[LabelAgentUID] != string(agent.UID):
-		return &revisionCollisionError{name: desired.Name, ns: runNS, existing: "(another agent's)",
-			desired: digest, kind: "service", shape: shape}
-	case stamped && existingDigest != digest:
-		// Typed, so reconcile reports RevisionHashCollision rather than returning a
-		// bare error. A bare one retried forever and wrote no status — the silent
-		// degraded path NFR-8 forbids, and the same defect ensureWorkload records.
-		return &revisionCollisionError{name: desired.Name, ns: runNS, existing: existingDigest,
-			desired: digest, kind: "service", shape: shape}
-	case !stamped && !vouched:
-		return &revisionCollisionError{name: desired.Name, ns: runNS, existing: "(no stamp)",
-			desired: digest, kind: "service", shape: shape}
+	if !ours {
+		switch {
+		case existing.Labels[LabelAgentUID] != string(agent.UID):
+			return &revisionCollisionError{name: desired.Name, ns: runNS, existing: "(another agent's)",
+				desired: digest, kind: "service", shape: shape}
+		case stamped && existingDigest != digest:
+			// Typed, so reconcile reports RevisionHashCollision rather than returning a
+			// bare error. A bare one retried forever and wrote no status — the silent
+			// degraded path NFR-8 forbids, and the same defect ensureWorkload records.
+			return &revisionCollisionError{name: desired.Name, ns: runNS, existing: existingDigest,
+				desired: digest, kind: "service", shape: shape}
+		case !stamped && !vouched:
+			return &revisionCollisionError{name: desired.Name, ns: runNS, existing: "(no stamp)",
+				desired: digest, kind: "service", shape: shape}
+		}
 	}
 
-	// Past that switch the object is OURS, and a wrong shape on our own object
-	// is CONVERGED, not refused.
+	// Past that point the object is OURS — by record, or by provenance — and a
+	// wrong shape on our own object is CONVERGED, not refused.
 	//
 	// The first cut of A77 refused it, and the human reversed that on the fifth
-	// review's argument. Provenance is what decides: an object that carries our
-	// stamp is ours, rewriting it is exactly what ensureWorkload already does
-	// to the Deployment, and "converging would rewrite a stranger's object" —
-	// the whole case for refusing — is not true of it. The wedge was the deeper
-	// problem: refusing here handed anyone with `services/patch` in a run
-	// namespace a permanent per-Agent outage, needing no ExternalName and no
-	// cleverness, which is a worse failure than the one this amendment closes.
+	// review's argument. Provenance is what decides: rewriting an object that
+	// is ours is exactly what ensureWorkload already does to the Deployment,
+	// and "converging would rewrite a stranger's object" — the whole case for
+	// refusing — is not true of it. The wedge was the deeper problem: refusing
+	// here handed anyone with `services/patch` in a run namespace a permanent
+	// per-Agent outage, needing no ExternalName and no cleverness, which is a
+	// worse failure than the one this amendment closes.
 	//
 	// ONE field cannot be repaired by an Update — `spec.clusterIP` is immutable
 	// — so that object is DELETED and recreated instead. The human decided this
-	// on 2026-09-22, after the first cut refused it.
+	// on 2026-09-22, after the first cut refused it, and decided on 2026-09-23
+	// what authorises it: the recorded UID, and nothing else.
 	//
-	// The warrant is the line above: provenance has already admitted the object
-	// as ours, and an object carrying our stamp for this revision is ours to
-	// replace as much as it is ours to rewrite. **The ordering is the safety
-	// property**, not an accident of where the code sits: a foreign or
-	// unstamped object never reaches this line, because every ground above
-	// returns.
-	//
-	// What that buys is stated exactly, because the obvious sentence —
-	// "nothing this operator did not create is ever deleted here" — was
-	// measured FALSE: every element of the gate is forgeable by a principal who
-	// can create a Service in this namespace, and a plant carrying a forged UID
-	// label AND a forged digest is deleted and replaced. What the gate buys is
-	// that an object which merely SITS at the name, unstamped or stamped for
-	// another revision, is never destroyed, and that an adversary who forges
-	// the whole set gets their own plant repaired — strictly worse for them
-	// than leaving it unstamped, which buys a wedge. Design 02 §5 says it in
-	// those terms.
-	//
-	// Refusing instead was measured to be a wedge, and the premise that made it
-	// look narrow was false. `spec.clusterIP` is immutable EXCEPT across
-	// transitions to and from `ExternalName`, so two strategic-merge patches
-	// reach it with no create, no delete and no forged label — the object keeps
-	// our UID and our stamp the whole way:
+	// `spec.clusterIP` is immutable EXCEPT across transitions to and from
+	// `ExternalName`, so two strategic-merge patches reach headless with no
+	// create, no delete and no forged label — the object keeps our UID the
+	// whole way:
 	//
 	//	{"spec":{"type":"ExternalName","externalName":"elsewhere.example.com"}}
 	//	{"spec":{"type":"ClusterIP","externalName":null,"clusterIP":"None","clusterIPs":["None"]}}
 	//
-	// That is `services/patch` alone, and it left a served Agent permanently
-	// Degraded with its route still naming the object.
+	// That is `services/patch` alone, and before the record it left a served
+	// Agent permanently Degraded with its route still naming the object.
 	//
 	// Only this fault takes this path. Every shape an Update CAN repair is
 	// repaired in place, because a delete is strictly more destructive and the
 	// replacement gets a new ClusterIP — design 02 §5 states the gap.
 	if shape != nil && shape.what == faultHeadless {
-		// STAMPED, and with THIS revision's digest — the strongest evidence
-		// available, and NOT a proof of creation.
-		//
-		// Every element of it is forgeable by a principal who can `create` a
-		// Service here: the name is derived from the Agent's name and a public
-		// revision hash, the `agent-uid` label is readable off any object in the
-		// namespace, and the digest is a pure function of the spec that is also
-		// stamped on the Deployment. routeCollision says the same of its own
-		// labels and does not pretend otherwise. What this gate buys is that an
-		// object which merely SITS at the name — unstamped, or stamped for a
-		// different revision — is never destroyed, and that an adversary who
-		// forges the whole set gets their own plant repaired. Design 02 §5
-		// states it in those terms rather than as "nothing this operator did not
-		// create is ever deleted", which was measured false.
-		if !stamped || existingDigest != digest {
+		// The delete is authorised by the RECORD, not by the stamp. The stamp
+		// was the gate until round three of A77's review, and it was the wrong
+		// authority in both directions: forgeable with `create` (a plant
+		// carrying a forged agent-uid label AND a forged digest was deleted and
+		// replaced) and strippable with `patch` (the wedge above). An object
+		// whose UID is not the recorded one is never deleted here, whatever it
+		// carries — including an object this operator did create but has no
+		// record of, which is the migration cost design 02 §5 states.
+		if !ours {
 			return &serviceShapeError{
 				ns: existing.Namespace, name: existing.Name,
-				what: faultHeadless, unowned: true,
+				what: faultHeadless, unrecorded: true, recorded: recorded, live: existing.UID,
 			}
 		}
-		return r.replaceUnrepairableService(ctx, &existing, desired, rev, status)
+		return r.replaceUnrepairableService(ctx, &existing, desired, rev, digest, recorded, status)
 	}
 
 	// ClusterIP is assigned by the API server and must survive the update, as
@@ -292,6 +295,7 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 	// and §5 lists it with the other fields this operator does not read.
 	updated.Spec.LoadBalancerSourceRanges = nil
 	if equalService(&existing, updated) {
+		adoptServiceRecord(status, rev, digest, &existing)
 		return nil
 	}
 	// SAY what was reset. There is no durable record of a repair — no
@@ -307,7 +311,88 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 	if err := r.Update(ctx, updated); err != nil {
 		return fmt.Errorf("converge service %s: %w", desired.Name, err)
 	}
+	adoptServiceRecord(status, rev, digest, &existing)
 	return nil
+}
+
+// recordedServiceUID is the UID `status.revisionServices` records for this
+// revision's Service at this digest, or "" when there is none. The digest is
+// part of the key so that a 40-bit revision-name collision between two
+// projections cannot borrow the other's record and skip the DigestMismatch
+// refusal.
+func recordedServiceUID(status *assaydv1alpha1.AgentStatus, rev, digest string) types.UID {
+	for _, rec := range status.RevisionServices {
+		if rec.Revision == rev && rec.RevisionDigest == digest {
+			return rec.UID
+		}
+	}
+	return ""
+}
+
+// recordServiceUID sets this revision's entry, replacing any entry the
+// revision already has. It is called with the UID the API server returned on
+// this operator's own create — at the first create and at a replace — and by
+// adoptServiceRecord.
+func recordServiceUID(status *assaydv1alpha1.AgentStatus, rev, digest string, uid types.UID) {
+	for i := range status.RevisionServices {
+		if status.RevisionServices[i].Revision == rev {
+			status.RevisionServices[i] = assaydv1alpha1.RevisionServiceRecord{
+				Revision: rev, RevisionDigest: digest, UID: uid}
+			return
+		}
+	}
+	status.RevisionServices = append(status.RevisionServices, assaydv1alpha1.RevisionServiceRecord{
+		Revision: rev, RevisionDigest: digest, UID: uid})
+}
+
+// adoptServiceRecord records an existing Service's UID when this revision has
+// NO record yet, and only once the object has been converged to the render.
+//
+// It is the migration path. An Agent created before `status.revisionServices`
+// existed has no record, and neither has one whose status write was lost after
+// the create — every early exit after ensureService that returns an error
+// without writing status loses it. Refusing to record such an object would
+// leave the operator's own Service permanently unrecorded, so the two-patch
+// wedge this record exists to heal would stay open for every upgraded Agent.
+//
+// Adopting reopens the forged-stamp case for one window, and the window is
+// bounded by what is adopted. It is called only past provenance and only on the
+// converge path, never for a headless object: the object it records is one this
+// pass has just made identical to the render — selector, ports, labels, stamp
+// and shape — and which the serving route already names. A plant that reaches
+// it has already been adopted as the revision's Service by the convergence
+// A77 shipped before the record existed; recording its UID concedes no traffic
+// the convergence had not. What it adds is that a LATER headless state of that
+// object is replaced rather than refused. An object that is headless on the
+// pass it is first seen is never recorded, so it is never deleted: it stays a
+// refusal until a human deletes it.
+//
+// A record that exists and names a DIFFERENT object is not overwritten. That
+// object passed provenance, so it is converged, but this operator did not
+// create it and it will never be deleted here.
+func adoptServiceRecord(status *assaydv1alpha1.AgentStatus, rev, digest string, existing *corev1.Service) {
+	if recordedServiceUID(status, rev, digest) != "" || existing.UID == "" {
+		return
+	}
+	recordServiceUID(status, rev, digest, existing.UID)
+}
+
+// pruneServiceRecords drops the records of revisions that have left the
+// retained set, exactly as pruneCards does for cards: the record leaves with
+// the Service it names.
+func pruneServiceRecords(status *assaydv1alpha1.AgentStatus, keep map[string]bool) bool {
+	if len(status.RevisionServices) == 0 {
+		return false
+	}
+	before := len(status.RevisionServices)
+	kept := status.RevisionServices[:0]
+	for _, rec := range status.RevisionServices {
+		if keep[rec.Revision] {
+			kept = append(kept, rec)
+		}
+	}
+	status.RevisionServices = kept
+	return len(kept) != before
 }
 
 // shapeFieldsReset names the shape fields the converge is about to put back, so
@@ -355,13 +440,16 @@ const ServiceReplacedAnnotation = "assayd.dev/service-replaced-at"
 // iteration leaves the Service repaired.
 const ServiceReplaceCooldown = 10 * time.Minute
 
-// replaceUnrepairableService deletes a revision Service this operator owns and
-// cannot repair by Update, and creates the rendered one in its place.
+// replaceUnrepairableService deletes a revision Service this operator created
+// and cannot repair by Update, and creates the rendered one in its place.
 //
-// CALLED ONLY ON AN OBJECT CARRYING THIS OPERATOR'S STAMP FOR THIS REVISION.
-// That is the whole safety argument, and it is why this function takes the
-// object the caller already validated rather than re-reading it: a second read
-// could return a different object under the same name.
+// CALLED ONLY ON AN OBJECT WHOSE UID IS THE ONE `status.revisionServices`
+// RECORDS FOR THIS REVISION. That is the whole safety argument: the UID was
+// returned by the API server on this operator's own create, and nobody can
+// choose it. It is why this function takes the object the caller already
+// validated rather than re-reading it, and why the Delete's precondition is
+// the RECORDED UID: a second read could return a different object under the
+// same name, and the precondition turns that into a refusal.
 //
 // Three things guard the window the delete opens, and each was a measured
 // failure before it existed.
@@ -380,7 +468,7 @@ const ServiceReplaceCooldown = 10 * time.Minute
 //     readiness, promotion and the route, so the operator credited whatever had
 //     taken the name with the Agent's traffic and reported Ready=True about it.
 func (r *AgentReconciler) replaceUnrepairableService(
-	ctx context.Context, existing, desired *corev1.Service, rev string,
+	ctx context.Context, existing, desired *corev1.Service, rev, digest string, recorded types.UID,
 	status *assaydv1alpha1.AgentStatus,
 ) error {
 	if status.ServiceReplacedRevision == rev && status.ServiceReplacedAt != nil {
@@ -397,10 +485,11 @@ func (r *AgentReconciler) replaceUnrepairableService(
 	if err := r.Create(ctx, probe, client.DryRunAll); err != nil && !apierrors.IsAlreadyExists(err) {
 		return &serviceReplaceError{
 			ns: existing.Namespace, name: existing.Name, stage: "would not be admitted", cause: err,
+			standing: true,
 		}
 	}
 
-	if err := r.Delete(ctx, existing, client.Preconditions{UID: &existing.UID}); err != nil {
+	if err := r.Delete(ctx, existing, client.Preconditions{UID: &recorded}); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Already gone. The next pass reads what is there now; this one must
 			// not go on to promote over an object it never established.
@@ -408,6 +497,8 @@ func (r *AgentReconciler) replaceUnrepairableService(
 				ns: existing.Namespace, name: existing.Name, stage: "vanished before it could be replaced", cause: err,
 			}
 		}
+		// A lost precondition, or any other refusal of the delete. Either way
+		// the object it names may still be standing, or may be somebody else's.
 		return &serviceReplaceError{
 			ns: existing.Namespace, name: existing.Name, stage: "could not be deleted", cause: err,
 		}
@@ -423,12 +514,27 @@ func (r *AgentReconciler) replaceUnrepairableService(
 		}
 	}
 	// Recorded only once the replacement exists, and in `status`, which only
-	// this controller writes.
+	// this controller writes. The new UID and the replace time are one status
+	// write: a record that still named the deleted object would refuse the next
+	// replace of the one this operator just created.
 	now := metav1.Now()
 	status.ServiceReplacedRevision, status.ServiceReplacedAt = rev, &now
+	recordServiceUID(status, rev, digest, desired.UID)
 	log.FromContext(ctx).Info("replaced a revision Service that could not be repaired in place",
 		"service", existing.Namespace+"/"+existing.Name, "reason", "spec.clusterIP is immutable",
 		"was", existing.UID, "now", desired.UID)
+	// And CHECKED. The create's response is what the API server stored, so a
+	// mutating webhook that forces `clusterIP: None` on create is visible here.
+	// Returning nil over it let the pass promote and route with Ready=True over
+	// a replacement as headless as the object it replaced, for one pass before
+	// the next one held.
+	if desired.Spec.ClusterIP == "" || desired.Spec.ClusterIP == corev1.ClusterIPNone {
+		return &serviceReplaceError{
+			ns: existing.Namespace, name: existing.Name,
+			stage: "was recreated with no ClusterIP", standing: true,
+			cause: fmt.Errorf("the API server stored spec.clusterIP %q", desired.Spec.ClusterIP),
+		}
+	}
 	return nil
 }
 
@@ -440,15 +546,24 @@ type serviceReplaceError struct {
 	ns, name string
 	stage    string
 	cause    error
+	// standing is set on the stages that delete nothing — the dry-run refusal
+	// and a replacement stored headless — so the message can say what is
+	// actually at the name instead of implying it may be nothing.
+	standing bool
 }
 
 func (e *serviceReplaceError) Error() string {
+	at := "The serving route's backendRef names this object by name, so whatever holds that name " +
+		"now is what traffic reaches."
+	if e.standing {
+		at = "The object this operator read is still at that name, and the serving route's " +
+			"backendRef still names it."
+	}
 	return fmt.Sprintf("service %s/%s could not be repaired in place — spec.clusterIP is "+
-		"immutable — and the replacement %s: %v. The serving route's backendRef names this "+
-		"object by name, so whatever holds that name now is what traffic reaches. To recover: "+
-		"check what is at that name, delete it if it is not this Agent's, and look for an "+
-		"admission policy over services that refuses this operator's writes.",
-		e.ns, e.name, e.stage, e.cause)
+		"immutable — and the replacement %s: %v. %s To recover: check what is at that name, "+
+		"delete it if it is not this Agent's, and look for an admission policy or webhook over "+
+		"services that refuses or rewrites this operator's writes.",
+		e.ns, e.name, e.stage, e.cause, at)
 }
 
 func (e *serviceReplaceError) Unwrap() error { return e.cause }
@@ -463,8 +578,10 @@ var errServiceCreate = errors.New("the revision Service could not be created")
 //
 // Only the headless fault is returned AS an error, because it is the only one
 // convergence cannot repair; the rest ride on a provenance refusal as detail,
-// through detail(). It is terminal by design, exactly as a revision collision
-// is: the remedy is a human deleting the object.
+// through detail(). Both situations it is returned for are re-read every
+// RefusedServiceRecheck: a held replace runs again once the cooldown has
+// passed, and an unrecorded object is replaced by the operator's own create
+// once a human deletes it.
 type serviceShapeError struct {
 	ns, name     string
 	what         shapeFault
@@ -475,16 +592,20 @@ type serviceShapeError struct {
 	// performed: the object was replaced at this time and is unrepairable
 	// again, so replacing it once more would be a loop.
 	heldSince time.Time
-	// unowned is set when the object was refused because this operator cannot
-	// establish it created it. It is a DIFFERENT SITUATION from a held replace,
-	// and the type carried both: the message described a replace that never
-	// happened, at a zero `heldSince`, and — worse, because it is what an alert
-	// keys on — the caller set one reason for either. A77 makes this exact
-	// argument one type over for revisionCollisionError, where "an operator
-	// whose object was refused for carrying no stamp was told two projections
-	// had collided"; shipping it here would be that defect with its own fix as
-	// the indictment.
-	unowned bool
+	// unrecorded is set when the object was refused because its UID is not
+	// the one `status.revisionServices` records for this revision, so this
+	// operator cannot establish that it created it. It is a DIFFERENT
+	// SITUATION from a held replace, and the type carried both: the message
+	// described a replace that never happened, at a zero `heldSince`, and —
+	// worse, because it is what an alert keys on — the caller set one reason
+	// for either. A77 makes this exact argument one type over for
+	// revisionCollisionError.
+	unrecorded bool
+	// recorded is the UID status records for this revision, "" when there is
+	// none; live is the UID of the object that was refused. Both are rendered,
+	// because "not the object this operator created" is checkable only if the
+	// reader can see which object that was.
+	recorded, live types.UID
 }
 
 type shapeFault int
@@ -543,34 +664,36 @@ func (e *serviceShapeError) detail() string {
 
 // reason is what the caller reports. It lives on the error because the error
 // is what knows which situation it is: guarding only the prose would leave
-// `Ready.Reason` claiming a cooldown on an object that was never held, and no
-// cooldown will ever run on it — the operator has committed to never replacing
-// it.
+// `Ready.Reason` claiming a cooldown on an object that was never held.
 //
-// `Unstamped` is reused rather than minted. It is already this repo's word for
-// "provenance could not be established", which is exactly why the operator will
-// not act, and a new string is a vocabulary change with a cost (PR #59
-// enumerates 64 reasons across 83 call sites). The state it names on the
-// collision path — an object at a revision's name that nothing vouches for —
-// is the same state, reached one branch over.
+// The unrecorded case has its own reason, and it is NOT `Unstamped`, which it
+// reused until the record replaced the stamp as the delete's authority. The
+// object refused here may carry this revision's stamp — a forged one, or this
+// operator's own on a Service whose record was never written — so a reason
+// saying it carries none would be false of the object in front of the reader.
 func (e *serviceShapeError) reason() string {
-	if e.unowned {
-		return "Unstamped"
+	if e.unrecorded {
+		return CondReasonServiceNotRecorded
 	}
 	return CondReasonServiceReplaceHeld
 }
 
 func (e *serviceShapeError) Error() string {
-	if e.unowned {
+	if e.unrecorded {
+		record := fmt.Sprintf("status.revisionServices records UID %s for this revision", e.recorded)
+		if e.recorded == "" {
+			record = "status.revisionServices records no Service for this revision"
+		}
 		return fmt.Sprintf("service %s/%s cannot be repaired in place. %s This operator will "+
-			"not delete and recreate it either, because it cannot establish that it created "+
-			"it: the object carries no assayd.dev/revision-digest for this revision. An object "+
-			"it merely finds at this name is rewritten, never destroyed. To recover: delete "+
-			"that Service yourself and let the operator recreate it.",
-			e.ns, e.name, e.detail())
+			"not delete and recreate it either, because it cannot establish that it created it: "+
+			"%s, and this object is UID %s. Its labels and annotations are not evidence either "+
+			"way, since any principal who can create a Service here can forge them. To recover: "+
+			"delete that Service yourself, and the operator creates its own in its place and "+
+			"records it.",
+			e.ns, e.name, e.detail(), record, e.live)
 	}
 	// Otherwise the replace was HELD: every other unrepairable Service this
-	// operator owns is deleted and recreated rather than reported.
+	// operator has a record of is deleted and recreated rather than reported.
 	return fmt.Sprintf("service %s/%s cannot be repaired in place. %s This operator already "+
 		"deleted and recreated it at %s and it is unrepairable again, so it is being left alone "+
 		"rather than replaced a second time inside %s — replacing it on every pass would be a "+
@@ -580,6 +703,28 @@ func (e *serviceShapeError) Error() string {
 		"that Service and let the operator recreate it.",
 		e.ns, e.name, e.detail(), e.heldSince.UTC().Format(time.RFC3339), ServiceReplaceCooldown)
 }
+
+// serviceReadError is a revision Service this operator could not READ, for a
+// reason that is not "it does not exist". It is reported under its own reason
+// because the fault is the operator's access, not the object: nothing was
+// written, and deleting the Service would change nothing.
+type serviceReadError struct {
+	ns, name string
+	cause    error
+}
+
+func (e *serviceReadError) Error() string {
+	why := "Nothing was written to it."
+	if apierrors.IsForbidden(e.cause) || apierrors.IsUnauthorized(e.cause) {
+		why = "This operator's own credentials were refused: its ClusterRole must grant get on " +
+			"services, which the chart's operator ClusterRole does (charts/assayd/files/" +
+			"operator-rules.yaml) — check that the role and its binding are installed and " +
+			"unmodified. Nothing was written to the Service, and deleting it would change nothing."
+	}
+	return fmt.Sprintf("could not read revision Service %s/%s: %v. %s", e.ns, e.name, e.cause, why)
+}
+
+func (e *serviceReadError) Unwrap() error { return e.cause }
 
 // serviceNotRendered answers whether an existing revision Service has a shape
 // serviceFor never produces.
@@ -596,7 +741,7 @@ func (e *serviceShapeError) Error() string {
 //
 // This function is a SHAPE CLASSIFIER and knows nothing about the cooldown or
 // about ownership: the fields those decisions need are set by the callers that
-// make them. It returns a zero `heldSince` and a false `unowned` because it
+// make them. It returns a zero `heldSince` and a false `unrecorded` because it
 // has no business setting either.
 func serviceNotRendered(existing *corev1.Service) *serviceShapeError {
 	e := &serviceShapeError{ns: existing.Namespace, name: existing.Name, typ: existing.Spec.Type}

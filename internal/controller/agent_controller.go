@@ -96,6 +96,18 @@ const (
 	// longer exists. Rule 8 is about naming the real cause.
 	CondReasonServiceReplaceHeld = "RevisionServiceReplaceHeld"
 
+	// CondReasonServiceNotRecorded names a revision Service that cannot be
+	// repaired in place and whose UID is not the one status.revisionServices
+	// records for its revision, so this operator cannot establish that it
+	// created it and will not delete it (design 02 §3.2, A77).
+	CondReasonServiceNotRecorded = "RevisionServiceNotRecorded"
+
+	// CondReasonServiceUnreadable names a revision Service this operator could
+	// not read, for a reason that is not "it does not exist" and not one a
+	// retry fixes — most often its own RBAC. Nothing is written and the Service
+	// is not at fault (design 02 §3.2, A77).
+	CondReasonServiceUnreadable = "RevisionServiceUnreadable"
+
 	// DefaultRevisionHistoryLimit is the number of revisions retained IN ADDITION
 	// TO the active one and any in-flight candidate (design 02 §3.3). Counting
 	// them inside the limit would let a rollout garbage-collect its own rollback
@@ -637,12 +649,6 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				return ctrl.Result{RequeueAfter: RefusedServiceRecheck},
 					r.reportCollision(ctx, &agent, status, conds, collision)
 			}
-			// The one shape fault convergence cannot repair. Reported under its
-			// own reason rather than folded into RevisionHashCollision: nothing
-			// collided, and a condition that names a cause nobody checked is the
-			// loud-and-wrong half of rule 8. Returning here is what keeps the
-			// revision unpromoted and reconcileGateway unreached, so no route is
-			// ever emitted naming the object this refuses.
 			// A replace that did not complete. Reported FIRST, because it is the
 			// only one of these exits that can leave no object at all under a
 			// name the serving route still points at.
@@ -658,16 +664,23 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				return ctrl.Result{RequeueAfter: RefusedServiceRecheck},
 					r.writeStatus(ctx, &agent, status)
 			}
+			// The one shape fault convergence cannot repair, when the replace was
+			// held or the object is not one this operator has a record of
+			// creating. Reported under its own reason rather than folded into
+			// RevisionHashCollision: nothing collided, and a condition that names
+			// a cause nobody checked is the loud-and-wrong half of rule 8.
+			// Returning here is what keeps the revision unpromoted and
+			// reconcileGateway unreached, so no route is ever emitted naming the
+			// object this refuses.
 			if shape := (*serviceShapeError)(nil); errors.As(err, &shape) {
 				msg := shape.Error()
 				if r.routeNames(status, desired) {
-					// The subjunctive in shape.Error() — "adopting it as it stands
-					// WOULD leave the route naming it" — is the wrong tense for a
-					// revision that is already serving: the route names it now, this
-					// refusal does not withdraw it, and a reader told only what
-					// adopting would cost concludes nothing is currently wrong. The
-					// missing-policy Lock says "The route is not withdrawn." in the
-					// same words for the same reason (authtxn.go).
+					// shape.Error() says what is wrong with the object and why it is
+					// left alone, and nothing about traffic. For a revision that is
+					// already serving that silence reads as "nothing is flowing": the
+					// route names this object now, and this refusal does not withdraw
+					// it. The missing-policy Lock says "The route is not withdrawn."
+					// in the same words for the same reason (authtxn.go).
 					msg += servedRouteNote
 				}
 				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, shape.reason(), msg)
@@ -685,7 +698,24 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				return ctrl.Result{RequeueAfter: RefusedServiceRecheck},
 					r.writeStatus(ctx, &agent, status)
 			}
-			if rejectedByAPIServer(err) {
+			// The operator could not READ its revision Service. Its own fault,
+			// not the object's, so it is not ServiceRejected — whose update-arm
+			// remedy, "delete that Service", would send a reader to destroy an
+			// object to fix a permission. A transient read error is left to the
+			// queue's backoff, as every other transient error here is.
+			if unread := (*serviceReadError)(nil); errors.As(err, &unread) && rejectedByAPIServer(unread.cause) {
+				conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse,
+					CondReasonServiceUnreadable, unread.Error())
+				conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue,
+					CondReasonServiceUnreadable, unread.Error())
+				r.carryGatewayReport(conds, &agent)
+				status.Phase = assaydv1alpha1.PhaseDegraded
+				status.Conditions = conds.merge(agent.Status.Conditions)
+				status.ObservedGeneration = agent.Generation
+				return ctrl.Result{RequeueAfter: RefusedServiceRecheck},
+					r.writeStatus(ctx, &agent, status)
+			}
+			if rejectedByAPIServer(err) && !errors.As(err, new(*serviceReadError)) {
 				created := errors.Is(err, errServiceCreate)
 				// A77's convergence made this exit reachable from a Service the
 				// operator OWNS, and by more than one route: it asserts an
@@ -1388,13 +1418,31 @@ func (r *AgentReconciler) activeRevisionUnaddressable(ctx context.Context,
 	if svc.Spec.ClusterIP != "" && svc.Spec.ClusterIP != corev1.ClusterIPNone {
 		return ""
 	}
+	// The remedy NEVER says to remove the object. Following that advice was
+	// measured by round three of A77's review: with the gateway on, the route
+	// then named nothing and the Agent read Pending/RouteApplyFailed on every
+	// pass; with it off, the Agent read Ready=True/Available with no Service
+	// at all and nothing reporting it. Reverting the edit makes the broken
+	// revision the desired one again, and the operator then replaces its own
+	// Service itself (§3.2); promotion of the new revision moves the route off
+	// it. Those are the two things a user can do.
+	//
+	// What this does NOT claim is that traffic stops. A headless Service with a
+	// selector still has EndpointSlices, and a gateway that routes to endpoints
+	// may reach the Pods through it; what is certain is that nothing addressing
+	// the ClusterIP does, the operator's own card fetch included.
 	return fmt.Sprintf("the ACTIVE revision %s is serving, and its Service %s/%s has no "+
-		"ClusterIP, so nothing the serving route sends to it arrives. This operator converges "+
-		"only the DESIRED revision (%s), so it will not repair that object: an edit to the spec "+
-		"moved the desired revision on and left this one behind. To recover: delete %s/%s — the "+
-		"operator recreates it only while it is the desired revision, so revert the spec edit "+
-		"first, or promote a new revision and let the route follow it.",
-		active, runNS, name, desired, runNS, name)
+		"ClusterIP (spec.clusterIP %q), so nothing that addresses the revision by ClusterIP "+
+		"reaches it, this operator's card fetch included; whether the gateway still delivers "+
+		"to it through its endpoints is not checked. This operator converges only the DESIRED "+
+		"revision (%s), so it will not repair that object: an edit to the spec moved the "+
+		"desired revision on and left this one behind. To recover: revert that spec edit, "+
+		"which makes %s the desired revision again, and the operator replaces its own Service "+
+		"itself — or, if it has no record of creating it, says so under "+
+		"RevisionServiceNotRecorded; or wait for revision %s to become available and be promoted, which moves "+
+		"the serving route off %s. Leave the Service in place meanwhile: with it gone the "+
+		"route names nothing at all.",
+		active, runNS, name, svc.Spec.ClusterIP, desired, active, desired, active)
 }
 
 // RefusedServiceRecheck is how soon a revision Service the operator refused is
@@ -2060,9 +2108,15 @@ func (r *AgentReconciler) collectGarbage(
 	// something must write again or it is simply lost. It is rare — only when a
 	// revision leaves the retained set — and the alternative, dropping the write,
 	// would make the pruning code look like it worked while nothing persisted.
-	if pruneCards(status, keep) {
+	//
+	// The Service records leave with their revisions on the same write, for
+	// the same reason: `status.revisionServices` would otherwise grow one entry
+	// per revision this Agent ever had.
+	prunedCards := pruneCards(status, keep)
+	prunedRecords := pruneServiceRecords(status, keep)
+	if prunedCards || prunedRecords {
 		if err := r.writeStatus(ctx, agent, status); err != nil {
-			return fmt.Errorf("persist pruned cards: %w", err)
+			return fmt.Errorf("persist pruned cards and service records: %w", err)
 		}
 	}
 	return r.collectPreA42Leftovers(ctx, agent)

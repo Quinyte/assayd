@@ -32,18 +32,37 @@ reasons:
   - reason: ActiveRevisionServiceUnaddressable
     state: >-
       The active revision is not the desired one, and the active revision's
-      Service exists but has no usable ClusterIP (empty or `None`), so nothing
-      the serving route sends to it arrives. The usual cause is an owner editing
-      the spec to recover from a broken Service, which moves the desired
-      revision on and leaves the broken one behind.
+      Service exists with no ClusterIP: `spec.clusterIP` is empty (an
+      `ExternalName` Service) or `None` (headless). Nothing that addresses the
+      revision by ClusterIP reaches it, the operator's own card fetch included.
+      Whether the gateway still delivers to it is not established: a headless
+      Service with a selector still has EndpointSlices, and what a gateway does
+      with an `ExternalName` backend is implementation-specific. The usual
+      cause is an owner editing the spec to recover from a broken Service,
+      which moves the desired revision on and leaves the broken one behind.
     operator: >-
       Reads the active revision's Service live and writes nothing to it: sets
       `Ready=False` and `Degraded=True` with this reason and phase `Degraded`,
-      then carries on to the gateway step. It does not repair or re-create the
-      object, because it converges only the desired revision. A missing Service,
-      or one it cannot read, raises nothing.
+      then carries on to the gateway step. It checks the ClusterIP and nothing
+      else — a wrong selector, ports, `internalTrafficPolicy: Local` or any
+      other shape on that Service is reported by nothing. It does not repair or
+      re-create the object, because it converges only the desired revision. A
+      missing Service, or one it cannot read, raises nothing. A non-transient
+      error from the gateway step later in the same pass replaces this reason
+      on `Ready`, and on `Degraded` for a served Agent. The message's remedy is
+      to revert the spec edit or to wait for the new revision to promote; it
+      never says to delete the Service, which leaves the route naming nothing.
     traffic: not-withdrawn
-    note: The route keeps naming the active revision; the report is that its address is dead.
+    note: The route keeps naming the active revision; the report is that its ClusterIP is gone.
+    disagreement: >-
+      Design 03 A81 describes `Ready` and `Degraded` reading
+      `ServingRouteNotAccepted` on a pass where the Gateway refuses a served
+      Agent's route. This report sets `Ready=False` before the gateway step and
+      `withholdReady` never overrides a `Ready` that is already False, so on a
+      pass where both fire `Ready` and `Degraded` read this reason while
+      `PolicyApplyIncomplete` reads `ServingRouteNotAccepted` — measured by
+      `TestAnUnaddressableActiveServiceAndARefusedRouteOnOnePass`. `Ready=False`
+      and phase `Degraded` agree with design 03; only the reason differs.
 
   - reason: AuthAbandonWaiting
     state: >-
@@ -466,13 +485,19 @@ reasons:
   - reason: ForeignObject
     state: >-
       An object at a desired revision's name — its Deployment or its Service —
-      carries a different Agent's `assayd.dev/agent-uid` label.
+      does not carry this Agent's UID in its `assayd.dev/agent-uid` label: the
+      label is absent, which is the commonest plant, or it names another Agent.
+      On the Service path this is reached only by an object whose UID
+      `status.revisionServices` does not record; the one it records is the
+      operator's own whatever its labels say.
     operator: >-
       Refuses it and never rewrites or deletes it. Sets `RevisionHashCollision=True`
       with this reason, `Ready=False` and `Degraded=True` under
       `RevisionHashCollision`, phase `Degraded`, and returns before the gateway
       step. On the Service path it re-checks after `RefusedServiceRecheck` (one
-      minute); on the workload path nothing schedules a re-check.
+      minute). On the workload path the pass requests no requeue; an event on a
+      Deployment the watch maps to this Agent can still enqueue it, but a
+      refused object usually carries none of the labels that mapping reads.
     traffic: not-withdrawn
     note: Before A77 this ground reported `DigestMismatch`.
 
@@ -707,12 +732,17 @@ reasons:
 
   - reason: RevisionHashCollision
     state: >-
-      The same state as `DigestMismatch`: one revision name, two different
-      projections.
+      A desired revision's Deployment or Service was refused on one of the
+      three provenance grounds the `RevisionHashCollision` condition carries:
+      `DigestMismatch` (two projections, one revision name), `ForeignObject`
+      (the object does not carry this Agent's UID label) or `Unstamped` (no
+      digest stamp, and nothing in status vouches for the revision).
     operator: >-
-      Terminal. This is the reason carried on `Ready=False` and `Degraded=True`
-      while `RevisionHashCollision=True` carries `DigestMismatch`. Phase
-      `Degraded`; no adoption and no rewrite.
+      This is the reason carried on `Ready=False` and `Degraded=True` while the
+      `RevisionHashCollision` condition carries the ground. Phase `Degraded`; no
+      adoption, rewrite or delete. The Service path re-checks after
+      `RefusedServiceRecheck` (one minute); the workload path requests no
+      requeue.
     traffic: not-withdrawn
 
   - reason: RevisionMaterialUnavailable
@@ -730,31 +760,85 @@ reasons:
       weight 0 here. The code returns before the gateway step and changes no
       weight. Reported, not settled.
 
+  - reason: RevisionServiceNotRecorded
+    state: >-
+      A Service at the desired revision's name is headless — `spec.clusterIP:
+      None`, which no Update can repair — and its UID is not the one
+      `status.revisionServices` records for that revision: there is no record
+      (an Agent created before the record, whose Service went headless before it
+      was adopted into it), or the record names a different object (the
+      operator's Service was deleted and another put at the name). The object
+      passed provenance, so it is not a collision; the operator cannot establish
+      that it created it, whatever its labels and annotations say.
+    operator: >-
+      Never deletes it. Sets `Ready=False` and `Degraded=True` with this reason
+      and phase `Degraded`, carries design 03's `PolicyApplyIncomplete` and
+      `PolicyCompileFailed`, returns before the gateway step, and re-checks after
+      `RefusedServiceRecheck` (one minute). The message names the recorded UID
+      and the object's. It stands until a human deletes the object; the operator
+      then creates its own and records it.
+    traffic: not-withdrawn
+    note: If the revision is active, its route still names this object.
+
   - reason: RevisionServiceReplaceFailed
     state: >-
-      The operator's own revision Service could not be repaired in place, and
-      its delete-and-recreate did not complete — the recreate failed, or the
-      object was not the one read when the delete ran.
+      The operator's own revision Service — the object whose UID
+      `status.revisionServices` records — is headless and cannot be repaired
+      in place, and its delete-and-recreate did not complete. The message names
+      the stage: the dry-run create of the replacement was refused ("would not
+      be admitted"), which is the likeliest and deletes nothing; the delete was
+      refused ("could not be deleted"), by a lost UID precondition because the
+      object at the name is no longer the recorded one, or by any other API
+      error; the object had already gone ("vanished before it could be
+      replaced"); the recreate failed after the delete ("could not be recreated
+      after it was deleted"); or the replacement was stored with no ClusterIP
+      ("was recreated with no ClusterIP"), as a mutating webhook forcing
+      `clusterIP: None` would do.
     operator: >-
       Sets `Ready=False` and `Degraded=True` with this reason and phase
-      `Degraded`, writes status, returns before the gateway step, and re-checks
-      after `RefusedServiceRecheck` (one minute). It never reports success, so
-      the revision is not promoted over whatever took the name.
+      `Degraded`, carries design 03's `PolicyApplyIncomplete` and
+      `PolicyCompileFailed`, writes status, returns before the gateway step, and
+      re-checks after `RefusedServiceRecheck` (one minute). It never reports
+      success, so the revision is not promoted over whatever holds the name.
     traffic: not-withdrawn
     note: >-
-      The route names the Service by name, so during this state it may name no
-      object, or an object someone else created at that name.
+      The route names the Service by name, so what it reaches depends on the
+      stage. After a refused dry-run or a refused delete, the object the operator
+      read is still there, unless the precondition was lost, in which case
+      somebody else's object is. After a vanished object or a failed recreate,
+      the name may hold nothing or an object someone else created. After a
+      headless replacement, it holds the operator's new, recorded object, which
+      has no ClusterIP.
 
   - reason: RevisionServiceReplaceHeld
     state: >-
-      The operator's own revision Service is unrepairable in place again, and
-      the operator already deleted and recreated it inside
+      The operator's own revision Service — the object whose UID
+      `status.revisionServices` records — is headless and unrepairable in place
+      again, and the operator already deleted and recreated it inside
       `ServiceReplaceCooldown` (ten minutes, counted from
       `status.serviceReplacedAt`).
     operator: >-
       Does not replace it a second time inside the window. Sets `Ready=False`
       and `Degraded=True` with this reason and phase `Degraded`, returns before
-      the gateway step, and re-checks after `RefusedServiceRecheck` (one minute).
+      the gateway step, and re-checks after `RefusedServiceRecheck` (one minute),
+      replacing it once the window has passed.
+    traffic: not-withdrawn
+
+  - reason: RevisionServiceUnreadable
+    state: >-
+      The operator's live `get` of the desired revision's Service was answered
+      with a status error that is neither NotFound nor transient — most often
+      Forbidden or Unauthorized, meaning the operator's own credentials may not
+      read services. The Service is not at fault. The chart's operator
+      ClusterRole grants the verb cluster-wide.
+    operator: >-
+      Writes nothing to the Service. Sets `Ready=False` and `Degraded=True` with
+      this reason and phase `Degraded`, carries design 03's
+      `PolicyApplyIncomplete` and `PolicyCompileFailed`, returns before the
+      gateway step, and re-checks after `RefusedServiceRecheck` (one minute). For
+      a Forbidden or Unauthorized the message names the missing permission; it
+      never tells the reader to delete anything. A transient read error raises
+      nothing and is retried with backoff.
     traffic: not-withdrawn
 
   - reason: RolloutComplete
@@ -813,17 +897,28 @@ reasons:
 
   - reason: ServiceRejected
     state: >-
-      The API server answered a create or an update of a revision's Service
-      with a status that is not transient — an Invalid error, or a Forbidden
-      from an admission policy or webhook over `services`. Conflict, NotFound,
-      AlreadyExists, timeouts, throttling and server errors are not this reason.
+      The API server answered this operator's create or update of a revision's
+      Service with a status error that is not on the transient list — Conflict,
+      NotFound, AlreadyExists, ServerTimeout, Timeout, TooManyRequests,
+      InternalError, ServiceUnavailable and UnexpectedServerError are excluded,
+      and a transport failure that carries no status is retried unreported.
+      That is any other status: an Invalid render or repair, a Forbidden from an
+      admission policy or webhook over `services`, and equally an RBAC Forbidden
+      or an Unauthorized on the write. A refused READ of the Service is not this
+      reason; it is `RevisionServiceUnreadable`.
     operator: >-
-      Sets `Ready=False`, `Degraded=True` and phase `Degraded`, writes status,
-      and re-checks after `RefusedServiceRecheck` (one minute). The message says
-      which write was refused: on a create there is no object to delete, and on
-      an update it names the admission policy as the thing to fix first.
+      Sets `Ready=False`, `Degraded=True` and phase `Degraded`, carries design
+      03's `PolicyApplyIncomplete` and `PolicyCompileFailed`, writes status,
+      returns before the gateway step, and re-checks after
+      `RefusedServiceRecheck` (one minute). The message says which write was
+      refused: on a create, that there is no object to delete and to look for an
+      admission policy or webhook over services; on an update, to fix or exempt
+      the policy and then delete the Service so the operator recreates it.
     traffic: not-withdrawn
-    note: The pass returns before the gateway step; nothing touches the route.
+    note: >-
+      The remedy assumes an admission policy. For an RBAC refusal of the write
+      it names the wrong thing to fix, and the message does not tell the two
+      apart, since both arrive as Forbidden.
 
   - reason: ServingRouteNotAccepted
     state: >-
@@ -883,22 +978,24 @@ reasons:
 
   - reason: Unstamped
     state: >-
-      An object at a desired revision's name carries no revision-digest stamp
-      the operator can vouch for. On the collision path it is not adopted; on
-      the Service path, an unstamped object that `status` vouches for is
-      adopted, but if it is also unrepairable in place (headless) the operator
-      will not delete it, because it cannot establish that it created it.
+      An object at a desired revision's name — its Deployment or its Service —
+      carries this Agent's UID label but no revision-digest stamp, and `status`
+      vouches for no such revision: it is neither the active nor the candidate
+      revision at this digest. On the Service path this is reached only by an
+      object whose UID `status.revisionServices` does not record.
     operator: >-
-      Never deletes the object. On the collision path, sets
-      `RevisionHashCollision=True` with this reason and `Ready=False` /
-      `Degraded=True` under `RevisionHashCollision`. On the unrepairable Service
-      path, sets `Ready=False` and `Degraded=True` with this reason. Either way
-      phase `Degraded`, the pass returns before the gateway step, and the
-      Service path re-checks after `RefusedServiceRecheck` (one minute).
+      Refuses it and never rewrites or deletes it. Sets
+      `RevisionHashCollision=True` with this reason, and `Ready=False` and
+      `Degraded=True` under `RevisionHashCollision`, phase `Degraded`, and
+      returns before the gateway step. The Service path re-checks after
+      `RefusedServiceRecheck` (one minute); the workload path requests no
+      requeue.
     traffic: not-withdrawn
     note: >-
-      Lands on different conditions depending on the path. The Agent stays
-      `Degraded` until a human deletes the object.
+      Until round three of design 02 A77's review this reason also named a
+      headless Service the operator would not delete. That is
+      `RevisionServiceNotRecorded` now, because the object refused there may
+      carry a stamp.
 
   - reason: WorkloadNotAvailable
     state: >-
