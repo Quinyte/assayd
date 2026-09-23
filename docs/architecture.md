@@ -438,8 +438,9 @@ kagent answers "how do I run an agent on k8s"; assayd answers "how do I run an a
 
 **Apache 2.0 core** (CNCF path open, no AGPL adoption tax, no BSL community damage). Open-core by component, never by crippling the core. **Single team free; organizational scale paid**:
 
-- OSS: the full loop for one team — runtime, KG + patterns, evals + gating, drift, receipts, packs, CLI, exposure, Apps.
-- Enterprise: `Tenant` CR + hard multi-tenancy fan-out, compliance profiles + audit reporting, SSO/SCIM, fleet management, advanced governance, support.
+- OSS: the full loop for one team — runtime, KG + patterns, evals + gating, drift, receipts, packs, CLI, exposure, Apps — **and SSO**.
+- Enterprise: `Tenant` CR + hard multi-tenancy fan-out, compliance profiles + audit reporting, **SCIM and directory sync**, fleet management, advanced governance, support.
+- **`SSO/SCIM` is what the enterprise row used to read, and the SSO half is withdrawn.** ADR-0015's own Decision says "never paywall correctness or safety" and then listed SSO among the enterprise modules, which contradicted the rule in the same paragraph. **Amendment 1 (2026-09-10) settled it against the list**: CISA's Secure-by-Design guidance puts single sign-on "in the base offering" with no SSO tax, and paywalling authentication is now the practice being named rather than a neutral default. **SSO is free core.** SCIM, fleet management, hard multi-tenancy and compliance reporting stay paid — they are scale, not safety.
 - **Never paywall correctness or safety** — evals, receipts, signing, drift stay open. Trust is the funnel.
 
 ## 17 · Weight budget — core tier

@@ -38,6 +38,32 @@
 //
 // Each rule bans an ASSERTION and permits a RETRACTION, because "X is withdrawn"
 // is exactly the sentence a correction needs to make.
+//
+// # What this gate does not prove
+//
+// Stated here, at the top, because a gate that overstates its own reach is the
+// same defect class it exists to catch — and a green run is exactly the moment
+// nobody goes looking for the limits.
+//
+//   - **Every rule is a lexical tripwire, not a semantic guarantee.** A rule
+//     catches the phrasings someone wrote down, and the corpus has already
+//     defeated that twice from the inside: once by emphasis inside a banned
+//     phrase, once because the live body said "revisionHash(spec) — spec only"
+//     while the rule knew only a reviewer's paraphrase. A green run means no
+//     KNOWN phrasing of a WITHDRAWN claim is present. It does not mean the
+//     document is true. Nothing here reads a sentence nobody thought to ban.
+//   - **renderHTML is not a browser.** It reduces a page to blocks of text; it
+//     does not lay one out. A withdrawn guarantee typed into an inline `<svg>`'s
+//     `aria-label`, or into any element dropped whole, is not scanned — see
+//     renderHTML, which names what it drops and why.
+//   - **A rescue is per block, and an HTML block is bigger than a table cell.**
+//     Markdown splits a table row into cells, so a retraction on one side cannot
+//     launder a claim on the other. HTML splits on block-level tags, so a `<div>`
+//     of `<span>` pills renders as ONE block and a retraction in one pill DOES
+//     rescue its neighbour. That was measured while writing this: re-planting the
+//     header claim beside the corrected one did not fail the gate until the
+//     blanket-approval rule's rescue clause was narrowed. The residue is real for
+//     any inline-only container.
 package docs
 
 import (

@@ -1777,10 +1777,11 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
     <tbody>
       <tr><td>The full loop for one team: runtime, KG + knowledge patterns, evals + gating, drift, receipts, packs, CLI, exposure, Apps — single-tenant, one cluster</td><td><code>Tenant</code> CR + hard multi-tenancy fan-out (vCluster automation, NATS accounts, RLS roles, IdP orgs, gateway partitions)</td></tr>
       <tr><td>Security fundamentals: SPIRE identity, signing, budgets, basic RBAC/admission policies</td><td>Compliance profiles (HIPAA / SOC 2 / GDPR packs), access-review + audit reporting, 6-year retention tooling</td></tr>
-      <tr><td>Community knowledge packs</td><td>SSO/SCIM &amp; directory sync, fleet management across clusters/environments, advanced governance (approval workflows, policy packs), support/SLA</td></tr>
+      <tr><td>Community knowledge packs, <b>and SSO</b></td><td><b>SCIM</b> &amp; directory sync, fleet management across clusters/environments, advanced governance (approval workflows, policy packs), support/SLA</td></tr>
     </tbody>
   </table></div>
   <div class="prose">
+    <p class="soft"><b>This table read “SSO/SCIM” on the enterprise side until 2026-09-23, and the SSO half is withdrawn.</b> ADR-0015’s Decision says “never paywall correctness or safety” and then listed SSO among the enterprise modules — a contradiction inside one paragraph. <b>Amendment 1 (2026-09-10) settled it against the list</b>: CISA’s Secure-by-Design guidance puts single sign-on in the base offering with no SSO tax, and paywalling authentication is now the practice being named rather than a neutral default. SSO is free core; SCIM, fleet management, hard multi-tenancy and compliance reporting stay paid, because they are scale rather than safety.</p>
     <p class="soft">One rule held absolutely: <em>never paywall correctness or safety</em> — evals, receipts, signing, drift stay open. They are why anyone trusts the platform; trust is the funnel. What's paid is running it for a hundred teams instead of one.</p>
   </div>
 </section>
