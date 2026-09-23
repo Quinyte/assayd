@@ -24,10 +24,26 @@
 set -euo pipefail
 
 web_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+known_targets=(site docs)
 targets=("${@:-}")
 if [ -z "${targets[0]}" ]; then
-  targets=(site docs)
+  targets=("${known_targets[@]}")
 fi
+
+# Reject an unknown name here rather than letting it fall through to the
+# missing-dist guard, which would answer "run 'pnpm run build' first" — the
+# wrong fix for a typo, and one that sends the reader off to rebuild something
+# that was never going to appear.
+for target in "${targets[@]}"; do
+  case " ${known_targets[*]} " in
+    *" ${target} "*) ;;
+    *)
+      echo "check-links: unknown target '${target}'. Known targets: ${known_targets[*]}" >&2
+      exit 2
+      ;;
+  esac
+done
 
 if ! command -v lychee >/dev/null 2>&1; then
   echo "check-links: lychee is not installed." >&2
@@ -69,25 +85,24 @@ for target in "${targets[@]}"; do
   #   --include-fragments=...      Checks `#anchor` against id/name in the
   #                                target document. DEFAULT IS none: without
   #                                this, a dead anchor passes silently.
-  #   --index-files index.html     Models the host exactly: a directory link
-  #                                resolves only if that directory really has
-  #                                an index.html. So `/` passes (dist/index.html
-  #                                exists) and `/guides/` fails, because under
-  #                                build.format 'file' dist/guides/ holds
-  #                                figures.html and no index. lychee's DEFAULT
-  #                                accepts any directory that exists on disk,
-  #                                which passes `/guides/` — a false pass.
+  #   --index-files ''             Rejects EVERY bare-directory link, so no URL
+  #                                on either target depends on the server's
+  #                                directory-index behaviour — which is the
+  #                                same thing astro.config.mjs gives as the
+  #                                reason for build.format 'file' in the first
+  #                                place. lychee's DEFAULT accepts any
+  #                                directory that exists on disk, which passes
+  #                                `/guides/` even though dist/guides/ holds
+  #                                figures.html and no index: a false pass.
   #
-  #                                `--index-files ''` rejects EVERY directory
-  #                                link, which was measured to fail the four
-  #                                `href="/"` links in the site masthead. That
-  #                                models a host with no directory index at
-  #                                all, and directory indexing is a different
-  #                                server feature from URL rewriting: the host
-  #                                serves index.html for a directory and does
-  #                                not rewrite /guides/example to
-  #                                guides/example.html. The stricter flag was a
-  #                                false FAILURE, so it is not used.
+  #                                This was briefly relaxed to
+  #                                `--index-files index.html`, because the site
+  #                                masthead linked `href="/"` four times and
+  #                                the strict flag failed them. That was the
+  #                                masthead contradicting the config's own
+  #                                argument, not the flag being wrong; the
+  #                                links are `/index.html` now and the strict
+  #                                flag passes both targets.
   #   --root-dir <absolute>        Resolves root-relative `/guides/x.html`
   #                                against the dist root rather than the
   #                                filesystem root. Must be absolute.
@@ -102,7 +117,7 @@ for target in "${targets[@]}"; do
     lychee \
       --offline \
       --include-fragments=anchor-only \
-      --index-files index.html \
+      --index-files '' \
       --root-dir "${dist}" \
       --no-progress \
       "${dist}" 2>&1

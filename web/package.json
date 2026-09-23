@@ -11,11 +11,13 @@
     "pnpm": "11.8.0"
   },
   "scripts": {
-    "build": "pnpm -r --workspace-concurrency=1 run build",
+    "build": "./scripts/build.sh",
     "build:site": "pnpm --filter @assayd/site run build",
     "build:docs": "pnpm --filter @assayd/docs run build",
     "check": "pnpm -r --workspace-concurrency=1 run check",
+    "check:warnings": "./scripts/check-warnings.sh",
     "check:links": "./scripts/check-links.sh",
+    "check:claims": "./scripts/check-claims.sh",
     "dev:site": "pnpm --filter @assayd/site run dev",
     "dev:docs": "pnpm --filter @assayd/docs run dev"
   }

@@ -25,6 +25,25 @@ const classes: string[] = [
 ];
 if (extraClass) classes.push(extraClass);
 const className = classes.join(" ");
+
+// Machine-readable evidence, emitted onto the rendered element.
+//
+// scripts/check-claims.sh reads these out of the BUILT HTML and resolves each
+// one against the repository: a `measured` badge must name a Go test function
+// that actually exists, a `designed` badge must name a design document that
+// actually exists. Parsing the styled markup instead would mean depending on
+// class names for a contract, and would break the moment the typography
+// changed; these attributes are the contract.
+//
+// The check is over built output for the same reason the link check is: what
+// ships is what gets verified.
+const data: Record<string, string> = { "data-claim": resolved.claim };
+if (claimProps.claim === "measured") {
+  data["data-claim-test"] = resolved.evidence ?? "";
+} else if (claimProps.claim === "designed") {
+  data["data-claim-design"] = claimProps.design.trim();
+  data["data-claim-section"] = claimProps.section.trim();
+}
 ---
 
 {
@@ -41,7 +60,7 @@ const className = classes.join(" ");
 }
 {
   variant === "header" ? (
-    <div class={className}>
+    <div class={className} {...data}>
       <span class="cc__sr">{resolved.label}</span>
       <div class="cc__vis" aria-hidden="true">
         <span class="cc__eyebrow">Claim class</span>
@@ -50,7 +69,7 @@ const className = classes.join(" ");
       </div>
     </div>
   ) : (
-    <span class={className}>
+    <span class={className} {...data}>
       <span class="cc__sr">{resolved.label}</span>
       <span class="cc__vis" aria-hidden="true">
         <span class="cc__mark">{resolved.mark}</span>
@@ -167,8 +186,20 @@ const className = classes.join(" ");
    */
   .cc--header {
     display: block;
+    /*
+     * margin-top is not optional. Without it the rule sits hard against
+     * whatever precedes it and reads as that element's underline rather than
+     * as this block's masthead — which is exactly how it looked under the
+     * `<h2>` on the component's own demo page.
+     */
+    margin-top: var(--ax-space-5, 48px);
     padding-top: var(--ax-space-2, 16px);
     margin-bottom: var(--ax-space-3, 24px);
+  }
+
+  /* Nothing precedes it at the top of a page, so no separation is wanted. */
+  .cc--header:first-child {
+    margin-top: 0;
   }
 
   .cc--header .cc__vis {

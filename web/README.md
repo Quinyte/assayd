@@ -24,16 +24,25 @@ protocol, so there is one copy and the build fails if it is broken.
 ```sh
 cd web
 pnpm install --frozen-lockfile
-pnpm run build        # both targets -> site/dist and docs/dist
-pnpm run check        # astro check (typecheck) on both
-pnpm run check:links  # internal links + anchors, over the BUILT output
-pnpm run dev:site     # local preview of assayd.io
-pnpm run dev:docs     # local preview of assayd.dev
+pnpm run build          # both targets -> site/dist and docs/dist
+pnpm run check          # typecheck all three packages
+pnpm run check:warnings # every build warning is a known one
+pnpm run check:links    # internal links + anchors, over the BUILT output
+pnpm run check:claims   # every claim badge names evidence that exists
+pnpm run dev:site       # local preview of assayd.io
+pnpm run dev:docs       # local preview of assayd.dev
 ```
 
+The three `check:*` gates read what the build produced, so run `build` first.
 `check:links` needs `lychee` on PATH (`brew install lychee`; CI pins the
-version and its sha256 in `.github/workflows/web.yml`). It runs after a build,
-because it checks `dist/`, not source.
+version and its sha256 in `.github/workflows/web.yml`).
+
+**`pnpm run check` reports "0 errors, 0 warnings" — that is `astro check`'s
+number, not the build's.** The build itself emits five warnings and exits 0.
+All five are accounted for in `scripts/check-warnings.sh`, and a sixth fails
+CI until someone accounts for it too. One of the five is the sitemap skipping
+for want of `site:`, so whoever points DNS has to come back and remove that
+entry.
 
 Node and pnpm are pinned exactly — `.nvmrc` and `package.json#packageManager` —
 and `.npmrc` sets `engine-strict`, so an install on a different Node is refused
@@ -75,12 +84,11 @@ is a false pass. Measured, with a deliberately bad link in place:
 | drop `--include-fragments` | **0 errors** — a dead `#anchor` passes silently |
 | drop `--root-dir` | 16 errors — every root-relative link breaks (false failure) |
 
-`--index-files index.html` models the host: `/` resolves because
-`dist/index.html` exists, `/guides/` does not because `dist/guides/` holds
-`figures.html` and no index. `--index-files ''` was tried and rejected — it
-fails the four `href="/"` links in the masthead, because it models a host with
-no directory index at all, and directory indexing is a different server
-feature from URL rewriting.
+`--index-files ''` rejects every bare-directory link, so no URL on either
+target depends on the server's directory-index behaviour — the same thing the
+Astro config gives as its reason for `build.format: 'file'`. The site masthead
+linked `href="/"` and had to be changed to `/index.html` to satisfy it; that
+was the masthead contradicting the config, not the flag being wrong.
 
 ## Components
 
@@ -97,9 +105,20 @@ written in a design and enforced by nothing, or not built.
 ```
 
 `measured` without a test, or `designed` without a design and section, **fails
-the build**. Both are mutation-checked: emptying `test=` and replacing a
-`Figure` alt with its own filename each stop `pnpm run build` with a non-zero
-exit and a named error.
+the build**. That is the weaker half: the live failure is the rename or the
+delete, not the omission — a badge reading "Proven by the test
+`TestRenamedLastMonth`" would otherwise build, ship, and be read aloud as
+proof. So `pnpm run check:claims` reads every badge out of the **built HTML**
+(via the `data-claim-*` attributes the component emits) and resolves it:
+
+- `measured` → a top-level `func <name>(` must exist under `test/`,
+  `internal/` or `api/`. Anchored at line start, so a mention in a comment or
+  a call site cannot satisfy it.
+- `designed` → `docs/designs/<NN>-*.md` must exist.
+
+It checks **existence, not truth**. It does not run the test, and it cannot
+know whether the named test proves the sentence the badge sits beside. `make
+test` says the first; a human says the second.
 
 The three states are told apart by stroke — filled, hairline, dashed — and by a
 mark that survives greyscale. Colour carries none of the meaning. The visible
@@ -157,15 +176,27 @@ Nothing is deployed, no secret is set and no DNS is pointed. `.github/workflows/
 builds both targets and uploads two artifacts; its `publish` job is stopped
 three separate ways and its last step exits non-zero.
 
+> **Read this before you touch the `web-production` environment.** GitHub
+> auto-creates an environment referenced by a workflow file, **with no
+> protection rules and no secrets**, the first time that job runs. So if a
+> dispatch has ever reached the `publish` job, `web-production` already exists
+> and is **unprotected** — finding it there is not evidence that anyone
+> configured it. `environment:` is therefore not one of the stops; the armed
+> check in step 2 is, because it depends on this repository's state and not on
+> the platform's behaviour.
+
 To publish, a human must:
 
 1. **Decide the transport.** Hostinger static apps can be fed more than one
    way. No command in this repository has ever been run against the host, so
    the workflow contains none — a command that has never been executed is a
    guess, and the first person to need it would read it as a guarantee.
-2. **Create the `web-production` GitHub environment**, and put a required
-   reviewer on it. That is where the human gate belongs permanently, rather
-   than in an `if:` someone can edit.
+2. **Add a required reviewer to the `web-production` environment** — creating
+   it first if no dispatch has auto-created it — and only then set the
+   repository **variable** `ASSAYD_WEB_PUBLISH_ENABLED` to exactly `true`.
+   That variable is the stop that cannot be satisfied by accident: until it is
+   set, the job fails on its first step regardless of secrets, environment or
+   input.
 3. **Set these repository secrets** (the workflow's preflight names each one it
    cannot find):
 
@@ -192,10 +223,15 @@ To publish, a human must:
   development. Nothing in this scaffold claims versioning works. If versioned
   docs become a requirement, the framework decision should be revisited —
   MkDocs + Material with `mike` is the mature answer.
-- `pnpm run build` for the docs target logs a Starlight warning that the `i18n`
-  collection is empty. The site is monolingual; the warning is benign.
 - No accessibility check and no visual regression check runs in CI. The build,
-  the typecheck and the link check are the gate today.
+  the typecheck, the warning gate, the link check and the claim check are the
+  gate today.
+- The claim check proves a named test **exists**, not that it passes and not
+  that it proves the claim beside it. The second of those is a human
+  judgement; nothing automates it.
+- The page composition is two stacked single-column pages. The components are
+  considered; the layout has no second rhythm yet. That is a real gap and it
+  belongs with whoever owns the information architecture.
 - The link check covers **internal** links and anchors only. External links are
   never fetched, so a link to a page that has since 404'd elsewhere on the web
   will not be caught here. That is deliberate — a third-party outage must not

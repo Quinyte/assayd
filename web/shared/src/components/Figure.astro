@@ -156,7 +156,13 @@ const hasStamp = Boolean(claim) || Boolean(depicts) || Boolean(full);
     overflow-x: auto;
     /* Panning the plate must not drag the page behind it. */
     overscroll-behavior-x: contain;
-    border: var(--ax-hairline, 1px) solid var(--ax-outline-variant, #f3ecd9);
+    /*
+     * --ax-outline, not --ax-outline-variant. The variant is the gold tint
+     * #f3ecd9, which against the #fafaf7 page measures about 1.05:1 — a border
+     * nobody can see. This frame has a job: it tells the reader where the
+     * pannable region begins and ends, so it has to be visible.
+     */
+    border: var(--ax-hairline, 1px) solid var(--ax-outline, #999999);
     /* Cards are square on tinted grounds; the plate ground is the page. */
     border-radius: var(--ax-radius-lg, 8px);
     background: var(--ax-surface, #fafaf7);

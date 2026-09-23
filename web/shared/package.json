@@ -14,5 +14,11 @@
   },
   "files": [
     "src"
-  ]
+  ],
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
 }

@@ -4,9 +4,11 @@
 # web/ — the assayd.io and assayd.dev workspace.
 # Installed trees, build output, and Astro's generated type cache. The
 # pnpm lockfile is NOT ignored: it is the pin that makes a build reproducible.
+#
+# Anchored to web/ deliberately. A bare `dist/` here would also swallow a
+# future Go or chart build directory anywhere in the tree, which is the kind
+# of ignore rule that hides a generated artifact nobody meant to drop.
 web/**/node_modules/
 web/**/dist/
 web/**/.astro/
-node_modules/
-dist/
-.astro/
+web/.build.log

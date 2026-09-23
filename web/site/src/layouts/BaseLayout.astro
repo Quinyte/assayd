@@ -16,7 +16,7 @@ const { title, description, current } = Astro.props;
 // Two entries is the whole navigation for a scaffold. The information
 // architecture belongs to whoever owns it; this exists to prove the shell.
 const nav = [
-  { href: "/", label: "Overview" },
+  { href: "/index.html", label: "Overview" },
   { href: "/claim-classes.html", label: "Claim classes" },
 ];
 ---
@@ -42,7 +42,7 @@ const nav = [
 
     <header class="masthead">
       <div class="shell masthead__inner">
-        <a class="wordmark" href="/">assayd</a>
+        <a class="wordmark" href="/index.html">assayd</a>
         <nav aria-label="Primary">
           <ul class="nav">
             {

@@ -8,7 +8,6 @@
 // the product.
 import BaseLayout from "../layouts/BaseLayout.astro";
 import ClaimClass from "@assayd/web-shared/ClaimClass.astro";
-import Figure from "@assayd/web-shared/Figure.astro";
 ---
 
 <BaseLayout
@@ -42,23 +41,12 @@ import Figure from "@assayd/web-shared/Figure.astro";
   <ClaimClass variant="header" claim="designed" design="design 16" section="§4.4" />
   <ClaimClass variant="header" claim="not-built" note="no alert rule ships in this repository" />
 
-  <h2>Figure</h2>
-  <p>
-    Diagrams are generated <code>.webp</code> plates, not diagram-as-code. The
-    caption carries the claim class and the revision the plate depicts, because
-    a raster cannot be checked against the code that moved underneath it.
-  </p>
-
-  <Figure
-    src="/diagrams/placeholder-plate.webp"
-    alt="Placeholder plate: three empty ink-outlined boxes in a row, joined left to right by two arrows, beneath a single gold rule and above a dashed baseline. It depicts nothing — it exists to prove the Figure component renders."
-    width={1600}
-    height={900}
-    depicts="scaffold placeholder"
-    claim={{ claim: "not-built" }}
-  >
-    A placeholder plate. The diagram set belongs to another agent.
-  </Figure>
+  {/*
+    The Figure component is demonstrated on the DOCS target, not here.
+    Diagrams are a docs concern, and shipping the same placeholder plate in
+    both public/ trees would be two byte-identical copies with no generator
+    between them — the duplication this whole workspace exists to avoid.
+  */}
 </BaseLayout>
 
 <style>
