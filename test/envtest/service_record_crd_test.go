@@ -9,9 +9,11 @@ import (
 	"testing"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
@@ -124,5 +126,71 @@ func TestAStaleCRDThatPrunesTheRecordIsReportedAndNothingIsDeleted(t *testing.T)
 		if !strings.Contains(ready.Message, want) {
 			t.Errorf("the message does not name %q: %s", want, ready.Message)
 		}
+	}
+}
+
+// dryRunStatusFails refuses every DRY-RUN status write of an Agent, and passes
+// every real one through.
+type dryRunStatusFails struct{ client.Client }
+
+func (c *dryRunStatusFails) Status() client.SubResourceWriter {
+	return &dryRunStatusFailsSW{SubResourceWriter: c.Client.Status()}
+}
+
+type dryRunStatusFailsSW struct{ client.SubResourceWriter }
+
+func (w *dryRunStatusFailsSW) Update(ctx context.Context, obj client.Object,
+	opts ...client.SubResourceUpdateOption) error {
+	o := &client.SubResourceUpdateOptions{}
+	o.ApplyOptions(opts)
+	if _, ok := obj.(*assaydv1alpha1.Agent); ok && len(o.DryRun) > 0 {
+		return apierrors.NewServiceUnavailable("injected: the dry-run was not answered")
+	}
+	return w.SubResourceWriter.Update(ctx, obj, opts...)
+}
+
+// A dry run that ERRORS establishes nothing about the CRD, and must not be
+// reported as a stale one.
+//
+// The keepability check answers "cannot keep a record" only when the API
+// server's dry-run answer shows the record pruned. Treating an error as that
+// answer would send a reader on a CRD that is current to re-apply CRDs, for a
+// timeout — rule 8. Round six's mutation V07 did exactly that and survived.
+func TestADryRunThatErrorsIsNotReportedAsAStaleCRD(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "dryerr")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("dryerr", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	before := liveService(t, key)
+	forgetServiceRecords(t, a)
+	headlessByPatchAlone(t, key)
+
+	failing := newGatewayReconciler("assayd-gateway", "assayd")
+	failing.Client = &dryRunStatusFails{Client: k8s}
+	failing.Reader = k8s
+	for i := 0; i < 2; i++ {
+		if _, err := failing.Reconcile(context.Background(),
+			ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)}); err != nil {
+			t.Logf("reconcile: %v", err)
+		}
+	}
+
+	if after := liveService(t, key); after.UID != before.UID {
+		t.Fatalf("an unrecorded headless Service was deleted (%s -> %s)", before.UID, after.UID)
+	}
+	ready := condition(liveAgentPtr(t, a), assaydv1alpha1.CondReady)
+	if ready == nil || ready.Reason != controller.CondReasonServiceNotRecorded {
+		t.Fatalf("a dry run that errored is reported as %+v, want %s: nothing established that "+
+			"the CRD prunes the record", ready, controller.CondReasonServiceNotRecorded)
+	}
+	if strings.Contains(ready.Message, "crds/") {
+		t.Errorf("the message sends the reader to re-apply CRDs on the strength of an error: %s",
+			ready.Message)
 	}
 }
