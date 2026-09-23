@@ -82,25 +82,35 @@
 //     page's own `meta-row` — renders as ONE block and any retraction in it
 //     rescues every claim beside it.
 //
-//     **Scope, stated because it was measured and is NOT closed: ONE of the
-//     rules here is hardened against this.** blanket-approval-claim's rescue
-//     clause was narrowed to explicit retractions after a replanted header claim
-//     survived; planting four OTHER withdrawn guarantees into the same
-//     `meta-row` launders all four, because every other rule accepts a bare
-//     `supersed`. Neither general fix was taken, and both were measured first:
-//     making `<span>` block-level splits eight mid-sentence uses and every
-//     code-highlighting token, trading laundering for MISSED violations, which
-//     is the worse direction for a gate; and requiring the retraction in the
-//     same SENTENCE breaks legitimate corrections throughout this corpus, which
-//     routinely quote a withdrawn claim and retract it in the next sentence.
-//     A third general fix was measured by the round-four reviewer and again
-//     before this line was written: dropping the bare `supersed` rescue from
-//     all nineteen rules fails SIX legitimate lines across five documents —
-//     superseded-adr in architecture.md, in architecture.html and in ADR-0026,
-//     cuts-early-guarantee and header-tool-filter in design 03, and
-//     nonexistent-tracing-field in design 04 — each of which names a superseded
-//     ADR, note or claim in order to date or retract it.
-//     So nineteen rules remain launderable inside an inline-only container.
+//     **Scope, stated because it was measured: the page's own `meta-row` is
+//     closed, and the defect class is not.** Nineteen rules used to accept a
+//     bare `supersed`, so the row's own "superseded in part" rescued a claim
+//     planted beside it. Measured on the eighteen that can apply to the page
+//     (header-tool-filter is scoped to design 03): all eighteen passed.
+//     blanket-approval-claim was narrowed first, to explicit retractions; the
+//     other nineteen rules now accept only `supersedes`, `superseded by`,
+//     `superseding` and `the superseded note`, and cuts-early-guarantee also
+//     accepts `unachievable`. With that, none of the eighteen passes, the
+//     corpus needed no edit, and TestTheRealMetaRowRescuesNoPlantedClaim pins
+//     it. Dropping `supersed` outright was measured too and is worse: it fails
+//     six legitimate lines across five documents. In five, the `supersed` word
+//     dates or retracts the very thing the rule bans. In the sixth, design
+//     03's research header, it does not: that line's "cuts early" unachievable
+//     is a negative result, and it passed only because "The former note is
+//     superseded", 1,846 characters further along the same line, rescued it,
+//     which is an instance of this very defect. `unachievable` now rescues it
+//     on its own words.
+//
+//     What remains is the defect itself: a rescue word anywhere in a block
+//     rescues the whole block. Measured on the real row: one more pill reading
+//     "superseded by ADR-0028" launders all eighteen rules again, "no longer
+//     applies" launders ten and "earlier draft" seven. Two general fixes were
+//     measured and not taken: making `<span>` block-level splits eight
+//     mid-sentence uses and every code-highlighting token, trading laundering
+//     for MISSED violations, which is the worse direction for a gate; and
+//     requiring the retraction in the same SENTENCE breaks legitimate
+//     corrections throughout this corpus, which routinely quote a withdrawn
+//     claim and retract it in the next sentence.
 package docs
 
 import (
@@ -173,8 +183,8 @@ var rules = []rule{
 		// line is withdrawn. Remove the marker and the gate reports the ADR. No
 		// ADR body is edited either way, which is the whole constraint.
 		//
-		// The rescue clause deliberately omits the bare word `supersed`, which
-		// every other rule here carries. Measured: with it, re-planting the
+		// The rescue clause deliberately omits `supersed` in every form.
+		// Measured: while it accepted a bare `supersed`, re-planting the
 		// header claim did NOT fail the gate. `<span>` is inline, so the page's
 		// whole `meta-row` renders as ONE block, and the corrected pill beside
 		// it — "superseded in part" — rescued the planted one. The word this
@@ -189,67 +199,67 @@ var rules = []rule{
 	{
 		name:    "superseded-research-note",
 		banned:  regexp.MustCompile(regexp.QuoteMeta(supersededNote)),
-		allowed: regexp.MustCompile(`(?i)supersed|no such|replaces|written against`),
+		allowed: regexp.MustCompile(`(?i)supersedes|superseded[ -]by|superseding|the superseded note|no such|replaces|written against`),
 		why:     "cites the superseded note; use agentgateway-v1.4.1-2026-08.md",
 	},
 	{
 		name:    "nonexistent-release",
 		banned:  regexp.MustCompile(`agentgateway[ -]2\.2`),
-		allowed: regexp.MustCompile(`(?i)supersed|does not exist|no such|kgateway`),
+		allowed: regexp.MustCompile(`(?i)supersedes|superseded[ -]by|superseding|the superseded note|does not exist|no such|kgateway`),
 		why:     "there is no agentgateway 2.x; the floor is v1.4.1 (ADR-0028)",
 	},
 	{
 		name:    "cuts-early-guarantee",
 		banned:  regexp.MustCompile(`(?i)cuts? early|never late`),
-		allowed: regexp.MustCompile(`(?i)withdraw|retract|no longer|cannot|is false|supersed`),
+		allowed: regexp.MustCompile(`(?i)withdraw|retract|no longer|cannot|is false|unachievable|supersedes|superseded[ -]by|superseding|the superseded note`),
 		why:     "token limits apply to future requests only; the guarantee is withdrawn (ADR-0028)",
 	},
 	{
 		name:    "exact-usd-tier",
 		banned:  regexp.MustCompile("(?i)exact tier|exact budget tier|backstop is exact"),
-		allowed: regexp.MustCompile(`(?i)withdraw|retract|not exact|no longer|supersed`),
+		allowed: regexp.MustCompile(`(?i)withdraw|retract|not exact|no longer|supersedes|superseded[ -]by|superseding|the superseded note`),
 		why:     "the receipt tier sums the same usd_est estimates the gateway uses; it is not exact in USD",
 	},
 	{
 		name:    "nonexistent-tracing-field",
 		banned:  regexp.MustCompile(`frontendPolicies`),
-		allowed: regexp.MustCompile(`(?i)supersed|no such|there is no|instead of`),
+		allowed: regexp.MustCompile(`(?i)supersedes|superseded[ -]by|superseding|the superseded note|no such|there is no|instead of`),
 		why:     "no such field at v1.4.1; tracing is AgentgatewayPolicy.spec.frontend.tracing, Gateway-scoped",
 	},
 	{
 		name:    "superseded-adr",
 		banned:  regexp.MustCompile(`ADR-0020`),
-		allowed: regexp.MustCompile(`0028|supersed`),
+		allowed: regexp.MustCompile(`0028|supersedes|superseded[ -]by|superseding|the superseded note`),
 		why:     "ADR-0020 is superseded by ADR-0028; cite the live one",
 	},
 	{
 		name:    "egress-as-restriction",
 		banned:  regexp.MustCompile(`(?i)egressRestricted|Backend restriction`),
-		allowed: regexp.MustCompile(`(?i)no such|construction|not restriction|earlier draft|supersed`),
+		allowed: regexp.MustCompile(`(?i)no such|construction|not restriction|earlier draft|supersedes|superseded[ -]by|superseding|the superseded note`),
 		why:     "the CRD has no egress field; the control is Backend construction (design 03 §3.4.1)",
 	},
 	{
 		name:    "overshoot-bound",
 		banned:  regexp.MustCompile(`(?i)overshoot[- ]bounds?|measured overshoot|excess is bounded`),
-		allowed: regexp.MustCompile(`(?i)withdraw|retract|no bound|unbounded|refuted|is false|supersed`),
+		allowed: regexp.MustCompile(`(?i)withdraw|retract|no bound|unbounded|refuted|is false|supersedes|superseded[ -]by|superseding|the superseded note`),
 		why:     "the spike measured 100x a one-replica budget under concurrency; no bound is published (design 03 A13)",
 	},
 	{
 		name:    "pricing-damage-bounded",
 		banned:  regexp.MustCompile(`(?i)backstop bounds?|bounds? the damage|damage is bounded`),
-		allowed: regexp.MustCompile(`(?i)withdraw|retract|not exact|no longer|supersed`),
+		allowed: regexp.MustCompile(`(?i)withdraw|retract|not exact|no longer|supersedes|superseded[ -]by|superseding|the superseded note`),
 		why:     "the receipt tier prices from the same table it is meant to backstop; it bounds nothing (ADR-0028)",
 	},
 	{
 		name:    "in-worker-poll",
 		banned:  regexp.MustCompile("(?i)acceptance poll(s|ing)?|poll(s|ing)? each resource|bounded: ?30 ?s|on the reconcile worker"),
-		allowed: regexp.MustCompile(`(?i)earlier draft|supersed|no longer|replaced|state machine`),
+		allowed: regexp.MustCompile(`(?i)earlier draft|supersedes|superseded[ -]by|superseding|the superseded note|no longer|replaced|state machine`),
 		why:     "A15 replaced the blocking poll with an event-driven staged reconcile; a worker that sleeps starves the fleet",
 	},
 	{
 		name:    "allowlist-equality",
 		banned:  regexp.MustCompile(`(?i)set equals the allowlist|equals the allowlist|exactly the resolved allowlist`),
-		allowed: regexp.MustCompile(`(?i)earlier draft|supersed|conflat|subset|not equality`),
+		allowed: regexp.MustCompile(`(?i)earlier draft|supersedes|superseded[ -]by|superseding|the superseded note|conflat|subset|not equality`),
 		why:     "egressAllowlist is a ceiling, not a selection: requested must be a SUBSET of permitted (A16)",
 	},
 	{
@@ -259,7 +269,7 @@ var rules = []rule{
 		// only", matched nothing, and the gate stayed green over the exact claim
 		// it existed to ban. A rule must cover how the DOCUMENT says it.
 		banned:  regexp.MustCompile(`(?i)computed from spec alone|hashed by referent|revisionHash\(spec\)[^;.]{0,12}spec only|hash covers spec only|spec only; the`),
-		allowed: regexp.MustCompile(`(?i)no longer|earlier|retract|supersed|was never|A20`),
+		allowed: regexp.MustCompile(`(?i)no longer|earlier|retract|supersedes|superseded[ -]by|superseding|the superseded note|was never|A20`),
 		why:     "A20 hashes env sources by content, so the digest is no longer spec-only",
 	},
 	{
@@ -267,7 +277,7 @@ var rules = []rule{
 		// The sibling phrasing, and the dangerous one: it sits in the A12
 		// classification TABLE, which is the cell an implementer copies from.
 		banned:  regexp.MustCompile(`(?i)by referent,? not contents|referent(s)? rather than contents|referent identity is (the |)hash`),
-		allowed: regexp.MustCompile(`(?i)was never sufficient|no longer|retract|supersed|earlier`),
+		allowed: regexp.MustCompile(`(?i)was never sufficient|no longer|retract|supersedes|superseded[ -]by|superseding|the superseded note|earlier`),
 		why:     "A20 hashes every env source by CONTENT; referent identity alone let an update replace a prompt under a gated revision",
 	},
 	{
@@ -279,7 +289,7 @@ var rules = []rule{
 		// is memorable enough to be quoted back into a body by someone working
 		// from the older half of the document.
 		banned:  regexp.MustCompile(`(?i)no bytes are copied|sealed,? not snapshotted|seals? the source in place`),
-		allowed: regexp.MustCompile(`(?i)supersed|revers|retract|no longer|A35|retired`),
+		allowed: regexp.MustCompile(`(?i)supersedes|superseded[ -]by|superseding|the superseded note|revers|retract|no longer|A35|retired`),
 		why:     "A35 replaced the seal with immutable revision-scoped copies; sealing cannot close unplanned guard loss",
 	},
 	{
@@ -290,7 +300,7 @@ var rules = []rule{
 		// whether the revision can be rerun — and following the old rule extends
 		// an incident by declining a recovery that is available.
 		banned:  regexp.MustCompile(`(?i)rollback is refused[^.]*(referent|env content|original)|referent'?s? content has (changed|moved)`),
-		allowed: regexp.MustCompile(`(?i)supersed|revers|retract|no longer|irrelevant|A38`),
+		allowed: regexp.MustCompile(`(?i)supersedes|superseded[ -]by|superseding|the superseded note|revers|retract|no longer|irrelevant|A38`),
 		why:     "A38: rollback tests the retained COPY's digest and owner, never the original source's drift",
 	},
 	{
@@ -301,19 +311,19 @@ var rules = []rule{
 		// A50 separated name from identity; this stops the shorthand returning to
 		// a body that grants production traffic.
 		banned:  regexp.MustCompile(`(?i)evalStatus\.revision ==|verdict names the revision name|gate(s|d)? on the revision name`),
-		allowed: regexp.MustCompile(`(?i)supersed|no longer|retract|digest|A37|A50`),
+		allowed: regexp.MustCompile(`(?i)supersedes|superseded[ -]by|superseding|the superseded note|no longer|retract|digest|A37|A50`),
 		why:     "a revision NAME is 40 bits and a chosen collision costs about a second; the digest decides (A37, A50, design 16 A2)",
 	},
 	{
 		name:    "verifier-undecided",
 		banned:  regexp.MustCompile(`(?i)Sigstore[^.]{0,40}or[^.]{0,10}Kyverno|Kyverno[^.]{0,40}or[^.]{0,10}Sigstore`),
-		allowed: regexp.MustCompile(`(?i)not a design|earlier|supersed|chose|decided`),
+		allowed: regexp.MustCompile(`(?i)not a design|earlier|supersedes|superseded[ -]by|superseding|the superseded note|chose|decided`),
 		why:     "design 07 A2 chose Sigstore policy-controller; \"or Kyverno\" names two controllers, not a contract",
 	},
 	{
 		name:    "inert-tightening",
 		banned:  regexp.MustCompile(`(?i)make (the |every |its )?(dependent )?routes? inert|quiesc`),
-		allowed: regexp.MustCompile(`(?i)withdraw|retract|earlier draft|no longer|supersed|A19`),
+		allowed: regexp.MustCompile(`(?i)withdraw|retract|earlier draft|no longer|supersedes|superseded[ -]by|superseding|the superseded note|A19`),
 		why:     "A19 withdrew in-place tightening; a serving route is never made inert (design 03 §3.3.3)",
 	},
 	{
@@ -324,7 +334,7 @@ var rules = []rule{
 		name:    "header-tool-filter",
 		onlyIn:  "03-policy-compiler.md",
 		banned:  regexp.MustCompile(`Mcp-Name`),
-		allowed: regexp.MustCompile(`(?i)supersed|SEP-2243|cannot filter|weaker`),
+		allowed: regexp.MustCompile(`(?i)supersedes|superseded[ -]by|superseding|the superseded note|SEP-2243|cannot filter|weaker`),
 		why:     "tool filtering is backend.mcp.authorization CEL, which also filters tools/list (§3.4.2)",
 	},
 }
@@ -1356,10 +1366,12 @@ func TestTheHeadRescueNamesTheWithdrawal(t *testing.T) {
 //
 // This is the page's own header shape: a `<div class="meta-row">` of `<span>`
 // pills. `<span>` is inline, so the whole row renders as ONE block — and the
-// corrected pill next door says "superseded in part". Every other rule here
-// carries a bare `supersed` in its rescue clause, so adding one back to this
-// rule reads like harmonisation and is a silent reopening: the claim this gate
-// exists for goes back to passing.
+// corrected pill next door says "superseded in part". The other rules accept
+// the explicit forms `supersedes`, `superseded by`, `superseding` and `the
+// superseded note`, so adding one of those, or a bare `supersed`, to this rule
+// reads like harmonisation and is a silent reopening: the claim this gate
+// exists for goes back to passing. TestTheRealMetaRowRescuesNoPlantedClaim
+// holds the same line for the eighteen other rules that can apply to the page.
 //
 // Measured, not theorised. Re-planting the real header sentence beside the real
 // corrected one did NOT fail the gate while that clause was broad; it is what
@@ -1390,6 +1402,87 @@ func TestACorrectedPillDoesNotRescueTheOneBesideIt(t *testing.T) {
 			"blanket-approval-claim must not accept a bare \"supersed\": an inline-only "+
 			"container renders as one block, so a retraction anywhere in the row would "+
 			"launder every claim in it.\n    rendered: %q", rendered)
+	}
+}
+
+// metaRowPlants is one phrase per rule that the page's `meta-row` can carry: a
+// phrase each rule's `banned` matches on its own. header-tool-filter is absent
+// because it is scoped to design 03, and blanket-approval-claim because
+// TestACorrectedPillDoesNotRescueTheOneBesideIt owns it.
+var metaRowPlants = map[string]string{
+	"superseded-research-note":  "see agentgateway-2.2-2026-08.md",
+	"nonexistent-release":       "built on agentgateway 2.2",
+	"cuts-early-guarantee":      "the limiter cuts early",
+	"exact-usd-tier":            "the backstop is exact",
+	"nonexistent-tracing-field": "tracing via frontendPolicies",
+	"superseded-adr":            "per ADR-0020",
+	"egress-as-restriction":     "egressRestricted agents",
+	"overshoot-bound":           "a measured overshoot per replica",
+	"pricing-damage-bounded":    "the damage is bounded",
+	"in-worker-poll":            "acceptance polling",
+	"allowlist-equality":        "the set equals the allowlist",
+	"spec-only-hash":            "the hash is computed from spec alone",
+	"env-referent-hash":         "hashed by referent, not contents",
+	"seal-not-copy":             "no bytes are copied",
+	"referent-drift-refusal":    "its referent's content has changed",
+	"bare-revision-gate":        "it gates on the revision name",
+	"verifier-undecided":        "Sigstore policy-controller or Kyverno",
+	"inert-tightening":          "make routes inert",
+}
+
+// TestTheRealMetaRowRescuesNoPlantedClaim pins the narrowed rescue clauses on
+// the eighteen rules above, against the page's REAL header row rather than a
+// copy of it.
+//
+// That row says "superseded in part" and "(0020 and 0033 superseded)", and
+// `<span>` is inline, so the row is ONE block. While every one of these rules
+// accepted a bare `supersed`, a claim planted as one more pill in that row was
+// rescued by the row's own words: measured, all eighteen passed the gate. The
+// clauses now accept only `supersedes`, `superseded by`, `superseding` and
+// `the superseded note`, and none of the eighteen passes. Putting a bare
+// `supersed` back into any one clause, which reads like harmonisation, fails
+// this for that rule.
+func TestTheRealMetaRowRescuesNoPlantedClaim(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(docsRoot, "architecture.html"))
+	if err != nil {
+		t.Fatalf("read the page: %v", err)
+	}
+	page := string(b)
+	i := strings.Index(page, `<div class="meta-row">`)
+	if i < 0 {
+		t.Fatal(`the page has no <div class="meta-row">; this test has nothing to plant into`)
+	}
+	j := strings.Index(page[i:], `</div>`)
+	if j < 0 {
+		t.Fatal("the meta-row is not closed")
+	}
+	row := strings.TrimRight(page[i:i+j], " \t\n")
+	if !strings.Contains(row, "superseded in part") {
+		t.Fatalf("fixture is vacuous: the real meta-row no longer says \"superseded in part\", "+
+			"so it may rescue nothing for a reason other than the narrowed clauses:\n%s", row)
+	}
+	for name, plant := range metaRowPlants {
+		if !caughtHTML(t, name, htmlPage("<p>"+plant+"</p>")) {
+			t.Errorf("%s: the plant %q is not caught even on its own, so it proves nothing", name, plant)
+			continue
+		}
+		frag := row + "\n<span>" + plant + "</span></div>"
+		merged := false
+		for _, blk := range blocks(renderHTML(frag)) {
+			if strings.Contains(blk, plant) && strings.Contains(blk, "superseded in part") {
+				merged = true
+			}
+		}
+		if !merged {
+			t.Errorf("%s: the plant did not land in the row's block, so a per-block rescue "+
+				"could not reach it and this proves nothing", name)
+			continue
+		}
+		if !caughtHTML(t, name, htmlPage(frag)) {
+			t.Errorf("%s: a claim planted in the real meta-row passed the gate. Its rescue "+
+				"clause accepts a word the row already carries; a bare `supersed` is the "+
+				"one this test was written for", name)
+		}
 	}
 }
 
