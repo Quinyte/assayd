@@ -58,6 +58,7 @@ Resource Types:
 
 Agent is any container that speaks A2A and serves an Agent Card.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -93,7 +94,7 @@ into a governed, discoverable, eval-gated workload.
 
 Design 02 §3.1 (r3, integrated). Exactly one of Runtime or External is set.<br/>
           <br/>
-            <i>Validations</i>:<li>has(self.runtime) != has(self.external): set exactly one of spec.runtime (an agent this cluster runs) or spec.external (an agent running elsewhere)</li><li>!has(self.budget): spec.budget is not enforced yet: no gateway rate limit and no spend backstop exist (ADR-0030 step 1). Remove spec.budget; it is accepted again when design 03's -ratelimit and design 04's spend aggregation ship.</li>
+            <i>Validations</i>:<ul><li>has(self.runtime) != has(self.external): set exactly one of spec.runtime (an agent this cluster runs) or spec.external (an agent running elsewhere)</li><li>!has(self.budget): spec.budget is not enforced yet: no gateway rate limit and no spend backstop exist (ADR-0030 step 1). Remove spec.budget; it is accepted again when design 03&#39;s -ratelimit and design 04&#39;s spend aggregation ship.</li></ul>
         </td>
         <td>true</td>
       </tr><tr>
@@ -105,6 +106,7 @@ Design 02 §3.1 (r3, integrated). Exactly one of Runtime or External is set.<br/
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec
@@ -117,6 +119,7 @@ into a governed, discoverable, eval-gated workload.
 
 Design 02 §3.1 (r3, integrated). Exactly one of Runtime or External is set.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -215,7 +218,7 @@ this spec computes to (ADR-0031 decision 2).<br/>
         <td>
           Runtime describes an in-cluster agent workload.<br/>
           <br/>
-            <i>Validations</i>:<li>!(has(self.sandbox) && self.replicas > 1): spec.runtime.sandbox is a stateful singleton: set replicas to 1, or drop sandbox to scale out</li><li>!has(self.env) || self.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.resourceFieldRef)): spec.runtime.env[].valueFrom.resourceFieldRef is not supported. It reads a resource limit or request into the container, and spec.runtime.resources is editable in place without minting a revision — so a CPU or memory edit could change what the program reads while the revision digest, and the evaluation that gated it, stayed the same. The selector is hashed; the value it resolves to is not. Pass the value literally, or set spec.runtime.resources and read it from the downward API in a way that does not affect behaviour. See ADR-0031.</li><li>!has(self.env) || self.env.all(e, !e.name.startsWith('ASSAYD_')): spec.runtime.env may not set a name beginning with ASSAYD_. That prefix is the operator's injected contract (design 02 §11) — ASSAYD_GATEWAY_URL and its siblings — and a container keeps the LAST duplicate, so setting one here would redirect the agent away from the gateway every budget, tool grant and egress rule is enforced at. Choose another name. See ADR-0031 and design 02 A65.</li><li>!has(self.envFrom) || self.envFrom.all(f, !has(f.prefix) || !f.prefix.startsWith('ASSAYD_')): spec.runtime.envFrom may not use a prefix beginning with ASSAYD_: it is the operator's injected contract, and a ConfigMap or Secret mapped under it could shadow ASSAYD_GATEWAY_URL. See design 02 A65.</li>
+            <i>Validations</i>:<ul><li>!(has(self.sandbox) &amp;&amp; self.replicas &gt; 1): spec.runtime.sandbox is a stateful singleton: set replicas to 1, or drop sandbox to scale out</li><li>!has(self.env) || self.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.resourceFieldRef)): spec.runtime.env[].valueFrom.resourceFieldRef is not supported. It reads a resource limit or request into the container, and spec.runtime.resources is editable in place without minting a revision — so a CPU or memory edit could change what the program reads while the revision digest, and the evaluation that gated it, stayed the same. The selector is hashed; the value it resolves to is not. Pass the value literally, or set spec.runtime.resources and read it from the downward API in a way that does not affect behaviour. See ADR-0031.</li><li>!has(self.env) || self.env.all(e, !e.name.startsWith(&#39;ASSAYD_&#39;)): spec.runtime.env may not set a name beginning with ASSAYD_. That prefix is the operator&#39;s injected contract (design 02 §11) — ASSAYD_GATEWAY_URL and its siblings — and a container keeps the LAST duplicate, so setting one here would redirect the agent away from the gateway every budget, tool grant and egress rule is enforced at. Choose another name. See ADR-0031 and design 02 A65.</li><li>!has(self.envFrom) || self.envFrom.all(f, !has(f.prefix) || !f.prefix.startsWith(&#39;ASSAYD_&#39;)): spec.runtime.envFrom may not use a prefix beginning with ASSAYD_: it is the operator&#39;s injected contract, and a ConfigMap or Secret mapped under it could shadow ASSAYD_GATEWAY_URL. See design 02 A65.</li></ul>
         </td>
         <td>false</td>
       </tr><tr>
@@ -228,6 +231,7 @@ surface (ADR-0009).<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.budget
@@ -249,6 +253,7 @@ leaves its spec unchanged, and refuses any spec edit until the budget is
 removed. A typed Update is a spec edit, because the round-trip adds empty
 blocks, so the operator writes its finalizer with a metadata patch.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.budget. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -304,6 +309,7 @@ from this comment, is what surfaced it.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.card
@@ -314,6 +320,7 @@ from this comment, is what surfaced it.<br/>
 Card locates the A2A Agent Card. The container is the source of truth
 (ADR-0019): the operator fetches, validates and digests it per revision.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.card. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -365,12 +372,13 @@ its status is writable and an unrelated spec field can be edited, while a
 newly invalid path is still refused (TestAStoredCardPathStaysEditable,
 measured at Kubernetes 1.36.2).<br/>
           <br/>
-            <i>Validations</i>:<li>self.matches("^/[A-Za-z0-9._~!$&'()*+,;=:@/-]*$"): spec.card.path is a path on the agent's own Service, not a URL: start it with '/' and use only letters, digits, '-._~', the sub-delimiters !$&'()*+,;=, ':' and '@'. A '?', a '#' or a '%' is refused because this field is one already-decoded path: a '?' or a '#' would never be read as a query or a fragment, and /card%20.json would ask the agent for a path whose name contains '%20'. Drop it, or take the default /.well-known/agent-card.json</li>
+            <i>Validations</i>:<ul><li>self.matches(&#34;^/[A-Za-z0-9._~!$&amp;&#39;()*+,;=:@/-]*$&#34;): spec.card.path is a path on the agent&#39;s own Service, not a URL: start it with &#39;/&#39; and use only letters, digits, &#39;-._~&#39;, the sub-delimiters !$&amp;&#39;()*+,;=, &#39;:&#39; and &#39;@&#39;. A &#39;?&#39;, a &#39;#&#39; or a &#39;%&#39; is refused because this field is one already-decoded path: a &#39;?&#39; or a &#39;#&#39; would never be read as a query or a fragment, and /card%20.json would ask the agent for a path whose name contains &#39;%20&#39;. Drop it, or take the default /.well-known/agent-card.json</li></ul>
             <i>Default</i>: /.well-known/agent-card.json<br/>
         </td>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.expose
@@ -380,6 +388,7 @@ measured at Kubernetes 1.36.2).<br/>
 
 Expose publishes this agent beyond the cluster over open standards.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.expose. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -403,11 +412,12 @@ An upgraded install enforces this only once this CRD is applied: the chart
 ships the CRD under crds/, which helm upgrade never updates, so until then
 auth still defaults to oauth and apikey is refused.<br/>
           <br/>
-            <i>Validations</i>:<li>has(self.auth): spec.expose.a2a.auth is required and has no default: set apikey (keys in the group named for this namespace), none (an unauthenticated route), or oauth (not compilable until design 06 ships)</li>
+            <i>Validations</i>:<ul><li>has(self.auth): spec.expose.a2a.auth is required and has no default: set apikey (keys in the group named for this namespace), none (an unauthenticated route), or oauth (not compilable until design 06 ships)</li></ul>
         </td>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.expose.a2a
@@ -425,6 +435,7 @@ An upgraded install enforces this only once this CRD is applied: the chart
 ships the CRD under crds/, which helm upgrade never updates, so until then
 auth still defaults to oauth and apikey is refused.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.expose.a2a. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -473,6 +484,7 @@ chose it: removing a default migrates nothing.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.external
@@ -483,6 +495,7 @@ chose it: removing a default migrates nothing.<br/>
 External registers an agent that runs outside this cluster. It receives no
 SVID; it authenticates to the gateway with OAuth client credentials.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.external. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -515,6 +528,7 @@ SVID; it authenticates to the gateway with OAuth client credentials.
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.gates[index]
@@ -524,6 +538,7 @@ SVID; it authenticates to the gateway with OAuth client credentials.
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.gates[index]. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -542,6 +557,7 @@ SVID; it authenticates to the gateway with OAuth client credentials.
         <td>true</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.knowledge[index]
@@ -557,6 +573,7 @@ wrapper named a protocol, not a choice, so it nested without discriminating.
 Compare ExposeSpec, whose arm does select between protocols and earns it.
 Graphs resolve in the agent's own namespace, for the reason ToolBinding gives.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.knowledge[index]. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -590,6 +607,7 @@ by the provider (design 01 A1).<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.knowledge[index].scope
@@ -600,6 +618,7 @@ by the provider (design 01 A1).<br/>
 Scope narrows what this agent may read: injected by the gateway, enforced
 by the provider (design 01 A1).
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.knowledge[index].scope. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -618,6 +637,7 @@ by the provider (design 01 A1).
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm
@@ -627,6 +647,7 @@ by the provider (design 01 A1).
 
 LLM declares model access. Designs 03, 20 and 25 compile against this.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -653,7 +674,7 @@ endpoint identity because design 20 A2 keys drift on one: an arm plus a
 model name would let a canary against a healthy deployment clear drift on
 the one that was actually drifting.<br/>
           <br/>
-            <i>Validations</i>:<li>(self.arm == 'azureopenai') == has(self.azureopenai): arm azureopenai requires spec.llm…azureopenai (endpoint, and deploymentName where the model is pinned), and no other arm may set it: two Azure resources share the arm and a model name while differing in endpoint, deployment and BAA posture</li><li>(self.arm == 'vertexai') == has(self.vertexai): arm vertexai requires spec.llm…vertexai (projectId, region), and no other arm may set it</li><li>(self.arm == 'bedrock') == has(self.bedrock): arm bedrock requires spec.llm…bedrock (region), and no other arm may set it</li><li>(self.arm == 'custom') == has(self.custom): arm custom requires spec.llm…custom (host), and no other arm may set it</li><li>self.arm != 'azureopenai' || !has(self.model): arm azureopenai carries no model field; the deployment is the identity (design 03 §3.4.1.1). Set azureopenai.deploymentName instead.</li>
+            <i>Validations</i>:<ul><li>(self.arm == &#39;azureopenai&#39;) == has(self.azureopenai): arm azureopenai requires spec.llm…azureopenai (endpoint, and deploymentName where the model is pinned), and no other arm may set it: two Azure resources share the arm and a model name while differing in endpoint, deployment and BAA posture</li><li>(self.arm == &#39;vertexai&#39;) == has(self.vertexai): arm vertexai requires spec.llm…vertexai (projectId, region), and no other arm may set it</li><li>(self.arm == &#39;bedrock&#39;) == has(self.bedrock): arm bedrock requires spec.llm…bedrock (region), and no other arm may set it</li><li>(self.arm == &#39;custom&#39;) == has(self.custom): arm custom requires spec.llm…custom (host), and no other arm may set it</li><li>self.arm != &#39;azureopenai&#39; || !has(self.model): arm azureopenai carries no model field; the deployment is the identity (design 03 §3.4.1.1). Set azureopenai.deploymentName instead.</li></ul>
         </td>
         <td>false</td>
       </tr><tr>
@@ -665,6 +686,7 @@ the one that was actually drifting.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.egressAllowlist[index]
@@ -675,6 +697,7 @@ the one that was actually drifting.<br/>
 LLMAllowEntry is an endpoint identity with `models` in place of `model`: the
 permitted set, which requested providers must be a subset of.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.egressAllowlist[index]. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -739,6 +762,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.egressAllowlist[index].azureopenai
@@ -751,6 +775,7 @@ AzureOpenAIInstance is what distinguishes two Azure resources. Design 03
 may be supplied by the request — which is why a models-narrowed allowlist
 entry is rejected for it unless a non-v1 deploymentName pins the identity.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.egressAllowlist[index].azureopenai. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -783,6 +808,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.egressAllowlist[index].bedrock
@@ -792,6 +818,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.egressAllowlist[index].bedrock. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -817,6 +844,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.egressAllowlist[index].custom
@@ -826,6 +854,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.egressAllowlist[index].custom. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -860,6 +889,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.egressAllowlist[index].vertexai
@@ -869,6 +899,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.egressAllowlist[index].vertexai. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -894,6 +925,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
         <td>true</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.fallback
@@ -906,6 +938,7 @@ endpoint identity because design 20 A2 keys drift on one: an arm plus a
 model name would let a canary against a healthy deployment clear drift on
 the one that was actually drifting.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.fallback. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -971,6 +1004,7 @@ azureopenai does not have one — see the CEL rule above.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.fallback.azureopenai
@@ -983,6 +1017,7 @@ AzureOpenAIInstance is what distinguishes two Azure resources. Design 03
 may be supplied by the request — which is why a models-narrowed allowlist
 entry is rejected for it unless a non-v1 deploymentName pins the identity.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.fallback.azureopenai. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1015,6 +1050,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.fallback.bedrock
@@ -1024,6 +1060,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.fallback.bedrock. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1049,6 +1086,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.fallback.custom
@@ -1058,6 +1096,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.fallback.custom. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1092,6 +1131,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.fallback.vertexai
@@ -1101,6 +1141,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.fallback.vertexai. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1126,6 +1167,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
         <td>true</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.providers[index]
@@ -1140,6 +1182,7 @@ The instance block must match the arm, or the identity is not an identity —
 an azureopenai entry with no instance names every Azure resource in the
 tenant, which is the collapse this type exists to prevent.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.providers[index]. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1205,6 +1248,7 @@ azureopenai does not have one — see the CEL rule above.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.providers[index].azureopenai
@@ -1217,6 +1261,7 @@ AzureOpenAIInstance is what distinguishes two Azure resources. Design 03
 may be supplied by the request — which is why a models-narrowed allowlist
 entry is rejected for it unless a non-v1 deploymentName pins the identity.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.providers[index].azureopenai. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1249,6 +1294,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.providers[index].bedrock
@@ -1258,6 +1304,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.providers[index].bedrock. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1283,6 +1330,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.providers[index].custom
@@ -1292,6 +1340,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.providers[index].custom. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1326,6 +1375,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.llm.providers[index].vertexai
@@ -1335,6 +1385,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.llm.providers[index].vertexai. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1360,6 +1411,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
         <td>true</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.loop
@@ -1370,6 +1422,7 @@ entry is rejected for it unless a non-v1 deploymentName pins the identity.
 Loop bounds re-entry for this agent. Enforcement is stateless in-proxy CEL
 over a gateway-owned lineage header (design 22).
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.loop. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1399,6 +1452,7 @@ over a gateway-owned lineage header (design 22).
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.release
@@ -1409,6 +1463,7 @@ over a gateway-owned lineage header (design 22).
 Release selects which revision serves, when that is not simply the one
 this spec computes to (ADR-0031 decision 2).
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.release. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1433,6 +1488,7 @@ point under source drift.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime
@@ -1442,6 +1498,7 @@ point under source drift.<br/>
 
 Runtime describes an in-cluster agent workload.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1473,7 +1530,7 @@ Unconditional, with no local-profile relaxation: one schema applies
 cluster-wide and CEL has no profile in its evaluation context, so an
 alternative permitting `:dev` would permit a mutable tag in production.<br/>
           <br/>
-            <i>Validations</i>:<li>self.matches('^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+(:[a-zA-Z0-9._-]+)?@sha256:[0-9a-f]{64}$'): spec.runtime.image must be a lowercase OCI reference pinned by a sha256 digest: <registry>[:port]/<repo>[:tag]@sha256:<64 lowercase hex>. A tag can be repointed after the revision is gated, so the running code would no longer be the code that passed. Resolve the tag to a digest (docker buildx imagetools inspect, or the digest your CI already publishes).</li>
+            <i>Validations</i>:<ul><li>self.matches(&#39;^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+(:[a-zA-Z0-9._-]+)?@sha256:[0-9a-f]{64}$&#39;): spec.runtime.image must be a lowercase OCI reference pinned by a sha256 digest: &lt;registry&gt;[:port]/&lt;repo&gt;[:tag]@sha256:&lt;64 lowercase hex&gt;. A tag can be repointed after the revision is gated, so the running code would no longer be the code that passed. Resolve the tag to a digest (docker buildx imagetools inspect, or the digest your CI already publishes).</li></ul>
         </td>
         <td>true</td>
       </tr><tr>
@@ -1531,6 +1588,7 @@ hardened Deployment and sets SandboxDowngraded — never silently.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.env[index]
@@ -1540,6 +1598,7 @@ hardened Deployment and sets SandboxDowngraded — never silently.<br/>
 
 EnvVar represents an environment variable present in a Container.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.env[index]. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1581,6 +1640,7 @@ Defaults to "".<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.env[index].valueFrom
@@ -1590,6 +1650,7 @@ Defaults to "".<br/>
 
 Source for the environment variable's value. Cannot be used if value is not empty.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.env[index].valueFrom. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1639,6 +1700,7 @@ Requires the EnvFiles feature gate to be enabled.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.env[index].valueFrom.configMapKeyRef
@@ -1648,6 +1710,7 @@ Requires the EnvFiles feature gate to be enabled.<br/>
 
 Selects a key of a ConfigMap.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.env[index].valueFrom.configMapKeyRef. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1686,6 +1749,7 @@ More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/nam
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.env[index].valueFrom.fieldRef
@@ -1696,6 +1760,7 @@ More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/nam
 Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.env[index].valueFrom.fieldRef. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1721,6 +1786,7 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.env[index].valueFrom.fileKeyRef
@@ -1731,6 +1797,7 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
 FileKeyRef selects a key of the env file.
 Requires the EnvFiles feature gate to be enabled.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.env[index].valueFrom.fileKeyRef. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1781,6 +1848,7 @@ an error will be returned during Pod creation.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.env[index].valueFrom.resourceFieldRef
@@ -1791,6 +1859,7 @@ an error will be returned during Pod creation.<br/>
 Selects a resource of the container: only resources limits and requests
 (limits.cpu, limits.memory, limits.ephemeral-storage, requests.cpu, requests.memory and requests.ephemeral-storage) are currently supported.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.env[index].valueFrom.resourceFieldRef. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1823,6 +1892,7 @@ Selects a resource of the container: only resources limits and requests
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.env[index].valueFrom.secretKeyRef
@@ -1832,6 +1902,7 @@ Selects a resource of the container: only resources limits and requests
 
 Selects a key of a secret in the pod's namespace
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.env[index].valueFrom.secretKeyRef. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1870,6 +1941,7 @@ More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/nam
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.envFrom[index]
@@ -1879,6 +1951,7 @@ More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/nam
 
 EnvFromSource represents the source of a set of ConfigMaps or Secrets
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.envFrom[index]. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1912,6 +1985,7 @@ May consist of any printable ASCII characters except '='.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.envFrom[index].configMapRef
@@ -1921,6 +1995,7 @@ May consist of any printable ASCII characters except '='.<br/>
 
 The ConfigMap to select from
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.envFrom[index].configMapRef. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1952,6 +2027,7 @@ More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/nam
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.envFrom[index].secretRef
@@ -1961,6 +2037,7 @@ More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/nam
 
 The Secret to select from
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.envFrom[index].secretRef. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -1992,6 +2069,7 @@ More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/nam
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.resources
@@ -2001,6 +2079,7 @@ More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/nam
 
 ResourceRequirements describes the compute resource requirements.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.resources. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2043,6 +2122,7 @@ More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-co
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.resources.claims[index]
@@ -2052,6 +2132,7 @@ More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-co
 
 ResourceClaim references one entry in PodSpec.ResourceClaims.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.resources.claims[index]. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2081,6 +2162,7 @@ only the result of this request.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.runtime.sandbox
@@ -2092,6 +2174,7 @@ Sandbox opts into an isolated, stateful singleton with a persistent
 scratchpad. Where the runtime class is absent the operator falls back to a
 hardened Deployment and sets SandboxDowngraded — never silently.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.runtime.sandbox. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2112,6 +2195,7 @@ hardened Deployment and sets SandboxDowngraded — never silently.
         <td>true</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.spec.tools[index]
@@ -2131,6 +2215,7 @@ itself: whoever may create an Agent in one namespace could reach a tool in
 another. Cross-namespace tool use needs consent from the target namespace (the
 ReferenceGrant shape) — a design change, not a field.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.spec.tools[index]. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2158,6 +2243,7 @@ gateway consumes (design 22).<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.status
@@ -2167,6 +2253,7 @@ gateway consumes (design 22).<br/>
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2372,6 +2459,7 @@ from the one that superseded it.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.status.auth
@@ -2390,6 +2478,7 @@ is. The chart installs this CRD under crds/, which helm upgrade never
 updates, and a status field an operator writes before its CRD carries it
 is pruned without an error.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status.auth. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2489,6 +2578,7 @@ Present exactly when Mode is apikey.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.status.auth.transaction
@@ -2501,6 +2591,7 @@ It is keyed on its target (TargetMode, plus TargetDigest for apikey),
 never on the Agent's generation, so an edit that leaves the desired -auth
 unchanged does not disturb it (design 03 §3.3).
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status.auth.transaction. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2617,6 +2708,7 @@ re-entry then repeats the write, which is idempotent (design 03 §3.3.3).<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.status.auth.transaction.probe
@@ -2626,6 +2718,7 @@ re-entry then repeats the write, which is idempotent (design 03 §3.3.3).<br/>
 
 Probe holds the answers the probe last observed, never the keys.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status.auth.transaction.probe. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2659,6 +2752,7 @@ on it.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.status.auth.verified
@@ -2669,6 +2763,7 @@ on it.<br/>
 Verified records how much of the gateway the enforcement probe reached.
 Present exactly when Mode is apikey.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status.auth.verified. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2703,6 +2798,7 @@ reached.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.status.budget
@@ -2712,6 +2808,7 @@ reached.<br/>
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status.budget. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2756,6 +2853,7 @@ scans a namespace for; remaining is what an agent is throttled on.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.status.cards[index]
@@ -2765,6 +2863,7 @@ scans a namespace for; remaining is what an agent is throttled on.<br/>
 
 
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status.cards[index]. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2838,6 +2937,7 @@ condition that claims to key on it must have something to read.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.status.conditions[index]
@@ -2847,6 +2947,7 @@ condition that claims to key on it must have something to read.<br/>
 
 Condition contains details for one aspect of the current state of this API Resource.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status.conditions[index]. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2915,6 +3016,7 @@ with respect to the current state of the instance.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.status.eval
@@ -2926,6 +3028,7 @@ Eval carries the last gate result. It is a printer column because it answers
 "why is this Held?", which a developer would otherwise reconstruct by
 reading conditions.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status.eval. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -2979,6 +3082,7 @@ Eval printer column.<br/>
         <td>false</td>
       </tr></tbody>
 </table>
+</div>
 
 
 #### Agent.status.revisionServices[index]
@@ -2989,6 +3093,7 @@ Eval printer column.<br/>
 RevisionServiceRecord is one revision Service this operator created, or
 adopted after converging it (see AgentStatus.RevisionServices).
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status.revisionServices[index]. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
@@ -3026,6 +3131,7 @@ this operator's create, or as read from the object when it was adopted.<br/>
         <td>true</td>
       </tr></tbody>
 </table>
+</div>
 
 ---
 

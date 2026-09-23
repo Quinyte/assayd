@@ -5,9 +5,11 @@ package refgen
 
 import (
 	"fmt"
+	"html"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -74,6 +76,10 @@ func renderCRD(root, out string) error {
 		text = text[i:]
 	}
 	text = demoteHeadings(text)
+	text, err = repairTableHTML(text)
+	if err != nil {
+		return err
+	}
 
 	var sb strings.Builder
 	sb.WriteString(frontMatter("The Agent CRD",
@@ -154,3 +160,71 @@ func demoteHeadings(md string) string {
 func renderedValidationNodes(text string) int {
 	return strings.Count(text, "<i>Validations</i>")
 }
+
+// validationItems is one crdoc Validations run: `<i>Validations</i>:` followed
+// by one or more `<li>…</li>` on the same line, with no list around them.
+var validationItems = regexp.MustCompile(`(<i>Validations</i>:)((?:<li>.*?</li>)+)`)
+
+// listItem is one `<li>…</li>` inside a Validations run.
+var listItem = regexp.MustCompile(`<li>(.*?)</li>`)
+
+// repairTableHTML fixes three defects in the HTML crdoc emits inside its field
+// tables, each of which the public site published (independent review of PR
+// #67, measured with axe on the built /reference/crd-agent.html):
+//
+//   - A Validations run is bare `<li>` elements with no `<ul>`, which is
+//     invalid HTML and which assistive technology announces as nothing in
+//     particular (axe `listitem`). Each run is wrapped in one `<ul>`.
+//   - A rule's text and message are written RAW. spec.runtime.image's message
+//     reads `<registry>[:port]/<repo>[:tag]@sha256:<64 lowercase hex>`, and a
+//     browser parses `<registry>` and `<repo>` as unknown elements, so the
+//     published message lost its placeholders. Each item is HTML-escaped. If
+//     crdoc ever starts escaping itself this would double-escape, so an item
+//     that already carries an entity refuses generation instead.
+//   - A wide table scrolls, and a scrolling region nothing can focus cannot be
+//     panned from the keyboard (axe `scrollable-region-focusable`, WCAG
+//     2.1.1). Each table is wrapped in a focusable, labelled region, the same
+//     shape web/shared's Figure uses for a wide plate. The site's stylesheet
+//     makes the wrapper, not the table, the thing that scrolls.
+func repairTableHTML(md string) (string, error) {
+	var bad string
+	md = validationItems.ReplaceAllStringFunc(md, func(run string) string {
+		m := validationItems.FindStringSubmatch(run)
+		items := listItem.ReplaceAllStringFunc(m[2], func(li string) string {
+			inner := listItem.FindStringSubmatch(li)[1]
+			if entity.MatchString(inner) && bad == "" {
+				bad = inner
+			}
+			return "<li>" + html.EscapeString(inner) + "</li>"
+		})
+		return m[1] + "<ul>" + items + "</ul>"
+	})
+	if bad != "" {
+		return "", fmt.Errorf("a validation rule in the table renderer's output already carries an "+
+			"HTML entity, so escaping it would publish the entity's text instead of the character: "+
+			"%q. %s has started escaping its own output; drop the escape in repairTableHTML", bad, crdocBin)
+	}
+
+	var out []string
+	heading := "the table"
+	for _, line := range strings.Split(md, "\n") {
+		if m := headingLine.FindStringSubmatch(line); m != nil {
+			heading = strings.TrimSpace(strings.TrimLeft(line, "#"))
+		}
+		switch strings.TrimSpace(line) {
+		case "<table>":
+			out = append(out, fmt.Sprintf(`<div class="ref-table" role="region" tabindex="0" aria-label="%s">`,
+				html.EscapeString("Fields of "+heading+". Scroll or use the arrow keys to pan.")))
+			out = append(out, line)
+			continue
+		case "</table>":
+			out = append(out, line, "</div>")
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n"), nil
+}
+
+// entity matches an HTML character reference: named, decimal or hex.
+var entity = regexp.MustCompile(`&(#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);`)

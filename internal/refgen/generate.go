@@ -5,6 +5,7 @@ package refgen
 
 import (
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -126,6 +127,7 @@ func write(path, body string) error {
 		body += "\n"
 	}
 	name := filepath.Base(path)
+	body = wrapMarkdownTables(body)
 	if err := checkFrontMatter(name, body); err != nil {
 		return err
 	}
@@ -296,4 +298,44 @@ func checkAnchors(name, body string) error {
 			name, strings.Join(problems, "\n  "))
 	}
 	return nil
+}
+
+// wrapMarkdownTables puts every Markdown pipe table in a focusable, labelled
+// region, for the reason repairTableHTML gives for crdoc's HTML tables: a table
+// wider than the page scrolls, and a scroll region nothing can focus cannot be
+// panned from the keyboard (axe `scrollable-region-focusable`, measured on the
+// published helm-values page). The blank lines inside the <div> are what let a
+// CommonMark renderer, GitHub's included, go on parsing the table as Markdown.
+// Fenced code is left alone.
+func wrapMarkdownTables(md string) string {
+	lines := strings.Split(md, "\n")
+	var out []string
+	heading := "the page"
+	fenced := false
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		if strings.HasPrefix(line, "```") {
+			fenced = !fenced
+		}
+		if !fenced {
+			if m := headingLine.FindStringSubmatch(line); m != nil {
+				heading = strings.TrimSpace(strings.TrimLeft(line, "#"))
+			}
+		}
+		if fenced || !strings.HasPrefix(line, "|") || i+1 >= len(lines) ||
+			!strings.HasPrefix(lines[i+1], "|---") {
+			out = append(out, line)
+			continue
+		}
+		j := i
+		for j < len(lines) && strings.HasPrefix(lines[j], "|") {
+			j++
+		}
+		out = append(out, fmt.Sprintf(`<div class="ref-table" role="region" tabindex="0" aria-label="%s">`,
+			html.EscapeString("Table under "+heading+". Scroll or use the arrow keys to pan.")), "")
+		out = append(out, lines[i:j]...)
+		out = append(out, "", "</div>")
+		i = j - 1
+	}
+	return strings.Join(out, "\n")
 }
