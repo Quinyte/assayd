@@ -475,9 +475,6 @@ func TestAServedPolicyTheGatewayDoesNotAttachIsReported(t *testing.T) {
 		partiallyValidPolicy(t, a)
 		reconcileOnce(t, r, a)
 		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
-		if g == nil {
-			t.Fatal("GovernanceSkipped is absent")
-		}
 		mustContain(t, g, "GovernanceSkipped", "ACCEPTED this Agent's <agent>-auth policy but not the whole of it")
 		mustNotContain(t, g, "GovernanceSkipped", "does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED",
 			"The hole is announced")
