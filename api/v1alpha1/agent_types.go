@@ -367,8 +367,19 @@ type LLMSpec struct {
 type BudgetSpec struct {
 	// +optional
 	TokensPerDay *int64 `json:"tokensPerDay,omitempty"`
-	// USDPerDay compiles at the max price across allowed models; a model
-	// matching no pricing pattern is a compile error (ADR-0020).
+	// USDPerDay names a daily spend ceiling. NOTHING COMPILES IT TODAY: the
+	// whole of spec.budget is refused at admission (AgentSpec's XValidation,
+	// ADR-0030 step 1), and a budget stored before that refusal is
+	// PolicyCompileFailed.
+	//
+	// This comment used to promise that it "compiles at the max price across
+	// allowed models; a model matching no pricing pattern is a compile error
+	// (ADR-0020)". ADR-0028 supersedes ADR-0020 and withdraws that guarantee:
+	// the gateway tier bounds sustained rate rather than any single request, no
+	// overshoot bound is published at all (Amendment 1), and neither tier is
+	// exact in USD. The sentence survived here because test/docs scans docs/**
+	// and never read api/**; docs/reference/crd-agent.md, which is generated
+	// from this comment, is what surfaced it.
 	// +optional
 	USDPerDay *string `json:"usdPerDay,omitempty"`
 	// +optional

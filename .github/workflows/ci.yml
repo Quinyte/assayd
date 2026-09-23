@@ -43,7 +43,35 @@ jobs:
       # into a step failure. It passed in two jobs and failed in a third on the
       # same commit, which is the signature of exactly that.
 
-      - name: generation is reproducible and committed
+      # `make verify` installs crdoc with `go install pkg@version`. That module
+      # graph is outside this one, so setup-go's cache neither keys on it nor
+      # re-saves it on a hit, and the ~176 MB download ran on EVERY job. Cache
+      # the binary, keyed on the version the Makefile pins, and it is fetched
+      # once per version instead.
+      #
+      # Not Go's `tool` directive, which would also fix it: that merges crdoc's
+      # dependency graph into this module, and crdoc pins OLDER sigs.k8s.io/yaml,
+      # go-logr and structured-merge-diff than the operator builds against.
+      # Trading a correctness hazard in the operator for a cache is a bad trade;
+      # the measurement is in the Makefile.
+      - name: pinned crdoc version
+        id: crdoc
+        run: |
+          set -euo pipefail
+          echo "version=$(make -s print-crdoc-version)" >> "$GITHUB_OUTPUT"
+          echo "bin=$(go env GOPATH)/bin/crdoc" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.crdoc.outputs.bin }}
+          key: crdoc-${{ runner.os }}-${{ steps.crdoc.outputs.version }}
+
+      # Covers the generated CRD and RBAC, and since the reference landed, the
+      # three pages under docs/reference/ as well: `make verify` regenerates all
+      # of them and fails if what is committed differs. A generator nobody runs
+      # is worse than none — its output reads as current and is not — so this is
+      # where docs/reference/ stops being a document and starts being a gate.
+      - name: generation is reproducible and committed (CRD, RBAC, docs/reference)
         run: make verify
 
       - name: vet
