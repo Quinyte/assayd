@@ -89,8 +89,17 @@ const (
 	ReasonGatewayAuthPolicy = "GatewayAuthPolicy"
 	// A80's two, for a served Agent with no transaction in the slot or a
 	// refused Adopt in it: the assayd Gateway reports the serving route
-	// refused, and it reports that it does not attach the served <agent>-auth.
-	// AuthPolicyNotAttached is a GovernanceSkipped reason too.
+	// refused, and it reports §3.3.2's tuple for the served <agent>-auth
+	// BROKEN. AuthPolicyNotAttached is a GovernanceSkipped reason too.
+	//
+	// AuthPolicyNotAttached's NAME is narrower than what it covers, and that
+	// is a decision rather than an oversight: since A83 the reason also
+	// carries the clause in which the Gateway accepted the policy only in part
+	// and reported it ATTACHED. The human kept (B1)'s condition set on
+	// 2026-09-23 and D5(b) is decided as no, because the claim store on
+	// status.auth is one boolean per half and carries no clause, so a
+	// per-clause reason could not be re-asserted on a pass that re-derives
+	// nothing. The MESSAGE names what the Gateway actually said (§5, §9 D5).
 	ReasonServingRouteNotAccepted = "ServingRouteNotAccepted"
 	ReasonAuthPolicyNotAttached   = "AuthPolicyNotAttached"
 	// Ready, while a `Create` is short of `Served` and before its deadline.

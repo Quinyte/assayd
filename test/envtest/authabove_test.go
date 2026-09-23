@@ -154,6 +154,23 @@ func mustContain(t *testing.T, c *metav1.Condition, what string, parts ...string
 	}
 }
 
+// mustNotContain is the assertion a message SPLIT needs and mustContain
+// cannot make: under design 03's (B1)+(B4) the reason and the condition set
+// are the same on every clause of the policy half, so the only thing that
+// separates a clause's message from the one A81 shipped for all of them is
+// what it no longer says (A83).
+func mustNotContain(t *testing.T, c *metav1.Condition, what string, parts ...string) {
+	t.Helper()
+	if c == nil {
+		return
+	}
+	for _, p := range parts {
+		if strings.Contains(c.Message, p) {
+			t.Errorf("%s still says %q, which this clause did not check: %s", what, p, c.Message)
+		}
+	}
+}
+
 func phaseOf(t *testing.T, a *assaydv1alpha1.Agent) assaydv1alpha1.AgentPhase {
 	t.Helper()
 	return liveAgent(t, a).Status.Phase

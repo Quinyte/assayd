@@ -132,43 +132,204 @@ func TestTheServedPolicyReportHasThreeAnswers(t *testing.T) {
 		"kind": "StatusSummary", "name": "StatusSummary"}, "conditions": []any{}})
 
 	for _, tc := range []struct {
-		name string
-		p    *unstructured.Unstructured
-		want gatewayReport
+		name   string
+		p      *unstructured.Unstructured
+		want   gatewayReport
+		clause policyClause
 	}{
 		{"accepted and attached at the current generation", policy(2, ours(
-			cond("Accepted", "True", "Valid", 2), cond("Attached", "True", "Attached", 2))), reportHolding},
+			cond("Accepted", "True", "Valid", 2), cond("Attached", "True", "Attached", 2))), reportHolding, clauseUnknown},
 		{"Attached=False at the current generation", policy(2, ours(
-			cond("Accepted", "True", "Valid", 2), cond("Attached", "False", "NotAttached", 2))), reportBroken},
+			cond("Accepted", "True", "Valid", 2), cond("Attached", "False", "NotAttached", 2))), reportBroken, clauseUnattached},
 		{"Accepted=False at the current generation", policy(2, ours(
-			cond("Accepted", "False", "Invalid", 2), cond("Attached", "True", "Attached", 2))), reportBroken},
+			cond("Accepted", "False", "Invalid", 2), cond("Attached", "True", "Attached", 2))), reportBroken, clauseRejected},
 		{"Accepted=True with a reason other than Valid", policy(2, ours(
-			cond("Accepted", "True", "Translated", 2), cond("Attached", "True", "Attached", 2))), reportBroken},
-		{"the synthetic StatusSummary ancestor", policy(2, summary), reportBroken},
+			cond("Accepted", "True", "Translated", 2), cond("Attached", "True", "Attached", 2))), reportBroken, clausePartlyValid},
+		{"the synthetic StatusSummary ancestor", policy(2, summary), reportBroken, clauseUnattached},
+		// A83's ranking, which is the whole of what splitting the message
+		// changes about the ANSWER: two clauses can fire on one policy, the
+		// report is broken either way, and the message must take the STRONGER
+		// claim. The loop reads Accepted first, so before A83 each of these
+		// would have named the weaker one and stopped short of saying the
+		// route may be answering with no credential required.
+		{"Attached=False beside a non-Valid Accepted outranks it", policy(2, ours(
+			cond("Accepted", "True", "PartiallyValid", 2), cond("Attached", "False", "Pending", 2))),
+			reportBroken, clauseUnattached},
+		{"Attached=False outranks Accepted=False", policy(2, ours(
+			cond("Accepted", "False", "Invalid", 2), cond("Attached", "False", "Pending", 2))),
+			reportBroken, clauseUnattached},
+		// The synthetic ancestor still short-circuits WHEREVER it appears,
+		// which is D5(c) and is deliberately NOT decided by A83: the human
+		// took (B4) for the message, and the fail-open alternative A82
+		// records — short-circuit only when no real ancestor reports
+		// Attached=True at the current generation — is still open (§9 D5).
+		{"the synthetic ancestor still outranks a real ancestor that holds", policy(2, summary, ours(
+			cond("Accepted", "True", "Valid", 2), cond("Attached", "True", "Attached", 2))),
+			reportBroken, clauseUnattached},
 		// THE ONE EXCEPTION to "at the object's current generation", and it is
 		// deliberate and stated in §3.3.3: the ancestor list is rewritten whole
 		// on every status write, so there is no generation to compare the
 		// synthetic ancestor's PRESENCE against, and §3.3.2 already calls that
 		// presence the signal. Fail-safe on the fail-OPEN half (A81, the
 		// review's MINOR 3).
-		{"the StatusSummary ancestor is not generation-gated", policy(5, summary), reportBroken},
+		{"the StatusSummary ancestor is not generation-gated", policy(5, summary), reportBroken, clauseUnattached},
 		{"a failure reported a generation behind", policy(3, ours(
-			cond("Accepted", "True", "Valid", 2), cond("Attached", "False", "NotAttached", 2))), reportUnknown},
-		{"an empty ancestor list", policy(2), reportUnknown},
+			cond("Accepted", "True", "Valid", 2), cond("Attached", "False", "NotAttached", 2))), reportUnknown, clauseUnknown},
+		{"an empty ancestor list", policy(2), reportUnknown, clauseUnknown},
 		{"no ancestor is the assayd Gateway", policy(2, map[string]any{
 			"ancestorRef": map[string]any{"group": gatewayv1.GroupName, "kind": "Gateway",
-				"name": "other", "namespace": "elsewhere"}}), reportUnknown},
-		{"no policy at all", nil, reportUnknown},
+				"name": "other", "namespace": "elsewhere"}}), reportUnknown, clauseUnknown},
+		{"no policy at all", nil, reportUnknown, clauseUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, why := policyReport(tc.p, gw)
+			got, clause, why := policyReport(tc.p, gw)
 			if got != tc.want {
 				t.Errorf("policyReport = %v, want %v (%s)", got, tc.want, why)
+			}
+			if clause != tc.clause {
+				t.Errorf("policyReport named clause %v, want %v; the clause is what the message "+
+					"branches on, and the wrong one names a cause that was never checked "+
+					"(design 03 A83, %s)", clause, tc.clause, why)
 			}
 			if tc.want == reportBroken && why == "" {
 				t.Error("a broken report names nothing")
 			}
 		})
+	}
+}
+
+// The four leads A83 splits policyBrokenMessage into, each asserted by what it
+// must NOT say as well as by what it must. The reason does not branch — (B1)
+// is kept — so what a clause says is the only thing that separates it, and a
+// test asserting only reasons would pass with A81's one lead for all four.
+func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		clause        policyClause
+		routeOK       bool
+		judged        bool
+		says, saysNot []string
+	}{
+		{"unattached on an accepted route", clauseUnattached, true, true,
+			[]string{"does not attach", "no credential required", "announced, not closed"},
+			[]string{"THIS PASS DID NOT READ IT AS ACCEPTED", "but not the whole of it"}},
+		{"unattached beside a route this pass did not read as accepted", clauseUnattached, false, true,
+			[]string{"does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED"},
+			[]string{"route is accepted and SERVING"}},
+		{"rejected outright on an accepted route", clauseRejected, true, true,
+			[]string{"REJECTED", "none of this Agent's authentication or authorization is in force",
+				"announced, not closed"},
+			[]string{"does not attach", "but not the whole of it"}},
+		// The row A83's own review found missing, and it found it by DELETING
+		// this lead's !routeOK block and watching the whole suite stay green.
+		// The arm is live — §5 keeps it for a release that starts producing
+		// Accepted=False — and unpinned it reaches A81's MAJOR 2 verbatim:
+		// "route is accepted and SERVING" on a pass that recorded the route
+		// refused, with nothing able to fail on it (rule 5).
+		{"rejected beside a route this pass did not read as accepted", clauseRejected, false, true,
+			[]string{"REJECTED", "THIS PASS DID NOT READ IT AS ACCEPTED"},
+			[]string{"route is accepted and SERVING"}},
+		// The shape A82 measured, and the one A83 exists for: the Gateway
+		// says Attached=True and the route is measured refusing, so a lead
+		// asserting non-attachment or an open route is rule 8. The ConfigMap
+		// attribution is HEDGED, because 1.5.0 reports the same PartiallyValid
+		// for three measured causes and only one of them is namespace-wide.
+		{"accepted only in part", clausePartlyValid, true, true,
+			[]string{"but not the whole of it", "NOT reporting the policy unattached",
+				"makes no request of its own", "IF it is the key ConfigMap",
+				"shared by every Agent in this run namespace",
+				"the other causes are this policy's alone"},
+			[]string{"does not attach", "no credential required", "REJECTED",
+				"announced, not closed", "the cause measured on agentgateway"}},
+		// A held report has no clause to name, because the claim store is one
+		// boolean. Restating the unattached lead here would re-enter the
+		// defect one pass later for a claim that may have been partly-valid.
+		//
+		// THE LEAD says nothing about what the Gateway has done since or
+		// about what would clear it. The NOTE the caller appends is a
+		// separate string and is not scoped by this table: THREE held paths
+		// reach this lead and two of them — the Gateway gone quiet at this
+		// object's generation, and an errored step — do say it, correctly,
+		// through heldNote and erroredNote. Only the third, where §5's
+		// precondition excluded the policy, must not, and it gets
+		// unjudgedNote. Saying "neither held path checked either" here was
+		// wrong twice over: there are three, and the claim belongs to the
+		// lead alone (A83's second review, MAJOR 1).
+		{"held over a pass that still judged the policy", clauseUnknown, true, true,
+			[]string{"re-derived nothing", "restates the claim and cannot narrow it",
+				"The policy is present"},
+			[]string{"does not attach", "no credential required", "REJECTED",
+				"but not the whole of it", "stands until the Gateway reports again",
+				"has not reported at the policy's current generation since"}},
+		// The path A83's review found asserting a precondition nothing on it
+		// established: a claim held over a pass that read NO policy, which is
+		// every pass after a foreign takeover of the -auth name and every pass
+		// after an upgrade that renders a digest status.auth does not record —
+		// permanently, in the second case.
+		{"held over a pass that judged no policy", clauseUnknown, true, false,
+			[]string{"re-derived nothing", "restates the claim and cannot narrow it"},
+			[]string{"The policy is present", "carries this Agent's UID",
+				"stands until the Gateway reports again"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := policyBrokenMessage(tc.clause, "WHY", tc.routeOK, tc.judged)
+			for _, s := range tc.says {
+				if !strings.Contains(msg, s) {
+					t.Errorf("the message does not say %q: %s", s, msg)
+				}
+			}
+			for _, s := range tc.saysNot {
+				if strings.Contains(msg, s) {
+					t.Errorf("the message says %q, which this clause did not check: %s", s, msg)
+				}
+			}
+			if !strings.Contains(msg, "WHY") {
+				t.Errorf("the message drops the Gateway's own words: %s", msg)
+			}
+			if !strings.Contains(msg, "This is not AuthPolicyMissing") {
+				t.Errorf("every clause tells the reader which condition this is not: %s", msg)
+			}
+		})
+	}
+}
+
+// The Gateway's own MESSAGE reaches the condition on the partly-valid clause,
+// and it is the only field that separates the three causes 1.5.0 has been
+// measured reporting as `PartiallyValid`: a rejected key-ConfigMap entry, an
+// authorization expression that does not parse, an extAuth Service that does
+// not exist (`research/a80-policy-half-conformance-2026-09.md` rows 10, 1, 7b).
+// A83's first cut formatted the REASON alone, so the condition withheld the
+// one field the Gateway had written to name the cause while its own lead
+// named a different one — rule 8, inside the amendment that exists to remove
+// it, and found by A83's review.
+//
+// Mutation: drop c.Message from the reason-mismatch arm's format, and this
+// must fail.
+func TestThePartlyValidReportCarriesTheGatewaysMessage(t *testing.T) {
+	gw := GatewayConfig{Name: "assayd", Namespace: "assayd-gateway"}
+	p := NewAgentgatewayPolicy()
+	p.SetName("a-auth")
+	p.SetNamespace("assayd-run-x")
+	p.SetGeneration(2)
+	p.Object["status"] = map[string]any{"ancestors": []any{map[string]any{
+		"ancestorRef": map[string]any{"group": gatewayv1.GroupName, "kind": "Gateway",
+			"name": "assayd", "namespace": "assayd-gateway"},
+		"conditions": []any{
+			map[string]any{"type": "Accepted", "status": "True", "reason": "PartiallyValid",
+				"message":            "authorization matchExpression is not a valid CEL expression",
+				"observedGeneration": int64(2)},
+			map[string]any{"type": "Attached", "status": "True", "reason": "Attached",
+				"message": "Attached to all targets", "observedGeneration": int64(2)},
+		},
+	}}}
+	rep, clause, why := policyReport(p, gw)
+	if rep != reportBroken || clause != clausePartlyValid {
+		t.Fatalf("policyReport = %v/%v, want broken/partly-valid (%s)", rep, clause, why)
+	}
+	if !strings.Contains(why, "authorization matchExpression is not a valid CEL expression") {
+		t.Errorf("the report drops the Gateway's own message, which is the only field that says "+
+			"WHICH translation failed; the reader is then sent to the key ConfigMap for a cause "+
+			"that is not there: %s", why)
 	}
 }
 
