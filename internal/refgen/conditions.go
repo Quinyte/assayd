@@ -354,6 +354,14 @@ a given pass picks where a call site can set several — those rows say which se
 a test" means a test file names the string, which is weaker than pinning it: nine tests in this
 repository once passed with their subject deleted.
 
+**And the join has a limit worth naming.** It pins the SET of reasons — a new one cannot ship
+undescribed, and a description cannot outlive its reason. It does NOT prove the three annotated
+answers are still true of the code: behaviour can change under a reason whose name does not. What
+covers that is weaker and indirect. Each reason's own constant doc comment is reproduced below, so
+when the code's comment moves the page moves, `+"`make verify`"+` fails, and a human reads the diff — which is
+how the annotation for `+"`AuthPolicyNotAttached`"+` was found stale after design 03 A83 landed. That is a
+prompt to look, not a proof.
+
 `, len(v.Conditions), len(v.ReasonsByName), AnnotationsSource)
 }
 

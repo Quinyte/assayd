@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -416,13 +417,23 @@ func conditionsPage(t *testing.T) string {
 	return string(b)
 }
 
+// The extraction type-checks two packages, which is a second or so normally and
+// well over ten under -race. Six tests wanted it, and re-running it six times
+// put `make race` up by two minutes for no extra coverage: every caller treats
+// the result as read-only.
+var (
+	vocabOnce sync.Once
+	vocabVal  *Vocabulary
+	vocabErr  error
+)
+
 func vocabulary(t *testing.T) *Vocabulary {
 	t.Helper()
-	v, err := ExtractVocabulary(repoRoot)
-	if err != nil {
-		t.Fatalf("extract: %v", err)
+	vocabOnce.Do(func() { vocabVal, vocabErr = ExtractVocabulary(repoRoot) })
+	if vocabErr != nil {
+		t.Fatalf("extract: %v", vocabErr)
 	}
-	return v
+	return vocabVal
 }
 
 func reasonsOf(t *testing.T, v *Vocabulary, condition string) []string {

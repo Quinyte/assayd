@@ -28,6 +28,14 @@ a given pass picks where a call site can set several — those rows say which se
 a test" means a test file names the string, which is weaker than pinning it: nine tests in this
 repository once passed with their subject deleted.
 
+**And the join has a limit worth naming.** It pins the SET of reasons — a new one cannot ship
+undescribed, and a description cannot outlive its reason. It does NOT prove the three annotated
+answers are still true of the code: behaviour can change under a reason whose name does not. What
+covers that is weaker and indirect. Each reason's own constant doc comment is reproduced below, so
+when the code's comment moves the page moves, `make verify` fails, and a human reads the diff — which is
+how the annotation for `AuthPolicyNotAttached` was found stale after design 03 A83 landed. That is a
+prompt to look, not a proof.
+
 ## Phases
 
 `status.phase` is the one-word summary `kubectl get ag` prints. It is a rollup; the conditions below are the detail.
@@ -139,14 +147,14 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `Degraded=True`, `PolicyApplyIncomplete=True`, `Ready=False`
 
-**Constant:** `ReasonAuthAbandonWaiting` (`internal/controller/authtxn.go:917`)
+**Constant:** `ReasonAuthAbandonWaiting` (`internal/controller/authtxn.go:926`)
 
 > ReasonAuthAbandonWaiting is PolicyApplyIncomplete's reason while an abandoned transaction's policy delete has returned and the object is still held by a finalizer: status keeps the transaction until it is gone.
 
 **Set at:**
 
 - `internal/controller/agent_controller.go:967` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authtxn.go:1043` in `abandonWaiting()` — constant at the call site
+- `internal/controller/authtxn.go:1052` in `abandonWaiting()` — constant at the call site
 - `internal/controller/agent_controller.go:965` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `test/envtest/authabandonlive_test.go`, `test/envtest/authlockreview_test.go`, `test/envtest/authreview3_test.go`
@@ -163,7 +171,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `Degraded=True`, `Ready=False`
 
-**Constant:** `ReasonAuthEnforcementPending` (`internal/controller/authtxn.go:97`)
+**Constant:** `ReasonAuthEnforcementPending` (`internal/controller/authtxn.go:106`)
 
 > Ready, while a `Create` is short of `Served` and before its deadline.
 
@@ -193,7 +201,7 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:967` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authtxn.go:1478` in `runCreate()` — constant at the call site
+- `internal/controller/authtxn.go:1487` in `runCreate()` — constant at the call site
 - `internal/controller/agent_controller.go:965` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authcreate_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authreview3_test.go`
@@ -217,8 +225,8 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:967` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authtxn.go:788` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
-- `internal/controller/authtxn.go:817` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
+- `internal/controller/authtxn.go:797` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
+- `internal/controller/authtxn.go:826` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
 - `internal/controller/agent_controller.go:965` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authtxn_test.go`, `internal/controller/conditions_test.go`, `test/envtest/authcreate_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authrecreate_test.go`, `test/envtest/authreview3_test.go`
@@ -255,11 +263,11 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GovernanceSkipped=True`
 
-**Constant:** `ReasonAuthLockPending` (`internal/controller/authtxn.go:103`)
+**Constant:** `ReasonAuthLockPending` (`internal/controller/authtxn.go:112`)
 
 **Set at:**
 
-- `internal/controller/authtxn.go:2052` in `runLock()` — constant at the call site
+- `internal/controller/authtxn.go:2061` in `runLock()` — constant at the call site
 - `internal/controller/httproute.go:725` in `assessGovernance()` — constant at the call site
 
 **Referenced by a test:** `test/e2e/auth_helpers_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authlockreview_test.go`, `test/envtest/authreview4_test.go`
@@ -281,7 +289,7 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:967` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authtxn.go:2057` in `runLock()` — constant at the call site
+- `internal/controller/authtxn.go:2066` in `runLock()` — constant at the call site
 - `internal/controller/httproute.go:727` in `assessGovernance()` — constant at the call site
 - `internal/controller/agent_controller.go:965` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
 
@@ -299,14 +307,14 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GovernanceSkipped=status computed at run time`
 
-**Constant:** `ReasonAuthOptedOut` (`internal/controller/authtxn.go:101`)
+**Constant:** `ReasonAuthOptedOut` (`internal/controller/authtxn.go:110`)
 
 **Set at:**
 
-- `internal/controller/authtxn.go:1508` in `runCreate()` — from the local `reason`, one of 3 reasons it folds to
-- `internal/controller/authtxn.go:1577` in `recordServed()` — from the local `reason`, one of 3 reasons it folds to
-- `internal/controller/authtxn.go:1670` in `reconcileServed()` — from the local `reason`, one of 3 reasons it folds to
-- `internal/controller/authtxn.go:2268` in `lockServed()` — from the local `reason`, one of 3 reasons it folds to
+- `internal/controller/authtxn.go:1517` in `runCreate()` — from the local `reason`, one of 3 reasons it folds to
+- `internal/controller/authtxn.go:1586` in `recordServed()` — from the local `reason`, one of 3 reasons it folds to
+- `internal/controller/authtxn.go:1679` in `reconcileServed()` — from the local `reason`, one of 3 reasons it folds to
+- `internal/controller/authtxn.go:2277` in `lockServed()` — from the local `reason`, one of 3 reasons it folds to
 - `internal/controller/httproute.go:750` in `assessGovernance()` — from the local `reason`, one of 3 reasons it folds to
 
 **Referenced by a test:** `internal/controller/authtxn_test.go`, `internal/controller/httproute_unit_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authcreate_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authserved_test.go`
@@ -326,9 +334,9 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:967` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authtxn.go:2040` in `runLock()` — constant at the call site
+- `internal/controller/authtxn.go:2049` in `runLock()` — constant at the call site
 - `internal/controller/httproute.go:739` in `assessGovernance()` — constant at the call site
-- `internal/controller/authtxn.go:2045` in `runLock()` — constant at the call site
+- `internal/controller/authtxn.go:2054` in `runLock()` — constant at the call site
 - `internal/controller/httproute.go:740` in `assessGovernance()` — constant at the call site
 - `internal/controller/agent_controller.go:965` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
 
@@ -346,27 +354,27 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `Degraded=True`, `GovernanceSkipped=True`, `PolicyApplyIncomplete=True`, `Ready=False`
 
-**Constant:** `ReasonAuthPolicyNotAttached` (`internal/controller/authtxn.go:95`)
+**Constant:** `ReasonAuthPolicyNotAttached` (`internal/controller/authtxn.go:104`)
 
 **Set at:**
 
 - `internal/controller/agent_controller.go:967` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authserved.go:545` in `appendGovernance()` — from the local `reason`, which folds to this one reason
-- `internal/controller/authtxn.go:596` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
-- `internal/controller/authtxn.go:598` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authserved.go:796` in `appendGovernance()` — from the local `reason`, which folds to this one reason
+- `internal/controller/authtxn.go:605` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:607` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
 - `internal/controller/agent_controller.go:965` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/conformance/ancestor.go`, `test/conformance/slice_attach_cluster_test.go`, `test/envtest/authserved_test.go`
 
-**State:** A served `<agent>-auth` exists, carries the Agent's UID and renders to the recorded `appliedDigest`, and the Gateway reports its tuple broken at the policy's current generation — `Accepted=False`, `Accepted=True` with a reason other than `Valid`, `Attached=False`, or only the synthetic `StatusSummary` ancestor.
+**State:** A served `<agent>-auth` exists, carries the Agent's UID and renders to the recorded `appliedDigest`, and the Gateway reports its tuple broken at the policy's current generation. "Broken" is four different answers, and since design 03 A83 the message says which: the policy rejected outright (`Accepted=False`); accepted but not in whole (`Accepted=True` with a reason other than `Valid`); attached to nothing (`Attached=False`); or only the synthetic `StatusSummary` ancestor present.
 
 **What the operator does:** Sets `PolicyApplyIncomplete=True` and `GovernanceSkipped=True`, `Ready=False`, phase `Degraded`, and records the claim on `status.auth.policyUnattached` so it is re-asserted on passes that learn nothing new.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
-**Code and design disagree:** Design 03 §5 frames this row as firing on a pass that ALSO read the route accepted at its current generation. The code raises it whenever the policy report comes back broken, whatever the route report said; the route report only chooses the opening clause of the message. The same design row later describes the both-fire case and its ordering, so the document is self-reconciling, but its leading clause reads as a precondition the code does not implement. Separately, design 03 records as OWED that this reason's message can name the wrong cause — it opens "the assayd Gateway reports that it does not attach the policy" in a measured case where the Gateway says `Attached=True` — a rule-8 defect both sides agree on and neither has fixed.
+**Code and design disagree:** Design 03 §5 still frames this row as firing "on a pass that also read the route ACCEPTED at its current generation". The code raises it on the policy report alone; whether the route read accepted only selects which opening the message uses, and for the partly-valid answer it is deliberately not consulted at all. A83 rewrote the surrounding bullet and left that clause byte-identical, and the bullet before it says the opposite — that the fail-open reaches the policy half "in the message rather than in what is raised". So one row reads as a precondition the code does not implement while its neighbour describes what the code does. A second disagreement this page carried is now RESOLVED and is recorded here because the record of it is not: A83 fixed the rule-8 defect where this reason's message named non-attachment in a state the Gateway reported `Attached=True`, and design 03 §5 no longer calls it owed — but A82's amendment entry in §11 still reads "The fix is OWED", with no forward pointer to the amendment that made it, so a reader arriving at §11 first is told a fixed defect is open. What genuinely remains: the REASON still names non-attachment for a clause where the Gateway says the opposite, and only the message says otherwise — as does the `status.auth.policyUnattached` field name. And a policy carrying the synthetic ancestor beside a real one reporting `Attached=True` still takes the non-attachment lead, which design 03 records as owed.
 
-**Note:** Nothing is withdrawn, deleted or rewritten: this is the fail-open half, ANNOUNCED AND NOT CLOSED. A cluster measurement on agentgateway 1.5.0 found a state that reaches this report while the route still answers `401`, so the fail-open consequence the message announces is not true of every state that produces it.
+**Note:** Nothing is withdrawn, deleted or rewritten: this is the fail-open half, ANNOUNCED AND NOT CLOSED. Since design 03 A83 the MESSAGE says which of the four answers the Gateway gave, and the partly-valid one — the only shape a cluster measurement on agentgateway 1.5.0 has reached with a byte-unchanged policy, where the route was still answering `401` — no longer claims the policy is unattached or that a credential may not be required. It says instead that the judgement reads the Gateway's report, issues no request, and so did not check. The REASON does not branch: one string covers all four answers.
 
 ### `AuthRecordNotKept`
 
@@ -377,8 +385,8 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:853` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
-- `internal/controller/authtxn.go:596` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
-- `internal/controller/authtxn.go:598` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:605` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:607` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
 - `internal/controller/agent_controller.go:839` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
 
 **Referenced by a test:** `test/envtest/authreview_test.go`, `test/envtest/authserved_test.go`
@@ -400,8 +408,8 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:853` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
-- `internal/controller/authtxn.go:596` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
-- `internal/controller/authtxn.go:598` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:605` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:607` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
 - `internal/controller/agent_controller.go:839` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
 
 **Referenced by a test:** `test/envtest/authreview_test.go`
@@ -421,8 +429,8 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:967` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authtxn.go:788` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
-- `internal/controller/authtxn.go:817` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
+- `internal/controller/authtxn.go:797` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
+- `internal/controller/authtxn.go:826` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
 - `internal/controller/agent_controller.go:965` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authtxn_test.go`, `test/envtest/authcreate_test.go`
@@ -439,14 +447,14 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GovernanceSkipped=status computed at run time`
 
-**Constant:** `ReasonAuthVerifiedOnOneReplica` (`internal/controller/authtxn.go:100`)
+**Constant:** `ReasonAuthVerifiedOnOneReplica` (`internal/controller/authtxn.go:109`)
 
 **Set at:**
 
-- `internal/controller/authtxn.go:1508` in `runCreate()` — from the local `reason`, one of 3 reasons it folds to
-- `internal/controller/authtxn.go:1577` in `recordServed()` — from the local `reason`, one of 3 reasons it folds to
-- `internal/controller/authtxn.go:1670` in `reconcileServed()` — from the local `reason`, one of 3 reasons it folds to
-- `internal/controller/authtxn.go:2268` in `lockServed()` — from the local `reason`, one of 3 reasons it folds to
+- `internal/controller/authtxn.go:1517` in `runCreate()` — from the local `reason`, one of 3 reasons it folds to
+- `internal/controller/authtxn.go:1586` in `recordServed()` — from the local `reason`, one of 3 reasons it folds to
+- `internal/controller/authtxn.go:1679` in `reconcileServed()` — from the local `reason`, one of 3 reasons it folds to
+- `internal/controller/authtxn.go:2277` in `lockServed()` — from the local `reason`, one of 3 reasons it folds to
 - `internal/controller/httproute.go:750` in `assessGovernance()` — from the local `reason`, one of 3 reasons it folds to
 
 **Referenced by a test:** `internal/controller/authtxn_test.go`, `internal/controller/httproute_unit_test.go`, `test/e2e/auth_helpers_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authcreate_test.go`, `test/envtest/authgate_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authrecreate_test.go`, `test/envtest/authserved_test.go`
@@ -691,11 +699,11 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GovernanceSkipped=True`
 
-**Constant:** `ReasonCompilerUpgradeUnsupported` (`internal/controller/authtxn.go:102`)
+**Constant:** `ReasonCompilerUpgradeUnsupported` (`internal/controller/authtxn.go:111`)
 
 **Set at:**
 
-- `internal/controller/authtxn.go:2482` in `refuseAdopt()` — constant at the call site
+- `internal/controller/authtxn.go:2491` in `refuseAdopt()` — constant at the call site
 
 **Referenced by a test:** `internal/controller/httproute_unit_test.go`, `test/envtest/authabandonlive_test.go`, `test/envtest/authcreate_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authserved_test.go`
 
@@ -716,8 +724,8 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:967` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authtxn.go:788` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
-- `internal/controller/authtxn.go:817` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
+- `internal/controller/authtxn.go:797` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
+- `internal/controller/authtxn.go:826` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
 - `internal/controller/agent_controller.go:965` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authtxn_test.go`
@@ -819,9 +827,9 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:967` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authtxn.go:647` in `reportForeign()` — constant at the call site
-- `internal/controller/authtxn.go:596` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
-- `internal/controller/authtxn.go:598` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:656` in `reportForeign()` — constant at the call site
+- `internal/controller/authtxn.go:605` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:607` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
 - `internal/controller/agent_controller.go:965` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/conformance/slice_cluster_test.go`, `test/envtest/authabandonlive_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authlockrace_test.go`, `test/envtest/authlockreview_test.go`, `test/envtest/authreview3_test.go`, `test/envtest/authreview4_test.go`, `test/envtest/authreview_test.go`, `test/envtest/authserved_test.go`
@@ -883,11 +891,11 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:967` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authtxn.go:406` in `reportAboveServed()` — constant at the call site
-- `internal/controller/authtxn.go:414` in `reportAboveServed()` — constant at the call site
-- `internal/controller/authtxn.go:596` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
-- `internal/controller/authtxn.go:598` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
-- `internal/controller/authtxn.go:2066` in `runLock()` — constant at the call site
+- `internal/controller/authtxn.go:415` in `reportAboveServed()` — constant at the call site
+- `internal/controller/authtxn.go:423` in `reportAboveServed()` — constant at the call site
+- `internal/controller/authtxn.go:605` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:607` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:2075` in `runLock()` — constant at the call site
 - `internal/controller/agent_controller.go:965` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/e2e/gatewayhold_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authgate_test.go`, `test/envtest/authserved_test.go`
@@ -926,17 +934,17 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GovernanceSkipped=status computed at run time`
 
-**Constant:** `ReasonGoverned` (`internal/controller/authtxn.go:99`)
+**Constant:** `ReasonGoverned` (`internal/controller/authtxn.go:108`)
 
 > GovernanceSkipped (§3.1).
 
 **Set at:**
 
-- `internal/controller/authtxn.go:837` in `authStep()` — from the local `reason`, which folds to this one reason
-- `internal/controller/authtxn.go:1508` in `runCreate()` — from the local `reason`, one of 3 reasons it folds to
-- `internal/controller/authtxn.go:1577` in `recordServed()` — from the local `reason`, one of 3 reasons it folds to
-- `internal/controller/authtxn.go:1670` in `reconcileServed()` — from the local `reason`, one of 3 reasons it folds to
-- `internal/controller/authtxn.go:2268` in `lockServed()` — from the local `reason`, one of 3 reasons it folds to
+- `internal/controller/authtxn.go:846` in `authStep()` — from the local `reason`, which folds to this one reason
+- `internal/controller/authtxn.go:1517` in `runCreate()` — from the local `reason`, one of 3 reasons it folds to
+- `internal/controller/authtxn.go:1586` in `recordServed()` — from the local `reason`, one of 3 reasons it folds to
+- `internal/controller/authtxn.go:1679` in `reconcileServed()` — from the local `reason`, one of 3 reasons it folds to
+- `internal/controller/authtxn.go:2277` in `lockServed()` — from the local `reason`, one of 3 reasons it folds to
 - `internal/controller/httproute.go:745` in `assessGovernance()` — from the local `reason`, which folds to this one reason
 - `internal/controller/httproute.go:750` in `assessGovernance()` — from the local `reason`, one of 3 reasons it folds to
 - `internal/controller/httproute.go:760` in `assessGovernance()` — from the local `reason`, which folds to this one reason
@@ -1137,8 +1145,8 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:853` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
-- `internal/controller/authtxn.go:596` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
-- `internal/controller/authtxn.go:598` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:605` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:607` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
 - `internal/controller/agent_controller.go:839` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
 
 **Referenced by a test:** `test/envtest/authserved_test.go`
@@ -1255,8 +1263,8 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:853` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
-- `internal/controller/authtxn.go:596` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
-- `internal/controller/authtxn.go:598` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:605` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:607` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
 - `internal/controller/agent_controller.go:839` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
 
 **Referenced by a test:** `internal/controller/httproute_unit_test.go`, `test/envtest/httproute_test.go`
@@ -1336,15 +1344,15 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `Degraded=True`, `PolicyApplyIncomplete=True`, `Ready=False`
 
-**Constant:** `ReasonServingRouteNotAccepted` (`internal/controller/authtxn.go:94`)
+**Constant:** `ReasonServingRouteNotAccepted` (`internal/controller/authtxn.go:103`)
 
-> A80's two, for a served Agent with no transaction in the slot or a refused Adopt in it: the assayd Gateway reports the serving route refused, and it reports that it does not attach the served &lt;agent&gt;-auth. AuthPolicyNotAttached is a GovernanceSkipped reason too.
+> A80's two, for a served Agent with no transaction in the slot or a refused Adopt in it: the assayd Gateway reports the serving route refused, and it reports §3.3.2's tuple for the served &lt;agent&gt;-auth BROKEN. AuthPolicyNotAttached is a GovernanceSkipped reason too.  AuthPolicyNotAttached's NAME is narrower than what it covers, and that is a decision rather than an oversight: since A83 the reason also carries the clause in which the Gateway accepted the policy only in part and reported it ATTACHED. The human kept (B1)'s condition set on 2026-09-23 and D5(b) is decided as no, because the claim store on status.auth is one boolean per half and carries no clause, so a per-clause reason could not be re-asserted on a pass that re-derives nothing. The MESSAGE names what the Gateway actually said (§5, §9 D5).
 
 **Set at:**
 
 - `internal/controller/agent_controller.go:967` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authtxn.go:596` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
-- `internal/controller/authtxn.go:598` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:605` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
+- `internal/controller/authtxn.go:607` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
 - `internal/controller/agent_controller.go:965` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/envtest/authserved_test.go`

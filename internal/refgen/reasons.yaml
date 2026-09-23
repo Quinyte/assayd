@@ -638,9 +638,11 @@ reasons:
     state: >-
       A served `<agent>-auth` exists, carries the Agent's UID and renders to the
       recorded `appliedDigest`, and the Gateway reports its tuple broken at the
-      policy's current generation — `Accepted=False`, `Accepted=True` with a
-      reason other than `Valid`, `Attached=False`, or only the synthetic
-      `StatusSummary` ancestor.
+      policy's current generation. "Broken" is four different answers, and since
+      design 03 A83 the message says which: the policy rejected outright
+      (`Accepted=False`); accepted but not in whole (`Accepted=True` with a
+      reason other than `Valid`); attached to nothing (`Attached=False`); or only
+      the synthetic `StatusSummary` ancestor present.
     operator: >-
       Sets `PolicyApplyIncomplete=True` and `GovernanceSkipped=True`,
       `Ready=False`, phase `Degraded`, and records the claim on
@@ -649,22 +651,36 @@ reasons:
     traffic: not-withdrawn
     note: >-
       Nothing is withdrawn, deleted or rewritten: this is the fail-open half,
-      ANNOUNCED AND NOT CLOSED. A cluster measurement on agentgateway 1.5.0 found
-      a state that reaches this report while the route still answers `401`, so
-      the fail-open consequence the message announces is not true of every state
-      that produces it.
+      ANNOUNCED AND NOT CLOSED. Since design 03 A83 the MESSAGE says which of the
+      four answers the Gateway gave, and the partly-valid one — the only shape a
+      cluster measurement on agentgateway 1.5.0 has reached with a byte-unchanged
+      policy, where the route was still answering `401` — no longer claims the
+      policy is unattached or that a credential may not be required. It says
+      instead that the judgement reads the Gateway's report, issues no request,
+      and so did not check. The REASON does not branch: one string covers all
+      four answers.
     disagreement: >-
-      Design 03 §5 frames this row as firing on a pass that ALSO read the route
-      accepted at its current generation. The code raises it whenever the policy
-      report comes back broken, whatever the route report said; the route report
-      only chooses the opening clause of the message. The same design row later
-      describes the both-fire case and its ordering, so the document is
-      self-reconciling, but its leading clause reads as a precondition the code
-      does not implement. Separately, design 03 records as OWED that this
-      reason's message can name the wrong cause — it opens "the assayd Gateway
-      reports that it does not attach the policy" in a measured case where the
-      Gateway says `Attached=True` — a rule-8 defect both sides agree on and
-      neither has fixed.
+      Design 03 §5 still frames this row as firing "on a pass that also read the
+      route ACCEPTED at its current generation". The code raises it on the policy
+      report alone; whether the route read accepted only selects which opening
+      the message uses, and for the partly-valid answer it is deliberately not
+      consulted at all. A83 rewrote the surrounding bullet and left that clause
+      byte-identical, and the bullet before it says the opposite — that the
+      fail-open reaches the policy half "in the message rather than in what is
+      raised". So one row reads as a precondition the code does not implement
+      while its neighbour describes what the code does.
+      A second disagreement this page carried is now RESOLVED and is recorded
+      here because the record of it is not: A83 fixed the rule-8 defect where
+      this reason's message named non-attachment in a state the Gateway reported
+      `Attached=True`, and design 03 §5 no longer calls it owed — but A82's
+      amendment entry in §11 still reads "The fix is OWED", with no forward
+      pointer to the amendment that made it, so a reader arriving at §11 first is
+      told a fixed defect is open.
+      What genuinely remains: the REASON still names non-attachment for a clause
+      where the Gateway says the opposite, and only the message says otherwise —
+      as does the `status.auth.policyUnattached` field name. And a policy
+      carrying the synthetic ancestor beside a real one reporting `Attached=True`
+      still takes the non-attachment lead, which design 03 records as owed.
 
   - reason: AuthRecordNotKept
     state: >-
