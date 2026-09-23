@@ -11,12 +11,39 @@
 # given. See the note above the `publish` job.
 name: web
 
+# The paths are what the BUILT site depends on, not only where its source
+# lives. check-claims.sh resolves every `measured` badge to a `func Test…(`
+# under test/, internal/ or api/, and every `designed` badge to a file under
+# docs/designs/; build.sh copies docs/reference/ into the docs target. Scoped to
+# web/** alone, a pull request that renamed a Go test a badge names ran ci.yml
+# and not this workflow, merged green, and left the badge citing nothing until
+# the next change under web/ (docs/web/information-architecture.md §5.1).
+# chart/ and hack/ are here because the "what runs" page states what they
+# install. The two lists are kept identical by hand.
 on:
   push:
     branches: [main]
-    paths: ["web/**", ".github/workflows/web.yml"]
+    paths:
+      - "web/**"
+      - ".github/workflows/web.yml"
+      - "test/**"
+      - "internal/**"
+      - "api/**"
+      - "docs/designs/**"
+      - "docs/reference/**"
+      - "charts/**"
+      - "hack/**"
   pull_request:
-    paths: ["web/**", ".github/workflows/web.yml"]
+    paths:
+      - "web/**"
+      - ".github/workflows/web.yml"
+      - "test/**"
+      - "internal/**"
+      - "api/**"
+      - "docs/designs/**"
+      - "docs/reference/**"
+      - "charts/**"
+      - "hack/**"
   workflow_dispatch:
     inputs:
       deploy:
@@ -104,6 +131,7 @@ jobs:
           set -euo pipefail
           test -f site/dist/index.html
           test -f site/dist/claim-classes.html
+          test -f site/dist/concepts/the-auth-transaction.html
           echo "site: $(find site/dist -name '*.html' | wc -l) html file(s)"
 
       - name: docs produced real .html files
@@ -111,6 +139,13 @@ jobs:
           set -euo pipefail
           test -f docs/dist/index.html
           test -f docs/dist/guides/figures.html
+          test -f docs/dist/what-runs-today.html
+          # The generated reference, copied in by build.sh. Named by path, so
+          # a page that drops out of the copy fails here rather than leaving
+          # the link gate green over fewer pages.
+          test -f docs/dist/reference/crd-agent.html
+          test -f docs/dist/reference/helm-values.html
+          test -f docs/dist/reference/conditions.html
           echo "docs: $(find docs/dist -name '*.html' | wc -l) html file(s)"
 
       - name: install lychee
