@@ -13,68 +13,82 @@ import (
 
 // TestADefaultInstallRunsOneOperatorAndNothingElse pins the inventory the
 // website's "what runs today" page and its plate (docs/diagrams/AUDIT-2026-09.md,
-// P1) state: one workload, the operator's Deployment, at two replicas; four CEL
-// admission policies and nothing that runs a webhook; one CRD; and no Gateway,
-// no GatewayClass and no agentgateway object, with the gateway off or on.
+// P1) state, as the EXACT list of rendered objects for each configuration the
+// page describes: the default (prod) profile, the same with the gateway on,
+// and the local profile. One workload, the operator's Deployment, at two
+// replicas (one at local); four CEL admission policies, each bound, and no
+// webhook; the RBAC, Namespace and disruption budget beside them; one CRD; and
+// no Gateway, GatewayClass, agentgateway object or subchart.
+//
+// An exact list rather than a set of forbidden kinds: an earlier version
+// forbade the workload kinds it could think of, and a ReplicationController, a
+// MutatingAdmissionPolicy or a third Role rendered past it (independent review
+// of PR #67). Any object added or removed now fails here, and the change that
+// adds one updates this list and the page together.
 //
 // TestCorePodBudget asserts no more than eight pods and
 // TestProdProfileRendersWhatItClaims at least two replicas; neither says
 // "exactly this", which is what a page titled for what runs has to claim. The
 // plate that preceded this one (07-what-runs) drew eight pods and twelve
 // components the chart does not install, and nothing failed.
+//
+// It renders the chart; it does not start a pod.
 func TestADefaultInstallRunsOneOperatorAndNothingElse(t *testing.T) {
+	core := []string{
+		"ClusterRole/assayd-agent-operator",
+		"ClusterRoleBinding/assayd-agent-operator",
+		"Deployment/assayd-agent-operator",
+		"Namespace/assayd-system",
+		"ServiceAccount/assayd-agent-operator",
+		"ValidatingAdmissionPolicy/assayd-api-keys",
+		"ValidatingAdmissionPolicy/assayd-gateway-policies",
+		"ValidatingAdmissionPolicy/assayd-gateway-routes",
+		"ValidatingAdmissionPolicy/assayd-namespace-labels",
+		"ValidatingAdmissionPolicyBinding/assayd-api-keys",
+		"ValidatingAdmissionPolicyBinding/assayd-gateway-policies",
+		"ValidatingAdmissionPolicyBinding/assayd-gateway-routes",
+		"ValidatingAdmissionPolicyBinding/assayd-namespace-labels",
+	}
+	with := func(extra ...string) []string { return append(append([]string{}, core...), extra...) }
+
 	for _, tc := range []struct {
-		name string
-		args []string
+		name     string
+		args     []string
+		want     []string
+		replicas int
 	}{
-		{"default", nil},
+		{"default", nil, with("PodDisruptionBudget/assayd-agent-operator"), 2},
 		{"gateway enabled", []string{"--set", "gateway.enabled=true",
-			"--set", "gateway.servingUrl=http://assayd-gateway.agentgateway-system.svc"}},
+			"--set", "gateway.servingUrl=http://assayd-gateway.agentgateway-system.svc"},
+			with("PodDisruptionBudget/assayd-agent-operator",
+				"Role/assayd-agent-operator-gateway-events",
+				"Role/assayd-agent-operator-gateway-labels",
+				"RoleBinding/assayd-agent-operator-gateway-events",
+				"RoleBinding/assayd-agent-operator-gateway-labels"), 2},
+		{"local profile", []string{"-f", filepath.Join(chartPath, "values-local.yaml")}, core, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			docs := render(t, tc.args...)
 
-			var workloads []string
-			for _, kind := range []string{"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob",
-				"ReplicaSet", "Pod"} {
-				for _, d := range kindsOf(docs, kind) {
-					workloads = append(workloads, kind+"/"+nameOf(d))
-				}
-			}
-			if len(workloads) != 1 || workloads[0] != "Deployment/assayd-agent-operator" {
-				t.Fatalf("the chart renders workloads %v; the site says it renders exactly one, "+
-					"Deployment/assayd-agent-operator", workloads)
-			}
-			if n := replicasOf(t, kindsOf(docs, "Deployment")[0]); n != 2 {
-				t.Errorf("the operator renders %d replica(s) at the default profile; the site says two", n)
-			}
-
-			var policies []string
-			for _, d := range kindsOf(docs, "ValidatingAdmissionPolicy") {
-				policies = append(policies, nameOf(d))
-			}
-			sort.Strings(policies)
-			want := []string{"assayd-api-keys", "assayd-gateway-policies", "assayd-gateway-routes",
-				"assayd-namespace-labels"}
-			if strings.Join(policies, ",") != strings.Join(want, ",") {
-				t.Errorf("the chart renders admission policies %v; the site names %v", policies, want)
-			}
-			for _, kind := range []string{"ValidatingWebhookConfiguration", "MutatingWebhookConfiguration",
-				"Service"} {
-				if got := kindsOf(docs, kind); len(got) != 0 {
-					t.Errorf("the chart renders a %s (%s); the site says admission is CEL with no "+
-						"webhook and nothing serving it", kind, nameOf(got[0]))
-				}
-			}
-
+			var got []string
 			for _, d := range docs {
-				api, _ := d["apiVersion"].(string)
 				kind, _ := d["kind"].(string)
-				if strings.HasPrefix(api, "gateway.networking.k8s.io/") ||
-					strings.Contains(api, "agentgateway") || kind == "CustomResourceDefinition" {
-					t.Errorf("the chart renders %s %s (%s); the site says the chart ships no Gateway, "+
-						"no agentgateway and no template-rendered CRD", kind, nameOf(d), api)
-				}
+				got = append(got, kind+"/"+nameOf(d))
+			}
+			sort.Strings(got)
+			want := append([]string{}, tc.want...)
+			sort.Strings(want)
+			if strings.Join(got, "\n") != strings.Join(want, "\n") {
+				t.Errorf("the chart renders\n  %s\nand the site says it renders exactly\n  %s",
+					strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+			}
+
+			deploys := kindsOf(docs, "Deployment")
+			if len(deploys) != 1 {
+				t.Fatalf("the chart renders %d Deployments; the site says one", len(deploys))
+			}
+			if n := replicasOf(t, deploys[0]); n != tc.replicas {
+				t.Errorf("the operator renders %d replica(s); the site says %d", n, tc.replicas)
 			}
 		})
 	}

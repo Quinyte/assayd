@@ -2579,9 +2579,11 @@ when it was refused records apikey, and stays refused.<br/>
         <td><b>stage</b></td>
         <td>string</td>
         <td>
-          Stage is one of design 03 §3.3's stage names: PreparingRoute,
-ProbingBefore, ApplyingPolicies, Converging, ProbingAfter, Publishing,
-Served, or Refused for an Adopt.<br/>
+          Stage is one of design 03 §3.3's stage names that a transaction can sit
+in: PreparingRoute, ProbingBefore, ApplyingPolicies, Converging,
+ProbingAfter, Publishing, or Refused for an Adopt. Served is the chain's
+terminal outcome and never a value here: the operator records it by
+writing status.auth.mode and clearing this transaction.<br/>
         </td>
         <td>false</td>
       </tr><tr>

@@ -908,9 +908,11 @@ type AuthTransaction struct {
 	// Present exactly when TargetMode is apikey.
 	// +optional
 	TargetDigest string `json:"targetDigest,omitempty"`
-	// Stage is one of design 03 §3.3's stage names: PreparingRoute,
-	// ProbingBefore, ApplyingPolicies, Converging, ProbingAfter, Publishing,
-	// Served, or Refused for an Adopt.
+	// Stage is one of design 03 §3.3's stage names that a transaction can sit
+	// in: PreparingRoute, ProbingBefore, ApplyingPolicies, Converging,
+	// ProbingAfter, Publishing, or Refused for an Adopt. Served is the chain's
+	// terminal outcome and never a value here: the operator records it by
+	// writing status.auth.mode and clearing this transaction.
 	// +optional
 	Stage string `json:"stage,omitempty"`
 	// Written is set in the status update that ENTERS ApplyingPolicies, before
