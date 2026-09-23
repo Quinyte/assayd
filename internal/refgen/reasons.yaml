@@ -764,19 +764,26 @@ reasons:
     state: >-
       A Service at the desired revision's name is headless — `spec.clusterIP:
       None`, which no Update can repair — and its UID is not the one
-      `status.revisionServices` records for that revision: there is no record
-      (an Agent created before the record, whose Service went headless before it
-      was adopted into it), or the record names a different object (the
-      operator's Service was deleted and another put at the name). The object
-      passed provenance, so it is not a collision; the operator cannot establish
-      that it created it, whatever its labels and annotations say.
+      `status.revisionServices` records for that revision and digest. There is
+      no record: an Agent created before the record, whose Service went
+      headless before it was adopted; or the record of the operator's own
+      create was lost — its dedicated status write and the pass's final status
+      write both failed, or the process died between the create and them —
+      before the object went headless. Or the record names a different object:
+      the operator's Service was deleted and another put at the name, or the
+      operator's own replacement lost its record in the same way. The object
+      passed provenance, so it is not a collision; the operator cannot
+      establish that it created or adopted it, whatever its labels and
+      annotations say.
     operator: >-
       Never deletes it. Sets `Ready=False` and `Degraded=True` with this reason
       and phase `Degraded`, carries design 03's `PolicyApplyIncomplete` and
       `PolicyCompileFailed`, returns before the gateway step, and re-checks after
       `RefusedServiceRecheck` (one minute). The message names the recorded UID
-      and the object's. It stands until a human deletes the object; the operator
-      then creates its own and records it.
+      and the object's. It stands until a human deletes the object, after which
+      the operator creates its own and records it, or repairs it in place back
+      to addressable, after which the next pass converges it and, if there is
+      no record at that revision and digest, adopts it.
     traffic: not-withdrawn
     note: If the revision is active, its route still names this object.
 
@@ -819,7 +826,8 @@ reasons:
       `status.serviceReplacedAt`).
     operator: >-
       Does not replace it a second time inside the window. Sets `Ready=False`
-      and `Degraded=True` with this reason and phase `Degraded`, returns before
+      and `Degraded=True` with this reason and phase `Degraded`, carries design
+      03's `PolicyApplyIncomplete` and `PolicyCompileFailed`, returns before
       the gateway step, and re-checks after `RefusedServiceRecheck` (one minute),
       replacing it once the window has passed.
     traffic: not-withdrawn

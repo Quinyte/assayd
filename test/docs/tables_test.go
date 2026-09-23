@@ -69,18 +69,23 @@ func TestNoMarkdownTableIsBrokenByItsOwnLayout(t *testing.T) {
 	}
 }
 
-// TestTheTableCheckCatchesBothBreaks holds the check to the two shapes that
-// broke design 02, so it cannot pass by matching nothing.
+// TestTheTableCheckCatchesBothBreaks holds the check to the shapes that broke
+// design 02, and to the legitimate shapes it must not flag, so it can pass
+// neither by matching nothing nor by matching everything.
 func TestTheTableCheckCatchesBothBreaks(t *testing.T) {
 	for _, tc := range []struct {
 		name, doc string
 		want      int
 	}{
-		{"a blank line inside a cell", "| a | b |\n|---|---|\n| x | first\n\n  second |\n| y | z |\n", 1},
+		{"a blank line inside a cell", "| a | b |\n|---|---|\n| x | first\n\n  second |\n| y | z |\n", 2},
+		{"a blank line inside the LAST row", "| a | b |\n|---|---|\n| x | first\n\n  second |\n\nprose\n", 1},
 		{"a row at another indent", "- item\n\n  | a | b |\n  |---|---|\n  | x | y |\n| z | w |\n", 1},
 		{"a well-formed table in a list item", "- item\n\n  | a | b |\n  |---|---|\n  | x | y |\n", 0},
 		{"two tables, one after the other", "| a |\n|---|\n| x |\n\n| b |\n|---|\n| y |\n", 0},
-		{"pipes in a fenced block", "```\n| not | a table |\n\n| still not |\n```\n", 0},
+		{"pipes in a backtick fence", "```\n| not | a table |\n\n| still not |\n```\n", 0},
+		{"pipes in a tilde fence", "~~~\n| not | a table |\n\n| still not |\n~~~\n", 0},
+		{"a top-level row indented three spaces", "| a | b |\n|---|---|\n| x | y |\n   | z | w |\n", 0},
+		{"prose after a table", "| a |\n|---|\n| x |\n\nA sentence, with no pipe.\n", 0},
 	} {
 		if got := len(orphanedTableRows(tc.doc)); got != tc.want {
 			t.Errorf("%s: %d orphaned rows, want %d", tc.name, got, tc.want)
@@ -90,25 +95,59 @@ func TestTheTableCheckCatchesBothBreaks(t *testing.T) {
 
 var tableDelimiter = regexp.MustCompile(`^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$`)
 
-// orphanedTableRows returns the 1-based line numbers of rows that no table
-// owns: neither a continuation of a row at the same indent nor a header.
+// orphanedTableRows returns the 1-based line numbers of lines that GFM would
+// render as raw pipes: a row that no table owns — neither a continuation of a
+// row at the same indent nor a header — and the continuation of a cell that a
+// blank line cut off, which is how a break in a table's LAST row shows,
+// since no row follows it to be orphaned.
+//
+// A blank line inside a cell orphans two lines, the cut-off continuation and
+// the row after it, and both are reported.
+//
+// Indents are compared against the table's HEADER. A table whose header is at
+// column 0 is top-level, where GFM strips up to three leading spaces, so any
+// row indented less than four spaces continues it. A table whose header is
+// indented sits in a list item, whose indent is its container, so its rows
+// must match that indent exactly — which is how design 02's §12 table broke.
 func orphanedTableRows(doc string) []string {
 	lines := strings.Split(doc, "\n")
 	indent := func(s string) int { return len(s) - len(strings.TrimLeft(s, " \t")) }
-	isRow := func(s string) bool { return strings.HasPrefix(strings.TrimLeft(s, " \t"), "|") }
+	tableIndent := -1
+	fits := func(s string) bool {
+		if tableIndent == 0 {
+			return indent(s) < 4
+		}
+		return indent(s) == tableIndent
+	}
+	trimmed := func(s string) string { return strings.TrimLeft(s, " \t") }
+	isRow := func(s string) bool { return strings.HasPrefix(trimmed(s), "|") }
 	var out []string
-	fenced := false
+	fence := ""
 	for i, l := range lines {
-		if strings.HasPrefix(strings.TrimLeft(l, " \t"), "```") {
-			fenced = !fenced
+		if t := trimmed(l); fence == "" && (strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")) {
+			fence = t[:3]
+			continue
+		} else if fence != "" {
+			if strings.HasPrefix(t, fence) {
+				fence = ""
+			}
 			continue
 		}
-		if fenced || !isRow(l) {
+		if !isRow(l) {
+			// A cell continued past a blank line: the line two above is a row,
+			// the line above is blank, and this one carries on with a pipe.
+			if i >= 2 && strings.TrimSpace(lines[i-1]) == "" && isRow(lines[i-2]) &&
+				!strings.HasSuffix(strings.TrimSpace(lines[i-2]), "|") && strings.Contains(l, "|") {
+				out = append(out, strconv.Itoa(i+1))
+			}
 			continue
 		}
 		header := i+1 < len(lines) && tableDelimiter.MatchString(lines[i+1]) && indent(lines[i+1]) == indent(l)
-		continues := i > 0 && isRow(lines[i-1]) && indent(lines[i-1]) == indent(l)
-		if !header && !continues {
+		if header {
+			tableIndent = indent(l)
+			continue
+		}
+		if !(i > 0 && isRow(lines[i-1]) && tableIndent >= 0 && fits(l)) {
 			out = append(out, strconv.Itoa(i+1))
 		}
 	}

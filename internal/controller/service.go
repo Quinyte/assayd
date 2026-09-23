@@ -139,8 +139,11 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 			return fmt.Errorf("create service %s: %w: %w", desired.Name, errServiceCreate, err)
 		}
 		// The API server's answer to OUR create is the one proof of creation
-		// there is: nobody chooses a UID.
+		// there is: nobody chooses a UID. Persisted NOW, in a write of its own,
+		// rather than by the pass's final status write — see
+		// persistServiceRecord.
 		recordServiceUID(status, rev, digest, desired.UID)
+		r.persistServiceRecord(ctx, agent, rev, digest, desired.UID, nil)
 		return nil
 	case err != nil:
 		// Not a Service fault, and not reported as one. The live read needs RBAC
@@ -247,7 +250,7 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 				what: faultHeadless, unrecorded: true, recorded: recorded, live: existing.UID,
 			}
 		}
-		return r.replaceUnrepairableService(ctx, &existing, desired, rev, digest, recorded, status)
+		return r.replaceUnrepairableService(ctx, agent, &existing, desired, rev, digest, recorded, status)
 	}
 
 	// ClusterIP is assigned by the API server and must survive the update, as
@@ -329,13 +332,16 @@ func recordedServiceUID(status *assaydv1alpha1.AgentStatus, rev, digest string) 
 	return ""
 }
 
-// recordServiceUID sets this revision's entry, replacing any entry the
-// revision already has. It is called with the UID the API server returned on
-// this operator's own create — at the first create and at a replace — and by
-// adoptServiceRecord.
+// recordServiceUID sets the entry for this revision AT THIS DIGEST, replacing
+// only an entry with the same revision and digest. It is called with the UID
+// the API server returned on this operator's own create — at the first create
+// and at a replace — and by adoptServiceRecord. Keying the replacement by the
+// digest as well is what makes "adoption never overwrites a record" true
+// without qualification: an adoption at another projection of the same
+// 40-bit name adds an entry beside the existing one and cannot replace it.
 func recordServiceUID(status *assaydv1alpha1.AgentStatus, rev, digest string, uid types.UID) {
 	for i := range status.RevisionServices {
-		if status.RevisionServices[i].Revision == rev {
+		if status.RevisionServices[i].Revision == rev && status.RevisionServices[i].RevisionDigest == digest {
 			status.RevisionServices[i] = assaydv1alpha1.RevisionServiceRecord{
 				Revision: rev, RevisionDigest: digest, UID: uid}
 			return
@@ -345,31 +351,93 @@ func recordServiceUID(status *assaydv1alpha1.AgentStatus, rev, digest string, ui
 		Revision: rev, RevisionDigest: digest, UID: uid})
 }
 
+// persistServiceRecord writes a record the moment the create that produced
+// its UID returns, in a status write of its own, instead of leaving it to the
+// pass's final status write.
+//
+// Left to the final write, the record of a REPLACE was lost by any error or
+// Conflict between the replace and the end of the pass — the card fetch, the
+// gateway step, a concurrent edit to the Agent — and the operator's own
+// replacement then stayed unrecorded: the next time it was made headless it
+// was refused as RevisionServiceNotRecorded until a human deleted it, with the
+// route still published. Round four of A77's review measured that with one
+// injected Conflict. A destructive act ordered ahead of its own record is the
+// ordering collectGarbage's comment calls backwards; this puts the record as
+// close behind the create as a second API call can.
+//
+// It writes ONLY the record, and on a replace the bound. The first attempt
+// sends the Agent as this pass read it, so the API server's resourceVersion
+// check guarantees it overwrites nothing written since. On success the pass's
+// copy takes the new resourceVersion and the stored record, so its final
+// write neither conflicts with this one nor sees a difference to write. On a
+// Conflict it re-reads the Agent live and re-applies only these fields onto
+// what it finds, and leaves the pass's copy stale: the final write then
+// Conflicts, the pass is retried, and nothing written concurrently is
+// overwritten by a pass that did not read it.
+//
+// What remains is the process dying between the create and this write, or
+// every attempt failing. Either leaves the record to the final write, as
+// before, and design 02 §5 states it.
+func (r *AgentReconciler) persistServiceRecord(ctx context.Context, agent *assaydv1alpha1.Agent,
+	rev, digest string, uid types.UID, replacedAt *metav1.Time) {
+	apply := func(st *assaydv1alpha1.AgentStatus) {
+		recordServiceUID(st, rev, digest, uid)
+		if replacedAt != nil {
+			st.ServiceReplacedRevision, st.ServiceReplacedAt = rev, replacedAt
+		}
+	}
+	current := agent.DeepCopy()
+	apply(&current.Status)
+	err := r.Status().Update(ctx, current)
+	if err == nil {
+		agent.ResourceVersion = current.ResourceVersion
+		apply(&agent.Status)
+		return
+	}
+	for attempt := 0; attempt < 4 && apierrors.IsConflict(err); attempt++ {
+		var live assaydv1alpha1.Agent
+		if gerr := r.reader().Get(ctx, client.ObjectKeyFromObject(agent), &live); gerr != nil {
+			err = gerr
+			break
+		}
+		apply(&live.Status)
+		err = r.Status().Update(ctx, &live)
+	}
+	if err != nil {
+		log.FromContext(ctx).Info("could not persist the revision Service record ahead of the "+
+			"pass's final status write; it rides that write instead",
+			"service", rev, "uid", uid, "error", err.Error())
+	}
+}
+
 // adoptServiceRecord records an existing Service's UID when this revision has
-// NO record yet, and only once the object has been converged to the render.
+// NO record at this digest yet, and only once the object has been converged to
+// the render.
 //
-// It is the migration path. An Agent created before `status.revisionServices`
-// existed has no record, and neither has one whose status write was lost after
-// the create — every early exit after ensureService that returns an error
-// without writing status loses it. Refusing to record such an object would
-// leave the operator's own Service permanently unrecorded, so the two-patch
-// wedge this record exists to heal would stay open for every upgraded Agent.
+// It runs on the first sight of ANY revision's Service without a record, which
+// includes every new revision, not only an upgraded Agent. The migration is
+// why it exists: an Agent created before `status.revisionServices` existed has
+// no record, and neither has one whose record write was lost after the create.
+// Refusing to record such an object would leave the operator's own Service
+// permanently unrecorded, so the two-patch wedge this record exists to heal
+// would stay open for every upgraded Agent.
 //
-// Adopting reopens the forged-stamp case for one window, and the window is
-// bounded by what is adopted. It is called only past provenance and only on the
-// converge path, never for a headless object: the object it records is one this
-// pass has just made identical to the render — selector, ports, labels, stamp
-// and shape — and which the serving route already names. A plant that reaches
-// it has already been adopted as the revision's Service by the convergence
-// A77 shipped before the record existed; recording its UID concedes no traffic
-// the convergence had not. What it adds is that a LATER headless state of that
-// object is replaced rather than refused. An object that is headless on the
-// pass it is first seen is never recorded, so it is never deleted: it stays a
-// refusal until a human deletes it.
+// What adoption concedes is bounded by what is adopted, and it is the same on
+// every revision. A revision's name is predictable from its spec, so anyone
+// who can create a Service in the run namespace can put one at the next
+// revision's name before the operator does, carrying this Agent's UID label
+// and the new digest. It is called only past provenance and only on the
+// converge path, never for a headless object: the object it records is one
+// this pass has just made identical to the render — selector, ports, labels,
+// stamp and shape — and which the route will name. Recording it concedes no
+// traffic the convergence had not; what it adds is that a LATER headless state
+// of that object is deleted and replaced with the operator's own. What gets
+// deleted is then the planter's own object. An object headless on the pass it
+// is first seen is never recorded, so it is never deleted.
 //
-// A record that exists and names a DIFFERENT object is not overwritten. That
-// object passed provenance, so it is converged, but this operator did not
-// create it and it will never be deleted here.
+// A record that exists at this revision and digest and names a DIFFERENT
+// object is not overwritten. That object passed provenance, so it is
+// converged, but it will never be deleted here.
 func adoptServiceRecord(status *assaydv1alpha1.AgentStatus, rev, digest string, existing *corev1.Service) {
 	if recordedServiceUID(status, rev, digest) != "" || existing.UID == "" {
 		return
@@ -468,8 +536,8 @@ const ServiceReplaceCooldown = 10 * time.Minute
 //     readiness, promotion and the route, so the operator credited whatever had
 //     taken the name with the Agent's traffic and reported Ready=True about it.
 func (r *AgentReconciler) replaceUnrepairableService(
-	ctx context.Context, existing, desired *corev1.Service, rev, digest string, recorded types.UID,
-	status *assaydv1alpha1.AgentStatus,
+	ctx context.Context, agent *assaydv1alpha1.Agent, existing, desired *corev1.Service,
+	rev, digest string, recorded types.UID, status *assaydv1alpha1.AgentStatus,
 ) error {
 	if status.ServiceReplacedRevision == rev && status.ServiceReplacedAt != nil {
 		if since := time.Since(status.ServiceReplacedAt.Time); since >= 0 && since < ServiceReplaceCooldown {
@@ -520,6 +588,7 @@ func (r *AgentReconciler) replaceUnrepairableService(
 	now := metav1.Now()
 	status.ServiceReplacedRevision, status.ServiceReplacedAt = rev, &now
 	recordServiceUID(status, rev, digest, desired.UID)
+	r.persistServiceRecord(ctx, agent, rev, digest, desired.UID, &now)
 	log.FromContext(ctx).Info("replaced a revision Service that could not be repaired in place",
 		"service", existing.Namespace+"/"+existing.Name, "reason", "spec.clusterIP is immutable",
 		"was", existing.UID, "now", desired.UID)

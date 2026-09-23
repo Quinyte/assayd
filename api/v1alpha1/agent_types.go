@@ -628,21 +628,30 @@ type AgentStatus struct {
 	// +optional
 	ServiceReplacedAt *metav1.Time `json:"serviceReplacedAt,omitempty"`
 	// RevisionServices records the UID of each revision Service this operator
-	// CREATED, per revision (design 02 §3.2, A77). It is the authority for the
-	// one destructive act on a Service outside teardown: a revision Service
-	// that cannot be repaired in place is deleted and recreated only when its
-	// UID equals the one recorded here, whatever its labels or annotations say.
+	// CREATED OR ADOPTED, per revision and digest (design 02 §3.2, A77). It is
+	// the authority for the one destructive act on a Service outside teardown:
+	// a revision Service that cannot be repaired in place is deleted and
+	// recreated only when its UID equals the one recorded here, whatever its
+	// labels or annotations say. The authority is exactly as strong as the RBAC
+	// on agents/status, which the chart grants only to this operator.
 	//
 	// A UID is assigned by the API server and cannot be chosen by whoever
-	// creates an object, so it is the one fact about a Service that proves this
-	// operator created it. The labels and annotations the operator also stamps
-	// are forgeable by any principal who can create a Service in the run
-	// namespace, and strippable by any who can patch one.
+	// creates an object. An entry written from this operator's own create
+	// therefore proves it created that Service; the labels and annotations it
+	// also stamps prove nothing, being forgeable by any principal who can
+	// create a Service in the run namespace and strippable by any who can
+	// patch one.
 	//
-	// An entry is also written for an existing Service that passes provenance
-	// and is addressable when no entry exists for its revision, which is how an
-	// Agent created before this field acquires one. A headless Service is never
-	// recorded that way. Entries leave with their revision.
+	// An entry is ALSO written, by adoption, for an existing Service that has
+	// no entry for its revision and digest, passes provenance, is addressable,
+	// and has just been converged to the render. That happens on the first
+	// sight of ANY revision's Service without a record — every new revision
+	// included, not only an Agent created before this field — so an adopted
+	// entry proves only that the object carried this Agent's provenance and
+	// was made this operator's shape; it may be an object someone else
+	// created at the revision's predictable name. A headless Service is never
+	// adopted, and an existing entry is never overwritten by adoption.
+	// Entries leave with their revision.
 	// +optional
 	RevisionServices []RevisionServiceRecord `json:"revisionServices,omitempty"`
 	// SupersededCandidates records abandoned in-flight candidates so the
@@ -699,7 +708,8 @@ type AgentStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
-// RevisionServiceRecord is one revision Service this operator created.
+// RevisionServiceRecord is one revision Service this operator created, or
+// adopted after converging it (see AgentStatus.RevisionServices).
 type RevisionServiceRecord struct {
 	// Revision is the revision the Service belongs to; its name is
 	// `<agent>-<revision>`.
@@ -709,8 +719,8 @@ type RevisionServiceRecord struct {
 	// 40-bit name collision between two projections cannot borrow the other's
 	// record.
 	RevisionDigest string `json:"revisionDigest"`
-	// UID is the Service's metadata.uid as the API server returned it on the
-	// create.
+	// UID is the Service's metadata.uid: as the API server returned it on
+	// this operator's create, or as read from the object when it was adopted.
 	UID types.UID `json:"uid"`
 }
 

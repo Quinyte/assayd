@@ -5,12 +5,17 @@ package envtest
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
@@ -359,6 +364,26 @@ func TestAServiceWithNoRecordIsNeverDeleted(t *testing.T) {
 	if !strings.Contains(ready.Message, "records no Service for this revision") {
 		t.Errorf("the message does not say there is no record: %s", ready.Message)
 	}
+
+	// The refusal has TWO exits, not one. Deleting the object is the one the
+	// message names; repairing it IN PLACE back to addressable — the two
+	// patches in reverse — is the other: the next pass converges it and, since
+	// there is no record, adopts it.
+	patchService(t, key,
+		`{"spec":{"type":"ExternalName","externalName":"elsewhere.example.com"}}`,
+		`{"spec":{"type":"ClusterIP","externalName":null}}`)
+	reconcileOnce(t, r, a)
+	repaired := liveService(t, key)
+	got = liveAgentPtr(t, a)
+	if repaired.UID != before.UID {
+		t.Fatalf("the in-place repair was replaced (%s -> %s)", before.UID, repaired.UID)
+	}
+	if c := condition(got, assaydv1alpha1.CondReady); c != nil && c.Reason == controller.CondReasonServiceNotRecorded {
+		t.Errorf("an in-place repair back to addressable did not clear the refusal: %+v", c)
+	}
+	if rec := recordFor(got, rev); rec != repaired.UID {
+		t.Errorf("the repaired object was not adopted into the empty record (%q, want %s)", rec, repaired.UID)
+	}
 }
 
 // The MIGRATION: an addressable Service with no record, which passes
@@ -392,5 +417,191 @@ func TestAnAddressableServiceWithNoRecordIsAdoptedIntoTheRecord(t *testing.T) {
 	if after := liveService(t, key); after.UID == before.UID {
 		t.Fatalf("the adopted Service was not replaced once it went headless: %+v",
 			condition(liveAgentPtr(t, a), assaydv1alpha1.CondReady))
+	}
+}
+
+// conflictOnFinalStatusWrite answers Conflict to every Agent status write that
+// changes anything BESIDES the Service record and the replace bound, for as
+// long as it is armed — which is what the pass's final status write is, and
+// what a concurrent edit to the Agent does to it.
+type conflictOnFinalStatusWrite struct {
+	client.Client
+	refused int
+}
+
+func (c *conflictOnFinalStatusWrite) Status() client.SubResourceWriter {
+	return &conflictOnFinalSW{SubResourceWriter: c.Client.Status(), c: c}
+}
+
+type conflictOnFinalSW struct {
+	client.SubResourceWriter
+	c *conflictOnFinalStatusWrite
+}
+
+func (w *conflictOnFinalSW) Update(ctx context.Context, obj client.Object,
+	opts ...client.SubResourceUpdateOption) error {
+	if a, ok := obj.(*assaydv1alpha1.Agent); ok {
+		var live assaydv1alpha1.Agent
+		if err := k8s.Get(ctx, client.ObjectKeyFromObject(a), &live); err == nil {
+			strip := func(s assaydv1alpha1.AgentStatus) assaydv1alpha1.AgentStatus {
+				s.RevisionServices, s.ServiceReplacedRevision, s.ServiceReplacedAt = nil, "", nil
+				return s
+			}
+			if !equality.Semantic.DeepEqual(strip(a.Status), strip(live.Status)) {
+				w.c.refused++
+				return apierrors.NewConflict(schema.GroupResource{Group: "assayd.dev", Resource: "agents"},
+					a.GetName(), errors.New("injected: the pass's final status write lost a race"))
+			}
+		}
+	}
+	return w.SubResourceWriter.Update(ctx, obj, opts...)
+}
+
+// The record survives a pass whose final status write fails.
+//
+// It was carried only by that write, so one Conflict after a replace left the
+// operator's own replacement unrecorded, and the next headless state of it was
+// refused as RevisionServiceNotRecorded until a human deleted it, with the
+// route still published — round four of A77's review measured exactly that.
+// The record is now written the moment the create returns, in a write of its
+// own. Both creates are driven: the replace, and a plain create after the
+// Service is gone.
+func TestTheRecordSurvivesAConflictOnThePassesFinalStatusWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		breakIt func(t *testing.T, key types.NamespacedName)
+		replace bool
+	}{
+		{"the replace", headlessByPatchAlone, true},
+		{"a create after the Service is gone", func(t *testing.T, key types.NamespacedName) {
+			svc := liveService(t, key)
+			if err := k8s.Delete(context.Background(), &svc); err != nil {
+				t.Fatalf("delete: %v", err)
+			}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := newNamespace(t)
+			a := noneAgent(t, ns, "conflicted")
+			r := newGatewayReconciler("assayd-gateway", "assayd")
+			rev := revision.MustHash(a.Spec)
+			svcName := controller.WorkloadName("conflicted", rev)
+			settle(t, r, a)
+			markAvailable(t, ns, svcName, 1)
+			settle(t, r, a)
+
+			key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+			before := liveService(t, key)
+			tc.breakIt(t, key)
+			// Give the pass something besides the record to write, so its final
+			// status write is not a no-op: the record now reaches the API server
+			// before it, and a pass with nothing else to say would write nothing
+			// for the Conflict to refuse.
+			stale := liveAgentPtr(t, a)
+			stale.Status.ObservedGeneration = 0
+			if err := k8s.Status().Update(context.Background(), stale); err != nil {
+				t.Fatalf("seed a stale observedGeneration: %v", err)
+			}
+
+			losing := &conflictOnFinalStatusWrite{Client: k8s}
+			cr := newGatewayReconciler("assayd-gateway", "assayd")
+			cr.Client = losing
+			cr.Reader = k8s
+			_, err := cr.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)})
+			if losing.refused == 0 || err == nil {
+				t.Fatalf("setup: the pass's final status write was not refused (refused=%d, err=%v)",
+					losing.refused, err)
+			}
+
+			after := liveService(t, key)
+			if after.UID == before.UID {
+				t.Fatal("setup: the Service was not replaced or recreated")
+			}
+			got := liveAgentPtr(t, a)
+			if rec := recordFor(got, rev); rec != after.UID {
+				t.Fatalf("the pass's final status write failed and the record went with it: status "+
+					"records %q, and the Service this operator just created is %s. The next headless "+
+					"state of its own object would be refused as not its own", rec, after.UID)
+			}
+			if tc.replace && (got.Status.ServiceReplacedRevision != rev || got.Status.ServiceReplacedAt == nil) {
+				t.Errorf("the replace bound was lost with the final write: %q %v",
+					got.Status.ServiceReplacedRevision, got.Status.ServiceReplacedAt)
+			}
+		})
+	}
+}
+
+// concurrentStatusWriter lets another writer update the Agent's status just
+// before this operator's FIRST status write of the pass reaches the API server.
+type concurrentStatusWriter struct {
+	client.Client
+	fired bool
+}
+
+func (c *concurrentStatusWriter) Status() client.SubResourceWriter {
+	return &concurrentSW{SubResourceWriter: c.Client.Status(), c: c}
+}
+
+type concurrentSW struct {
+	client.SubResourceWriter
+	c *concurrentStatusWriter
+}
+
+func (w *concurrentSW) Update(ctx context.Context, obj client.Object,
+	opts ...client.SubResourceUpdateOption) error {
+	if a, ok := obj.(*assaydv1alpha1.Agent); ok && !w.c.fired {
+		w.c.fired = true
+		var live assaydv1alpha1.Agent
+		if err := k8s.Get(ctx, client.ObjectKeyFromObject(a), &live); err != nil {
+			return err
+		}
+		live.Status.Conditions = append(live.Status.Conditions, metav1.Condition{
+			Type: "example.com/Concurrent", Status: metav1.ConditionTrue, Reason: "WrittenMeanwhile",
+			Message: "written by another controller during the pass", LastTransitionTime: metav1.Now(),
+		})
+		if err := k8s.Status().Update(ctx, &live); err != nil {
+			return err
+		}
+	}
+	return w.SubResourceWriter.Update(ctx, obj, opts...)
+}
+
+// The early record write overwrites nothing written concurrently.
+//
+// Its first attempt carries the resourceVersion this pass read, so a write that
+// landed in between makes it Conflict; the retry re-reads the Agent live and
+// applies only the record onto it.
+func TestTheEarlyRecordWriteDoesNotClobberAConcurrentStatusWrite(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "concur")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("concur", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	headlessByPatchAlone(t, key)
+	racing := &concurrentStatusWriter{Client: k8s}
+	cr := newGatewayReconciler("assayd-gateway", "assayd")
+	cr.Client = racing
+	cr.Reader = k8s
+	if _, err := cr.Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)}); err != nil {
+		t.Logf("reconcile: %v", err)
+	}
+	if !racing.fired {
+		t.Fatal("setup: no status write was issued")
+	}
+
+	after := liveService(t, key)
+	got := liveAgentPtr(t, a)
+	if rec := recordFor(got, rev); rec != after.UID {
+		t.Errorf("the record did not survive the race: %q, want %s", rec, after.UID)
+	}
+	if condition(got, "example.com/Concurrent") == nil {
+		t.Errorf("the early record write overwrote a status field another writer set during the "+
+			"pass: %+v", got.Status.Conditions)
 	}
 }

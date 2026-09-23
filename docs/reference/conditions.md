@@ -1292,11 +1292,11 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/agent_controller.go:687` in `Reconcile()` — from the local `shape.reason(…)`, one of 2 reasons it folds to
 - `internal/controller/agent_controller.go:686` in `Reconcile()` — from the local `shape.reason(…)`, one of 2 reasons it folds to
 
-**Referenced by a test:** **no — no test file in this repository names it.** Nothing here fails if it changes or stops being set.
+**Referenced by a test:** `test/envtest/service_record_test.go`
 
-**State:** A Service at the desired revision's name is headless — `spec.clusterIP: None`, which no Update can repair — and its UID is not the one `status.revisionServices` records for that revision: there is no record (an Agent created before the record, whose Service went headless before it was adopted into it), or the record names a different object (the operator's Service was deleted and another put at the name). The object passed provenance, so it is not a collision; the operator cannot establish that it created it, whatever its labels and annotations say.
+**State:** A Service at the desired revision's name is headless — `spec.clusterIP: None`, which no Update can repair — and its UID is not the one `status.revisionServices` records for that revision and digest. There is no record: an Agent created before the record, whose Service went headless before it was adopted; or the record of the operator's own create was lost — its dedicated status write and the pass's final status write both failed, or the process died between the create and them — before the object went headless. Or the record names a different object: the operator's Service was deleted and another put at the name, or the operator's own replacement lost its record in the same way. The object passed provenance, so it is not a collision; the operator cannot establish that it created or adopted it, whatever its labels and annotations say.
 
-**What the operator does:** Never deletes it. Sets `Ready=False` and `Degraded=True` with this reason and phase `Degraded`, carries design 03's `PolicyApplyIncomplete` and `PolicyCompileFailed`, returns before the gateway step, and re-checks after `RefusedServiceRecheck` (one minute). The message names the recorded UID and the object's. It stands until a human deletes the object; the operator then creates its own and records it.
+**What the operator does:** Never deletes it. Sets `Ready=False` and `Degraded=True` with this reason and phase `Degraded`, carries design 03's `PolicyApplyIncomplete` and `PolicyCompileFailed`, returns before the gateway step, and re-checks after `RefusedServiceRecheck` (one minute). The message names the recorded UID and the object's. It stands until a human deletes the object, after which the operator creates its own and records it, or repairs it in place back to addressable, after which the next pass converges it and, if there is no record at that revision and digest, adopts it.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
@@ -1338,7 +1338,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **State:** The operator's own revision Service — the object whose UID `status.revisionServices` records — is headless and unrepairable in place again, and the operator already deleted and recreated it inside `ServiceReplaceCooldown` (ten minutes, counted from `status.serviceReplacedAt`).
 
-**What the operator does:** Does not replace it a second time inside the window. Sets `Ready=False` and `Degraded=True` with this reason and phase `Degraded`, returns before the gateway step, and re-checks after `RefusedServiceRecheck` (one minute), replacing it once the window has passed.
+**What the operator does:** Does not replace it a second time inside the window. Sets `Ready=False` and `Degraded=True` with this reason and phase `Degraded`, carries design 03's `PolicyApplyIncomplete` and `PolicyCompileFailed`, returns before the gateway step, and re-checks after `RefusedServiceRecheck` (one minute), replacing it once the window has passed.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
@@ -1633,7 +1633,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 ## Reasons no test in this repository names
 
-19 of the 71 reasons the operator can set are named by no test file
+18 of the 71 reasons the operator can set are named by no test file
 anywhere under `internal/`, `api/` or `test/`. Each is a string this operator will put on a user's
 object, and no test in this repository fails if it changes, stops being set, or is set for the
 wrong state. That is not a claim that the BEHAVIOUR is untested — a test can exercise a path and
@@ -1651,7 +1651,6 @@ unpinned.
 - [`NoRolloutInFlight`](#norolloutinflight)
 - [`NoSigningConfigured`](#nosigningconfigured)
 - [`ProtocolHasNoDeclaration`](#protocolhasnodeclaration)
-- [`RevisionServiceNotRecorded`](#revisionservicenotrecorded)
 - [`RevisionServiceReplaceFailed`](#revisionservicereplacefailed)
 - [`RevisionServiceReplaceHeld`](#revisionservicereplaceheld)
 - [`RevisionServiceUnreadable`](#revisionserviceunreadable)
@@ -1696,5 +1695,5 @@ their own section above. This page reports them; it does not settle them.
 
 **Every reason set is closed.** Each struct reason field the page reads had all of its writes folded, so a `field` row lists every reason that field can hold.
 
-**Coverage of the test reference scan.** 52 of 71 reasons are named by at least one test file. The scan matches the reason string or its `Reason*` identifier on a word boundary, across every `_test.go` under `internal/` and `api/` and every Go file under `test/`. `internal/refgen` is excluded: its tests name reasons to check that the GENERATOR resolves them, and counting those would let this page shrink its own unpinned list.
+**Coverage of the test reference scan.** 53 of 71 reasons are named by at least one test file. The scan matches the reason string or its `Reason*` identifier on a word boundary, across every `_test.go` under `internal/` and `api/` and every Go file under `test/`. `internal/refgen` is excluded: its tests name reasons to check that the GENERATOR resolves them, and counting those would let this page shrink its own unpinned list.
 
