@@ -224,7 +224,7 @@ func TestChartShipsTheGeneratedCRD(t *testing.T) {
 // The local profile is the honest mode: single replicas, and it must still
 // render. NFR-3 says this runs on a laptop, and a profile nobody renders is a
 // profile that does not work.
-func TestLocalProfileRenders(t *testing.T) {
+func TestLocalProfileRendersRenamed(t *testing.T) {
 	docs := render(t, "-f", filepath.Join(chartPath, "values-local.yaml"))
 	for _, d := range kindsOf(docs, "Deployment") {
 		if n := replicasOf(t, d); n != 1 {
