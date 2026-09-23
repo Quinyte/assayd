@@ -1,7 +1,8 @@
 # The assayd website — information architecture
 
 - **Status**: **proposal, not approved.** No critique of this document has been run. It specifies pages, not prose, and no page it names exists. Where it proposes a file outside `docs/web/`, that file is owed by whoever implements the section, and this document does not create it.
-- **Date**: 2026-09-22 · **Scope**: `assayd.io` and `assayd.dev`
+- **Date**: 2026-09-22 · **revised 2026-09-23** against `main` `6ae20e1`, PR #60 (`3bc7e6b`) and PR #59 (`939f964`), neither merged · **Scope**: `assayd.io` and `assayd.dev`
+- **What the revision changed**: §11 was a list of 22 defects; PR #60 has addressed all 22, so §11 is now a reconciliation — fixed, changed shape, or still live — because a fixed-defect list published as a record reads as a to-do list. §5.5 replaces this document's own first finding, which is **void**: `make docs` was not in CI at `22b65c2` where this branch started and was added in `80b63b5` the same day. What replaces it is stronger and is PR #60's: the gate *ran*, and had never scanned either of the two documents that mattered. §12's O1, O2 and O4 are closed.
 - **Reads from**: `README.md`, `AGENTS.md`, `CLAUDE.md`, `SECURITY.md`, `docs/architecture.md`, `docs/install.md`, `docs/agent-contract.md`, `docs/agent-protocol.md`, `docs/supply-chain.md`, `docs/requirements.md`, `docs/designs/README.md`, the Status lines of designs 02, 03 and 16, and ADR-0030.
 - **Does not decide**: the site scaffold (`web/**`), the generated reference tooling (`hack/**`, `docs/reference/**`), or the diagram audit (`docs/diagrams/**`). Those are owned elsewhere. This document names what those owners must produce and what a page may claim about it.
 
@@ -91,9 +92,9 @@ Every page below states the question it answers for a reader who arrives cold, k
 | `/supply-chain` | How do I verify the bytes I am about to run? |
 | `/feature-status` | Is the thing I need actually enforced, at the version I run? |
 | `/reference/` | Which reference surface do I want? |
-| `/reference/agent` | Every field of the Agent CRD, its default, and what refuses it |
-| `/reference/values` | Every chart value and its default |
-| `/reference/conditions` | Every condition type and phase the operator sets |
+| `/reference/crd-agent` | Every field of the Agent CRD, its default, and what refuses it |
+| `/reference/helm-values` | Every chart value and its default |
+| `/reference/conditions` | Every condition the operator writes, every reason it can set, and whether traffic is withdrawn |
 | `/reference/flags` | Every operator flag |
 | `/reference/labels` | Every `assayd.dev/*` label and annotation, and whether it is evidence |
 | `/reference/tested-versions` | Which versions of Kubernetes, Gateway API and agentgateway have been measured |
@@ -105,7 +106,7 @@ Every page below states the question it answers for a reader who arrives cold, k
 | `/contributing` | How do I contribute, and what will happen to my patch? |
 | `/contributing/review` | What does "independently reviewed" mean here? |
 
-**`/reference/reasons` is deliberately absent, and §5.4 explains why.** The short form: condition *types* are a closed vocabulary with a test that closes it; condition *reasons* are not, and a reference page listing 30 of the 56 reasons in the operator would be a reference that is wrong about the other 26.
+**Reasons are on `/reference/conditions`, not on a page of their own — and an earlier revision of this document said they could not be documented at all.** That was right about the code and wrong about the remedy: reasons were 30 constants plus 26 bare string literals with nothing closing the set. **PR #59 closes it** by extracting the vocabulary with `go/packages` and `go/types` rather than reading the constants — 39 condition types, 64 reason strings and their call sites — and by holding a hand-written annotation file to that set, so a reason with no entry or an entry with no reason fails `make reference` and so fails CI. §12, O4 carries what the page still cannot promise.
 
 ## 4. The claim-class system
 
@@ -235,6 +236,7 @@ Each is one assertion in `test/docs/claims_test.go`, and each fails the build.
 | E | Every `designed`/`not-built` record's `evidence.status` string appears in that design's `- **Status**:` bullet. | A slice's approval boundary moving without the claim moving. |
 | F | Every claim `id` referenced by a page exists in the manifest, and every manifest record is referenced by at least one page. | Dangling references and orphan records. |
 | G | `TestEveryClaimsGateIsPinnedByAFixture` — each gate above has a fixture that fails it. | The gate itself rotting. `test/docs/superseded_test.go` already does this as `TestEveryRuleIsPinnedByAnIndependentFixture`; rule 1 says a gate nothing can fail is not a gate. |
+| H | `TestEveryClaimedPageAndHolderExists` — every page path the manifest references, and every `evidence.file`/`evidence.design` holder, is asserted to exist **by path**, and the count of scanned pages is asserted against the count on disk. | **A file dropping out of the gate's own corpus.** §5.5 is why this gate exists and why it is not optional. |
 
 ### 5.3 What these gates do not catch — stated, not dressed up
 
@@ -245,7 +247,7 @@ Each is one assertion in `test/docs/claims_test.go`, and each fails the build.
 
 ### 5.4 Per-page source of truth, mode, and whether a gate protects it
 
-**The enforcement column below is written against a defect this document found and does not hide:** `make docs` — the repository's only mechanical prose gate — is in `make test` but is **not** in `.github/workflows/ci.yml`, which runs `verify`, `vet`, `unit`, `race`, `envtest`, `chart`, `chart-conform` and `e2e` individually and omits `docs` and `conformance`. **So every "CI" below is conditional on adding `make docs` to `ci.yml`**, which is the first item on the cut list (§9) and is not done by this change. Until it lands, every row reads "someone notices", including the rows for the gate that exists today.
+**The enforcement column below is real, not conditional.** `make docs` and `make conformance` both run in `.github/workflows/ci.yml` as their own steps, added in `80b63b5` — whose comment records that each was "Also in `make test` and, like conformance, in no CI job before." An earlier revision of this document named that absence as its first cut-list item; it was true at `22b65c2`, where this branch started, and was fixed the same day. **The stronger finding is §5.5's, and it is not that a gate was missing.**
 
 #### `assayd.io`
 
@@ -255,7 +257,7 @@ Each is one assertion in `test/docs/claims_test.go`, and each fails the build.
 | `/claims` | this document §4 | hand-written | someone notices |
 | `/concepts/*` | `web/claims.yaml` for each assertion; the design section each concept explains | derived-and-reviewed | CI (A–G) per claim; the explanation, someone notices |
 | `/roadmap` | `docs/decisions/0030-*.md`; each design's own `- **Status**:` bullet; `web/claims.yaml` | generated (status table and gap list), hand-written frame | CI (D, E) |
-| `/releases` | git tags; `docs/supply-chain.md`'s published-artifact table; `.github/workflows/release.yml` | generated from tags | someone notices — there is no CHANGELOG and no release-notes file to generate from (§10) |
+| `/releases` | git tags; `docs/supply-chain.md`'s published-artifact table and its per-version verification dates; `.github/workflows/release.yml` | derived-and-reviewed | someone notices. **Not generated from tags alone**: `supply-chain.md` now records `v0.4.1` as tagged and never verified from outside, so a tag is not evidence of a published artifact (§11.6.3). A version with no recorded check renders as unverified, never as a release. There is also no CHANGELOG to generate notes from (§12). |
 | `/security` | `SECURITY.md`; the `security`-tagged records in `web/claims.yaml` | derived-and-reviewed | CI (A–G) for the not-enforced list; the reporting policy, someone notices |
 | `/about` | `LICENSE`, `MAINTAINERS.md`, `GOVERNANCE.md`, `SECURITY.md` §Regulatory | derived-and-reviewed | someone notices |
 
@@ -265,7 +267,7 @@ Each is one assertion in `test/docs/claims_test.go`, and each fails the build.
 |---|---|---|---|
 | `/` | — | hand-written | someone notices |
 | `/guides/install` | `docs/install.md` §§1–3, 5 | derived-and-reviewed | someone notices; the version pins it quotes are held by `hack/e2e.sh` and are bound by `/reference/tested-versions` |
-| `/guides/api-keys` | `docs/install.md` §3; `charts/assayd/values.yaml` `admission.apiKeyWriters` | derived-and-reviewed | CI via `/reference/values` for the value names |
+| `/guides/api-keys` | `docs/install.md` §3; `charts/assayd/values.yaml` `admission.apiKeyWriters` | derived-and-reviewed | CI via `/reference/helm-values` for the value names |
 | `/guides/a2a-task` | `docs/install.md` §5; `docs/agent-contract.md` "The A2A binding" | derived-and-reviewed | someone notices |
 | `/guides/mcp-tool` | `docs/install.md` §6; `docs/agent-contract.md` "Calling an MCP tool" | derived-and-reviewed | someone notices |
 | `/guides/upgrading` | `docs/install.md` §4 | derived-and-reviewed | someone notices |
@@ -273,12 +275,12 @@ Each is one assertion in `test/docs/claims_test.go`, and each fails the build.
 | `/agent-contract` | `docs/agent-contract.md` | derived-and-reviewed | its own "Sources" table already names the file or test behind every row — the closest thing in the corpus to what §5.1 proposes, and the model for the manifest |
 | `/supply-chain` | `docs/supply-chain.md`; `.github/workflows/release.yml` | derived-and-reviewed | someone notices |
 | `/feature-status` | `web/claims.yaml` at each release tag | generated | CI (A–G) |
-| `/reference/agent` | `api/v1alpha1/agent_types.go` → `config/crd/assayd.dev_agents.yaml` | generated | the reference agent's drift check, plus `make verify` |
+| `/reference/crd-agent` | `api/v1alpha1/agent_types.go` → `config/crd/assayd.dev_agents.yaml`, via `cmd/refgen` | generated | **CI** — `make verify` regenerates `docs/reference/` and fails if what is committed differs (PR #59) |
 | *(note to the reference owner, not a decision of this document)* | The survey checked the two usual generators. **`ahmetb/gen-crd-api-reference-docs` has self-deprecated** — its README says "not super actively maintained… consider crd-ref-docs" and its last release was 2019, though cert-manager, Flux and Knative all still use it. **`elastic/crd-ref-docs` is active** (v0.3.0, 2026-02) and is what **Gateway API and Cluster API** both use. Separately: **agentgateway — the gateway assayd pins at 1.5.0 — renders its own CRD docs with `kubespec-render`**, and is indexed on `kubespec.dev` beside Gateway API, cert-manager, Cilium and Argo CD. If assayd's Agent CRD should sit next to agentgateway's, that is the shape to match. | — | — |
-| `/reference/values` | `charts/assayd/values.yaml` | generated | the reference agent's drift check |
-| `/reference/conditions` | the `const` block at `api/v1alpha1/agent_types.go` and `designConditions()` beside it | generated | CI — `TestNoConditionTypeIsALiteral` already closes this vocabulary |
-| `/reference/flags` | `cmd/` flag registrations | generated | the reference agent's drift check |
-| `/reference/labels` | `internal/compiler` and `internal/controller/runnamespace.go` label constants | generated | the reference agent's drift check |
+| `/reference/helm-values` | `charts/assayd/values.yaml`, via `cmd/refgen` | generated | **CI** — same `make verify` gate |
+| `/reference/conditions` | `api/v1alpha1` and `internal/controller`, read with `go/types` by `cmd/refgen`; the three per-reason annotations that are not in the code live in `internal/refgen/reasons.yaml` | generated | **CI** — `make verify`, plus `TestNoConditionTypeIsALiteral`. The join pins the *set* of reasons; it does not prove the annotations are still true of the code, and the page says so |
+| `/reference/flags` | `cmd/` flag registrations | generated | **owed** — PR #59 generates three pages, not six; this is not one of them |
+| `/reference/labels` | `internal/compiler` and `internal/controller/runnamespace.go` label constants | generated | **owed** — not generated by PR #59 |
 | `/reference/tested-versions` | `hack/e2e.sh` (`GWAPI_VERSION`, `AGW_VERSION`); `charts/assayd/Chart.yaml` `kubeVersion` | generated | `test/conformance/versions_test.go` already pins that the slice cases run the e2e's agentgateway release |
 | `/archive/designs/<nn>` | `docs/designs/<nn>-*.md` | generated, verbatim | CI (E) binds the Status line wherever a claim cites it |
 | `/archive/decisions/<nnnn>` | `docs/decisions/<nnnn>-*.md` | generated, verbatim | someone notices |
@@ -292,16 +294,34 @@ Each is one assertion in `test/docs/claims_test.go`, and each fails the build.
 - `README.md`'s *What is true today* / *What is NOT true today* — restated by `/` and `/feature-status`.
 - The *What remains untrue* paragraph in `AGENTS.md` (and its copy in `CLAUDE.md`) — restated by `/feature-status` and `/roadmap`.
 - `docs/designs/README.md`'s status table — **not** the holder for `/roadmap`. Each design's own `- **Status**:` bullet is, because `README.md`, `AGENTS.md` and the table itself all say a design's own Status line beats any summary, and the table is a summary. The table becomes a derived view like the site is.
-- `api/v1alpha1` and `charts/assayd/values.yaml` — restated by `/reference/agent` and `/reference/values`, generated.
+- `api/v1alpha1` and `charts/assayd/values.yaml` — restated by `/reference/crd-agent` and `/reference/helm-values`, generated.
 - git tags plus `docs/supply-chain.md` — restated by `/releases`.
 
-### 5.5 The copy count, which is evidence against this proposal
+### 5.5 The failure this section is actually designed against: a gate that ran and saw nothing
+
+The lesson is not "a gate was missing". It is worse than that, and it is the reason gate H exists.
+
+`test/docs/superseded_test.go` has run on every `make test` since it was written, and in CI since `80b63b5`. It passed. **It had never once scanned either of the two documents that mattered most**, and PR #60 found both holes:
+
+- **`docs/architecture.md` — the file `AGENTS.md` calls canonical — was exempt from the day the gate was written.** `isFrozen` reads the first 800 bytes for a document announcing its own supersession, so that a frozen ADR is not scanned. The file's Status line reads "superseded in part — read §18 before relying on this document", and the bare word `superseded` sits at byte 608, inside that window. "Superseded in part" is the *opposite* of frozen: the parts that stand are precisely what an implementer builds from. PR #60 adds `partiallySuperseded`, which returns `false` from `isFrozen` before the bare-word marker is consulted.
+- **`docs/architecture.html` was never scanned because the walk stopped at the file extension.** It is the rendered face of the canonical document, hand-maintained beside it with no generator in between, and it carried the "27/27 designs approved · 26 ADRs" header for weeks after both bodies had been corrected. PR #60 adds `renderHTML` and scans `.html` too.
+
+**The rule, and it is the one this whole section exists to teach: an unscanned file reports exactly the same silence as a clean one.** A green gate is evidence about the corpus the gate *saw*, and nothing at all about the corpus that exists. `TestAnEmptyCorpusIsAFailure` already guards that at the level of the whole tree; neither hole tripped it, because the corpus was not empty — it was one or two files short, and nothing counted.
+
+PR #60's answer is `TestTheCanonicalDocumentIsScanned`, which names the two files **by path**, because a corpus-level guard cannot see one file going missing. **Gate H is that pattern applied to the claims manifest**, and it is why the gate list is eight and not seven: without it, a page dropping out of the site build, or a holder file being moved, leaves every other gate passing on a manifest that no longer describes the site.
+
+Two further limits PR #60 states about itself, which transfer directly and are not hypothetical:
+
+- **Every rule is a lexical tripwire, not a semantic guarantee.** It catches the phrasings someone wrote down, and PR #60 records the corpus defeating that twice from the inside — once by emphasis inside a banned phrase, once because a rule knew only a reviewer's paraphrase of the live wording. This is §5.3's first bullet arriving from a different direction, and it is the argument against ever treating a green build as proof that a page is true.
+- **A rescue is per block, and an HTML block is bigger than a table cell.** Markdown splits a table row into cells, so a retraction on one side cannot launder a claim on the other. HTML splits on block-level tags, so a `<div>` of inline `<span>` pills renders as **one** block, and a retraction in one pill rescues its neighbour. PR #60 measured this while writing it: re-planting the false header claim beside the corrected one did not fail the gate until the rescue clause was narrowed. **The consequence for the `ClaimClass` component: a claim badge and its claim must render as one block, and two claims must never share one.** An inline badge row is a surface on which one classed claim can vouch for an unclassed neighbour, and nothing would catch it.
+
+### 5.6 The copy count, which is evidence against this proposal
 
 The same claims are currently written out in **six** places: `README.md`'s two lists, `SECURITY.md`'s *What is NOT yet enforced*, the `AGENTS.md`/`CLAUDE.md` paragraph, `docs/architecture.md` §02 and §18's notes, `docs/install.md`'s opening paragraph, and design 02 §5. Adding `web/claims.yaml` makes **seven** unless something is retired.
 
 The recommendation is not to retire them all. `AGENTS.md` and `CLAUDE.md` are narrative documents for contributors and read as prose for a reason; design 02 §5 is the authoritative list and must stay where an implementer reads it. The proposal is narrower and is one gate:
 
-**Gate H (owed, not proposed as done): `README.md`'s *What is true today* bullets are generated from the manifest's `headline`-tagged `measured` records, and *What is NOT true today* from its `headline`-tagged `designed` and `not-built` records.** That is the highest-reach copy and the one that has already gone false. It requires editing `README.md`, which this change does not do, and it is the second item on the cut list. Until it lands, the manifest is a seventh copy, and the honest description of the first release is that the site has one enforced copy and the repository has six unenforced ones.
+**Gate R (owed, not proposed as done): `README.md`'s *What is true today* bullets are generated from the manifest's `headline`-tagged `measured` records, and *What is NOT true today* from its `headline`-tagged `designed` and `not-built` records.** That is the highest-reach copy and the one that has already gone false. It requires editing `README.md`, which this change does not do, and it is the second item on the cut list. Until it lands, the manifest is a seventh copy, and the honest description of the first release is that the site has one enforced copy and the repository has six unenforced ones.
 
 ## 6. The concepts section
 
@@ -385,7 +405,7 @@ The counter-example is Tekton, which runs the two ladders separately — TEP sta
 | Gap | Class of defect | Links to | Observable |
 |---|---|---|---|
 | A published route can be served unauthenticated by a gateway replica that has not yet taken the Agent's policy. One probe proves one replica, and no replica count is declared. | Authentication bypass, window, multi-replica only | design 03 §3.3.3 and §8.1 | `GovernanceSkipped=False`, reason `AuthVerifiedOnOneReplica` |
-| Deleting the API-key ConfigMap takes every key to `401`, and nothing reports it. `DELETE` is not reserved by admission, and the operator does not watch key sets. *(The coordinator's brief names this **D6**; the repository carries no such label — §12, O1.)* | Availability, not bypass | design 03 §3.4.4 ("The key set is outside every gate") and §8.1's reservation scope | **nothing** — that is the defect |
+| Deleting the API-key ConfigMap takes every key to `401`, and nothing reports it. `DELETE` is not reserved by admission, and the operator does not watch key sets. | Availability, not bypass | design 03 §3.4.4 ("The key set is outside every gate") and §8.1's reservation scope ("`DELETE` is not reserved") | **nothing** — that is the defect |
 | A route published before the compiler, or one whose status was lost, stays unauthenticated and is never adopted. | Authentication bypass, upgrade and restore path | design 03 §3.3.3 | `GovernanceSkipped=CompilerUpgradeUnsupported` |
 | A served policy the Gateway reports as attached to nothing is announced and not closed — the fail-open half. | Authentication bypass, announced | design 03 §3.3.3 (A80/A81) | `PolicyApplyIncomplete` and `GovernanceSkipped=True`, both `AuthPolicyNotAttached` |
 | No NetworkPolicy is materialized in any namespace, so an agent Pod is reachable directly and any gateway control is bypassable. | Bypass, by default, on every install | design 07 A6.6; `SECURITY.md` | none — this is the documented default |
@@ -409,15 +429,13 @@ The argument, in order:
 
 `/contributing/review`, derived from `docs/agent-protocol.md`, publishes what "independent" means — the reviewer-family gradient, findings travelling as committed files, and the rule that two reviewers never reconcile. Without that page the ledger's reviewer-family column is unreadable, which is why `docs/agent-protocol.md` is on the site at all despite being an internal working document.
 
-### 9.2 `docs/architecture.html` is never published, and should be deleted or marked
+### 9.2 `docs/architecture.html` is not published — and the reason has changed
 
-This is the most dangerous artefact in the tree for a public site. It is the rendered companion to `docs/architecture.md`, it was partially corrected and its header and footer were missed, and it still carries verbatim:
+An earlier revision of this document called this file the most dangerous artefact in the tree, because it carried "27/27 designs approved · 26 ADRs" in its header and footer, plus "Every component below is designed, adversarially critiqued, and approved" and "Every claim in this document is backed by an ADR and a critique-passed design" — the sentence `CLAUDE.md` opens by recording as false. It recommended deleting or regenerating the file.
 
-- "27/27 designs approved · 26 ADRs" — the exact false sentence `CLAUDE.md` opens by recording;
-- "Every component below is designed, adversarially critiqued, and approved";
-- "Every claim in this document is backed by an ADR and a critique-passed design."
+**That was fixed by PR #60, and the fix is better than the recommendation.** The header now reads `status superseded in part · 27 designs, not 27 approved · 34 ADRs`; the approval sentence is rewritten in place; the footer claim is quoted and withdrawn. More importantly, the file is now **inside the gate**: `test/docs/superseded_test.go` scans `.html` through `renderHTML`, and `TestTheCanonicalDocumentIsScanned` names it by path so the exclusion cannot quietly return (§5.5).
 
-Partial correction is worse than uniform staleness, because the file looks current. It must not be published, must not be linked, and should be either regenerated from `docs/architecture.md` or deleted. That change is outside this document's one file; §11.1 records it.
+**The page still does not go on the site, on a different and smaller argument.** It is a hand-maintained rendering of `docs/architecture.md` with no generator between the two — PR #60's own comment says so, and that duplication is exactly how the header survived correction for weeks. Publishing it would make a third rendering of one document. `/archive/architecture` renders the Markdown (§9.3); the HTML stays in the repository as the reviewers' artefact it is.
 
 ### 9.3 `docs/architecture.md` is published only inside the archive
 
@@ -425,17 +443,15 @@ Partial correction is worse than uniform staleness, because the file looks curre
 
 The reason: its honest warnings are per-*section* ("Designed, not shipped" at the head of §02, §03, §12, §16, §17), and a reader skimming a table two screens below the warning takes the table and leaves the warning. §4's claim classes are per-*claim*, which is the granularity the failure demands. The concepts section (§6) is the site's architecture story, and it is classed sentence by sentence.
 
-Three specific things in it must not be lifted onto any other page, because they escape their own section's fence:
+An earlier revision listed three things in it that escaped their own section's fence and must not be lifted elsewhere. **PR #60 fenced two of them** — doctrine rules 5 and 6 now state what CI actually runs and that only one tier renders, and §07's bullets each carry an inline `*(intended)*` marker so a lifted bullet carries its own fence (§11.3). **The third stands**: §16's competitor table, §9.4.
 
-- §01's doctrine rules 5 and 6 — "minikube, k3d, kind, k3s included" (CI runs k3d and kind only) and "each tier independently removable" (the chart hard-fails on `tier: plus`) — carry no fence at all;
-- §07's bullets asserting shipped alert rules, OTel spans and receipts to JetStream, which the section's own preamble retracts but the bullets still state in the present tense;
-- §16's competitor table — see below.
+One new hazard replaces the two that were fixed, and it applies to the whole archive rather than to this file: **PR #60's corrections quote the sentences they withdraw**, so `docs/architecture.md` now contains "27/27", "12–18-month window" and "the design phase is complete" as *quotations inside retractions*. Rendering the file verbatim is safe; extracting sentences from it is not. §11.6.1 makes that a rule rather than a warning.
 
 ### 9.4 The competitor comparison table is not published
 
 `docs/architecture.md` §16's table has six capability rows. Its own header says the assayd column "states the target, not what ships", and only the gateway-path row is true today. A comparison table on which five of six rows would render `designed` or `not-built` is not a comparison; it is the original failure with a competitor's name beside it.
 
-It also still contains the retracted first-mover claim — "nobody ships it as a k8s primitive — 12–18-month window" — which ADR-0006 recorded as wrong, ADR-0030 withdrew, and the same file retracts three sections later in §19.
+The first-mover claim that used to close the section — "nobody ships it as a k8s primitive — 12–18-month window" — was withdrawn by PR #60, which quotes and retracts it at `:435` rather than deleting it. **The table itself is unchanged**, so the argument here is the one it always was: five of its six rows are not `measured`.
 
 A comparison page can exist when its rows are `measured`. Until then there is none, and the landing page's positioning is the thesis sentence and the honest list, not a grid.
 
@@ -443,7 +459,7 @@ A comparison page can exist when its rows are `measured`. Until then there is no
 
 | Not published | Why |
 |---|---|
-| `CLAUDE.md`, `AGENTS.md` | Contributor-facing working rules. `/feature-status` and `/roadmap` carry what a user needs from them; republishing the paragraph creates the copy §5.5 is trying to reduce. |
+| `CLAUDE.md`, `AGENTS.md` | Contributor-facing working rules. `/feature-status` and `/roadmap` carry what a user needs from them; republishing the paragraph creates the copy §5.6 is trying to reduce. |
 | `docs/HANDOFF.md` | Its own first line marks it a dated record, superseded and deliberately not rewritten. That is the exact class of document a site page must never be, because a site page is the one artefact a reader assumes is current. |
 | `docs/research/**` (33 notes) as a section | Each note is dated evidence about a third party, several past their re-verify dates. A stale note on our own site reads as our current position on someone else's product. Notes are linked individually from the concept or reference page that cites one. |
 | `docs/requirements.md` as a page | Of 30 FR/NFR identifiers, **zero `FR-` identifiers appear in any code or test file**, and only NFR-8 and NFR-3 appear at all. Publishing a requirements list where the overwhelming majority is `not-built` adds nothing `/roadmap` does not say better. Individual requirements are cited from claims where they are the holder. |
@@ -456,17 +472,17 @@ Ordered. Each item is shippable on its own, and each is a prerequisite of the on
 
 | # | Ship | Why here |
 |---|---|---|
-| 0 | **`make docs` added to `.github/workflows/ci.yml`** | Not a page. Every "CI" in §5.4 is false until this lands, including for the gate that already exists. It is one line and it is the difference between a mechanism and an intention. |
-| 1 | `web/claims.yaml` + `test/docs/claims_test.go` (gates A–G) | Infrastructure, not a page. Every badge on every page depends on it; shipping a page first means shipping unclassed prose and retrofitting, which is how the copies start. |
+| 0 | ~~`make docs` added to `.github/workflows/ci.yml`~~ — **void.** | Kept as a struck row rather than deleted, because a cut list that silently loses its first item is unreviewable. It was true at `22b65c2`, where this branch started; `80b63b5` added `make docs` **and** `make conformance` to CI the same day. The finding that replaces it is §5.5's, it is not a missing gate, and it is not this document's — the work it implies is **gate H**, already inside item 1. |
+| 1 | `web/claims.yaml` + `test/docs/claims_test.go` (gates A–H) | Infrastructure, not a page. Every badge on every page depends on it; shipping a page first means shipping unclassed prose and retrofitting, which is how the copies start. |
 | 2 | `assayd.io/` and `assayd.io/claims` | The landing page is the highest-reach surface. `/claims` ships with it, because a badge with no definition is decoration. |
 | 3 | `assayd.dev/feature-status` | Generated from item 1. The landing page's honest list has to resolve to something. |
 | 4 | `assayd.dev/guides/install`, `/guides/api-keys`, `/guides/troubleshooting` | The first thing a reader can actually *do*. Derived from `docs/install.md`, which is already written to this standard. |
 | 5 | `assayd.dev/agent-contract` | The second thing a reader can do. Its existing Sources table means it needs the least rewriting of any page here. |
 | 6 | `assayd.io/roadmap` | Needs items 1 and 3. Its §8.3 gap list is the reason the disclosure posture was decided, so it should not wait. |
-| 7 | **Gate H — `README.md` generated from the manifest** | Not a page. Deliberately after the roadmap, because it edits a file outside the site and should land once the manifest's shape has survived six pages of real use. |
+| 7 | **Gate R — `README.md` generated from the manifest** | Not a page. Deliberately after the roadmap, because it edits a file outside the site and should land once the manifest's shape has survived six pages of real use. |
 | 8 | `assayd.dev/supply-chain` | Standalone; a reader verifying signatures needs no other page. |
 | 9 | `assayd.io/concepts/*` — eight pages | Deferred behind the guides on purpose: a concept page is only worth reading once the reader has hit the thing it explains. Order within: `governance-at-the-gateway`, `revisions-and-cards`, `create-lock-adopt`, `attribution`, `the-auth-transaction`, `reserved-writes`, `the-revision-service`, `standards-only`. |
-| 10 | `assayd.dev/reference/*` | Blocked on the generated-reference agent. Ships as a unit when it lands; `/reference/conditions` can ship first, because `TestNoConditionTypeIsALiteral` already closes that vocabulary. |
+| 10 | `assayd.dev/reference/*` | **Three of the six exist.** PR #59 generates `crd-agent`, `helm-values` and `conditions` from `cmd/refgen`, gated by `make verify` in CI; those three ship as soon as that PR lands and need nothing from this document. `flags`, `labels` and `tested-versions` are owed and are the reference owner's, not the site's. |
 | 11 | `assayd.dev/archive/*` and the review ledger | High value, zero urgency — the files are already on GitHub. |
 | 12 | `assayd.io/releases`, `/security`, `/about`; `assayd.dev/` home, remaining guides, `/contributing*` | Completeness. |
 
@@ -481,69 +497,90 @@ Ordered. Each item is shippable on its own, and each is a prerequisite of the on
 | Full-text publication of `docs/designs/reviews/**` | Never, on the argument in §9.1. |
 | New diagrams for `the-auth-transaction` and `create-lock-adopt` | Item 9. They are owed and they do not block the concept pages' text. |
 
-## 11. Claims in the existing corpus that are false or stale
+## 11. Claims in the existing corpus, and where each one now stands
 
-Found while verifying this document. Each is stated as *what the text says* / *what is true*. These are inputs to whoever owns each file; this change corrects none of them.
+An earlier revision of this document listed 22 claims as false or stale, found while verifying it. **PR #60 (`docs-honesty-gate`, head `3bc7e6b`, on `main` `6ae20e1`) has since addressed all 22.** That PR is under independent review and is not merged.
 
-### 11.1 Blocking for the website
+**This section is rewritten rather than deleted, and the reason is the subject of this whole document.** A list of defects that have been fixed, published as a committed record, reads as a to-do list. The same shape was found in design 03 §11 on 2026-09-23, where A82's entry still read "The fix is OWED" for something A83 had fixed. A record wrong in the safe direction is still wrong.
 
-| # | Where | Says | Actually |
-|---|---|---|---|
-| 1 | `docs/architecture.html:356`, `:359`, `:1877` | "Every component below is designed, adversarially critiqued, and approved"; "27/27 designs approved · 26 ADRs"; "Every claim in this document is backed by an ADR and a critique-passed design" | The exact sentence `CLAUDE.md` opens by recording as false. Design 02 is not approved; 03 and 16 approve only their first slices; there are 34 ADRs. The file was partially corrected and its header and footer were missed, so it reads as current. **Must not be published, and should be regenerated or deleted.** |
-| 2 | `docs/architecture.md:433` (§16) | "nobody ships it as a k8s primitive — 12–18-month window" | ADR-0006 recorded that window as wrong and eval-gating as "Not a differentiator"; ADR-0030 withdrew the first-mover framing; `architecture.md:479` retracts it in the same file. §16 was never edited. |
-| 3 | `docs/decisions/0026-p5-enterprise.md:6` | "the design phase is complete — 27/27 approved, every one through independent critique. Implementation may begin." | Contradicted by ADR-0030 and by `docs/designs/README.md`'s own banner. ADR-0026 carries no supersession note. |
+Each row was re-verified against PR #60's head on 2026-09-23 rather than taken from its description. Three outcomes:
 
-### 11.2 Stale counts and cross-references
+- **Fixed** — the claim is gone, or is present only inside an explicit retraction.
+- **Changed shape** — the text a site author will find is not what the old row described, and the difference constrains the site. These matter most and each carries its consequence.
+- **Still live** — nothing has changed.
 
-| # | Where | Says | Actually |
-|---|---|---|---|
-| 4 | `docs/architecture.md:5`, `:488` | "32 ADRs"; "`docs/research/` (12 dated notes)" | 34 ADRs (0001–0034); 33 research notes plus a `research/paper/` directory. The correction at `:5` is itself stale. |
-| 5 | `docs/architecture.md:492–507` | An ADR index ending at 0027 | ADRs 0028–0034 have no row, including ADR-0028 (which supersedes the 0020 the table still lists as live), ADR-0030 (the scope reset) and ADR-0034 (the auth decisions). A reader using the table as the decision index misses every decision that narrowed the scope. |
-| 6 | `docs/architecture.md:533` | "design 02 carries eleven (A1–A11)" | Design 02 consolidated 61 amendments and runs to A76. |
-| 7 | `docs/architecture.md:88` | `# API group TBD at rename` | The rename is done (ADR-0001 Amendment 1, recorded at `:3` of the same file); `assayd.dev` ships in `api/v1alpha1/groupversion_info.go`. |
-| 8 | `docs/architecture.md:481` vs `:525` | R1 is an open item / R1 is CLOSED 2026-08-27 | Both, in one document. |
-| 9 | `docs/architecture.md:527`, `:529` | The agentgateway floor is v1.4.1 and conformance runs "against a real v1.4.1 gateway" | `hack/conformance-cluster.sh` runs both: 1.4.1 in phase 1 and 1.5.0 in phase 2. `install.md`, `agent-contract.md`, `CLAUDE.md` and `hack/e2e.sh` all use 1.5.0. §527 never learned that ADR-0030 made the 1.5.0 re-run a precondition. |
+### 11.1 The three that blocked a public site — all fixed, two changed shape
 
-### 11.3 Present-tense claims that escape their section's fence
+| # | Old finding | Now |
+|---|---|---|
+| 1 | `docs/architecture.html` carried "27/27 designs approved · 26 ADRs" in its header and footer, and "Every component below is designed, adversarially critiqued, and approved" | **Fixed.** The header `meta-row` reads `status superseded in part · 27 designs, not 27 approved · 34 ADRs (0020 and 0033 superseded)`; the approval sentence is rewritten in place; the footer's "Every claim in this document is backed by an ADR and a critique-passed design" is quoted and withdrawn at `:1878`. **And the file is now inside the gate** — §5.6. |
+| 2 | `docs/architecture.md:433` §16 sold a "12–18-month window" | **Fixed, changed shape.** The sentence is not deleted — `:435` now quotes it and withdraws it: *"The sentence that used to close this section is withdrawn, and is quoted here rather than deleted."* The string `12–18` is therefore still in the file, twice, both inside retractions. |
+| 3 | `docs/decisions/0026-p5-enterprise.md:6` said "the design phase is complete — 27/27 approved… Implementation may begin" | **Corrected, not rewritten — and the false sentence is still at `:6`, deliberately.** The Status line carries an Amendment 2 marker and Amendment 2 withdraws the clause, but the frozen Consequences body is untouched, because the `adr` skill forbids editing an ADR's content to match a later decision. **This has a direct IA consequence — §11.6.** |
 
-| # | Where | Says | Actually |
-|---|---|---|---|
-| 10 | `docs/architecture.md:44` (doctrine rule 5) | "minikube, k3d, kind, k3s included; local distros are a CI target, not a courtesy" | `.github/workflows/ci.yml` runs a matrix of k3d and kind only. minikube and k3s are CI targets nowhere in the repo. Doctrine §01 carries no "designed, not shipped" fence. |
-| 11 | `docs/architecture.md:45` (doctrine rule 6) | "Tiered install… Each tier independently removable" | `charts/assayd/templates/_helpers.tpl` hard-`fail`s on `tier: plus` — "tier: plus is not implemented yet" — and `TestUnimplementedTierIsRefusedNotIgnored` pins the refusal. §05 discloses this; the doctrine rule does not. |
-| 12 | `docs/architecture.md:235`, `:236`, `:238` (§07 bullets) | Receipts to JetStream; OTel spans; "alert rules shipped in the chart, each fixture-tested in CI" | None exists. The section's preamble retracts them; the bullets still state them in the present tense, so any extraction that lifts bullets without their preamble republishes them. |
-| 13 | `docs/architecture.md:447` (§17) | "≈ 8 pods" | The ledger sums to 8 **or 9** at its own upper bound (agentgateway is listed as 1–2). The shipped-side statement at `:445` is correct and the CI budget claim at `:451` is true. |
+### 11.2 Counts and cross-references — all fixed
 
-### 11.4 Requirements the code does not hold
+| # | Old finding | Now |
+|---|---|---|
+| 4 | "32 ADRs"; "12 dated notes" | **Fixed at `:493`** — "**34 ADRs**, 0001–0034, of which 0020 and 0033 are superseded" and "**33 dated notes** plus the `paper/` set", with the stale pair named: *"Those counts were last printed as 32 and 12."* |
+| 5 | The ADR index stopped at 0027 | **Fixed.** Rows 0028–0034 exist, each carrying its own status — 0020 and 0033 marked superseded, 0030 flagged as "the ADR that governs what may be claimed anywhere in this document". |
+| 6 | "design 02 carries eleven (A1–A11)" | **Fixed at `:562`** — "**seventy-six**, A1–A76, the tip dated 2026-09-16". |
+| 7 | `# API group TBD at rename` | **Fixed.** The string is gone from the corpus. |
+| 8 | R1 both open and closed in one file | **Fixed at `:486`** — the risk row now says what R1 is not: *"R1 is not what tracks that, and this row used to say it did."* |
+| 9 | The agentgateway floor stated as v1.4.1 against an e2e on 1.5.0 | **Fixed at `:556`** — *"A floor is not the only version that runs"*, with the two-phase conformance run named. |
 
-| # | Where | Says | Actually |
-|---|---|---|---|
-| 14 | `docs/requirements.md:3` | "Each requirement is testable; NFRs are release gates." | `.github/workflows/release.yml` contains no test job. Nothing gates a release on any NFR or on CI passing. Of 30 identifiers, zero `FR-` ids appear in any code or test file; only NFR-8 and NFR-3 appear at all. |
-| 15 | `docs/requirements.md:8` (NFR-2) | "Postgres and NATS JetStream are the only stateful dependencies, **ever**." | The test that enforces it (`test/chart/chart_test.go`) allows three: `postgres`, `nats` and `openobserve`. "Ever" is not what the code enforces. |
-| 16 | `docs/requirements.md:9` (NFR-3) | "CI runs full e2e on k3d + kind on every merge." | The kind lane runs a reduced suite: `hack/e2e.sh` sets `ASSAYD_E2E_RESPONDER_SKIP` for any non-k3d distro and gates the whole gateway setup behind `DISTRO = k3d`. `docs/install.md:18` states this correctly; `requirements.md` contradicts it. |
-| 17 | `docs/requirements.md:13` (NFR-7) | "`core` and `plus` independently installable/removable" | `plus` is not installable; see #11. |
+### 11.3 Present-tense escapes — all fixed, and one changed shape usefully
 
-### 11.5 Release and supply chain
+| # | Old finding | Now |
+|---|---|---|
+| 10 | Doctrine rule 5 listed four distros as CI targets | **Fixed.** Rule 5 now reads "**Two distros are a CI target, not four**", names `hack/e2e.sh`'s non-zero exit on anything else, and says minikube and k3s are "intended and untested". |
+| 11 | Doctrine rule 6 claimed independently removable tiers | **Fixed.** "**removability is untested because only one tier renders**", citing `_helpers.tpl`'s `fail` and what `plus` would add. |
+| 12 | §07's bullets asserted alert rules, OTel spans and JetStream receipts in the present tense | **Fixed, changed shape — and the new shape helps the site.** Each bullet now carries its own `*(intended)*` marker inline, and the preamble says the fence "applies to every bullet below, not to one clause in one of them". **A generator lifting a bullet now lifts its marker with it**, which is what §5.4 needs from a derived-and-reviewed page. |
+| 13 | §17's "≈ 8 pods" ledger summing to 9 | **Fixed at `:450`–`:452`** — "**8 pods at the low end of that range and 9 at the high end**", and the "≈" is named as having "hid a row that breaks the rule rather than a rounding". |
 
-| # | Where | Says | Actually |
-|---|---|---|---|
-| 18 | `docs/supply-chain.md:23` | "The current release is v0.4.0." | `git tag` shows **v0.4.1**, cut 2026-09-16, the day after the v0.4.0 verification date the page cites. The page does not mention v0.4.1 at all. `docs/install.md:15`, `:148` and `:444` pin `0.4.0` for the same reason. Either the page is stale or the tag published nothing — §12 carries the question. |
-| 19 | `docs/supply-chain.md:12` | "published only by `.github/workflows/release.yml`, on a `v*` tag" | The workflow also triggers on `workflow_dispatch` with a free-text tag input, so a publish can happen with no tag existing. |
-| 20 | `docs/supply-chain.md:9` (table) | The operator image row lists "SLSA provenance attached" unconditionally | The provenance step is guarded by `if: github.event.repository.visibility == 'public'` and warns instead otherwise. The prose at `:55` discloses this; the table row does not. |
-| 21 | `docs/supply-chain.md:12`, `:21`, `:63` | The workflow "verifies its own signatures from outside before it finishes", including provenance | It runs `cosign verify` and `verify-attestation --type spdxjson` for the image and `cosign verify` for the chart. It **never** runs `verify-attestation --type slsaprovenance1` or `gh attestation verify`. Those were done by hand on 2026-09-15 and no CI job reproduces them. |
+### 11.4 Requirements — all four fixed, all changed shape
 
-### 11.6 The gap that shaped §5
+`docs/requirements.md` now keeps each original wording and states the gap beside it, rather than lowering its bar silently. The opening line is explicit: *"a requirements document that lowers its bar without saying so is the defect this correction exists to fix."*
 
-| # | Where | Says | Actually |
-|---|---|---|---|
-| 22 | `.github/workflows/ci.yml` | — | CI runs `verify`, `vet`, `unit`, `race`, `envtest`, `chart`, `chart-conform` and `e2e` as separate steps. It never runs `make test`, and so never runs `make docs` or `make conformance`. **`test/docs/superseded_test.go` — the only mechanical gate against a withdrawn guarantee reappearing — does not run in CI.** A pull request that reintroduces one of its nine banned claims passes. This is not a false statement anywhere; it is an absent gate, and it is why §5.4's enforcement column reads the way it does and why cut-list item 0 exists. |
+| # | Old finding | Now |
+|---|---|---|
+| 14 | "Each requirement is testable; NFRs are release gates" | **Fixed at `:5`–`:8`.** Both halves withdrawn, with the grep result stated: a standalone `FR-` id returns **zero** matches across `api/ internal/ cmd/ test/ config/ charts/ hack/`, and every apparent hit is a substring of `NFR-`. |
+| 15 | NFR-2's "only stateful dependencies, **ever**" | **Fixed at `:15`** — the enforced rule is named as an allowlist of three, with `openobserve` recorded in the test as "observability sink, not substrate". |
+| 16 | NFR-3's "full e2e on k3d + kind" | **Fixed at `:16`** — "**Two distros are exercised, and only one of them fully.**" |
+| 17 | NFR-7's installable `plus` | **Fixed at `:25`** — "**`plus` does not render at all today**, so this requirement is unmet". |
 
-### 11.7 Documented honestly, listed so nobody "fixes" them
+### 11.5 Release and supply chain — all four fixed; one answers an open item
+
+| # | Old finding | Now |
+|---|---|---|
+| 18 | "The current release is v0.4.0" against a tagged `v0.4.1` | **Fixed at `:27`, and it answers §12's O2 — as "nobody has checked".** The page now states that `v0.4.1` is the newest tag and *"this page has not been re-verified against it… no `cosign verify` of them is recorded"*, and closes with *"Read a version claim here as 'last checked', never as 'current'."* **The IA consequence is in §11.6.** |
+| 19 | "published only on a `v*` tag" | **Fixed at `:14`** — `workflow_dispatch` with a `tag` input publishes identically, and is how `v0.2.0` was re-released. |
+| 20 | The table listed SLSA provenance unconditionally | **Fixed at `:9` and `:12`** — the row carries "**provenance is conditional, see below**", and the visibility guard is explained. |
+| 21 | The workflow never verifies its own provenance | **Fixed at `:16` and `:90`** — stated outright, with the consequence: *"Every provenance statement on this page is a dated manual check by a person."* |
+
+### 11.6 What PR #60's shapes require of the site
+
+Four of the fixes above change what a site author will find, in ways this document must answer rather than note.
+
+1. **Withdrawn claims are now quoted verbatim inside their own retractions**, in at least eight places across `architecture.md`, `requirements.md`, `supply-chain.md` and ADR-0026's Amendment 2. That is correct for the corpus — write-spec requires that a correction quote what it retracts — and it is a trap for any pipeline that extracts *sentences*. **The rule that follows: no page on either site is produced by extracting sentences from repository prose.** A page is generated from `web/claims.yaml`, or it renders a whole block with its surrounding retraction intact, or it is rewritten by a person. There is no third mode, and §5.1's three modes already encode this — this is the evidence for why.
+
+2. **`/archive/decisions/0026` renders a false sentence by design, and the archive is the one place the repository's own gate deliberately does not look.** ADR-0026's Consequences still says "the design phase is complete — 27/27 approved"; the `adr` skill forbids editing it; and PR #60's new `blanket-approval-claim` rule carries `exceptDir: "decisions"` for exactly that reason — enforcing it there would mean breaking one repository rule to satisfy another. **So the requirement lands on the site**: an archive page rendering a document verbatim must render its Status line and every Amendment marker **adjacent to the corrected clause**, not only at the top and bottom of the page. This is §4.4's Gateway API pattern — the box beside the sub-feature rather than under the H1 — and here it is load-bearing rather than stylistic, because a reader deep-linking to `#consequences` otherwise lands on the false sentence alone. `/archive` carries `someone notices` in §5.4's enforcement column, and this is the specific thing they must notice.
+
+3. **A tag is not evidence of a published, verified artifact.** `supply-chain.md` now records that `v0.4.1` is tagged and unverified. §5.4 lists `/releases` as *generated from tags*; that is wrong on its own and is corrected there. `/releases` renders a tag, its verification state, and the date it was last checked — and a tag with no recorded check renders as unverified, never as a release.
+
+4. **Anything the site publishes as inline SVG is outside the gate.** PR #60's `renderHTML` drops `<script>`, `<style>` and inline `<svg>` whole, and says so: *"a withdrawn guarantee typed into an SVG's `aria-label` is NOT scanned."* §4.2 rule 6 already says a diagram is a claim; this is the mechanism by which a diagram's text can carry one invisibly. A diagram's claim text belongs in the manifest and in the page's prose, never only in the artwork.
+
+### 11.7 Still live
+
+One. **`docs/architecture.md` §16's competitor table itself** — six capability rows whose own header says the assayd column "states the target, not what ships". PR #60 withdrew the first-mover sentence that closed the section; the table is unchanged, and §9.4's refusal to publish it stands for the original reason.
+
+### 11.8 Documented honestly, listed so nobody "fixes" them
 
 Not defects. Recorded because they look like defects and will be reported as such.
 
-- `charts/assayd/Chart.yaml` says `version: 0.1.0` and `charts/assayd/values.yaml` pins `tag: "0.1.0"`, against a newest tag of v0.4.1. `.github/workflows/release.yml` rewrites both at release time, and `docs/install.md:444` states plainly that the checkout's chart names a version "which is not published".
-- `docs/agent-contract.md` scopes every guarantee to one fixture — "it is the only agent any test here runs, so it is the only one this contract has been measured against". **That sentence must survive the rewrite to `assayd.dev/agent-contract`.** It is the single most load-bearing caveat in the corpus and it is exactly the kind of sentence a documentation restyle deletes.
+- `charts/assayd/Chart.yaml` says `version: 0.1.0` and `charts/assayd/values.yaml` pins `tag: "0.1.0"`, against a newest tag of `v0.4.1`. `.github/workflows/release.yml` rewrites both at release time with `yq`, and `docs/install.md` states plainly that the checkout's chart names a version "which is not published".
+- `docs/agent-contract.md` scopes every guarantee to one fixture — "it is the only agent any test here runs, so it is the only one this contract has been measured against". **That sentence must survive the rewrite to `assayd.dev/agent-contract`.** It is the single most load-bearing caveat in the corpus and exactly the kind a documentation restyle deletes.
 - `charts/assayd/templates/NOTES.txt` is the most accurate governance statement in the repository, on both branches of `gateway.enabled`. The landing page inherits its sentence — "YOUR AGENTS ARE REACHABLE, AUTHENTICATED BY API KEY, AND OTHERWISE UNGOVERNED" — rather than composing a new one.
+- **ADR-0026's Consequences body will keep saying something false.** See §11.6.2. It is frozen on purpose; do not open a PR against it.
 
 ## 12. Open items
 
@@ -551,10 +588,10 @@ Carried forward rather than hedged in the prose above.
 
 | # | Item | Why it is open |
 |---|---|---|
-| O1 | **The brief names a gap "D6"; the repository carries no such label.** `grep -n '\bD6\b' docs/` returns nothing. Design 03's D-list runs D1–D4 and design 07's D1–D3, and neither includes this defect. The defect itself is real and is described at design 03 §3.4.4 and §8.1. Either the label comes from a conversation not in the repository, or it needs assigning. §8.3 states the defect and flags the label. |
-| O2 | Whether `v0.4.1` published a chart and image, or is a tag with no release. `docs/supply-chain.md` and `docs/install.md` both stop at `0.4.0`. `/releases` and `/feature-status` cannot be generated from tags until this is settled. |
-| O3 | **The strongest evidence this project produces has no field in the claim record.** "Three mutations kill it" (`TestTheGatewayIsTheOnlyWayIn`) and "every case was run with a mutation of its own, in five batches" (design 03 §8.1) are stronger than "a test exists", and the record in §4.3 cannot express either. A `mutations:` field is the obvious answer and nothing would check it, which is the argument against adding it. Unresolved. |
-| O4 | **`/reference/reasons` is not specified, because it cannot be generated correctly.** Condition *types* are 38 constants closed by `designConditions()` and `TestNoConditionTypeIsALiteral`. Condition *reasons* are 30 constants in `internal/controller/` plus **26 bare string literals** at their call sites, with no constant and no closure test. A reasons reference would be right about 30 and silently absent on 26. The fix is a closure test for reasons mirroring the one for types; that is a code change this document does not make. Until then `/reference/conditions` documents types and phases only, and says so. |
+| O1 | ~~The brief names a gap "D6"~~ — **closed 2026-09-23. The label was never in the repository; it was invented in the brief this document was written from, and the coordinator has confirmed it.** The defect it named is real and is located at design 03 **§3.4.4** ("The key set is outside every gate") and **§8.1**'s reservation scope ("`DELETE` is not reserved"). §8.3 now cites the location and carries no label. Kept as a closed row because a spec that quietly drops a question it once raised teaches the next reader nothing. |
+| O2 | ~~Whether `v0.4.1` published a chart and image~~ — **answered, and the answer is that nobody has checked.** `docs/supply-chain.md` (PR #60) now records `v0.4.1` as the newest tag, states it has not been re-verified from outside, and closes "Read a version claim here as 'last checked', never as 'current'." That is not a blocker for `/releases`; it is the page's content. §11.6.3 carries the consequence: a tag renders as unverified, never as a release. |
+| O3 | **The strongest evidence this project produces still has no field in the claim record.** "Three mutations kill it" (`TestTheGatewayIsTheOnlyWayIn`) and "every case was run with a mutation of its own, in five batches" (design 03 §8.1) are stronger than "a test exists", and §4.3's record cannot express either. A `mutations:` field is the obvious answer and nothing would check it, which is the argument against adding it. PR #59 meets the same wall from the other side and says so: "a test names the string, which is weaker than pinning it — nine tests in this repository once passed with their subject deleted." Unresolved. |
+| O4 | ~~`/reference/reasons` cannot be generated correctly~~ — **answered by PR #59**, which extracts the vocabulary with `go/types` rather than reading constants: 39 condition types, 64 reasons, every call site resolved, and a hand-written annotation file held to the set by `make reference` so that a reason with no entry fails CI. **What remains open is narrower and is the page's own statement**: the join pins the *set* of reasons and does **not** prove the three annotated answers — what produces a reason, what the operator does, whether traffic is withdrawn — are still true of the code. `AuthPolicyNotAttached`'s annotation was found stale after design 03 A83 by exactly that route. And **17 of the 64 reasons are named by no test file**, so nothing fails if one changes or stops being set. `/reference/conditions` must render both facts; it does. |
 | O5 | Where the claim manifest lives. `web/claims.yaml` is proposed because the site consumes it, but `web/**` is another agent's territory and a manifest under it is a site asset rather than a repository one. `docs/web/claims.yaml` is the alternative. Not decided. |
 | O6 | Whether `/archive/designs/<nn>` should render 27 designs whose bodies contradict their own Status lines in places. Design 03's body is 2,000+ lines specifying an unapproved system; publishing it verbatim is honest and is also 2,000 lines of `designed` prose with one approval banner at the top. A per-section banner was considered and needs the design's own section structure, which varies. Not decided. |
 | O7 | Whether the landing page may state the thesis — "what was evaluated is what runs" — as an unclassed sentence. It is a statement of intent, not of behaviour, and §4.2 rule 1's boundary does not cleanly settle it. The conservative reading is that it is a claim and is `measured` only for revision identity, not for evaluation, since the eval gate is `designed`. |
