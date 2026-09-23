@@ -108,6 +108,13 @@ const (
 	// is not at fault (design 02 §3.2, A77).
 	CondReasonServiceUnreadable = "RevisionServiceUnreadable"
 
+	// CondReasonServiceRecordNotKept names a revision Service that cannot be
+	// repaired in place, has no record, and never will: the installed Agent
+	// CRD predates status.revisionServices and prunes it without an error, so
+	// the operator can neither record a Service nor, therefore, replace one
+	// (design 02 §3.2, A77).
+	CondReasonServiceRecordNotKept = "RevisionServiceRecordNotKept"
+
 	// DefaultRevisionHistoryLimit is the number of revisions retained IN ADDITION
 	// TO the active one and any in-flight candidate (design 02 §3.3). Counting
 	// them inside the limit would let a rollout garbage-collect its own rollback

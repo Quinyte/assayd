@@ -600,8 +600,98 @@ func TestTheEarlyRecordWriteDoesNotClobberAConcurrentStatusWrite(t *testing.T) {
 	if rec := recordFor(got, rev); rec != after.UID {
 		t.Errorf("the record did not survive the race: %q, want %s", rec, after.UID)
 	}
+	// And the replace BOUND survives the retry with the record: without it the
+	// cooldown is lost, and a second headless patch gets an immediate second
+	// replace — a delete and a traffic gap per patch. Round five's mutation T4,
+	// which dropped the bound from the retry, survived until this assertion.
+	if got.Status.ServiceReplacedRevision != rev || got.Status.ServiceReplacedAt == nil {
+		t.Errorf("the retry kept the record and lost the replace bound: %q %v",
+			got.Status.ServiceReplacedRevision, got.Status.ServiceReplacedAt)
+	}
 	if condition(got, "example.com/Concurrent") == nil {
 		t.Errorf("the early record write overwrote a status field another writer set during the "+
 			"pass: %+v", got.Status.Conditions)
+	}
+}
+
+// recreateAgentOnFirstStatusWrite deletes the Agent and creates another under
+// its name just before this operator's first status write of the pass lands.
+type recreateAgentOnFirstStatusWrite struct {
+	client.Client
+	t     *testing.T
+	fired bool
+	fresh *assaydv1alpha1.Agent
+}
+
+func (c *recreateAgentOnFirstStatusWrite) Status() client.SubResourceWriter {
+	return &recreateSW{SubResourceWriter: c.Client.Status(), c: c}
+}
+
+type recreateSW struct {
+	client.SubResourceWriter
+	c *recreateAgentOnFirstStatusWrite
+}
+
+func (w *recreateSW) Update(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+	if a, ok := obj.(*assaydv1alpha1.Agent); ok && !w.c.fired {
+		w.c.fired = true
+		var live assaydv1alpha1.Agent
+		if err := k8s.Get(ctx, client.ObjectKeyFromObject(a), &live); err != nil {
+			w.c.t.Fatalf("recreate: get: %v", err)
+		}
+		live.Finalizers = nil
+		if err := k8s.Update(ctx, &live); err != nil {
+			w.c.t.Fatalf("recreate: drop finalizer: %v", err)
+		}
+		if err := k8s.Delete(ctx, &live); err != nil {
+			w.c.t.Fatalf("recreate: delete: %v", err)
+		}
+		eventually(w.c.t, "the old Agent to go", func() bool {
+			var gone assaydv1alpha1.Agent
+			return apierrors.IsNotFound(k8s.Get(ctx, client.ObjectKeyFromObject(a), &gone))
+		})
+		fresh := &assaydv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: a.Namespace, Name: a.Name},
+			Spec: *live.Spec.DeepCopy()}
+		if err := k8s.Create(ctx, fresh); err != nil {
+			w.c.t.Fatalf("recreate: create: %v", err)
+		}
+		w.c.fresh = fresh
+	}
+	return w.SubResourceWriter.Update(ctx, obj, opts...)
+}
+
+// The early write's retry does not put a record on a DIFFERENT Agent that took
+// the name while the pass ran. A record authorises a delete, and it belongs to
+// the Agent whose Service it names.
+func TestTheEarlyRecordWriteDoesNotRecordOntoARecreatedAgent(t *testing.T) {
+	ns := newNamespace(t)
+	a := noneAgent(t, ns, "recreated")
+	r := newGatewayReconciler("assayd-gateway", "assayd")
+	rev := revision.MustHash(a.Spec)
+	svcName := controller.WorkloadName("recreated", rev)
+	settle(t, r, a)
+	markAvailable(t, ns, svcName, 1)
+	settle(t, r, a)
+
+	key := types.NamespacedName{Namespace: runNS(ns), Name: svcName}
+	headlessByPatchAlone(t, key)
+	racing := &recreateAgentOnFirstStatusWrite{Client: k8s, t: t}
+	cr := newGatewayReconciler("assayd-gateway", "assayd")
+	cr.Client = racing
+	cr.Reader = k8s
+	if _, err := cr.Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(a)}); err != nil {
+		t.Logf("reconcile: %v", err)
+	}
+	if racing.fresh == nil {
+		t.Fatal("setup: the Agent was not recreated during the pass")
+	}
+	got := liveAgentPtr(t, racing.fresh)
+	if got.UID == a.UID {
+		t.Fatal("setup: the Agent under the name is the same one")
+	}
+	if len(got.Status.RevisionServices) != 0 || got.Status.ServiceReplacedAt != nil {
+		t.Errorf("the pass wrote the old Agent's Service record onto the Agent recreated under its "+
+			"name: %+v, replacedAt %v", got.Status.RevisionServices, got.Status.ServiceReplacedAt)
 	}
 }

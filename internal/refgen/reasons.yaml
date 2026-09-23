@@ -774,7 +774,9 @@ reasons:
       operator's own replacement lost its record in the same way. The object
       passed provenance, so it is not a collision; the operator cannot
       establish that it created or adopted it, whatever its labels and
-      annotations say.
+      annotations say. When there is no record at all because the installed
+      Agent CRD prunes the field, the reason is `RevisionServiceRecordNotKept`
+      instead.
     operator: >-
       Never deletes it. Sets `Ready=False` and `Degraded=True` with this reason
       and phase `Degraded`, carries design 03's `PolicyApplyIncomplete` and
@@ -784,6 +786,28 @@ reasons:
       the operator creates its own and records it, or repairs it in place back
       to addressable, after which the next pass converges it and, if there is
       no record at that revision and digest, adopts it.
+    traffic: not-withdrawn
+    note: If the revision is active, its route still names this object.
+
+  - reason: RevisionServiceRecordNotKept
+    state: >-
+      A Service at the desired revision's name is headless — `spec.clusterIP:
+      None`, which no Update can repair — `status.revisionServices` holds no
+      record at all, and a dry-run status write shows the installed Agent CRD
+      would not keep one: it predates the field and prunes it without an
+      error. That is every install upgraded with `helm upgrade`, which never
+      updates a chart's `crds/`. The operator can then record no Service, and
+      so can replace none.
+    operator: >-
+      Never deletes it. Sets `Ready=False` and `Degraded=True` with this reason
+      and phase `Degraded`, carries design 03's `PolicyApplyIncomplete` and
+      `PolicyCompileFailed`, returns before the gateway step, and re-checks after
+      `RefusedServiceRecheck` (one minute). The message names the stale CRD and
+      the remedy: apply this release's `charts/assayd/crds/` with kubectl, then
+      delete the Service so the operator recreates and records it. Deleting it
+      before the CRD is applied gets a replacement that is refused the same way
+      the next time it is made headless. A dry-run that errors falls back to
+      `RevisionServiceNotRecorded`.
     traffic: not-withdrawn
     note: If the revision is active, its route still names this object.
 

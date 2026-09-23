@@ -245,10 +245,20 @@ func (r *AgentReconciler) ensureService(ctx context.Context, agent *assaydv1alph
 		// carries — including an object this operator did create but has no
 		// record of, which is the migration cost design 02 §5 states.
 		if !ours {
-			return &serviceShapeError{
+			refused := &serviceShapeError{
 				ns: existing.Namespace, name: existing.Name,
 				what: faultHeadless, unrecorded: true, recorded: recorded, live: existing.UID,
 			}
+			// With NO record, ask whether one could be kept at all. An Agent CRD
+			// from before `status.revisionServices` prunes it without an error —
+			// every upgraded install, since `helm upgrade` never updates a
+			// chart's crds/ — and then "delete it yourself and the operator
+			// records its own" is false: it would record nothing either.
+			// Refusing is still the safe act; only the report changes.
+			if recorded == "" && !r.serviceRecordKeepable(ctx, agent, rev, digest, existing.UID) {
+				refused.recordNotKept = true
+			}
+			return refused
 		}
 		return r.replaceUnrepairableService(ctx, agent, &existing, desired, rev, digest, recorded, status)
 	}
@@ -392,12 +402,24 @@ func (r *AgentReconciler) persistServiceRecord(ctx context.Context, agent *assay
 	if err == nil {
 		agent.ResourceVersion = current.ResourceVersion
 		apply(&agent.Status)
+		if recordedServiceUID(&current.Status, rev, digest) != uid {
+			log.FromContext(ctx).Info("the installed Agent CRD pruned status.revisionServices: no "+
+				"revision Service record is kept, so none will be replaced if it is made headless. "+
+				"Apply this release's charts/assayd/crds/", "revision", rev, "uid", uid)
+		}
 		return
 	}
 	for attempt := 0; attempt < 4 && apierrors.IsConflict(err); attempt++ {
 		var live assaydv1alpha1.Agent
 		if gerr := r.reader().Get(ctx, client.ObjectKeyFromObject(agent), &live); gerr != nil {
 			err = gerr
+			break
+		}
+		// The same Agent, not one recreated under its name since this pass
+		// read it: a record belongs to the Agent whose Service it names.
+		if live.UID != agent.UID {
+			err = fmt.Errorf("agent %s/%s was recreated (uid %s, was %s)", agent.Namespace, agent.Name,
+				live.UID, agent.UID)
 			break
 		}
 		apply(&live.Status)
@@ -408,6 +430,21 @@ func (r *AgentReconciler) persistServiceRecord(ctx context.Context, agent *assay
 			"pass's final status write; it rides that write instead",
 			"service", rev, "uid", uid, "error", err.Error())
 	}
+}
+
+// serviceRecordKeepable asks the API server, by a DRY-RUN status write,
+// whether it would store a record on this Agent. Nothing is persisted. It is
+// asked only on the path that refuses an unrecorded headless Service, to pick
+// the report; the refusal itself does not depend on the answer. An error
+// answers yes, which keeps the ordinary RevisionServiceNotRecorded report.
+func (r *AgentReconciler) serviceRecordKeepable(ctx context.Context, agent *assaydv1alpha1.Agent,
+	rev, digest string, uid types.UID) bool {
+	probe := agent.DeepCopy()
+	recordServiceUID(&probe.Status, rev, digest, uid)
+	if err := r.Status().Update(ctx, probe, client.DryRunAll); err != nil {
+		return true
+	}
+	return recordedServiceUID(&probe.Status, rev, digest) == uid
 }
 
 // adoptServiceRecord records an existing Service's UID when this revision has
@@ -670,6 +707,10 @@ type serviceShapeError struct {
 	// for either. A77 makes this exact argument one type over for
 	// revisionCollisionError.
 	unrecorded bool
+	// recordNotKept is set, on an unrecorded refusal, when a dry-run status
+	// write shows the installed Agent CRD prunes `status.revisionServices`:
+	// no record can be kept, so the usual remedy would not work.
+	recordNotKept bool
 	// recorded is the UID status records for this revision, "" when there is
 	// none; live is the UID of the object that was refused. Both are rendered,
 	// because "not the object this operator created" is checkable only if the
@@ -741,6 +782,9 @@ func (e *serviceShapeError) detail() string {
 // operator's own on a Service whose record was never written — so a reason
 // saying it carries none would be false of the object in front of the reader.
 func (e *serviceShapeError) reason() string {
+	if e.recordNotKept {
+		return CondReasonServiceRecordNotKept
+	}
 	if e.unrecorded {
 		return CondReasonServiceNotRecorded
 	}
@@ -748,6 +792,17 @@ func (e *serviceShapeError) reason() string {
 }
 
 func (e *serviceShapeError) Error() string {
+	if e.recordNotKept {
+		return fmt.Sprintf("service %s/%s cannot be repaired in place. %s This operator deletes and "+
+			"recreates such a Service only when its UID is the one status.revisionServices records, "+
+			"and the Agent CRD installed on this cluster does not carry status.revisionServices: it "+
+			"prunes the field without an error, so no record is ever kept and this Service will not be "+
+			"replaced. `helm upgrade` never updates a chart's crds/. To recover: apply this release's "+
+			"charts/assayd/crds/ with kubectl, then delete that Service — the operator recreates it "+
+			"and, with the CRD in place, records it. Deleting it before the CRD is applied gets a "+
+			"replacement that is refused the same way the next time it is made headless.",
+			e.ns, e.name, e.detail())
+	}
 	if e.unrecorded {
 		record := fmt.Sprintf("status.revisionServices records UID %s for this revision", e.recorded)
 		if e.recorded == "" {
