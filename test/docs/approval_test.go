@@ -170,8 +170,9 @@ func TestTheHeadReaderReadsTheWholeBullet(t *testing.T) {
 // humanApprovals is the human's decision, not a reading of the documents: the
 // approval each design may claim. Designs 03 and 16 are approved in part —
 // 03's first slice (ADR-0034 Amendment 4, 2026-09-12) and its amendments A84
-// and A85 (both 2026-09-23, recorded in design 03's §11, each with no ADR
-// amendment because neither makes ADR-0034 false), and 16's first slice (ADR-0024 Amendment 1, 2026-09-14). Every
+// and A85 (both 2026-09-23, recorded in design 03's §11; neither adds an
+// ADR-0034 amendment, on the reading that ADR-0034 is silent on what they
+// change — a precedent, not a stated decision of the human's), and 16's first slice (ADR-0024 Amendment 1, 2026-09-14). Every
 // other design number, including one that does not exist yet, is not approved.
 //
 // Changing this table is recording a human decision. Do it only in the change
