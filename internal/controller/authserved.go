@@ -604,10 +604,23 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 		}
 	}
 
-	// The policy half, fail-OPEN, and the one worth more: the route is accepted
-	// and serving while its authentication is attached to nothing. Only a
-	// served apikey Agent has a policy, and out.judgePolicy is set only where
-	// §3.2's name-and-label rule and the appliedDigest comparison both passed.
+	// The policy half, fail-OPEN, and the one worth more: the Gateway's last
+	// word about <agent>-auth, at the policy's current generation, is that its
+	// tuple is broken. THIS RAISE IS NOT GATED ON THE ROUTE. It fires on every
+	// route reading — accepted, refused or unknown — because the claim is about
+	// the POLICY. An earlier version of this comment introduced the branch as
+	// "the route is accepted and serving while its authentication is attached
+	// to nothing", which states a precondition no code here has ever had, and
+	// which §5 and §3.3.3 stated too until design 03 A84 corrected all three.
+	// routeOK above selects the LEAD'S WORDING inside policyBrokenMessage and
+	// gates nothing; when the route half raised too, incompleteOrder decides
+	// which reason leads. The comment at routeOK's own definition says the same
+	// thing the right way round — "in the message rather than in what is
+	// raised" — and was right while this one was wrong (A84).
+	//
+	// Only a served apikey Agent has a policy, and out.judgePolicy is set only
+	// where §3.2's name-and-label rule and the appliedDigest comparison both
+	// passed.
 	switch rep, clause, why := policyReport(out.judgePolicy, r.Gateway); rep {
 	case reportBroken:
 		claims.policyUnattached = true
