@@ -1427,6 +1427,89 @@ spec:
                 - BudgetHeld
                 - Killed
                 type: string
+              revisionServices:
+                description: |-
+                  RevisionServices records the UID of each revision Service this operator
+                  CREATED OR ADOPTED, per revision and digest (design 02 §3.2, A77). It is
+                  the authority for the one destructive act on a Service outside teardown:
+                  a revision Service that cannot be repaired in place is deleted and
+                  recreated only when its UID equals the one recorded here, whatever its
+                  labels or annotations say. The authority is exactly as strong as the RBAC
+                  on agents/status, which the chart grants only to this operator.
+
+                  A UID is assigned by the API server and cannot be chosen by whoever
+                  creates an object. An entry written from this operator's own create
+                  therefore proves it created that Service; the labels and annotations it
+                  also stamps prove nothing, being forgeable by any principal who can
+                  create a Service in the run namespace and strippable by any who can
+                  patch one.
+
+                  An entry is ALSO written, by adoption, for an existing Service that has
+                  no entry for its revision and digest, passes provenance, is addressable,
+                  and has just been converged to the render. That happens on the first
+                  sight of ANY revision's Service without a record — every new revision
+                  included, not only an Agent created before this field — so an adopted
+                  entry proves only that the object carried this Agent's provenance and
+                  was made this operator's shape; it may be an object someone else
+                  created at the revision's predictable name. A headless Service is never
+                  adopted, and an existing entry is never overwritten by adoption.
+                  Entries leave with their revision.
+                items:
+                  description: |-
+                    RevisionServiceRecord is one revision Service this operator created, or
+                    adopted after converging it (see AgentStatus.RevisionServices).
+                  properties:
+                    revision:
+                      description: |-
+                        Revision is the revision the Service belongs to; its name is
+                        `<agent>-<revision>`.
+                      type: string
+                    revisionDigest:
+                      description: |-
+                        RevisionDigest is the full digest of that revision's projection. The
+                        record matches only while the desired revision carries this digest, so a
+                        40-bit name collision between two projections cannot borrow the other's
+                        record.
+                      type: string
+                    uid:
+                      description: |-
+                        UID is the Service's metadata.uid: as the API server returned it on
+                        this operator's create, or as read from the object when it was adopted.
+                      type: string
+                  required:
+                  - revision
+                  - revisionDigest
+                  - uid
+                  type: object
+                type: array
+              serviceReplacedAt:
+                description: |-
+                  ServiceReplacedAt is when this operator last deleted and recreated the
+                  revision Service named by serviceReplacedRevision because it could not
+                  repair it in place. A second replace of that revision's Service is held
+                  until ten minutes after this time (design 02 §3.2, A77).
+                format: date-time
+                type: string
+              serviceReplacedRevision:
+                description: |-
+                  ServiceReplacedRevision and ServiceReplacedAt record the last revision
+                  Service this operator DELETED and recreated because it could not repair
+                  it in place (design 02 §3.2, A77). They bound that operation to one per
+                  revision per cooldown.
+
+                  They live in `status` and not on the Service, which is where the first
+                  implementation put them, because `status` is the non-forgeable side: this
+                  controller is its only author and writes it through the status
+                  subresource, while `metadata.annotations` is writable by the very
+                  principal the bound exists to stop. An annotation bound was measured
+                  broken both ways — a future-dated value held the replace forever, which
+                  is the permanent wedge this amendment exists to remove, and deleting the
+                  value removed the bound entirely and produced a delete, a new ClusterIP
+                  and a traffic gap on every pass.
+
+                  The revision is recorded beside the time because a NEW revision gets a
+                  new Service, which the last revision's cooldown must not hold.
+                type: string
               supersededCandidates:
                 description: |-
                   SupersededCandidates records abandoned in-flight candidates so the
