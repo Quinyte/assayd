@@ -458,6 +458,30 @@ func TestAServedPolicyTheGatewayDoesNotAttachIsReported(t *testing.T) {
 		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
 		mustNotContain(t, g, "GovernanceSkipped", "does not attach", "no credential required")
 	})
+	// The same clause on a route the Gateway REFUSES, which is design 03
+	// §3.3.3's refused × clausePartlyValid cell (A84). Every other
+	// partly-valid row here accepts the route first, and the unit table
+	// passes routeOK=true, so nothing pinned that this lead stays the same
+	// when routeOK is false — and the tempting edit, giving this arm the
+	// hedged non-attachment lead the other two clauses have, re-enters A83's
+	// rule-8 defect on every refused or unknown pass, namespace-wide.
+	//
+	// Mutation, one edit: in policyBrokenMessage's clausePartlyValid arm, on
+	// !routeOK, use the clauseUnattached hedged lead with announcedNotClosed.
+	// It compiles, the rest of the suite passes under it, and this must fail.
+	t.Run("Accepted=True with a reason other than Valid, on a refused route", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "a84partialrefused")
+		refuseRoute(t, a.Namespace, a.Name)
+		partiallyValidPolicy(t, a)
+		reconcileOnce(t, r, a)
+		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+		mustContain(t, g, "GovernanceSkipped", "ACCEPTED this Agent's <agent>-auth policy but not the whole of it")
+		mustNotContain(t, g, "GovernanceSkipped", "does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED",
+			"The hole is announced")
+		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "ServingRouteNotAccepted")
+		mustContain(t, c, "PolicyApplyIncomplete", "but not the whole of it")
+		mustNotContain(t, c, "PolicyApplyIncomplete", "does not attach", "The hole is announced")
+	})
 	// ENTERED, REPORTED, REPAIRED — the sequence A82's first draft got
 	// backwards, and the reason the measured bypass is not a standing hole.
 	//
@@ -630,6 +654,39 @@ func TestBothHalvesOnOnePassNameTheRouteFirst(t *testing.T) {
 			t.Errorf("the policy half asserts the route is accepted on a pass that did not read "+
 				"it at its current generation: %s", c.Message)
 		}
+	})
+	// The FIRST broken report on an UNKNOWN reading RAISES, with no claim of
+	// either half standing — design 03 §8.1 item 7 (A84). The subtest above
+	// cannot show it: it raises on an accepted pass first, so under a gate
+	// that sends an unknown reading to the held branch it still reads the
+	// same condition, the same reason and a lead with no route claim. Here
+	// nothing is standing, so a deferred raise leaves nothing to hold.
+	//
+	// Mutation, one edit (M2′): send a reportBroken policy to the held branch
+	// when routeRep is neither reportHolding nor reportBroken. It compiles,
+	// every other row passes under it, and this must fail.
+	t.Run("a first report on an unknown route reading raises", func(t *testing.T) {
+		b, rb, _ := servedAPIKeyAgent(t, "a84unknownfirst")
+		acceptRoute(t, b.Namespace, b.Name)
+		acceptPolicy(t, b.Namespace, b.Name)
+		reconcileOnce(t, rb, b)
+		if auth := authOf(t, b); auth == nil || auth.RouteRefused || auth.PolicyUnattached {
+			t.Fatalf("this row needs NO claim standing before the unknown pass: %+v", auth)
+		}
+		rt := servingRoute(t, b.Namespace, b.Name)
+		rt.Spec.Hostnames = append(rt.Spec.Hostnames, "drifted.example.com")
+		if err := k8s.Update(context.Background(), rt); err != nil {
+			t.Fatal(err)
+		}
+		unattachPolicy(t, b)
+		reconcileOnce(t, rb, b)
+		if auth := authOf(t, b); auth == nil || !auth.PolicyUnattached || auth.RouteRefused {
+			t.Errorf("a first broken report on an unknown route reading was not raised: %+v", auth)
+		}
+		c := condIs(t, b, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue,
+			"AuthPolicyNotAttached")
+		mustContain(t, c, "PolicyApplyIncomplete", "does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED")
+		mustNotContain(t, c, "PolicyApplyIncomplete", heldMark)
 	})
 	// Both claims are stored, which is what lets a held pass re-raise each.
 	if auth := authOf(t, a); auth == nil || !auth.RouteRefused || !auth.PolicyUnattached {
