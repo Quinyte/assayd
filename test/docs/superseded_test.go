@@ -93,6 +93,13 @@
 //     is the worse direction for a gate; and requiring the retraction in the
 //     same SENTENCE breaks legitimate corrections throughout this corpus, which
 //     routinely quote a withdrawn claim and retract it in the next sentence.
+//     A third general fix was measured by the round-four reviewer and again
+//     before this line was written: dropping the bare `supersed` rescue from
+//     all nineteen rules fails SIX legitimate lines across five documents —
+//     superseded-adr in architecture.md, in architecture.html and in ADR-0026,
+//     cuts-early-guarantee and header-tool-filter in design 03, and
+//     nonexistent-tracing-field in design 04 — each of which names a superseded
+//     ADR, note or claim in order to date or retract it.
 //     So nineteen rules remain launderable inside an inline-only container.
 package docs
 
