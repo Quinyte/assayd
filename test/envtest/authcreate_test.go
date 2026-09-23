@@ -406,7 +406,16 @@ func condIs(t *testing.T, a *assaydv1alpha1.Agent, typ assaydv1alpha1.ConditionT
 	status metav1.ConditionStatus, reason string) *metav1.Condition {
 	t.Helper()
 	c := condition(liveAgent(t, a), typ)
-	if c == nil || c.Status != status || c.Reason != reason {
+	// An ABSENT condition stops the test here rather than returning nil to a
+	// caller that dereferences it: that panic aborted the whole envtest
+	// package under design 03 A84's gating mutation M1, hiding every later
+	// row's result (§8.1 item 8). A present condition with the wrong status
+	// or reason still reports and returns, so the caller's other assertions
+	// keep running.
+	if c == nil {
+		t.Fatalf("%s is absent, want %s/%s", typ, status, reason)
+	}
+	if c.Status != status || c.Reason != reason {
 		t.Errorf("%s is %+v, want %s/%s", typ, c, status, reason)
 	}
 	return c
