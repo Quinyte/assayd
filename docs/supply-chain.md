@@ -93,6 +93,11 @@ make e2e          # k3d: create, build, load, helm install, test
 DISTRO=kind make e2e
 ```
 
+A k3d run names its own cluster, so any number can run at once. A kind run does
+not: it uses `kind-assayd-local` unless `CLUSTER` names another, so two kind runs
+at the same time collide. Give each its own cluster, created first with
+`kind create cluster --name`.
+
 **On Colima, raise the inotify instance limit first.** The default is 128, and
 every Kubernetes component wants watchers — with more than one k3d or kind
 cluster resident, the k3s API server fails to start with `error creating

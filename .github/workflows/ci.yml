@@ -125,8 +125,18 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # The cluster is NAMED here rather than left to hack/e2e.sh. Unnamed, the
+      # script invents a cluster per run and deletes it on exit — the isolation
+      # that lets several runs share a developer's machine. A CI job owns a
+      # whole VM, so there is nothing to isolate from, and a name the script
+      # does not own is a cluster it does not delete: which is what leaves the
+      # failure step below something to read logs from.
       matrix:
-        distro: [k3d, kind]
+        include:
+          - distro: k3d
+            cluster: assayd-ci
+          - distro: kind
+            cluster: assayd-local
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -154,7 +164,7 @@ jobs:
         if: matrix.distro == 'kind'
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
-          cluster_name: assayd-local
+          cluster_name: ${{ matrix.cluster }}
 
       # A skipped e2e is an untested feature: hack/e2e.sh exits non-zero rather
       # than skipping, and the suite itself registers a failing sentinel when
@@ -163,10 +173,21 @@ jobs:
         run: make e2e
         env:
           DISTRO: ${{ matrix.distro }}
+          CLUSTER: ${{ matrix.cluster }}
 
       - name: operator logs on failure
         if: failure()
         run: |
+          # hack/e2e.sh keeps its kubeconfig to itself and never writes the
+          # default one — that is exactly what stops two runs measuring each
+          # other's deployment — so this step builds its own from the named
+          # cluster instead of reading a default that is now deliberately left
+          # alone. kind-action still writes the default on the kind lane.
+          if [ "${{ matrix.distro }}" = "k3d" ]; then
+            KUBECONFIG="$(mktemp)"
+            export KUBECONFIG
+            k3d kubeconfig get "${{ matrix.cluster }}" > "$KUBECONFIG" || true
+          fi
           kubectl -n assayd-system describe deploy/assayd-agent-operator || true
           kubectl -n assayd-system logs -l app.kubernetes.io/component=agent-operator --tail=200 || true
           kubectl get agents -A -o yaml || true

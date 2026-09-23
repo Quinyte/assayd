@@ -33,7 +33,7 @@ k3d registry create "$REG_NAME" --port "$REG_PORT"
 k3d cluster create "$DEMO_CLUSTER" --agents 0 --wait --registry-use "k3d-$REG_NAME:$REG_PORT"
 ```
 
-- **Any free port works.** `5120` is chosen because the harness does not use it. `hack/e2e.sh` creates its own registry on `5111`, and keeps it between runs, so on a machine that has run `make e2e` a registry on `5111` fails to start: the port is taken. The harness's cluster is `assayd-local`, so `assayd` does not collide with it either. The variable is `DEMO_CLUSTER`, not `CLUSTER`, because the `Makefile` and `hack/e2e.sh` both read `CLUSTER` from the environment.
+- **Any free port works.** `5120` is chosen because the harness does not use it. `hack/e2e.sh` creates its own registry on `5111`, and keeps it between runs, so on a machine that has run `make e2e` a registry on `5111` fails to start: the port is taken. The harness never uses the name `assayd` for its cluster — a k3d run names its own `assayd-e2e-<run-id>` and deletes it on exit, and a kind run uses `assayd-local` unless told otherwise — so `assayd` does not collide with it either. The variable is `DEMO_CLUSTER`, not `CLUSTER`, because the `Makefile` and `hack/e2e.sh` both read `CLUSTER` from the environment.
 - **k3d prefixes the registry's name.** It names the registry `k3d-$REG_NAME`. The host pushes to it as `localhost:$REG_PORT`, and the cluster's nodes pull from it as `k3d-$REG_NAME:$REG_PORT`. Section 5.1 uses both names.
 - **Sections 5.1 and 6.3 read these variables.** Run them in the same shell, or set the variables again first.
 
