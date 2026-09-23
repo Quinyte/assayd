@@ -13,8 +13,20 @@
 // normative. Prose promising to have swept the document is what failed; this is
 // the mechanism that replaces it.
 //
-// Scope is deliberate — it covers what an implementer builds FROM, and nothing
-// whose job is to record or refute:
+// # What is scanned
+//
+// **The ROOT is `docs/` plus the Markdown at the top of the repository** —
+// AGENTS.md, CLAUDE.md, README.md and their siblings. The root used to stop at
+// `docs/`, undisclosed, and appending a planted claim to AGENTS.md left the gate
+// green: the file this project tells every other model to read first, and which
+// opens with the sentence the blanket-approval rule exists for, was outside it.
+// Below the top level the walk stops, because vendored chart fixtures and test
+// data live there and a corpus sweeping those would fail on text nobody here
+// wrote. Nothing under `charts/` or `api/` is read at all — a false claim in a
+// chart template or a CRD comment is not caught here.
+//
+// Scope is otherwise deliberate — it covers what an implementer builds FROM, and
+// nothing whose job is to record or refute:
 //
 //   - Both `.md` and `.html` are scanned. `docs/architecture.html` is the
 //     rendered face of the canonical document, hand-maintained beside it with no
@@ -28,12 +40,12 @@
 //     edited to match a later decision (write-spec).
 //   - docs/research/** is never scanned. A research note is evidence, and the
 //     note that supersedes another must quote every claim it refutes.
-//   - A document marked superseded IN WHOLE is never scanned. An ADR's content
-//     is frozen when it is superseded, by the rule in the adr skill. A document
-//     marked superseded IN PART is scanned, because the parts that stand are
-//     what people build from — see partiallySuperseded, which exists because the
-//     bare-word marker had quietly excluded `docs/architecture.md`, the document
-//     this project calls canonical.
+//   - Documents are skipped only by NAME, from the closed list in
+//     frozenDocuments, because their bodies may no longer be edited. Deciding
+//     that by pattern is what excluded `docs/architecture.md` — "superseded in
+//     part" in its Status line — and a narrowed pattern still let a live design
+//     out through "Replaces the superseded design 09". A skip decided by
+//     matching fails silently in the one direction that matters.
 //   - The superseded research note is not scanned but IS required to say so.
 //
 // Each rule bans an ASSERTION and permits a RETRACTION, because "X is withdrawn"
@@ -52,18 +64,36 @@
 //     while the rule knew only a reviewer's paraphrase. A green run means no
 //     KNOWN phrasing of a WITHDRAWN claim is present. It does not mean the
 //     document is true. Nothing here reads a sentence nobody thought to ban.
+//
 //   - **renderHTML is not a browser.** It reduces a page to blocks of text; it
 //     does not lay one out. A withdrawn guarantee typed into an inline `<svg>`'s
 //     `aria-label`, or into any element dropped whole, is not scanned — see
-//     renderHTML, which names what it drops and why.
-//   - **A rescue is per block, and an HTML block is bigger than a table cell.**
-//     Markdown splits a table row into cells, so a retraction on one side cannot
-//     launder a claim on the other. HTML splits on block-level tags, so a `<div>`
-//     of `<span>` pills renders as ONE block and a retraction in one pill DOES
-//     rescue its neighbour. That was measured while writing this: re-planting the
-//     header claim beside the corrected one did not fail the gate until the
-//     blanket-approval rule's rescue clause was narrowed. The residue is real for
-//     any inline-only container.
+//     renderHTML, which names what it drops and why. **This is not a corner:**
+//     `docs/architecture.html` carries roughly 11,000 characters of
+//     reader-visible prose inside ten SVG plates, about one per major section.
+//     No rule matches any of it today, so the gap is latent rather than active —
+//     but it is a tenth of the page, not an edge case, and a claim moved into a
+//     plate's label would leave the gate silently.
+//
+//   - **A retraction anywhere in a block rescues everything in it, and an HTML
+//     block is bigger than a table cell.** Markdown splits a table row into
+//     cells, so a retraction on one side cannot launder a claim on the other.
+//     HTML splits only on block-level tags, so a `<div>` of `<span>` pills — the
+//     page's own `meta-row` — renders as ONE block and any retraction in it
+//     rescues every claim beside it.
+//
+//     **Scope, stated because it was measured and is NOT closed: ONE of the
+//     rules here is hardened against this.** blanket-approval-claim's rescue
+//     clause was narrowed to explicit retractions after a replanted header claim
+//     survived; planting four OTHER withdrawn guarantees into the same
+//     `meta-row` launders all four, because every other rule accepts a bare
+//     `supersed`. Neither general fix was taken, and both were measured first:
+//     making `<span>` block-level splits eight mid-sentence uses and every
+//     code-highlighting token, trading laundering for MISSED violations, which
+//     is the worse direction for a gate; and requiring the retraction in the
+//     same SENTENCE breaks legitimate corrections throughout this corpus, which
+//     routinely quote a withdrawn claim and retract it in the next sentence.
+//     So nineteen rules remain launderable inside an inline-only container.
 package docs
 
 import (
@@ -77,6 +107,17 @@ import (
 
 const docsRoot = "../../docs"
 
+// The gate also reads the ENTRY DOCUMENTS at the repository root — AGENTS.md,
+// CLAUDE.md, README.md and their siblings — through rootDocs below, which
+// reuses licensing_test.go's repoRoot.
+//
+// They are not under docs/ and the gate did not read them: appending a planted
+// claim to AGENTS.md left `make docs` green. That matters more than their
+// location suggests. AGENTS.md is the file this project tells every other model
+// to start from, and both it and CLAUDE.md open with the very sentence the
+// blanket-approval rule exists for. A gate whose root stops at one directory
+// protects the documents nobody lands on first.
+
 // supersededNote is the research note that named a release which does not exist.
 const supersededNote = "agentgateway-2.2-2026-08.md"
 
@@ -85,11 +126,11 @@ type rule struct {
 	// onlyIn restricts a rule to one document. Used where a phrase is stale in
 	// one design and correct elsewhere.
 	onlyIn string
-	// exceptDir exempts one directory from a rule. Used exactly once, and only
-	// where enforcing the rule would demand an edit another of this corpus's
-	// rules forbids — see blanket-approval-claim.
-	exceptDir string
-	banned    *regexp.Regexp
+	// headRescue spares a document whose HEAD carries the correction, for a rule
+	// whose claim lives in a body that may not be edited. Used exactly once, and
+	// narrow on purpose — see blanket-approval-claim.
+	headRescue *regexp.Regexp
+	banned     *regexp.Regexp
 	// allowed rescues a line that mentions the banned thing in order to retract
 	// it. Nil means the mention is banned outright.
 	allowed *regexp.Regexp
@@ -110,15 +151,20 @@ var rules = []rule{
 		// gateway gets a rule; the withdrawn claim about the corpus itself did
 		// not.
 		//
-		// exceptDir is `decisions` and the reason is a rule collision, not
-		// convenience. ADR-0026's Consequences states this in its own frozen
-		// body, and the adr skill forbids editing an ADR's content to match a
-		// later decision — that is why ADR-0020 and ADR-0033 carry
-		// `superseded-by` with their bodies untouched. ADR-0026 is corrected, not
-		// superseded, so it carries the marker in its Status line and Amendment 2
-		// instead. A gate that demanded the body be rewritten would be enforcing
-		// one repository rule by breaking another, and the frozen record is not
-		// what an implementer builds from.
+		// headRescue, and NOT a whole-directory exemption. The first version of
+		// this rule exempted `docs/decisions/` outright, on the argument that
+		// enforcing it there would demand the ADR-body edit the adr skill
+		// forbids. **That argument was wrong on a fact.** ADR-0020 and ADR-0033
+		// are already out of the corpus as frozen documents, so the only file the
+		// directory exemption shielded was **ADR-0026 — accepted and live, not
+		// frozen** — and it shielded the correction too: deleting Amendment 2 and
+		// the Status marker left the gate green, so nothing pinned the very fix
+		// this branch made.
+		//
+		// The narrow form keeps the ADR's body untouched AND pins its marker: the
+		// claim is rescued only while the document's HEAD says the Consequences
+		// line is withdrawn. Remove the marker and the gate reports the ADR. No
+		// ADR body is edited either way, which is the whole constraint.
 		//
 		// The rescue clause deliberately omits the bare word `supersed`, which
 		// every other rule here carries. Measured: with it, re-planting the
@@ -127,11 +173,11 @@ var rules = []rule{
 		// it — "superseded in part" — rescued the planted one. The word this
 		// rule's own corrections use is "withdrawn", so the clause asks for
 		// that and for the other explicit retractions, and nothing weaker.
-		name:      "blanket-approval-claim",
-		exceptDir: "decisions",
-		banned:    regexp.MustCompile(`(?i)27/27|design phase is complete|all 27 designs|every component[^.]{0,80}approved`),
-		allowed:   regexp.MustCompile(`(?i)withdraw|retract|w(as|ere) false|are now false|is false|is not true|not approved|first slice|no longer|never meant`),
-		why:       "no central design is approved whole: design 02 is not approved by its own header, and 03 and 16 approve only their first slice (ADR-0030; docs/designs/README.md arbitrates)",
+		name:       "blanket-approval-claim",
+		headRescue: regexp.MustCompile(`(?i)is withdrawn by ADR-0030`),
+		banned:     regexp.MustCompile(`(?i)27/27|design phase is complete|all 27 designs|every component[^.]{0,80}approved`),
+		allowed:    regexp.MustCompile(`(?i)withdraw|retract|w(as|ere) false|are now false|is false|is not true|not approved|first slice|no longer|never meant`),
+		why:        "no central design is approved whole: design 02 is not approved by its own header, and 03 and 16 approve only their first slice (ADR-0030; docs/designs/README.md arbitrates)",
 	},
 	{
 		name:    "superseded-research-note",
@@ -307,35 +353,79 @@ func supersedes(path, ruleName string) bool {
 	return strings.Contains(head, "supersedes ADR-0020")
 }
 
-// partiallySuperseded is the head of a document that is still the document
-// people read.
+// frozenDocuments is the CLOSED LIST of documents this gate does not read,
+// because their bodies may no longer be edited and a violation in one would
+// demand the edit the adr skill forbids.
 //
-// "Superseded IN PART" is the opposite of frozen: the parts that stand are
-// exactly what an implementer builds from, so they are exactly what must be
-// scanned. The bare-word marker did not distinguish the two, and it swallowed
-// **docs/architecture.md** — the canonical document, whose Status line reads
-// "superseded in part — read §18 before relying on this document" at byte 608,
-// inside the 800-byte head.
+// **A list, not a pattern, and that inversion is the whole point.** Freezing was
+// decided by matching the word "superseded" in a document's first 800 bytes, and
+// a pattern that decides what to SKIP fails silently in the one direction that
+// matters: the skipped file reports nothing, which is indistinguishable from a
+// clean one. It swallowed `docs/architecture.md` — the canonical document, whose
+// Status line reads "superseded in part" at byte 608 — from the day the gate was
+// written. Narrowing the pattern to spare "in part" fixed that ONE sentence and
+// left the trapdoor: a live design whose Status says "Replaces the superseded
+// design 09" still left the corpus, silently, through a different trigger word.
 //
-// So the most-read document in the repository was exempt from this gate from the
-// day the gate was written, and nothing ever failed: an unscanned file reports
-// nothing, which is the same silence as a clean one. That is the shape
-// TestAnEmptyCorpusIsAFailure exists to catch at the level of the whole corpus,
-// happening to one file.
-var partiallySuperseded = regexp.MustCompile(`(?i)superseded in part`)
+// Now nothing is skipped unless it is named here, so a new phrasing cannot
+// remove a document from the gate. The cost is that superseding an ADR means
+// adding a line here in the same commit — and the failure when you forget is
+// LOUD: the gate reports the frozen body's stale claims and the message says to
+// add it. That is the same "edit the ledger in the same change" discipline the
+// pod budget uses, and it is the right direction for a skip list.
+//
+// Both directions are asserted: TestEveryFrozenDocumentSaysSo checks the list
+// cannot hide a live document, and TestEveryDocumentDeclaringItselfSupersededIsListed
+// checks the corpus cannot drift out from under the list.
+var frozenDocuments = []string{
+	"docs/decisions/0020-policy-compiler.md",
+	"docs/decisions/0033-slice-auth-api-keys-per-agent-no-live-tightening.md",
+	"docs/HANDOFF.md",
+}
 
-// isFrozen reports whether the document announces that ALL of it is superseded,
-// which is the only case where scanning would demand an edit the corpus's own
-// rules forbid.
-func isFrozen(content string) bool {
-	head := content
-	if len(head) > 800 {
-		head = head[:800]
+// isFrozen reports whether this path is one of the named frozen documents.
+// Matched on suffix so the fixture corpora, which live under a temp directory,
+// can never accidentally match.
+func isFrozen(path string) bool {
+	p := filepath.ToSlash(path)
+	for _, f := range frozenDocuments {
+		if strings.HasSuffix(p, f) {
+			return true
+		}
 	}
-	if partiallySuperseded.MatchString(head) {
+	return false
+}
+
+// declaresItselfSuperseded matches the two ways this corpus says a WHOLE
+// document is finished: an ADR's `superseded-by`, and the dated record's
+// "superseded, not rewritten". It no longer decides anything — it is the
+// consistency check between the list above and the documents themselves.
+var declaresItselfSuperseded = regexp.MustCompile(`(?i)superseded-by|superseded, not rewritten`)
+
+func headOf(content string) string {
+	if len(content) > 800 {
+		return content[:800]
+	}
+	return content
+}
+
+// headRescued reports whether the document's head carries the correction a rule
+// accepts in place of an edit to the body.
+//
+// Restricted to ADRs, for the same reason supersedes() is: a head-level rescue
+// is document-wide, and the document most likely to carry a stale claim is the
+// one where that would do the most damage. An ADR's body is the only text in
+// this corpus a repository rule forbids editing; everything else can simply be
+// corrected in place, and must be.
+func headRescued(path string, re *regexp.Regexp) bool {
+	if filepath.Base(filepath.Dir(path)) != "decisions" {
 		return false
 	}
-	return frozenMarker.MatchString(head)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return re.MatchString(headOf(string(b)))
 }
 
 // markdownNoise is inline formatting that must not let a superseded phrase
@@ -537,8 +627,8 @@ func scanBody(path, text string) []violation {
 			if r.onlyIn != "" && filepath.Base(path) != r.onlyIn {
 				continue
 			}
-			if r.exceptDir != "" && filepath.Base(filepath.Dir(path)) == r.exceptDir {
-				continue
+			if r.headRescue != nil && headRescued(path, r.headRescue) {
+				continue // the document's head carries the correction
 			}
 			if supersedes(path, r.name) {
 				continue // a document is allowed to name what it supersedes
@@ -581,17 +671,11 @@ func discover(root string) (map[string]string, error) {
 		if err != nil {
 			return err
 		}
-		if isHTML {
-			// The frozen rule is Markdown's. It reads the first 800 bytes for a
-			// document that announces its own supersession, and an HTML file's
-			// first 800 bytes are `<head>` — so the check could only ever answer
-			// "not frozen" here, and stating it as a check would be a rule
-			// nothing enforces. No page in this corpus is frozen; one that ever
-			// is needs a rule written for where an HTML document says so.
-			out[path] = renderHTML(string(b))
+		if isFrozen(path) {
 			return nil
 		}
-		if isFrozen(string(b)) {
+		if isHTML {
+			out[path] = renderHTML(string(b))
 			return nil
 		}
 		out[path] = body(string(b))
@@ -611,6 +695,42 @@ func scanned(t *testing.T, root string) map[string]string {
 	out, err := discover(root)
 	if err != nil {
 		t.Fatal(err)
+	}
+	return out
+}
+
+// rootDocs returns the entry documents at the top of the repository. Not a walk:
+// see repoRoot for why the recursion stops here.
+func rootDocs(t *testing.T) map[string]string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(repoRoot, "*.md"))
+	if err != nil {
+		t.Fatalf("globbing the repository root: %v", err)
+	}
+	out := map[string]string{}
+	for _, path := range matches {
+		if isFrozen(path) {
+			continue
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		out[path] = body(string(b))
+	}
+	if len(out) == 0 {
+		t.Fatal("no Markdown at the repository root — AGENTS.md and CLAUDE.md are the entry " +
+			"documents and the gate would silently stop covering them")
+	}
+	return out
+}
+
+// corpus is everything the gate reads: docs/ plus the entry documents.
+func corpus(t *testing.T) map[string]string {
+	t.Helper()
+	out := scanned(t, docsRoot)
+	for k, v := range rootDocs(t) {
+		out[k] = v
 	}
 	return out
 }
@@ -636,45 +756,147 @@ func TestAnEmptyCorpusIsAFailure(t *testing.T) {
 // renderHTML). Either exclusion returning leaves every rule here passing on a
 // corpus that no longer contains the documents most people read.
 func TestTheCanonicalDocumentIsScanned(t *testing.T) {
-	got := scanned(t, docsRoot)
-	for _, want := range []string{"architecture.md", "architecture.html"} {
-		p := filepath.Join(docsRoot, want)
+	got := corpus(t)
+	want := map[string]string{
+		"architecture.md":   docsRoot,
+		"architecture.html": docsRoot,
+		// The entry documents. Dropping rootDocs from the corpus used to survive
+		// the whole suite: the gate would stop reading the file this project
+		// tells every other model to start from, and nothing would fail.
+		"AGENTS.md": repoRoot,
+		"CLAUDE.md": repoRoot,
+		"README.md": repoRoot,
+	}
+	for name, root := range want {
+		p := filepath.Join(root, name)
 		if _, ok := got[p]; !ok {
-			t.Errorf("%s is not in the scanned corpus. It is the document this project calls "+
-				"canonical, or its rendered face; a gate that skips it reports the same silence "+
-				"as a clean scan", p)
+			t.Errorf("%s is not in the scanned corpus. It is the canonical document, its "+
+				"rendered face, or an entry document a contributor reads first; a gate that "+
+				"skips it reports the same silence as a clean scan", p)
 		}
 	}
 }
 
-// TestFrozenMeansTheWholeDocument pins the distinction directly, so the two
-// heads cannot be conflated again.
-func TestFrozenMeansTheWholeDocument(t *testing.T) {
-	cases := map[string]struct {
-		head string
-		want bool
-	}{
-		"a superseded ADR": {
-			"# ADR-0020: Policy compiler\n- **Status**: **superseded-by ADR-0028** · 2026-08-27\n", true,
-		},
-		"a dated record superseded whole": {
-			"# Handoff\n> **Dated record — superseded, not rewritten.**\n", true,
-		},
-		"the canonical document, superseded in part": {
-			"# assayd — Architecture v1.0\n- **Status**: **superseded in part — read §18 before relying on this document.**\n", false,
-		},
-		"an ordinary document": {"# Design 03\n\nStatus: draft.\n", false},
-	}
-	for name, c := range cases {
-		if got := isFrozen(c.head); got != c.want {
-			t.Errorf("%s: isFrozen = %v, want %v", name, got, c.want)
+// TestEveryFrozenDocumentSaysSo stops the skip list from hiding a live document.
+//
+// The list decides what the gate does not read, so an entry added carelessly —
+// or maliciously — would remove a document from the corpus with no other
+// symptom. Every entry must exist and must declare its own supersession in its
+// head, which is a claim the document makes about itself and not one the list
+// makes about it.
+func TestEveryFrozenDocumentSaysSo(t *testing.T) {
+	for _, rel := range frozenDocuments {
+		path := filepath.Join(repoRoot, rel)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("%s is listed as frozen and is not there: %v", rel, err)
+			continue
 		}
+		if !declaresItselfSuperseded.MatchString(headOf(string(b))) {
+			t.Errorf("%s is on the frozen list but its head does not declare it superseded. "+
+				"The list removes a document from this gate entirely; an entry that the "+
+				"document itself does not corroborate is a way to hide a live document", rel)
+		}
+	}
+}
+
+// TestEveryDocumentDeclaringItselfSupersededIsListed is the other direction, and
+// it is the one that fails LOUDLY when someone supersedes an ADR and forgets.
+//
+// Without it the corpus drifts out from under the list silently in the safe
+// direction and noisily in the wrong one: a newly superseded ADR would be
+// scanned, its frozen body would report its stale claims, and the only guidance
+// would be a violation the contributor is forbidden to fix by editing. This test
+// names the real remedy instead.
+func TestEveryDocumentDeclaringItselfSupersededIsListed(t *testing.T) {
+	listed := map[string]bool{}
+	for _, f := range frozenDocuments {
+		listed[f] = true
+	}
+	check := func(path string) {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		if !declaresItselfSuperseded.MatchString(headOf(string(b))) {
+			return
+		}
+		rel := strings.TrimPrefix(filepath.ToSlash(path), filepath.ToSlash(repoRoot)+"/")
+		if !listed[rel] {
+			t.Errorf("%s declares itself superseded and is not on frozenDocuments. Its body "+
+				"may no longer be edited, so this gate must not read it: add the path to "+
+				"frozenDocuments in this same change", rel)
+		}
+	}
+	_ = filepath.Walk(filepath.Join(repoRoot, "docs"), func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if info.Name() == "reviews" || info.Name() == "research" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".md") {
+			check(path)
+		}
+		return nil
+	})
+	matches, _ := filepath.Glob(filepath.Join(repoRoot, "*.md"))
+	for _, m := range matches {
+		check(m)
+	}
+}
+
+// TestTheCanonicalDocumentIsNotFrozen is the regression this whole mechanism
+// exists for, named by path so it cannot be reached around.
+//
+// `docs/architecture.md` says "superseded in part" in its Status line, and the
+// pattern that used to decide freezing read that as "superseded" and dropped the
+// canonical document from the gate. Narrowing the pattern fixed that one
+// sentence; a live design whose Status said "Replaces the superseded design 09"
+// left the corpus through the same trapdoor with a different trigger word. A
+// list cannot be reached that way at all.
+func TestTheCanonicalDocumentIsNotFrozen(t *testing.T) {
+	for _, p := range []string{"docs/architecture.md", "docs/architecture.html", "AGENTS.md", "CLAUDE.md"} {
+		if isFrozen(filepath.Join(repoRoot, p)) {
+			t.Errorf("%s is treated as frozen and would be skipped entirely", p)
+		}
+	}
+	// A document that merely MENTIONS supersession anywhere, including its head,
+	// is still read. This is the trapdoor closed.
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "designs")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	live := "# Design 28\n\n- **Status**: accepted. Replaces the superseded design 09.\n\n" +
+		"The limiter is conservative: it cuts early, never late.\n"
+	if err := os.WriteFile(filepath.Join(sub, "28-live.md"), []byte(live), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "29-other.md"), []byte("# Design 29\n\nNothing.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for path, text := range scanned(t, dir) {
+		for _, v := range scanBody(path, text) {
+			if v.rule == "cuts-early-guarantee" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("a LIVE document whose head mentions a supersession left the corpus silently. " +
+			"That is the architecture.md defect reached through a different trigger word, and " +
+			"the second document in the fixture means the empty-corpus guard cannot catch it")
 	}
 }
 
 // TestNoSupersededGuaranteeInAnAuthoritativeBody is the gate BLOCKER 8 asked for.
 func TestNoSupersededGuaranteeInAnAuthoritativeBody(t *testing.T) {
-	for path, text := range scanned(t, docsRoot) {
+	for path, text := range corpus(t) {
 		for _, v := range scanBody(path, text) {
 			t.Errorf("%s [%s]\n    %s\n    → %s", path, v.rule, v.block, v.why)
 		}
@@ -909,28 +1131,101 @@ func TestAWithdrawnGuaranteeCannotHideInTheRenderedPage(t *testing.T) {
 	}
 }
 
-// TestTheApprovalRuleIsExemptOnlyInDecisions pins `exceptDir` in both
-// directions, because an exemption nobody can fail is a hole with a comment
-// on it.
+// TestTheCorrectedADRKeepsItsMarker pins the headRescue in BOTH directions, and
+// it is what the whole-directory exemption it replaces could not do.
 //
-// The claim must be reported wherever an implementer reads it, and must NOT be
-// reported in `docs/decisions/`, whose bodies are frozen records — ADR-0026
-// states it in its own Consequences and carries the correction in its Status
-// line and Amendment 2 instead. Widening `exceptDir` to another directory, or
-// dropping the check, fails one half or the other.
-func TestTheApprovalRuleIsExemptOnlyInDecisions(t *testing.T) {
-	const claim = "The design phase is complete — 27/27 approved, every one through independent critique."
+// ADR-0026's Consequences says "the design phase is complete — 27/27 approved…
+// Implementation may begin". ADR-0030 withdrew that, and the adr skill forbids
+// editing an ADR's body to match a later decision — so the correction lives in
+// the Status line and in Amendment 2, and the gate accepts the head in place of
+// the edit. Under the old directory-wide exemption, deleting BOTH the marker and
+// the amendment left the suite green: the correction this branch made was pinned
+// by nothing.
+//
+// Now: remove the Status marker and the ADR is reported. Remove Amendment 2 and
+// this test fails. No ADR body is edited either way.
+func TestTheCorrectedADRKeepsItsMarker(t *testing.T) {
+	const rel = "docs/decisions/0026-p5-enterprise.md"
+	path := filepath.Join(repoRoot, rel)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	text := string(b)
 
+	if !strings.Contains(text, "## Amendment 2") {
+		t.Errorf("%s has lost Amendment 2, which is where the withdrawal of its "+
+			"\"27/27 approved … Implementation may begin\" consequence is recorded", rel)
+	}
+	if !headRescued(path, approvalRule(t).headRescue) {
+		t.Fatalf("%s no longer carries the correction in its head, so nothing tells a reader "+
+			"of the Consequences line that it is withdrawn", rel)
+	}
+
+	// The rescue must be doing real work. A rescue that spares a document with
+	// nothing to spare is decoration, and would pass whatever the ADR said.
+	if reportsApprovalClaim(path, body(text)) {
+		t.Error("the head marker did not rescue the ADR, so the gate is demanding an edit " +
+			"to a body the adr skill forbids editing")
+	}
+	if !reportsApprovalClaimWithoutRescue(t, path, body(text)) {
+		t.Error("with the head rescue removed the ADR is still not reported, so the rescue " +
+			"guards nothing and this test proves nothing")
+	}
+}
+
+func approvalRule(t *testing.T) rule {
+	t.Helper()
+	for _, r := range rules {
+		if r.name == "blanket-approval-claim" {
+			return r
+		}
+	}
+	t.Fatal("the blanket-approval-claim rule is gone")
+	return rule{}
+}
+
+func reportsApprovalClaim(path, text string) bool {
+	for _, v := range scanBody(path, text) {
+		if v.rule == "blanket-approval-claim" {
+			return true
+		}
+	}
+	return false
+}
+
+// reportsApprovalClaimWithoutRescue re-runs the same scan with the head rescue
+// disabled, so the test can tell "rescued" from "nothing to rescue".
+func reportsApprovalClaimWithoutRescue(t *testing.T, path, text string) bool {
+	t.Helper()
+	for i := range rules {
+		if rules[i].name != "blanket-approval-claim" {
+			continue
+		}
+		saved := rules[i].headRescue
+		rules[i].headRescue = nil
+		defer func(n int, re *regexp.Regexp) { rules[n].headRescue = re }(i, saved)
+		return reportsApprovalClaim(path, text)
+	}
+	return false
+}
+
+// TestTheHeadRescueIsRestrictedToADRs stops the narrow exemption widening back
+// into the general one it replaced. A design or a page cannot buy silence with a
+// sentence in its header; only an ADR can, because only an ADR's body is text a
+// repository rule forbids correcting in place.
+func TestTheHeadRescueIsRestrictedToADRs(t *testing.T) {
 	dir := t.TempDir()
 	for _, sub := range []string{"designs", "decisions"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, sub, "doc.md"), []byte("# Doc\n\n"+claim+"\n"), 0o644); err != nil {
+		doc := "# Doc\n\n- **Status**: the consequence is withdrawn by ADR-0030.\n\n" +
+			"The design phase is complete — 27/27 approved, every one through independent critique.\n"
+		if err := os.WriteFile(filepath.Join(dir, sub, "doc.md"), []byte(doc), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-
 	reported := map[string]bool{}
 	for path, text := range scanned(t, dir) {
 		for _, v := range scanBody(path, text) {
@@ -940,12 +1235,49 @@ func TestTheApprovalRuleIsExemptOnlyInDecisions(t *testing.T) {
 		}
 	}
 	if !reported["designs"] {
-		t.Error("the blanket-approval claim was not reported in a design — it is the sentence this rule exists for")
+		t.Error("a DESIGN bought silence with a header sentence. The head rescue exists only " +
+			"because an ADR's body may not be edited; a design's body can and must be")
 	}
 	if reported["decisions"] {
-		t.Error("the blanket-approval claim was reported in docs/decisions/. An ADR's body is a frozen " +
-			"record and the adr skill forbids editing it to match a later decision; this gate must not " +
-			"demand that edit. The correction belongs in the ADR's Status line and an amendment")
+		t.Error("the head rescue did not apply to an ADR, so the gate would demand an edit " +
+			"the adr skill forbids")
+	}
+}
+
+// TestTheHeadRescueNamesTheWithdrawal pins the marker's SPECIFICITY, which is a
+// separate property from whether the rescue fires at all.
+//
+// Measured: broadening the pattern to a bare "withdraw" survived the rest of
+// this suite. An ADR mentioning any withdrawal anywhere in its first 800 bytes
+// would then buy silence for a blanket-approval claim in its body — the
+// directory-wide exemption creeping back in a different shape. The rescue must
+// name the decision that did the withdrawing.
+func TestTheHeadRescueNamesTheWithdrawal(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "decisions")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A head that mentions a withdrawal of something ELSE, and a body that makes
+	// the blanket claim. Nothing here says the claim below is withdrawn.
+	doc := "# ADR-0099: Something else\n" +
+		"- **Status**: accepted. An earlier clause about retries was withdrawn.\n\n" +
+		"The design phase is complete \u2014 27/27 approved, every one through independent critique.\n"
+	if err := os.WriteFile(filepath.Join(sub, "0099-other.md"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for path, text := range scanned(t, dir) {
+		for _, v := range scanBody(path, text) {
+			if v.rule == "blanket-approval-claim" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("an ADR bought silence with an unrelated withdrawal in its head. The rescue " +
+			"must name the decision that withdrew THIS claim, or it is a directory-wide " +
+			"exemption wearing a regex")
 	}
 }
 

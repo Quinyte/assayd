@@ -494,7 +494,7 @@ Most claims above are backed by an ADR and a design that survived adversarial cr
 
 ### ADRs
 
-Rebuilt from `docs/decisions/` rather than patched, because the version this replaced **stopped at 0027** — it omitted 0028, 0030 and 0034 entirely, and went on listing 0020 as live while 0028 had superseded it since 2026-08-27. An index that names a superseded decision and not the one that replaced it is worse than no index: it answers the question, wrongly.
+Rebuilt from `docs/decisions/` rather than patched, because the version this replaced **stopped at 0027** — it omitted **seven** ADRs, 0028 through 0034, and went on listing 0020 as live while 0028 had superseded it since 2026-08-27. An earlier version of this note said it omitted three, naming only the ones cited elsewhere in this document; it omitted every ADR recorded after it was last touched. An index that names a superseded decision and not the one that replaced it is worse than no index: it answers the question, wrongly.
 
 Every file in `docs/decisions/` has a row. Status is read from each ADR's own `Status` line.
 
