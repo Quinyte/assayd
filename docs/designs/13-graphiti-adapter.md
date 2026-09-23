@@ -1,6 +1,6 @@
 # Design 13: Graphiti provider adapter (first kgp/v1alpha1 implementation)
 
-- **Status**: **approved** — critique PASS at r2 (reviews/13-review.md) · ADR-0023
+- **Status**: **HYPOTHESIS (ADR-0030)** · **not approved by the human** — critique PASS at r2 (reviews/13-review.md) · ADR-0023 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P2 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0017 (contract), 0018 (FalkorDB default, license caveat) · interfaces: 01 (implements it), 12 (consumes Pydantic derivations), 14 (admin surface caller), 15 (probe execution)
 - **Research**: `docs/research/connectors-2026-08.md` §graphiti (Pydantic custom types; `add_episode_bulk` empty-graph constraint; `group_id` namespacing)

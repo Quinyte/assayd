@@ -1,6 +1,6 @@
 # Design 24: AuthzProvider — ReBAC via OpenFGA (`authz/v1alpha1`)
 
-- **Status**: **approved** — critique PASS at r2 (reviews/24-review.md) · ADR-0025
+- **Status**: **not approved by the human** — critique PASS at r2 (reviews/24-review.md) · ADR-0025 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P4 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0011 (three authz layers; this is layer 2) · interfaces: 03 (ext-authz wiring), 06 (`act` chains; **workflow-actor identity per 21 r2** — its budget/authz bite depends on that fix, r1 f4), 22 (approvers roles via contextual tuples), 02/11 (tuple sources), 17 (decision replay), 26 (per-tenant stores)
 - **Research**: `docs/research/authz-2026-08.md` — agentgateway OSS supports **Envoy-compatible ext-authz gRPC** (CheckRequest → OK/Denied + dynamic_metadata usable in in-proxy CEL); OPA/Cerbos precedents for gateway-governed agents; OpenFGA = CNCF Zanzibar-style ReBAC (ADR-0011 grounding).

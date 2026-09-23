@@ -194,7 +194,42 @@ var rules = []rule{
 		headRescue: regexp.MustCompile(`(?i)is withdrawn by ADR-0030`),
 		banned:     regexp.MustCompile(`(?i)27/27|design phase is complete|all 27 designs|every component[^.]{0,80}approved`),
 		allowed:    regexp.MustCompile(`(?i)withdraw|retract|w(as|ere) false|are now false|is false|is not true|not approved|first slice|no longer|never meant`),
-		why:        "no central design is approved whole: design 02 is not approved by its own header, and 03 and 16 approve only their first slice (ADR-0030; docs/designs/README.md arbitrates)",
+		why:        "no central design is approved whole: design 02 is not approved by its own header, and 03 and 16 approve only their first slice (ADR-0030; a design's own Status line is the source of truth, and docs/designs/README.md summarises it — ADR-0030 Amendment 1)",
+	},
+	{
+		// A REGRESSION PIN for two historical sentences, not general coverage
+		// of design 03's status. Design 03 was consolidated on 2026-09-10 with
+		// no critique PASS, and two summaries said so in words that outlived
+		// the fact: its thirteenth critique passed its first slice, the human
+		// approved that slice on 2026-09-12 and amendment A84 on 2026-09-23.
+		// "Designs 02 and 03 are critique pending — not approved" sat in
+		// docs/architecture.md's Status line, and "no design 02 or 03 critique
+		// has returned PASS" in architecture.html's §18 note, until 2026-09-23.
+		// The pattern matches those two phrasings and close variants; any
+		// other wording of the same false claim passes. Design 02 alone is
+		// still unapproved and unpassed; a sentence saying so of 02 is not
+		// caught. The rescue is narrow on purpose: both live blocks carried
+		// "are now false" and "were false" about OTHER claims, and a looser
+		// clause would have spared them.
+		name:    "design-03-never-passed",
+		banned:  regexp.MustCompile(`(?i)designs? 02 and 03 (are|is|were|remain) (critique pending|not approved)|no (design )?02 or 03 critique has (ever )?returned pass`),
+		allowed: regexp.MustCompile(`(?i)withdrawn|retracted`),
+		why:     "design 03's thirteenth critique passed its first slice, which the human approved on 2026-09-12, and A84 was approved on 2026-09-23; only design 02 is wholly unapproved (design 03's Status line, ADR-0034 Amendment 4)",
+	},
+	{
+		// A REGRESSION PIN for one historical sentence. architecture.md §20 and
+		// architecture.html both said "where one design amended an
+		// already-approved one"; the designs amended that way were
+		// critique-passed, and the human had approved none of them whole. The
+		// md was corrected first and the html kept the phrase, with a stale
+		// amendment count beside it, until a review of 2026-09-23 found it.
+		//
+		// Banned outright, with no rescue. The paragraph it lived in now says
+		// "that reading is withdrawn" of another claim, and a rescue on
+		// "withdrawn" let the restored sentence pass there — measured.
+		name:   "already-approved-design",
+		banned: regexp.MustCompile(`(?i)already[- ]approved`),
+		why:    "no design is approved whole; the human approved only design 03's first slice and A84, and design 16's first slice (docs/designs/README.md, ADR-0030 Amendment 1)",
 	},
 	{
 		name:    "superseded-research-note",
@@ -1012,6 +1047,8 @@ var ruleFixtures = map[string]string{
 	"referent-drift-refusal":    "If the referent's content has moved, rollback is refused naming both digests.",
 	"verifier-undecided":        "Ship a Sigstore policy-controller or a Kyverno verifyImages binding.",
 	"inert-tightening":          "A tightening update must make the dependent routes inert first.",
+	"design-03-never-passed":    "Designs 02 and 03 are critique pending and not approved.",
+	"already-approved-design":   "Where a design amended an already approved one, the amendment is numbered.",
 }
 
 // livePhrasingFixtures are the exact sentences that were sitting in an
@@ -1029,6 +1066,8 @@ var livePhrasingFixtures = map[string]string{
 	"blanket-approval-claim": "<span><b>status</b> 27/27 designs approved · 26 ADRs</span>",
 	"spec-only-hash":         "1. Spec change → `revisionHash(spec)` — **spec only**; the card digest is status.",
 	"env-referent-hash":      "| `runtime.env`, `runtime.envFrom` (by **referent**, not contents) | `runtime.port` |\n|---|---|\n| a | b |",
+	// docs/architecture.md's Status line, as it read on main until 2026-09-23.
+	"design-03-never-passed": "- **Status**: **superseded in part — read §18 before relying on this document.** Its original header said \"design phase complete · 27/27 component designs approved, each through independent adversarial critique; 26 ADRs recorded. Implementation may begin.\" **Two of those are now false.** Designs **02 and 03** are `critique pending — not approved` by their own Status lines, and there are **34 ADRs**, not 26.",
 }
 
 // TestTheLivePhrasingsThatSlippedThroughAreCaught pins r6 MAJOR 5's second half.
@@ -1192,6 +1231,10 @@ var htmlFixtures = map[string]string{
 	"overshoot-bound":      "<p>Status publishes a measured\novershoot bound per replica.</p>",
 	"exact-usd-tier":       `<p>The <code>exact</code> <em>tier</em> &mdash; the receipt backstop.</p>`,
 	"superseded-adr":       `<td><a href="decisions/0020-policy-compiler.md">ADR</a>-0020 governs compilation order</td>`,
+	// docs/architecture.html's §20 sentence, as it read on main until 2026-09-23.
+	"already-approved-design": `<p>Where one design amended an already-approved one, the delta is recorded as a numbered amendment in the amended design — design 02 carries <b>seventy-six</b>, A1–A76, the tip dated 2026-09-16. This sentence read “eight”.</p>`,
+	// docs/architecture.html's §18 note, as it read on main until 2026-09-23.
+	"design-03-never-passed": `<div class="prose"><p><b>Status:</b> this line is superseded. An earlier version claimed all five phases were "designed and approved (27/27, each critique-passed)" and that implementation had not started. Both were false: no design 02 or 03 critique has returned PASS, and the operator, its CRD, the chart and a proven gateway path all run and are tested.</p></div>`,
 }
 
 // TestAWithdrawnGuaranteeCannotHideInTheRenderedPage is the gate's HTML half.

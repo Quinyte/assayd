@@ -1,6 +1,6 @@
 # Design 25: model-operator + ModelHub
 
-- **Status**: **approved** — critique PASS (reviews/25-review.md) · ADR-0026
+- **Status**: **HYPOTHESIS (ADR-0030)** · **not approved by the human** — critique PASS (reviews/25-review.md) · ADR-0026 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P5 · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: ADR-0003 (KServe/Trainer/KitOps bindings), 0006 (same gate mechanic), 0024 (EvalSuite reuse) · interfaces: 16 (Model gating), 03 (LLM Backend targets), 07 (plus-tier charts)
 - **Research**: `docs/research/modelhub-2026-08.md` (dated note: KServe RawDeployment + chart-shipped `ClusterStorageContainer` for `kit://`, Trainer v2 BuiltinTrainers, Kueue, agentgateway **virtual models** minimum version)

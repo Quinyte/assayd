@@ -1,6 +1,6 @@
 # Design 09: SDK templates (the BYO-SDK on-ramp)
 
-- **Status**: **approved** — critique PASS at r2 (reviews/09-review.md) · ADR-0022
+- **Status**: **not approved by the human** — critique PASS at r2 (reviews/09-review.md) · ADR-0022 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P1 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0003, 0019 · interfaces: 02 (card/registration contract), 05 (tool discovery), 08 (wizard renders these), 14-loop-eng (architecture §14: the reference inner loop lives here)
 - **Research**: `docs/research/a2a-2026-08.md` (primary sources landed, r1 f3): A2A v1.0 (Apr 2026) — stable spec, signed Agent Cards (publisher-domain trust model), JSON-RPC + SSE, official SDKs ×6.

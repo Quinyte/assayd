@@ -1,6 +1,6 @@
 # Design 23: The App layer (HTTP projection, typed clients, release pinning)
 
-- **Status**: **approved** — critique PASS at r2 (reviews/23-review.md) · ADR-0025
+- **Status**: **HYPOTHESIS (ADR-0030)** · **not approved by the human** — critique PASS at r2 (reviews/23-review.md) · ADR-0025 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P4 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0016 (BFF-less apps) · interfaces: 03 (projection routes), 06 (OIDC clients + exchange), 21 (workflow http triggers + input schemas), 08 (`init app` + client gen), architecture §03 (the App CR)
 

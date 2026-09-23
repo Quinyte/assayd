@@ -1,6 +1,6 @@
 # Design 15: Probe engine (semantic readiness)
 
-- **Status**: **approved** — critique PASS at r2 (reviews/15-review.md) · ADR-0023
+- **Status**: **not approved by the human** — critique PASS at r2 (reviews/15-review.md) · ADR-0023 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P2 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0005 (semantic readiness), 0017 (`kg.probe`), 0007 (drift seam) · interfaces: 01/13 (executes via `kg.probe`), 12 (probe content), 14 (promotion gate), 20 (continuous mode feeds drift)
 

@@ -1,6 +1,6 @@
 # Design 11: Connector CRD (three facets)
 
-- **Status**: **approved** — critique PASS at r2 (reviews/11-review.md) · ADR-0023
+- **Status**: **HYPOTHESIS (ADR-0030)** · **not approved by the human** — critique PASS at r2 (reviews/11-review.md) · ADR-0023 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P2 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0009 (three planes) · interfaces: 03 (tool Backends/policies), 05 (tools.* directory), 06 (credentials/OAuth), 14 (ingestion readers), 21-workflow (event triggers, P4 seam)
 - **Research**: `docs/research/connectors-2026-08.md` — **released NATS binding (v1.0.2) blesses structured mode only** (r1 f4, corrected + pinned); sdk-go `nats_jetstream/v2` is the implementation vehicle.
