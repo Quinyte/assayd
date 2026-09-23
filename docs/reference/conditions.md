@@ -361,7 +361,7 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:967` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authserved.go:796` in `appendGovernance()` — from the local `reason`, which folds to this one reason
+- `internal/controller/authserved.go:809` in `appendGovernance()` — from the local `reason`, which folds to this one reason
 - `internal/controller/authtxn.go:605` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
 - `internal/controller/authtxn.go:607` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
 - `internal/controller/agent_controller.go:965` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
