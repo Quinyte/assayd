@@ -685,12 +685,93 @@ func TestBothHalvesOnOnePassNameTheRouteFirst(t *testing.T) {
 		}
 		c := condIs(t, b, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue,
 			"AuthPolicyNotAttached")
+		// The hedge is what this row pins, and it survived §8.1 item 11's
+		// message fix by design: item 11 rewrote only what follows it on this
+		// cell, which TestTheHedgeSaysWhatWasReadOfTheRoute pins on its own.
 		mustContain(t, c, "PolicyApplyIncomplete", "does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED")
 		mustNotContain(t, c, "PolicyApplyIncomplete", heldMark)
 	})
 	// Both claims are stored, which is what lets a held pass re-raise each.
 	if auth := authOf(t, a); auth == nil || !auth.RouteRefused || !auth.PolicyUnattached {
 		t.Errorf("both halves fired and the claim store records %+v", auth)
+	}
+}
+
+// rejectPolicy makes the assayd Gateway report that it REJECTED this Agent's
+// `<agent>-auth` outright — Accepted=False on the real Gateway ancestor, at the
+// policy's current generation — which is policyReport's clauseRejected. Nothing
+// tried on agentgateway 1.5.0 has produced it (A82); the arm is live because
+// the CRD asserts the shape.
+func rejectPolicy(t *testing.T, a *assaydv1alpha1.Agent) {
+	t.Helper()
+	gen := policyExists(t, runNS(a.Namespace), policyNameOf(a)).GetGeneration()
+	reportPolicyAncestors(t, a, []any{map[string]any{
+		"ancestorRef": map[string]any{"group": gatewayv1.GroupName, "kind": "Gateway",
+			"name": "assayd", "namespace": "assayd-gateway"},
+		"controllerName": "agentgateway.dev/agentgateway",
+		"conditions": []any{policyCondition("Accepted", "False", "Invalid", gen),
+			policyCondition("Attached", "True", "Attached", gen)},
+	}})
+}
+
+// The hedged lead says what this pass read of the route — design 03 §8.1
+// item 11. On an UNKNOWN route reading with NO route claim standing, nothing
+// raises or holds the route half, so the policy half's message IS
+// PolicyApplyIncomplete's whole message and carries no route reading; the
+// hedge used to send the reader to "PolicyApplyIncomplete names the route's own
+// reading first" all the same, and on a cluster whose agentgateway controller
+// is renamed that is every pass. Rule 8.
+//
+// Both halves of the assertion are load-bearing: the absence alone passes two
+// wrong fixes — dropping the hedge entirely, and reverting to the "accepted and
+// SERVING" lead — so the positive wording is asserted too, and it does not lean
+// on item 7's assertion on the same cell.
+//
+// Mutation, one edit: make servedRouteLead answer routeNamed for every reading
+// that is not reportHolding — the shipped behaviour. It compiles, and both
+// subtests must fail.
+func TestTheHedgeSaysWhatWasReadOfTheRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		report func(*testing.T, *assaydv1alpha1.Agent)
+		says   string
+	}{
+		{"the policy attached to nothing", unattachPolicy, "does not attach"},
+		{"the policy rejected outright", rejectPolicy, "REJECTED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, r, _ := servedAPIKeyAgent(t, "a85hedge"+strings.Fields(tc.name)[2])
+			acceptRoute(t, a.Namespace, a.Name)
+			acceptPolicy(t, a.Namespace, a.Name)
+			reconcileOnce(t, r, a)
+			if auth := authOf(t, a); auth == nil || auth.RouteRefused || auth.PolicyUnattached {
+				t.Fatalf("this row needs NO claim standing before the unknown pass: %+v", auth)
+			}
+			rt := servingRoute(t, a.Namespace, a.Name)
+			rt.Spec.Hostnames = append(rt.Spec.Hostnames, "drifted.example.com")
+			if err := k8s.Update(context.Background(), rt); err != nil {
+				t.Fatal(err)
+			}
+			tc.report(t, a)
+			reconcileOnce(t, r, a)
+			if auth := authOf(t, a); auth == nil || !auth.PolicyUnattached || auth.RouteRefused {
+				t.Fatalf("this row needs the policy half raised on an UNKNOWN route reading with no "+
+					"route claim: %+v", auth)
+			}
+
+			c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue,
+				"AuthPolicyNotAttached")
+			g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue,
+				"AuthPolicyNotAttached")
+			ready := condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AuthPolicyNotAttached")
+			for what, cond := range map[string]*metav1.Condition{
+				"PolicyApplyIncomplete": c, "GovernanceSkipped": g, "Ready": ready} {
+				mustContain(t, cond, what, tc.says, "THIS PASS DID NOT READ IT AS ACCEPTED",
+					"the route's reading at its current generation is unknown")
+				mustNotContain(t, cond, what, "names the route's own reading first",
+					"route is accepted and SERVING", "ServingRouteNotAccepted")
+			}
+		})
 	}
 }
 
@@ -1105,6 +1186,79 @@ func TestAnUnknownReadingHoldsAStandingReport(t *testing.T) {
 				"that observed it, because this pass read no report at the policy's generation "+
 				"(the Agent is at %d)", g.ObservedGeneration, observed, live.Generation)
 		}
+	})
+}
+
+// A HELD policy claim does not overwrite a ForeignTrafficPolicy or a
+// GatewayAuthPolicy asserted on the same pass — design 03 §8.1 item 9.
+// holdGovernance used to carry a stored GovernanceSkipped=AuthPolicyNotAttached
+// whole whatever the pass had already asserted, so after a foreign takeover of
+// the -auth name PolicyApplyIncomplete and Ready named the foreign policy while
+// the tier condition, the one the held message sends its reader to, never did:
+// rule 8. §5's rule is that a standing ForeignTrafficPolicy or
+// GatewayAuthPolicy keeps GovernanceSkipped's reason and the policy half's
+// claim is appended to it — the composition a FRESH raise already gets through
+// appendGovernance ("a standing ForeignTrafficPolicy keeps the reason", above).
+//
+// Mutation, one edit: in holdGovernance, carry the stored condition whole
+// without asking what this pass already asserted. It compiles, and both halves
+// must fail.
+func TestAHeldPolicyClaimKeepsTheReasonAboveIt(t *testing.T) {
+	// Stripping the UID label is the takeover: §3.2's name-and-label rule no
+	// longer recognises the policy, so reassertServedPolicy judges nothing and
+	// the claim is HELD, and foreignTrafficPolicies reports the same object as
+	// foreign. Two passes, because the first carries the stored condition and
+	// the second must not have been rescued by anything the first wrote.
+	t.Run("a ForeignTrafficPolicy", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "a85heldforeign")
+		acceptRoute(t, a.Namespace, a.Name)
+		unattachPolicy(t, a)
+		reconcileOnce(t, r, a)
+		condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+
+		p := policyExists(t, runNS(a.Namespace), policyNameOf(a))
+		labels := p.GetLabels()
+		delete(labels, controller.LabelAgentUID)
+		p.SetLabels(labels)
+		if err := k8s.Update(context.Background(), p); err != nil {
+			t.Fatalf("strip %s from the served policy: %v", controller.LabelAgentUID, err)
+		}
+		reconcileOnce(t, r, a)
+		reconcileOnce(t, r, a)
+
+		if auth := authOf(t, a); auth == nil || !auth.PolicyUnattached {
+			t.Fatalf("this row needs the policy claim HELD, not cleared: %+v", auth)
+		}
+		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "ForeignTrafficPolicy")
+		mustContain(t, c, "PolicyApplyIncomplete", "AuthPolicyNotAttached")
+		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "ForeignTrafficPolicy")
+		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "ForeignTrafficPolicy")
+		mustContain(t, g, "GovernanceSkipped", "AuthPolicyNotAttached", heldMark,
+			"did not judge a policy at all")
+	})
+	// A Gateway-level policy that widens the route, planted after the claim,
+	// with the policy's generation moved past the Gateway's last report in the
+	// same step: the policy is still judged, its reading is unknown, and the
+	// claim is HELD beside W1's fresh GatewayAuthPolicy.
+	t.Run("a GatewayAuthPolicy", func(t *testing.T) {
+		a, r, _ := servedAPIKeyAgent(t, "a85heldabove")
+		acceptRoute(t, a.Namespace, a.Name)
+		unattachPolicy(t, a)
+		reconcileOnce(t, r, a)
+		condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "AuthPolicyNotAttached")
+
+		key := gatewayPolicy(t, "gw-"+a.Name, map[string]any{
+			"targetRefs": onGateway(suiteGatewayName, ""), "traffic": apiKeyTraffic(t, a)})
+		driftPolicySpec(t, a)
+		reconcileOnce(t, r, a)
+
+		if auth := authOf(t, a); auth == nil || !auth.PolicyUnattached {
+			t.Fatalf("this row needs the policy claim HELD, not cleared: %+v", auth)
+		}
+		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
+		mustContain(t, c, "PolicyApplyIncomplete", "AuthPolicyNotAttached")
+		g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "GatewayAuthPolicy")
+		mustContain(t, g, "GovernanceSkipped", key.String(), "AuthPolicyNotAttached", heldMark)
 	})
 }
 
