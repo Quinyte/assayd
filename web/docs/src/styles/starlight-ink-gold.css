@@ -160,3 +160,20 @@ body {
   --ax-on-ink: var(--ax-ink-dark);
   --ax-on-surface-variant: var(--ax-outline);
 }
+
+/*
+ * The generated CRD reference wraps each field table in
+ * <div class="ref-table" role="region" tabindex="0">, so a wide table can be
+ * panned from the keyboard (WCAG 2.1.1; internal/refgen repairTableHTML). The
+ * WRAPPER is the scroll container: Starlight makes markdown tables scroll on
+ * their own, and a table that scrolls inside a focusable div is a second,
+ * unfocusable scroll region, which is the defect this fixes.
+ */
+.sl-markdown-content .ref-table {
+  overflow-x: auto;
+}
+
+.sl-markdown-content .ref-table table {
+  display: table;
+  overflow: visible;
+}

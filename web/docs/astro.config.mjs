@@ -91,6 +91,11 @@ export default defineConfig({
       // would colour it by rules it does not follow.
       expressiveCode: {
         shiki: { langAlias: { cel: "txt" } },
+        // Long lines wrap rather than scroll. A code block that scrolls is a
+        // scroll region Expressive Code does not make focusable, so it cannot
+        // be panned from the keyboard (axe scrollable-region-focusable, four of
+        // them on the CRD reference's CEL rules).
+        defaultProps: { wrap: true },
       },
       pagination: false,
       credits: false,

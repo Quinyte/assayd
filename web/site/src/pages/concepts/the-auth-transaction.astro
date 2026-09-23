@@ -54,8 +54,8 @@ const design03 =
       Most of the evidence on this page is an envtest: a real Kubernetes API
       server with no kubelet and no gateway, where the anonymous request is
       answered by a stub and the Gateway’s status is written by the test. The
-      end-to-end tests, on k3d against agentgateway 1.5.0, are named where
-      they exist.
+      end-to-end tests, on k3d against the agentgateway release that <code>hack/e2e.sh</code> pins, are named
+      where they exist.
     </p>
 
     <h2 id="stages">The stages</h2>
@@ -67,14 +67,14 @@ const design03 =
     <dl class="stages">
       <dt><code>PreparingRoute</code></dt>
       <dd>
-        A new API-key Agent’s route is written first with no <code>backendRefs</code>, so it exists and carries nothing. <ClaimClass claim="measured" test="TestCreatePublishesOnlyOnA401" />
+        A new API-key Agent’s route exists with no <code>backendRefs</code> while its policy is written and converges, so it carries nothing. <ClaimClass claim="measured" test="TestCreatePublishesOnlyOnA401" />
       </dd>
 
       <dt><code>ProbingBefore</code></dt>
       <dd>
         Only a <code>Lock</code> starts here, on a route that is already
         serving. It sends one anonymous request and records the answer before
-        writing anything. It is an observation, not a gate: even a <code>503</code> is recorded and the policy is written after it. <ClaimClass claim="measured" test="TestTheLockProbesTheCardPathAndAttributesEvery401" />
+        writing the policy. It is an observation, not a gate: even a <code>503</code> is recorded and the policy is written after it. <ClaimClass claim="measured" test="TestTheLockProbesTheCardPathAndAttributesEvery401" />
       </dd>
 
       <dt><code>ApplyingPolicies</code></dt>
@@ -100,7 +100,7 @@ const design03 =
 
       <dt><code>Publishing</code></dt>
       <dd>
-        The <code>backendRefs</code> go onto the route. An Agent that declares <code>auth: none</code> starts here: its route is published at once,
+        The <code>backendRefs</code> go onto the route. An Agent that declares <code>auth: none</code> has no policy to prepare: its route is published at once,
         labelled <code>assayd.dev/auth: "none"</code>, with no policy written
         and no request sent. <ClaimClass claim="measured" test="TestANoneAgentIsPublishedAtOnceWithItsMarker" />
       </dd>
@@ -114,9 +114,10 @@ const design03 =
       </dd>
     </dl>
 
-    <h2 id="served">Served is not a stage</h2>
+    <h2 id="served">How a transaction ends</h2>
     <p>
-      There is no <code>Served</code> stage value. An Agent is served when <code>status.auth.mode</code> is recorded and the transaction slot is
+      A transaction ends at <code>Served</code>, which is an outcome and not
+      one of the stage values above. An Agent is served when <code>status.auth.mode</code> is recorded and the transaction slot is
       empty, so the operator ends a transaction by clearing it rather than by
       advancing it. <ClaimClass claim="measured" test="TestCreatePublishesOnlyOnA401" />
     </p>
@@ -138,9 +139,11 @@ const design03 =
         recorded only after the answer through that route turns to <code>401</code>. <ClaimClass claim="measured" test="TestJ2LocksAServedNoneAgentInPlace" />
       </li>
       <li>
-        On k3d against agentgateway 1.5.0, that lock runs end to end: the same
-        route stops answering anonymous callers and keeps answering with a key.
-        It is skipped where no gateway is installed. <ClaimClass claim="measured" test="TestAServedNoneAgentIsLockedInPlace" />
+        On k3d, that lock runs end to end through the Gateway’s own Service:
+        an anonymous request to the Agent gets the agent’s <code>200</code> before
+        the edit and <code>401</code> after it, and a key in the Agent’s group is
+        still answered by the agent. On runs that install no gateway it is
+        skipped and reported unverified. <ClaimClass claim="measured" test="TestAServedNoneAgentIsLockedInPlace" />
       </li>
       <li>
         One way a refused <code>Adopt</code> ends is the owner’s edit: the owner
@@ -157,11 +160,22 @@ const design03 =
     <ul class="claims">
       <li>
         While a policy on the Gateway itself could have answered the anonymous
-        request, no <code>401</code> is credited. The transaction holds at <code>ProbingAfter</code> with reason <code>GatewayAuthPolicy</code>, and moves on once that policy goes. <ClaimClass claim="measured" test="TestACreateHoldsWhileAGatewayLevelAuthPolicyStands" />
+        request, no <code>401</code> is credited. The transaction holds at <code>ProbingAfter</code> with reason <code>GatewayAuthPolicy</code>, and, in the case tested, moves on once that policy goes. <ClaimClass claim="measured" test="TestACreateHoldsWhileAGatewayLevelAuthPolicyStands" />
       </li>
       <li>
-        On k3d against agentgateway 1.5.0, a new Agent beside a Gateway-level
-        API-key policy holds at <code>ProbingAfter</code> on the Gateway’s own <code>401</code>. It is skipped where no gateway is installed. <ClaimClass claim="measured" test="TestAGatewayLevelAuthPolicyHoldsANewAgent" />
+        On k3d, a new Agent beside a Gateway-level API-key policy holds at <code>ProbingAfter</code> on the Gateway’s own <code>401</code>. On runs that install no gateway it is skipped and reported unverified. <ClaimClass claim="measured" test="TestAGatewayLevelAuthPolicyHoldsANewAgent" />
+      </li>
+      <li>
+        The same hold, with the same reason, stands while the Gateway admits ListenerSets at all, whether or not one exists: a ListenerSet’s listener could capture the Agent’s traffic, and the operator does not inspect ListenerSets. <ClaimClass claim="measured" test="TestAGatewayThatAdmitsListenerSetsHolds" />
+      </li>
+      <li>
+        It also stands while the Gateway, or the list of policies on it, cannot be read: a <code>401</code> is not credited against a Gateway the operator could not check. <ClaimClass claim="measured" test="TestAnUnreadableGatewayOrPolicyListHolds" />
+      </li>
+      <li>
+        A <code>traffic</code> policy on the Agent’s route that the operator did not write holds it too. Two such policies on one route resolve at random, so no <code>401</code> is credited while one stands, even after the operator’s own policy is accepted. <ClaimClass claim="measured" test="TestAForeignPoliciesAnswerIsNeverTakenForTheCreates" />
+      </li>
+      <li>
+        And a route not yet published stays unpublished while one stands, with <code>PolicyApplyIncomplete=True</code> and reason <code>ForeignTrafficPolicy</code>. <ClaimClass claim="measured" test="TestAForeignPolicyHoldsPublishing" />
       </li>
       <li>
         A NACK Event from agentgateway’s controller on the Gateway returns a <code>Lock</code> to <code>Converging</code>, and it does not finish
@@ -188,7 +202,7 @@ const design03 =
         One request proves one gateway replica, and no replica count is declared (<a href={`${design03}#why-gatewayreplicas-is-declared-rather-than-read-from-the-gateway-deployment`}>design 03 §3.1</a>). A served API-key Agent says so: <code>GovernanceSkipped=False</code>, reason <code>AuthVerifiedOnOneReplica</code>. <ClaimClass claim="measured" test="TestAPassOnOneReplicaIsReadyAndAHeldSwitchIsNot" />
       </li>
       <li>
-        Nothing shows that the gateway’s proxy has applied a policy. The operator reads the Gateway’s control-plane status, which the proxy may lag, so its checks narrow that window and do not close it (<a href={`${design03}#332-what-the-barrier-can-and-cannot-prove`}>design 03 §3.3.2</a>). <ClaimClass claim="not-built" note="no check reads the proxy's own configuration" />
+        The checks that decide whether a route may move and whether a <code>401</code> counts read the Gateway’s control-plane status, and the proxy may lag it. They narrow the window in which the proxy has not yet applied what the control plane reports, and do not close it (<a href={`${design03}#332-what-the-barrier-can-and-cannot-prove`}>design 03 §3.3.2</a>). <ClaimClass claim="not-built" note="no check reads the proxy's own configuration" />
       </li>
       <li>
         While a deleted policy is being rebuilt, its route keeps serving, and until the gateway applies the rebuilt policy it may serve without authentication (<a href={`${design03}#333-in-place-tightening-is-trusted-only-on-a-probe`}>design 03 §3.3.3</a>). Withdrawing the route instead would let anyone who can delete a policy take the Agent off the air. <ClaimClass claim="not-built" note="nothing closes this window; design 03 §3.3.3 records it" />

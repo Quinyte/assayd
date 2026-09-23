@@ -61,16 +61,17 @@ renders has an API group under `gateway.networking.k8s.io` or agentgateway's,
 and it vendors no subchart. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
 
 The end-to-end harness, `hack/e2e.sh`, installs Gateway API and agentgateway
-itself (by default v1.6.0 and 1.5.0) and creates the Gateway. None of that is
-the chart's.
+itself, at the versions it pins, and creates the Gateway. None of that is the
+chart's.
 
 On k3d, a request reaches an agent through that Gateway's own Service, on a route
-the operator wrote. The test skips, and reports the gateway path unverified,
-where no gateway is installed. <ClaimClass claim="measured" test="TestAnAgentAnswersThroughTheGateway" />
+the operator wrote. On runs that install no gateway, the test is skipped and
+reports the gateway path unverified. <ClaimClass claim="measured" test="TestAnAgentAnswersThroughTheGateway" />
 
 On a real cluster, the operator Deployment the chart installs names, in its pod
-template, the image the same end-to-end run built. It skips when no cluster is
-reachable. <ClaimClass claim="measured" test="TestTheOperatorUnderTestIsTheOneJustBuilt" />
+template, the image the same end-to-end run built, and every live pod of that
+Deployment runs it. The test is skipped unless the end-to-end suite is opted in
+(`ASSAYD_E2E=1`, which `make e2e` sets); opted in, a missing cluster fails it. <ClaimClass claim="measured" test="TestTheOperatorUnderTestIsTheOneJustBuilt" />
 
 ## What the architecture names and nothing installs
 

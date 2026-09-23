@@ -93,6 +93,38 @@ func TestADefaultInstallRunsOneOperatorAndNothingElse(t *testing.T) {
 		})
 	}
 
+	// The page that states this inventory, held to it. Without this the test
+	// pins the chart and not the sentences: a change to the chart and to the
+	// list above would stay green while the page went on saying the old thing
+	// (third independent review of PR #67). It reads the page's source, so it
+	// runs under ci.yml's chart job whenever the page or the chart changes.
+	page, err := os.ReadFile(filepath.Join("..", "..", "web", "docs", "src", "content", "docs",
+		"what-runs-today.mdx"))
+	if err != nil {
+		t.Fatalf("read the page this test pins: %v", err)
+	}
+	prose := strings.Join(strings.Fields(string(page)), " ")
+	for _, obj := range core {
+		kind, name, _ := strings.Cut(obj, "/")
+		if kind != "ValidatingAdmissionPolicy" && kind != "Deployment" {
+			continue
+		}
+		if !strings.Contains(prose, "`"+name+"`") {
+			t.Errorf("what-runs-today.mdx does not name %s %s, which the chart renders", kind, name)
+		}
+	}
+	for _, phrase := range []string{
+		"one workload",
+		"at two replicas", // the default profile, as rendered above
+		"at one replica",  // the local profile
+		"four `ValidatingAdmissionPolicy` objects",
+		"two Roles and two RoleBindings", // what gateway.enabled adds
+	} {
+		if !strings.Contains(prose, phrase) {
+			t.Errorf("what-runs-today.mdx does not say %q; the rendered chart above does", phrase)
+		}
+	}
+
 	crds, err := filepath.Glob(filepath.Join(chartPath, "crds", "*"))
 	if err != nil {
 		t.Fatal(err)
