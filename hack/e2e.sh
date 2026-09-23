@@ -64,6 +64,21 @@ cleanup() {
   if [ -n "${OWNED_CLUSTER}" ]; then
     echo "==> deleting ${OWNED_CLUSTER}, the cluster this run created"
     k3d cluster delete "${OWNED_CLUSTER}" >/dev/null 2>&1 || true
+    # `--registry-use` attaches the SHARED registry to this cluster's network,
+    # and `k3d cluster delete` leaves a network that still has a container on
+    # it. So every run leaked one network, and after a few dozen Docker ran out
+    # of address pools and no cluster could be created on this machine
+    # ("all predefined address pools have been fully subnetted"). Detach the
+    # registry from THIS run's network and remove it; the registry itself is
+    # shared between runs and stays.
+    local net="k3d-${OWNED_CLUSTER}"
+    if docker network inspect "${net}" >/dev/null 2>&1; then
+      docker network disconnect "${net}" "k3d-${REG_NAME:-assayd-e2e-registry}" >/dev/null 2>&1 || true
+      # Not fatal — cleanup must not fail the run — but never silent: a
+      # network this cannot remove is the leak this block exists to stop.
+      docker network rm "${net}" >/dev/null 2>&1 \
+        || echo "WARNING: could not remove docker network ${net}; remove it by hand, or Docker will run out of address pools" >&2
+    fi
   fi
 }
 trap cleanup EXIT
