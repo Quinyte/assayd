@@ -21,10 +21,16 @@
 // nothing about a dispatch from a ref whose release.yml predates the guard:
 // GitHub runs the file on the dispatched ref, and this test reads the one in
 // this checkout.
+//
+// It reads the rules GitHub documents for skipping: a step or job whose `if:`
+// has no status function gets an implicit success(), and a job is skipped when
+// a job it needs has failed. Every job other than `image` must therefore need
+// `image`, even one that would publish nothing.
 package release
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,12 +44,28 @@ import (
 const workflowPath = "../../.github/workflows/release.yml"
 
 type step struct {
-	ID   string            `yaml:"id"`
-	Name string            `yaml:"name"`
-	Uses string            `yaml:"uses"`
-	If   string            `yaml:"if"`
-	Env  map[string]string `yaml:"env"`
-	Run  string            `yaml:"run"`
+	ID              string            `yaml:"id"`
+	Name            string            `yaml:"name"`
+	Uses            string            `yaml:"uses"`
+	If              string            `yaml:"if"`
+	Env             map[string]string `yaml:"env"`
+	Run             string            `yaml:"run"`
+	Shell           string            `yaml:"shell"`
+	ContinueOnError yaml.Node         `yaml:"continue-on-error"`
+}
+
+// defaults is the `defaults:` block a workflow or a job may carry; only its
+// shell matters here.
+type defaults struct {
+	Run struct {
+		Shell string `yaml:"shell"`
+	} `yaml:"run"`
+}
+
+// continues reports whether a `continue-on-error:` is set to anything but
+// absent or a literal false. An expression counts: it may be true at run time.
+func continues(n yaml.Node) bool {
+	return n.Kind != 0 && !(n.Kind == yaml.ScalarNode && n.Value == "false")
 }
 
 func (s step) label() string {
@@ -56,22 +78,26 @@ func (s step) label() string {
 }
 
 type job struct {
-	If    string   `yaml:"if"`
-	Needs []string `yaml:"needs"`
-	Steps []step   `yaml:"steps"`
+	If              string
+	Needs           []string
+	Steps           []step
+	Defaults        defaults
+	ContinueOnError yaml.Node
 }
 
 // UnmarshalYAML accepts `needs:` as a string or a list, as GitHub does.
 func (j *job) UnmarshalYAML(n *yaml.Node) error {
 	var raw struct {
-		If    string    `yaml:"if"`
-		Needs yaml.Node `yaml:"needs"`
-		Steps []step    `yaml:"steps"`
+		If              string    `yaml:"if"`
+		Needs           yaml.Node `yaml:"needs"`
+		Steps           []step    `yaml:"steps"`
+		Defaults        defaults  `yaml:"defaults"`
+		ContinueOnError yaml.Node `yaml:"continue-on-error"`
 	}
 	if err := n.Decode(&raw); err != nil {
 		return err
 	}
-	j.If, j.Steps = raw.If, raw.Steps
+	j.If, j.Steps, j.Defaults, j.ContinueOnError = raw.If, raw.Steps, raw.Defaults, raw.ContinueOnError
 	switch raw.Needs.Kind {
 	case 0:
 	case yaml.ScalarNode:
@@ -85,7 +111,8 @@ func (j *job) UnmarshalYAML(n *yaml.Node) error {
 }
 
 type workflow struct {
-	Jobs map[string]job `yaml:"jobs"`
+	Defaults defaults       `yaml:"defaults"`
+	Jobs     map[string]job `yaml:"jobs"`
 }
 
 func load(t *testing.T) workflow {
@@ -120,6 +147,21 @@ func versionStep(t *testing.T, w workflow) (step, int) {
 				if !strings.Contains(s.Run, want) {
 					t.Fatalf("the `version` step's script no longer contains %q, so it cannot "+
 						"refuse a dispatch from the wrong ref:\n%s", want, s.Run)
+				}
+			}
+			if continues(s.ContinueOnError) {
+				t.Fatalf("the `version` step sets `continue-on-error: %s`, so its refusal "+
+					"does not fail the job and every step after it runs", s.ContinueOnError.Value)
+			}
+			// These tests run the script under bash; a run under another shell
+			// is a run they did not test.
+			for where, sh := range map[string]string{
+				"the step's `shell:`":         s.Shell,
+				"the image job's `defaults:`": w.Jobs["image"].Defaults.Run.Shell,
+				"the workflow's `defaults:`":  w.Defaults.Run.Shell,
+			} {
+				if sh != "" && sh != "bash" {
+					t.Fatalf("%s is %q; the version step is tested under bash only", where, sh)
 				}
 			}
 			return s, i
@@ -241,11 +283,12 @@ func TestTheVersionStepPublishesOnlyTheTagItWasStartedFrom(t *testing.T) {
 	}
 }
 
-// statusFunc matches GitHub's status-check functions. An `if:` without one
+// statusFunc matches GitHub's status-check functions, case-insensitively as
+// GitHub reads them, so `!cancelled()` and `Always()` count. An `if:` without one
 // gets an implicit success(), so the step is skipped once the version step
 // has failed. An `if:` with one runs regardless, unless it also requires the
 // push to have succeeded.
-var statusFunc = regexp.MustCompile(`\b(always|failure|cancelled|success)\s*\(`)
+var statusFunc = regexp.MustCompile(`(?i)\b(always|failure|cancelled|success)\s*\(`)
 
 const pushSucceeded = "steps.push.outcome == 'success'"
 
@@ -276,34 +319,109 @@ func TestNothingIsPublishedAfterTheVersionStepRefuses(t *testing.T) {
 		t.Error("no step with `id: push` follows the version step")
 	}
 
-	chart, ok := w.Jobs["chart"]
-	if !ok {
+	// Every OTHER job, not just `chart`: a job added later that signs or
+	// pushes must also be skipped when the image job fails. It is, only if it
+	// needs `image` directly and its `if:` carries no status function, since
+	// any status function (`always()`, `!cancelled()`, `failure()`,
+	// `success() || …`) can run it after a failed need.
+	if _, ok := w.Jobs["chart"]; !ok {
 		t.Fatal("release.yml has no `chart` job")
 	}
-	needsImage := false
-	for _, n := range chart.Needs {
-		needsImage = needsImage || n == "image"
+	for name, j := range w.Jobs {
+		if name == "image" {
+			continue
+		}
+		needsImage := false
+		for _, n := range j.Needs {
+			needsImage = needsImage || n == "image"
+		}
+		if !needsImage {
+			t.Errorf("job %q needs %v, not `image`, so it runs whether or not the version step refused", name, j.Needs)
+		}
+		if statusFunc.MatchString(j.If) {
+			t.Errorf("job %q has `if: %s`, which can run it after the image job has failed", name, j.If)
+		}
 	}
-	if !needsImage {
-		t.Errorf("the chart job needs %v, not `image`, so it publishes whether or not the version step refused", chart.Needs)
-	}
-	if statusFunc.MatchString(chart.If) {
-		t.Errorf("the chart job has `if: %s`, which runs it after the image job has failed", chart.If)
+	// A refusal must fail the image job, or the jobs that need it run anyway.
+	if continues(w.Jobs["image"].ContinueOnError) {
+		t.Errorf("the image job sets `continue-on-error`, so a refused run does not fail it")
 	}
 }
 
-// taintedExpr is anything whose value a person or a tag name chooses. Inside a
-// `run:` script, `${{ }}` is substituted as TEXT before the shell parses it, so
-// such a value must arrive through `env:` instead.
-var taintedExpr = regexp.MustCompile(`\$\{\{[^}]*\b(inputs\.|outputs\.version|ref_name|github\.ref\b)[^}]*\}\}`)
+// allowedInRun is every expression a `run:` script may carry, and it is an
+// ALLOWLIST: inside a script, `${{ }}` is substituted as TEXT before the shell
+// parses it, so anything a person or a tag name can choose must arrive through
+// `env:`. A denylist of names had holes — `format('{0}', inputs.tag)`,
+// `github.event.inputs['tag']`, `toJSON(github.event.inputs)`,
+// `github.event.ref`, `needs.image.outputs['version']`, or an input routed
+// through `env:` and back in as `env.T` all passed it. None of the four here
+// is chosen by whoever starts or tags a release: the token is GitHub's, the
+// actor and repository are GitHub account and repository names, and the
+// digest is the registry's `sha256:` answer to the push.
+var allowedInRun = map[string]bool{
+	"secrets.GITHUB_TOKEN":      true,
+	"github.actor":              true,
+	"github.repository":         true,
+	"steps.push.outputs.digest": true,
+}
 
-func TestNoRunScriptInlinesAValueATagOrInputChooses(t *testing.T) {
-	w := load(t)
-	for name, j := range w.Jobs {
-		for _, s := range j.Steps {
-			if m := taintedExpr.FindAllString(s.Run, -1); len(m) > 0 {
-				t.Errorf("%s/%s inlines %v into its script; pass it through `env:`", name, s.label(), m)
+// expressions returns the inside of every `${{ … }}` in s, trimmed. It reads
+// the expression grammar's single-quoted strings, where a doubled quote is
+// an escaped one, so a `}}` inside a string literal does not end the
+// expression. An unterminated `${{` is an error: GitHub would reject it, and
+// this must not skip it.
+func expressions(s string) ([]string, error) {
+	var out []string
+	for {
+		i := strings.Index(s, "${{")
+		if i < 0 {
+			return out, nil
+		}
+		s = s[i+3:]
+		end, inString := -1, false
+		for k := 0; k < len(s); k++ {
+			switch {
+			case s[k] == '\'' && inString && k+1 < len(s) && s[k+1] == '\'':
+				k++
+			case s[k] == '\'':
+				inString = !inString
+			case !inString && strings.HasPrefix(s[k:], "}}"):
+				end = k
+			}
+			if end >= 0 {
+				break
 			}
 		}
+		if end < 0 {
+			return nil, fmt.Errorf("unterminated ${{ in %q", s)
+		}
+		out = append(out, strings.TrimSpace(s[:end]))
+		s = s[end+2:]
+	}
+}
+
+func TestNoRunScriptCarriesAnExpressionOutsideTheAllowlist(t *testing.T) {
+	w := load(t)
+	seen := 0
+	for name, j := range w.Jobs {
+		for _, s := range j.Steps {
+			exprs, err := expressions(s.Run)
+			if err != nil {
+				t.Errorf("%s/%s: %v", name, s.label(), err)
+				continue
+			}
+			for _, e := range exprs {
+				seen++
+				if !allowedInRun[e] {
+					t.Errorf("%s/%s carries `${{ %s }}` in its script. Pass it through `env:` "+
+						"and read it as a shell variable; only %v may be inlined", name, s.label(), e, allowedInRun)
+				}
+			}
+		}
+	}
+	// Vacuity guard: the file inlines the allowed four today. If the parser
+	// ever found nothing, this test would pass on any script.
+	if seen == 0 {
+		t.Fatal("found no `${{ }}` in any run: script; the parser is broken, since release.yml has several")
 	}
 }

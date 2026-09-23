@@ -68,9 +68,12 @@ jobs:
       #
       # The values arrive through env, not `${{ }}` in the script, so the
       # free-text input is data to the shell, never shell text. The same holds
-      # for the version in the chart job. It is still text to `yq` there,
-      # because the chart step splices it into a yq expression; a tag whose
-      # name carries a `"` can therefore still reach that expression.
+      # for the version in the chart job, which splices it into a yq
+      # expression as text. A version carrying `"`, `$(` or a space cannot get
+      # there: it is not a valid image tag, so the `push` step below fails with
+      # "invalid reference format" before anything is pushed, and the chart
+      # job needs this one. Measured with `docker buildx build -t
+      # 'ghcr.io/quinyte/assayd-operator:1"|.x = "y'`.
       - id: version
         env:
           EVENT: ${{ github.event_name }}
