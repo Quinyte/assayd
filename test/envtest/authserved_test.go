@@ -466,8 +466,9 @@ func TestAServedPolicyTheGatewayDoesNotAttachIsReported(t *testing.T) {
 	// hedged non-attachment lead the other two clauses have, re-enters A83's
 	// rule-8 defect on every refused or unknown pass, namespace-wide.
 	//
-	// Mutation, one edit: in policyBrokenMessage's clausePartlyValid arm, on
-	// !routeOK, use the clauseUnattached hedged lead with announcedNotClosed.
+	// Mutation, one edit (P1): in policyBrokenMessage's clausePartlyValid arm,
+	// when route != routeServing (A81's !routeOK before A85), use the
+	// clauseUnattached hedged lead with announcedNotClosed.
 	// It compiles, the rest of the suite passes under it, and this must fail.
 	t.Run("Accepted=True with a reason other than Valid, on a refused route", func(t *testing.T) {
 		a, r, _ := servedAPIKeyAgent(t, "a84partialrefused")
@@ -630,7 +631,8 @@ func TestBothHalvesOnOnePassNameTheRouteFirst(t *testing.T) {
 	// assert a route it did not read. Without this half,
 	// routeOK := routeRep != reportBroken survives the whole suite.
 	//
-	// Mutation, one edit: make routeOK `routeRep != reportBroken`.
+	// Mutation, one edit: make servedRouteLead return routeServing where it
+	// returns routeUnread (before A85: make routeOK `routeRep != reportBroken`).
 	t.Run("an unknown route reading hedges too", func(t *testing.T) {
 		b, rb, _ := servedAPIKeyAgent(t, "a80unknownhedge")
 		acceptRoute(t, b.Namespace, b.Name)

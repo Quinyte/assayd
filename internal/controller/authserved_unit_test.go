@@ -256,7 +256,8 @@ func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
 				"announced, not closed"},
 			[]string{"does not attach", "but not the whole of it"}},
 		// The row A83's own review found missing, and it found it by DELETING
-		// this lead's !routeOK block and watching the whole suite stay green.
+		// this lead's !routeOK block (since A85, `route != routeServing`) and
+		// watching the whole suite stay green.
 		// The arm is live — §5 keeps it for a release that starts producing
 		// Accepted=False — and unpinned it reaches A81's MAJOR 2 verbatim:
 		// "route is accepted and SERVING" on a pass that recorded the route

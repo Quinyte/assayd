@@ -439,9 +439,14 @@ const announcedNotClosed = ". The hole is announced, not closed"
 // A81's routeOK split "an explicit good tuple on this pass" from everything
 // else, and everything else took one hedge that sent the reader to
 // PolicyApplyIncomplete for "the route's own reading". That is true where a
-// route reason stands: a refusal read on this pass, or one held from stored
-// status, puts ServingRouteNotAccepted at the head of PolicyApplyIncomplete.
-// On an UNKNOWN reading with NO route claim standing it is false — nothing
+// route reason stands and nothing outranks it: a refusal read on this pass, or
+// one held from stored status, puts ServingRouteNotAccepted at the head of
+// PolicyApplyIncomplete. It is NOT true where ForeignTrafficPolicy or
+// GatewayAuthPolicy — both above it in incompleteOrder — or an unranked reason
+// such as a deadline or a NACK already leads on the pass: the route's reading
+// is then in the message but not first, and the routeNamed sentence still says
+// "first". That cell is recorded as owed (design 03 §8.1 item 12), not fixed
+// here. On an UNKNOWN reading with NO route claim standing it is false — nothing
 // raises or holds the route half, so the policy half's message IS
 // PolicyApplyIncomplete's whole message and names no route reading at all —
 // and on a cluster whose agentgateway controller is renamed, which routeReport
@@ -455,7 +460,8 @@ const (
 	routeServing routeLead = iota
 	// routeNamed is a route reason standing on this pass — a refusal read now,
 	// or one held from status.auth.routeRefused — so PolicyApplyIncomplete
-	// leads with the route's own reading.
+	// carries the route's own reading, and leads with it unless a reason
+	// incompleteOrder ranks higher, or an unranked one, stands (§8.1 item 12).
 	routeNamed
 	// routeUnread is an unknown reading at the route's current generation with
 	// no refusal standing: no condition on this Agent names a route reading.
@@ -485,11 +491,12 @@ func routeHedge(route routeLead) string {
 			"the route is refused then nothing is reaching this Agent at all and this half is the " +
 			"smaller of the two problems: "
 	}
-	return hedge + "the route's reading at its current generation is unknown — this pass found " +
-		"neither Accepted and ResolvedRefs both reported by agentgateway's controller at that " +
-		"generation nor either reported False, and no refusal of the route is standing — so no " +
-		"condition on this Agent names a route reading. If the route is serving, it may be " +
-		"answering with no credential required: "
+	return hedge + "the route's reading at its current generation is unknown — this pass found no " +
+		"status entry for the assayd Gateway from controllerName " + AgentgatewayControllerName +
+		", the only one assayd reads, reporting both Accepted and ResolvedRefs at that generation " +
+		"or either of them False at it, and no refusal of the route is standing — so no condition " +
+		"on this Agent names a route reading. If the route is serving, it may be answering with " +
+		"no credential required: "
 }
 
 // policyBrokenMessage says what the assayd Gateway ACTUALLY SAID about this
@@ -724,6 +731,8 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 				why = "the Gateway has not reported on it at its current generation since"
 				note = heldNote
 			}
+			// The held lead (clauseUnknown) does not read `route`; it is passed
+			// for the signature's sake and no test can fail on its value.
 			held := policyBrokenMessage(clauseUnknown, why, route, judged)
 			holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, note)
 			holdGovernance(agent, conds, held, note)
@@ -756,7 +765,11 @@ func (r *AgentReconciler) holdServedJudgement(agent *assaydv1alpha1.Agent,
 	if stored.policyUnattached {
 		// judged is FALSE: this pass's -auth step errored, so it read no
 		// policy and may assert nothing about one.
-		held := policyBrokenMessage(clauseUnknown, "this pass could not re-read it", routeUnread, false)
+		// The held lead (clauseUnknown) does not read the route argument, so
+		// the value passed is unobservable; it is the stored claim's own
+		// answer, so that it is at least not wrong.
+		held := policyBrokenMessage(clauseUnknown, "this pass could not re-read it",
+			servedRouteLead(reportUnknown, stored), false)
 		holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, note)
 		holdGovernance(agent, conds, held, note)
 	}
