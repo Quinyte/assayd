@@ -85,6 +85,12 @@ trap 'exit 143' TERM
 #
 # kind clusters are created outside this script (CI's kind-action makes one),
 # so there is nothing there for a unique name to create.
+#
+# That leaves kind NOT isolated locally: two concurrent DISTRO=kind runs both
+# target kind-assayd-local and both `helm upgrade --install assayd` into it,
+# which is the collision this script closes for k3d. In CI each job has its own
+# VM, so nothing collides there. Locally, give each concurrent kind run its own
+# CLUSTER, created beforehand with `kind create cluster --name`.
 CLUSTER_IS_OURS=0
 case "${DISTRO}" in
 k3d)
@@ -194,6 +200,14 @@ k3d)
   fi
   if ! k3d cluster list -o json | grep "\"${CLUSTER}\"" >/dev/null; then
     echo "==> creating k3d cluster ${CLUSTER}"
+    # Only a cluster this run both NAMED and CREATED is this run's to delete; a
+    # cluster the caller named is the caller's, whether it existed already or
+    # this run had to make it. Ownership is claimed BEFORE the create, not
+    # after: a create that fails its --wait, or is interrupted, can leave a
+    # half-built cluster behind, and under an invented name nobody else can
+    # find it to delete by hand. `k3d cluster delete` on a cluster that never
+    # came into being is harmless, so claiming early costs nothing.
+    if [ "${CLUSTER_IS_OURS}" = "1" ]; then OWNED_CLUSTER="${CLUSTER}"; fi
     # --kubeconfig-update-default=false is belt and braces beside the KUBECONFIG
     # export above: it is the flag that makes "never touch the shared file" a
     # property of the command rather than of the environment it inherited.
@@ -202,10 +216,6 @@ k3d)
     k3d cluster create "${CLUSTER}" --agents 0 --wait \
       --registry-use "k3d-${REG_NAME}:${REG_PORT}" \
       --kubeconfig-update-default=false --kubeconfig-switch-context=false
-    # Only a cluster this run both NAMED and CREATED is this run's to delete.
-    # A cluster the caller named is the caller's, whether it existed already or
-    # this run had to make it.
-    if [ "${CLUSTER_IS_OURS}" = "1" ]; then OWNED_CLUSTER="${CLUSTER}"; fi
   elif ! docker exec "k3d-${CLUSTER}-server-0" \
         cat /etc/rancher/k3s/registries.yaml 2>/dev/null \
       | grep "k3d-${REG_NAME}:${REG_PORT}" >/dev/null; then
