@@ -4,12 +4,15 @@
 package refgen
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
+
+	sigsyaml "sigs.k8s.io/yaml"
 )
 
 // repoRoot is where the generator reads its inputs from. The tests run from
@@ -428,7 +431,13 @@ func TestTheFrontMatterOfEveryPageIsValidYAML(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fm, err := FrontMatter(string(b))
+		// INDEPENDENTLY of the gate: this test splits the block itself and
+		// decodes with sigs.k8s.io/yaml, which goes through go-yaml v2 and a
+		// JSON round-trip, while FrontMatter uses go-yaml v3 directly. Calling
+		// FrontMatter here would have been the same code and the same library
+		// as checkFrontMatter, so a bug in its block-splitting would have been
+		// invisible to both — the shape this whole round is about.
+		fm, err := independentFrontMatter(string(b))
 		if err != nil {
 			t.Errorf("%s: %v", e.Name(), err)
 			continue
@@ -438,26 +447,83 @@ func TestTheFrontMatterOfEveryPageIsValidYAML(t *testing.T) {
 			t.Errorf("%s has no `title`, which is the one field an Astro content collection requires",
 				e.Name())
 		}
+		// And the two readings must AGREE. A divergence means one of them is
+		// wrong about what a site would load.
+		viaGate, err := FrontMatter(string(b))
+		if err != nil {
+			t.Errorf("%s parses independently but not through FrontMatter: %v", e.Name(), err)
+			continue
+		}
+		if got, _ := viaGate["title"].(string); got != title {
+			t.Errorf("%s: the gate reads title %q, an independent parse reads %q", e.Name(), got, title)
+		}
 	}
 	if seen < 3 {
 		t.Fatalf("found %d page(s) under docs/reference; expected the three the generator writes", seen)
 	}
 
 	// And the emitter must survive the characters that broke it, plus the ones
-	// that would break it next.
+	// that would break it next. The two at the top are the ones that could end
+	// the block early and put the rest of a title into the document body.
 	for _, s := range []string{
-		`a: b`, `he said "hi"`, `back\slash`, "line\nbreak", `#hash`, `- dash`, `{brace}`, `[bracket]`,
+		`---`, "before\n---\nafter",
+		`a: b`, `ends with colon: `, `he said "hi"`, `back\slash`, "line\nbreak",
+		`#hash`, `- dash`, `{brace}`, `[bracket]`, `%YAML 1.2 thing`, `@reserved`,
+		"`backticked`", `true`, `null`, `0755`, "tab\there", "carriage\rreturn",
+		"line separator", strings.Repeat("long ", 1200),
 	} {
 		page := frontMatter(s, s) + "\nbody\n"
 		fm, err := FrontMatter(page)
 		if err != nil {
-			t.Errorf("front matter with title %q does not parse: %v", s, err)
+			t.Errorf("front matter with title %q does not parse through the gate: %v", s, err)
 			continue
 		}
-		if got, _ := fm["title"].(string); got != s {
-			t.Errorf("title round-tripped as %q, want %q", got, s)
+		got, _ := fm["title"].(string)
+		if got != s {
+			t.Errorf("title round-tripped through the gate as %q, want %q", got, s)
+		}
+		// And the same block through a different YAML implementation, because
+		// agreeing with itself proves nothing.
+		ind, err := independentFrontMatter(page)
+		if err != nil {
+			t.Errorf("front matter with title %q does not parse independently: %v", s, err)
+			continue
+		}
+		if indTitle, _ := ind["title"].(string); indTitle != got {
+			t.Errorf("for title %q the gate reads %q and an independent parser reads %q",
+				s, got, indTitle)
 		}
 	}
+}
+
+// independentFrontMatter splits and decodes a page's front matter WITHOUT using
+// any of the generator's own code.
+//
+// sigs.k8s.io/yaml rather than go.yaml.in/yaml/v3: it decodes through go-yaml
+// v2 and a JSON round-trip, so this is a different implementation and not the
+// same library called twice. The split is done here for the same reason — the
+// gate's own block-splitting is part of what is under test.
+func independentFrontMatter(page string) (map[string]any, error) {
+	lines := strings.Split(page, "\n")
+	if len(lines) == 0 || lines[0] != "---" {
+		return nil, fmt.Errorf("the page does not open with a `---` line")
+	}
+	end := -1
+	for i := 1; i < len(lines); i++ {
+		if lines[i] == "---" {
+			end = i
+			break
+		}
+	}
+	if end < 0 {
+		return nil, fmt.Errorf("the front matter block is never closed")
+	}
+	var out map[string]any
+	block := strings.Join(lines[1:end], "\n")
+	if err := sigsyaml.Unmarshal([]byte(block), &out); err != nil {
+		return nil, fmt.Errorf("an independent parser rejects the front matter: %w", err)
+	}
+	return out, nil
 }
 
 // The CRD page must carry every rule UNDER THE NODE IT BELONGS TO.

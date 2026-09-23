@@ -6,7 +6,9 @@ package refgen
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -241,8 +243,19 @@ func nearestSection(node string, have map[string]bool) (target, label string) {
 //
 // And its truth came from the same slice the renderer was handed, so a filter
 // applied before both would have been invisible to it. It now parses the CRD
-// again. One extra YAML parse buys a gate whose input no part of the render
-// path can touch.
+// again.
+//
+// What that re-read is and is not independent of, stated exactly, because the
+// first version of this comment overreached. It is independent of the render
+// path's FILTERING — which is what catches a node dropped between the read and
+// the page — and not of its READING: it calls celRules, so it shares
+// collectRules with the renderer, and a traversal that under-read the schema
+// would hide a node from both. An independent review walked the CRD without
+// using collectRules, descending every subschema blindly, and got the same
+// 9 nodes and 25 rules; it also confirmed that the shapes collectRules does not
+// descend — patternProperties, definitions, dependencies, additionalItems — are
+// forbidden in a CRD structural schema. So the reader is correct today. The
+// claim this comment makes is only that it is correct, not that it is checked.
 func verifyEveryRuleIsPublished(page, crdPath string) error {
 	rules, err := celRules(crdPath)
 	if err != nil {
@@ -252,35 +265,105 @@ func verifyEveryRuleIsPublished(page, crdPath string) error {
 		return fmt.Errorf("no validation rules were found in %s at all; the CRD carries CEL and "+
 			"the extractor is not reading it", CRDSource)
 	}
+	if err := verifyCensus(page, rules); err != nil {
+		return err
+	}
 	sections := ruleSections(page)
 
 	var missing []string
+	missingRules := 0
 	reportedNode := map[string]bool{}
 	for _, r := range rules {
+		// The renderer transforms a message before publishing it, and the gate
+		// looks for the transformed form — so the two share renderedMessage,
+		// which is what closed a false FAILURE over newline handling. The cost
+		// is that a transformation bug then computes the same wrong string on
+		// both sides and passes. A review truncated every message to twelve
+		// characters and the gate stayed green.
+		//
+		// This is the invariant that kills that class without re-opening the
+		// false failure: escaping can only GROW a string or leave it the same
+		// length. `\n` → " " is length-preserving and still passes; truncation,
+		// and most other mangling, is not.
+		if n := len(renderedMessage(r.Message)); n < len(r.Message) {
+			return fmt.Errorf("the renderer's message transformation SHORTENED the message for %q "+
+				"on %s, from %d bytes to %d. Escaping can only grow a string; anything shorter is "+
+				"dropping text a user reads when the API server refuses their write",
+				r.Rule, r.Node, len(r.Message), n)
+		}
 		body, ok := sections[r.Node]
 		if !ok {
 			// Once per node, not once per rule: a node dropped whole is one
 			// fact, and five copies of it buries the other four causes.
 			if !reportedNode[r.Node] {
 				reportedNode[r.Node] = true
+				n := rulesOn(rules, r.Node)
+				missingRules += n
 				missing = append(missing, fmt.Sprintf("%s: the whole node, %d rule(s) — no %q "+
-					"heading on the page", r.Node, rulesOn(rules, r.Node), celHeading(r.Node)))
+					"heading on the page", r.Node, n, celHeading(r.Node)))
 			}
 			continue
 		}
 		if !strings.Contains(body, r.Rule) {
+			missingRules++
 			missing = append(missing, fmt.Sprintf("%s: rule %q", r.Node, r.Rule))
 			continue
 		}
 		if r.Message != "" && !strings.Contains(body, renderedMessage(r.Message)) {
+			missingRules++
 			missing = append(missing, fmt.Sprintf("%s: the message for %q", r.Node, r.Rule))
 		}
 	}
 	if len(missing) > 0 {
+		// RULES missing, not findings reported. A node dropped whole is one
+		// finding and five rules, and the first version's headline said "1 of
+		// 25" for exactly that — a fivefold understatement in the one sentence
+		// whose job is to say how much is absent.
 		return fmt.Errorf("the CRD reference would have been written with %d of the CRD's %d "+
 			"validation rule(s) missing from the node they belong to, so a reader would conclude "+
 			"the API server enforces less than it does:\n  %s",
-			len(missing), len(rules), strings.Join(missing, "\n  "))
+			missingRules, len(rules), strings.Join(missing, "\n  "))
+	}
+	return nil
+}
+
+// censusLine matches the sentence the page opens its rule section with.
+var censusLine = regexp.MustCompile(
+	"All (\\d+) `x-kubernetes-validations` rules in the CRD, on all (\\d+) schema nodes")
+
+// verifyCensus holds the page's own count of itself to the CRD.
+//
+// The counts were rendered from the slice the renderer was handed and checked
+// by nothing. A review left every rule correctly published and changed only the
+// numbers: the page announced "All 32 rules … on all 12 schema nodes", a false
+// census about the CRD, with every gate green. It is the visible symptom of the
+// original blocker — the page that said "All 20 rules on 8 nodes" — and it was
+// the last thing the render path could assert unchecked.
+//
+// The integers are PARSED back out of the rendered page rather than compared to
+// a sentence built here, so that the check does not depend on the renderer's
+// wording being reproduced correctly in two places.
+func verifyCensus(page string, rules []CELRule) error {
+	m := censusLine.FindStringSubmatch(page)
+	if m == nil {
+		return fmt.Errorf("the CRD reference would have been written without the sentence that " +
+			"states how many validation rules the CRD has, which is the claim the rest of the " +
+			"section is the evidence for")
+	}
+	gotRules, err := strconv.Atoi(m[1])
+	if err != nil {
+		return fmt.Errorf("the rule count in the page's own census is not a number: %q", m[1])
+	}
+	gotNodes, err := strconv.Atoi(m[2])
+	if err != nil {
+		return fmt.Errorf("the node count in the page's own census is not a number: %q", m[2])
+	}
+	wantRules, wantNodes := len(rules), countNodes(rules)
+	if gotRules != wantRules || gotNodes != wantNodes {
+		return fmt.Errorf("the CRD reference would have been written announcing %d rule(s) on %d "+
+			"schema node(s) while the CRD carries %d on %d. Publishing a false census is the "+
+			"symptom the original omission was caught by; the counts must come from the CRD",
+			gotRules, gotNodes, wantRules, wantNodes)
 	}
 	return nil
 }
