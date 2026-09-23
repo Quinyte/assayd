@@ -38,10 +38,9 @@ const design03 =
     </p>
 
     <p class="thesis">
-      An Agent’s authentication is applied as a resumable transaction that
+      A new Agent’s authentication is applied as a resumable transaction that
       publishes its route only after an anonymous request through it has
-      actually been refused.
-      <ClaimClass claim="measured" test="TestCreatePublishesOnlyOnA401" />
+      actually been refused. <ClaimClass claim="measured" test="TestCreatePublishesOnlyOnA401" />
     </p>
 
     <p>
@@ -62,27 +61,21 @@ const design03 =
     <h2 id="stages">The stages</h2>
     <p>
       The transaction is recorded at <code>status.auth.transaction</code>. Its
-      stage values are the seven that <code>internal/controller/authtxn.go</code>
-      defines, read for this page at <code>main</code>
-      <code>{DEPICTS}</code>. Nothing fails if one is added, renamed or removed:
-      the CRD field carries no enum, and no test pins the list.
-      <ClaimClass claim="not-built" note="no test or schema pins the stage vocabulary" />
+      stage values are the seven that <code>internal/controller/authtxn.go</code> defines, read for this page at <code>main</code> <code>{DEPICTS}</code>. Nothing fails if one is added, renamed or removed:
+      the CRD field carries no enum, and no test pins the list. <ClaimClass claim="not-built" note="no test or schema pins the stage vocabulary" />
     </p>
 
     <dl class="stages">
       <dt><code>PreparingRoute</code></dt>
       <dd>
-        A new API-key Agent’s route is written first with no
-        <code>backendRefs</code>, so it exists and carries nothing.
-        <ClaimClass claim="measured" test="TestCreatePublishesOnlyOnA401" />
+        A new API-key Agent’s route is written first with no <code>backendRefs</code>, so it exists and carries nothing. <ClaimClass claim="measured" test="TestCreatePublishesOnlyOnA401" />
       </dd>
 
       <dt><code>ProbingBefore</code></dt>
       <dd>
         Only a <code>Lock</code> starts here, on a route that is already
         serving. It sends one anonymous request and records the answer before
-        writing anything. It is an observation, not a gate.
-        <ClaimClass claim="measured" test="TestJ2LocksAServedNoneAgentInPlace" />
+        writing anything. It is an observation, not a gate: even a <code>503</code> is recorded and the policy is written after it. <ClaimClass claim="measured" test="TestTheLockProbesTheCardPathAndAttributesEvery401" />
       </dd>
 
       <dt><code>ApplyingPolicies</code></dt>
@@ -90,93 +83,75 @@ const design03 =
         The <code>&lt;agent&gt;-auth</code> policy is written. The status update
         that enters this stage marks the transaction written before the write
         happens, so a crash between the two re-enters here and repeats the
-        write, which is idempotent.
-        <ClaimClass claim="measured" test="TestCreateReentersAtTheWriteAfterACrash" />
+        write, which is idempotent. <ClaimClass claim="measured" test="TestCreateReentersAtTheWriteAfterACrash" />
       </dd>
 
       <dt><code>Converging</code></dt>
       <dd>
-        The transaction waits until the Gateway reports the route and the
-        policy converged, and the route stays unpublished while it waits.
-        <ClaimClass claim="measured" test="TestACreateHasADeadlineOutcomeInEveryStage" />
+        The transaction waits until the Gateway reports both the route and the
+        policy converged. With the route accepted and the policy not yet
+        reported, it sends no request and publishes nothing. <ClaimClass claim="measured" test="TestACreateWaitsInConvergingUntilThePolicyConverges" />
       </dd>
 
       <dt><code>ProbingAfter</code></dt>
       <dd>
         An anonymous request goes through the route, and the transaction stays
         here until the answer is a <code>401</code> it is allowed to credit.
-        Converged conditions alone never publish the route.
-        <ClaimClass claim="measured" test="TestCreatePublishesOnlyOnA401" />
+        Converged conditions alone never publish the route. <ClaimClass claim="measured" test="TestCreatePublishesOnlyOnA401" />
       </dd>
 
       <dt><code>Publishing</code></dt>
       <dd>
-        The <code>backendRefs</code> go onto the route. An Agent that declares
-        <code>auth: none</code> starts here: its route is published at once,
+        The <code>backendRefs</code> go onto the route. An Agent that declares <code>auth: none</code> starts here: its route is published at once,
         labelled <code>assayd.dev/auth: "none"</code>, with no policy written
-        and no request sent.
-        <ClaimClass claim="measured" test="TestANoneAgentIsPublishedAtOnceWithItsMarker" />
+        and no request sent. <ClaimClass claim="measured" test="TestANoneAgentIsPublishedAtOnceWithItsMarker" />
       </dd>
 
       <dt><code>Refused</code></dt>
       <dd>
         Only an <code>Adopt</code> sits here. A route published before the
         compiler existed is refused rather than adopted. It stays published and
-        unauthenticated, under <code>GovernanceSkipped</code> with reason
-        <code>CompilerUpgradeUnsupported</code>, and no policy is written onto
-        it.
-        <ClaimClass claim="measured" test="TestARoutePublishedBeforeTheCompilerIsNotLocked" />
+        unauthenticated, under <code>GovernanceSkipped</code> with reason <code>CompilerUpgradeUnsupported</code>, and no policy is written onto
+        it. <ClaimClass claim="measured" test="TestARoutePublishedBeforeTheCompilerIsNotLocked" />
       </dd>
     </dl>
 
     <h2 id="served">Served is not a stage</h2>
     <p>
-      There is no <code>Served</code> stage value. An Agent is served when
-      <code>status.auth.mode</code> is recorded and the transaction slot is
+      There is no <code>Served</code> stage value. An Agent is served when <code>status.auth.mode</code> is recorded and the transaction slot is
       empty, so the operator ends a transaction by clearing it rather than by
-      advancing it.
-      <ClaimClass claim="measured" test="TestCreatePublishesOnlyOnA401" />
+      advancing it. <ClaimClass claim="measured" test="TestCreatePublishesOnlyOnA401" />
     </p>
 
     <h2 id="entry-points">Not every Agent walks the whole chain</h2>
     <p>
-      Where a transaction starts depends on what it is for. A new Agent’s
-      <code>Create</code> is the chain above; these are the others.
+      Where a transaction starts depends on what it is for. A new Agent’s <code>Create</code> is the chain above; these are the others.
     </p>
     <ul class="claims">
       <li>
         A served API-key Agent whose route is deleted gets it back through a
         new <code>Create</code> taken from its recorded status. The route is
         prepared with no <code>backendRefs</code> and is published again only
-        after a new <code>401</code>.
-        <ClaimClass claim="measured" test="TestADeletedRouteIsPreparedAgainAndPublishedOnlyOnA401" />
+        after a new <code>401</code>. <ClaimClass claim="measured" test="TestADeletedRouteIsPreparedAgainAndPublishedOnlyOnA401" />
       </li>
       <li>
         A served <code>auth: none</code> Agent edited to <code>apikey</code> is
         locked in place. Its route keeps serving throughout, and the new mode is
-        recorded only after the answer through that route turns to
-        <code>401</code>.
-        <ClaimClass claim="measured" test="TestJ2LocksAServedNoneAgentInPlace" />
+        recorded only after the answer through that route turns to <code>401</code>. <ClaimClass claim="measured" test="TestJ2LocksAServedNoneAgentInPlace" />
       </li>
       <li>
         On k3d against agentgateway 1.5.0, that lock runs end to end: the same
         route stops answering anonymous callers and keeps answering with a key.
-        It is skipped where no gateway is installed.
-        <ClaimClass claim="measured" test="TestAServedNoneAgentIsLockedInPlace" />
+        It is skipped where no gateway is installed. <ClaimClass claim="measured" test="TestAServedNoneAgentIsLockedInPlace" />
       </li>
       <li>
         One way a refused <code>Adopt</code> ends is the owner’s edit: the owner
         sets <code>auth</code> to <code>none</code>, waits for the refusal to
         record it, and then sets <code>apikey</code>. That runs the same kind
-        of lock.
-        <ClaimClass claim="measured" test="TestK2AnOwnersEditEndsTheRefusal" />
+        of lock. <ClaimClass claim="measured" test="TestK2AnOwnersEditEndsTheRefusal" />
       </li>
       <li>
-        A served API-key Agent whose policy is deleted gets the policy back by a
-        <code>Lock</code>. The policy is rebuilt from the recorded status, the
-        route is left open, and the policy is trusted again only after a
-        <code>401</code> that can be attributed to it.
-        <ClaimClass claim="measured" test="TestADeletedPolicyIsRecreatedAndTrustedOnlyOnAnAttributed401" />
+        An API-key Agent that reached <code>Served</code> and then lost its policy gets it back by a <code>Lock</code>. The policy is rebuilt from the recorded status and trusted again only after a <code>401</code> that can be attributed to it. The route is not withdrawn meanwhile, so until then it serves without authentication, and the Agent reports <code>GovernanceSkipped=True</code> with reason <code>AuthPolicyMissing</code>. <ClaimClass claim="measured" test="TestADeletedPolicyIsRecreatedAndTrustedOnlyOnAnAttributed401" />
       </li>
     </ul>
 
@@ -184,78 +159,55 @@ const design03 =
     <ul class="claims">
       <li>
         While a policy on the Gateway itself could have answered the anonymous
-        request, no <code>401</code> is credited. The transaction holds at
-        <code>ProbingAfter</code> with reason <code>GatewayAuthPolicy</code>,
-        and moves on once that policy goes.
-        <ClaimClass claim="measured" test="TestACreateHoldsWhileAGatewayLevelAuthPolicyStands" />
+        request, no <code>401</code> is credited. The transaction holds at <code>ProbingAfter</code> with reason <code>GatewayAuthPolicy</code>, and moves on once that policy goes. <ClaimClass claim="measured" test="TestACreateHoldsWhileAGatewayLevelAuthPolicyStands" />
       </li>
       <li>
         On k3d against agentgateway 1.5.0, a new Agent beside a Gateway-level
-        API-key policy holds at <code>ProbingAfter</code> on the Gateway’s own
-        <code>401</code>. It is skipped where no gateway is installed.
-        <ClaimClass claim="measured" test="TestAGatewayLevelAuthPolicyHoldsANewAgent" />
+        API-key policy holds at <code>ProbingAfter</code> on the Gateway’s own <code>401</code>. It is skipped where no gateway is installed. <ClaimClass claim="measured" test="TestAGatewayLevelAuthPolicyHoldsANewAgent" />
       </li>
       <li>
-        A NACK Event from agentgateway’s controller on the Gateway returns a
-        <code>Lock</code> to <code>Converging</code>, and it does not finish
-        while that NACK stands.
-        <ClaimClass claim="measured" test="TestANackReturnsALockToConverging" />
+        A NACK Event from agentgateway’s controller on the Gateway returns a <code>Lock</code> to <code>Converging</code>, and it does not finish
+        while that NACK stands. <ClaimClass claim="measured" test="TestANackReturnsALockToConverging" />
       </li>
       <li>
-        A transaction’s deadline is a condition, not a timeout. Past it, a
-        <code>Create</code> reads <code>PolicyApplyIncomplete=True</code> with a
+        A transaction’s deadline is a condition, not a timeout. Past it, a <code>Create</code> reads <code>PolicyApplyIncomplete=True</code> with a
         message naming the stage it waits in, and <code>Ready=False</code>, and
-        stays where it is, unpublished.
-        <ClaimClass claim="measured" test="TestACreateHasADeadlineOutcomeInEveryStage" />
+        stays where it is, unpublished. <ClaimClass claim="measured" test="TestACreateHasADeadlineOutcomeInEveryStage" />
       </li>
     </ul>
 
     <h2 id="one-way">The lock is one-way</h2>
     <p>
       Editing a served API-key Agent back to <code>auth: none</code> is refused.
-      The served policy is left untouched, the Agent reads
-      <code>PolicyCompileFailed=True</code> with reason
-      <code>AuthTransitionNotBuilt</code>, and <code>status.auth.mode</code>
-      still reads <code>apikey</code>.
-      <ClaimClass claim="measured" test="TestAPIKeyToNoneIsRefused" />
+      The served policy is left untouched, the Agent reads <code>PolicyCompileFailed=True</code> with reason <code>AuthTransitionNotBuilt</code>, and <code>status.auth.mode</code> still reads <code>apikey</code>. <ClaimClass claim="measured" test="TestAPIKeyToNoneIsRefused" />
     </p>
 
     <h2 id="limits">What this does not guarantee</h2>
     <p>
-      Each limit below is named and linked to the section of design 03 that
+      Each limit below is named and linked to the design section that
       describes it. None is given with steps to reproduce it.
     </p>
     <ul class="claims">
       <li>
-        One request proves one gateway replica, and no replica count is
-        declared. A served API-key Agent says so:
-        <code>GovernanceSkipped=False</code>, reason
-        <code>AuthVerifiedOnOneReplica</code>.
-        <ClaimClass claim="measured" test="TestAPassOnOneReplicaIsReadyAndAHeldSwitchIsNot" />
+        One request proves one gateway replica, and no replica count is declared (<a href={`${design03}#why-gatewayreplicas-is-declared-rather-than-read-from-the-gateway-deployment`}>design 03 §3.1</a>). A served API-key Agent says so: <code>GovernanceSkipped=False</code>, reason <code>AuthVerifiedOnOneReplica</code>. <ClaimClass claim="measured" test="TestAPassOnOneReplicaIsReadyAndAHeldSwitchIsNot" />
       </li>
       <li>
-        Nothing shows that the gateway’s proxy has applied a policy. The
-        operator reads the Gateway’s control-plane status, which the proxy may
-        lag, so its checks narrow that window and do not close it
-        (<a href={`${design03}#332-what-the-barrier-can-and-cannot-prove`}>design 03 §3.3.2</a>).
-        <ClaimClass claim="not-built" note="no check reads the proxy's own configuration" />
+        Nothing shows that the gateway’s proxy has applied a policy. The operator reads the Gateway’s control-plane status, which the proxy may lag, so its checks narrow that window and do not close it (<a href={`${design03}#332-what-the-barrier-can-and-cannot-prove`}>design 03 §3.3.2</a>). <ClaimClass claim="not-built" note="no check reads the proxy's own configuration" />
       </li>
       <li>
-        A policy deleted in the short interval between a pass’s check and its
-        route write leaves the route published without it until the next pass
-        (<a href={`${design03}#333-in-place-tightening-is-trusted-only-on-a-probe`}>design 03 §3.3.3</a>).
-        <ClaimClass claim="not-built" note="design 03 §3.3.3 records the window; nothing closes it" />
+        A policy deleted in the short interval between a pass’s check and its route write leaves the route published without it until the next pass (<a href={`${design03}#333-in-place-tightening-is-trusted-only-on-a-probe`}>design 03 §3.3.3</a>). <ClaimClass claim="not-built" note="design 03 §3.3.3 records the window; nothing closes it" />
       </li>
       <li>
-        Design 03 §3.5 specifies token and USD budgets compiled onto the
-        gateway. Nothing compiles one, and a stored <code>spec.budget</code> is
-        refused. No rate limit or tool allowlist is compiled either.
-        <ClaimClass claim="designed" design="design 03" section="§3.5" />
+        Design 03 §3.4 maps token and USD budgets, rate limits and a tool allowlist onto the gateway (<a href={`${design03}#34-concern-mapping`}>design 03 §3.4</a>). <ClaimClass claim="designed" design="design 03" section="§3.4" />
       </li>
       <li>
-        Nothing pages. Every condition on this page is something a person has
-        to go and read.
-        <ClaimClass claim="not-built" note="design 10 is not built, and no alert rule ships" />
+        None of them is compiled: the only policy the operator writes to the gateway is <code>&lt;agent&gt;-auth</code>, which authenticates and authorizes callers. <ClaimClass claim="not-built" note="no AgentgatewayBackend and no rate-limit or allowlist policy is emitted" />
+      </li>
+      <li>
+        So a <code>spec.budget</code> is refused when the Agent is written, rather than admitted and ignored. <ClaimClass claim="measured" test="TestABudgetIsRefusedWhileNothingEnforcesIt" />
+      </li>
+      <li>
+        Nothing pages (<a href="https://github.com/Quinyte/assayd/blob/main/docs/designs/10-observability-pack.md">design 10</a>). Every condition on this page is something a person has to go and read. <ClaimClass claim="not-built" note="design 10 is not built, and no alert rule ships" />
       </li>
     </ul>
   </article>

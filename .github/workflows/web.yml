@@ -18,8 +18,10 @@ name: web
 # web/** alone, a pull request that renamed a Go test a badge names ran ci.yml
 # and not this workflow, merged green, and left the badge citing nothing until
 # the next change under web/ (docs/web/information-architecture.md §5.1).
-# chart/ and hack/ are here because the "what runs" page states what they
-# install. The two lists are kept identical by hand.
+# charts/ and hack/ are deliberately NOT here: the "what runs" page states what
+# they install, but its badges name tests under test/, and no step in this
+# workflow reads the chart or the harness. The two lists must stay identical;
+# the first step of the build job fails if they do not.
 on:
   push:
     branches: [main]
@@ -31,8 +33,6 @@ on:
       - "api/**"
       - "docs/designs/**"
       - "docs/reference/**"
-      - "charts/**"
-      - "hack/**"
   pull_request:
     paths:
       - "web/**"
@@ -42,8 +42,6 @@ on:
       - "api/**"
       - "docs/designs/**"
       - "docs/reference/**"
-      - "charts/**"
-      - "hack/**"
   workflow_dispatch:
     inputs:
       deploy:
@@ -86,6 +84,22 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The push and pull_request path lists are two copies of one decision.
+      # A path added to one and not the other would gate a change on merge
+      # and not on review, or the reverse, so the two are compared here.
+      - name: path filters agree
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys, yaml
+          on = yaml.safe_load(open(".github/workflows/web.yml"))[True]
+          push, pr = on["push"]["paths"], on["pull_request"]["paths"]
+          if push != pr:
+              sys.exit(f"web.yml: push paths {push} != pull_request paths {pr}")
+          print(f"web.yml: {len(push)} path filters, identical for push and pull_request")
+          PY
 
       # Version comes from web/package.json#packageManager; naming it twice
       # would let the two drift.

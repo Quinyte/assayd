@@ -38,11 +38,19 @@ The three `check:*` gates read what the build produced, so run `build` first.
 version and its sha256 in `.github/workflows/web.yml`).
 
 **`pnpm run check` reports "0 errors, 0 warnings" — that is `astro check`'s
-number, not the build's.** The build itself emits five warnings and exits 0.
-All five are accounted for in `scripts/check-warnings.sh`, and a sixth fails
-CI until someone accounts for it too. One of the five is the sitemap skipping
-for want of `site:`, so whoever points DNS has to come back and remove that
-entry.
+number, not the build's.** The build itself emits warnings and exits 0.
+`scripts/check-warnings.sh` holds four known KINDS of warning, each a fixed
+substring with its reason, and fails CI on any warning matching none of them,
+and on any entry nothing matched. It does not fix the COUNT: one entry, the
+MDX `MODULE_LEVEL_DIRECTIVE` notice, is emitted once per MDX page, so the
+number of warning lines grows with the pages (six at the time of writing) and
+a new MDX page passes without an edit here. One entry is the sitemap skipping
+for want of `site:`, so whoever points DNS has to come back and remove it.
+
+`pnpm run build` also copies the generated reference (`docs/reference/*.md`)
+into the docs target first; `scripts/copy-reference.sh` does it, as the first
+step of `@assayd/docs`'s own `build` and `dev`, and refuses when there is
+nothing to copy. The copy is gitignored: edit the generator, never the copy.
 
 Node and pnpm are pinned exactly — `.nvmrc` and `package.json#packageManager` —
 and `.npmrc` sets `engine-strict`, so an install on a different Node is refused

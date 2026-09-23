@@ -26,10 +26,11 @@ on a real cluster.
 ## What the chart installs
 
 At the default `prod` profile, the chart renders one workload: the Deployment
-`assayd-agent-operator`, at two replicas. That is two pods, and the only assayd
-code in the cluster. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
+`assayd-agent-operator`, at two replicas. It is the only assayd code the chart
+installs. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
 
-The `local` profile renders the same Deployment at one replica. <ClaimClass claim="measured" test="TestLocalProfileRenders" />
+The `local` profile renders the same Deployment at one replica, and no
+PodDisruptionBudget. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
 
 Admission is four `ValidatingAdmissionPolicy` objects written in CEL, each with
 its binding: `assayd-namespace-labels`, `assayd-gateway-routes`,
@@ -40,8 +41,8 @@ The chart ships one CustomResourceDefinition, `agents.assayd.dev`, and it is
 byte-identical to the one the operator is generated against. <ClaimClass claim="measured" test="TestChartShipsTheGeneratedCRD" />
 
 Beside those, the chart renders a Namespace, a ServiceAccount, a ClusterRole
-and its binding, and, at `prod`, a PodDisruptionBudget. None of them runs
-anything.
+and its binding, and, at `prod`, a PodDisruptionBudget, and nothing else. None
+of them runs anything. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
 
 ## What `gateway.enabled` changes
 
@@ -49,9 +50,9 @@ Turning the gateway on adds two Roles and two RoleBindings and no workload: the
 same single Deployment, at the same two replicas, and still no Gateway object of
 any kind. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
 
-The chart refuses to render `gateway.enabled=true` without `gateway.servingUrl`,
-because the operator it installs publishes a new Agent's route only after an
-anonymous request to that address is refused, and will not start without it. <ClaimClass claim="measured" test="TestAnEnabledGatewayWithNoServingURLDoesNotRender" />
+The chart refuses to render `gateway.enabled=true` without `gateway.servingUrl`:
+the operator publishes a new Agent's route only after an anonymous request to
+that address is refused, so it needs the address. <ClaimClass claim="measured" test="TestAnEnabledGatewayWithNoServingURLDoesNotRender" />
 
 ## What the test harness adds, and assayd does not
 
@@ -59,14 +60,17 @@ The chart ships no Gateway, no GatewayClass and no agentgateway: nothing it
 renders has an API group under `gateway.networking.k8s.io` or agentgateway's,
 and it vendors no subchart. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
 
-On k3d, `hack/e2e.sh` installs Gateway API v1.6.0 and agentgateway 1.5.0, creates
-the Gateway itself, and a request then reaches an agent through that Gateway's
-own Service on a route the operator wrote. The kind lane skips every gateway
-test and reports the path unverified. <ClaimClass claim="measured" test="TestAnAgentAnswersThroughTheGateway" />
+The end-to-end harness, `hack/e2e.sh`, installs Gateway API and agentgateway
+itself (by default v1.6.0 and 1.5.0) and creates the Gateway. None of that is
+the chart's.
 
-On a real cluster, the operator Deployment the chart installs is running the
-image the same run built, on every pod. This is an end-to-end test; it skips
-when no cluster is reachable. <ClaimClass claim="measured" test="TestTheOperatorUnderTestIsTheOneJustBuilt" />
+On k3d, a request reaches an agent through that Gateway's own Service, on a route
+the operator wrote. The test skips, and reports the gateway path unverified,
+where no gateway is installed. <ClaimClass claim="measured" test="TestAnAgentAnswersThroughTheGateway" />
+
+On a real cluster, the operator Deployment the chart installs names, in its pod
+template, the image the same end-to-end run built. It skips when no cluster is
+reachable. <ClaimClass claim="measured" test="TestTheOperatorUnderTestIsTheOneJustBuilt" />
 
 ## What the architecture names and nothing installs
 
