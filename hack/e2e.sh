@@ -379,6 +379,22 @@ esac
 # consent the run-namespace move needs.
 if [ "${DISTRO}" = "k3d" ] && [ "${ASSAYD_E2E_GATEWAY:-1}" = "1" ]; then
   echo "==> installing Gateway API + agentgateway ${AGW_VERSION}"
+  # Pull agentgateway's two images on the HOST and import them into the node,
+  # rather than let the node pull them. Measured on 2026-09-23: a fresh k3d node
+  # took 7m1s to pull the 29 MB controller image that the host pulled in ~10s,
+  # so the install below (--wait --timeout 5m) failed on every fresh cluster
+  # and e2e could only pass on a cluster that already had the image cached.
+  # Both images are `IfNotPresent` in the chart, so an imported image is used
+  # as-is. Best effort: if the host cannot pull, the node still tries, which
+  # is the old behaviour.
+  for agw_img in "cr.agentgateway.dev/controller:v${AGW_VERSION}" "cr.agentgateway.dev/agentgateway:v${AGW_VERSION}"; do
+    if docker pull -q "${agw_img}" >/dev/null 2>&1; then
+      k3d image import "${agw_img}" -c "${CLUSTER}" >/dev/null 2>&1 \
+        || echo "WARNING: could not import ${agw_img} into ${CLUSTER}; the node will pull it" >&2
+    else
+      echo "WARNING: could not pull ${agw_img} on the host; the node will pull it" >&2
+    fi
+  done
   kubectl apply -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/${GWAPI_VERSION}/standard-install.yaml" >/dev/null
   helm upgrade --install agentgateway-crds     oci://ghcr.io/agentgateway/charts/agentgateway-crds --version "${AGW_VERSION}"     -n agentgateway --create-namespace >/dev/null
   helm upgrade --install agentgateway     oci://ghcr.io/agentgateway/charts/agentgateway --version "${AGW_VERSION}"     -n agentgateway --wait --timeout 5m >/dev/null
