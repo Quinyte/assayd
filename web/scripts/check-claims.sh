@@ -60,6 +60,22 @@ for target in site docs; do
   while IFS= read -r test_name; do
     [ -n "${test_name}" ] || continue
     total_claims=$((total_claims + 1))
+
+    # The name is interpolated into a REGEX below, so it must first be shown to
+    # be a plain identifier. Without this, `test=".*"` matched the first
+    # function in the tree and certified itself — a claim with no evidence
+    # behind it, produced by the gate that exists to prevent exactly that, and
+    # read aloud to a screen reader as "Proven by the test .*".
+    #
+    # Nobody types `Test.*` by accident, so this is not about an attacker; it
+    # is about the check being able to state what it verified.
+    if ! printf '%s' "${test_name}" | grep -qE '^[A-Za-z0-9_]+$'; then
+      echo "    FAIL measured: ${test_name} — not a Go identifier." >&2
+      echo "         A test name must match ^[A-Za-z0-9_]+$; a pattern cannot be evidence." >&2
+      status=1
+      continue
+    fi
+
     # Anchored at the start of a line, so a mention in a comment, a string or a
     # call site cannot satisfy it — only a top-level declaration can. Go test
     # functions are always top-level, so this is exactly the right anchor.
@@ -84,6 +100,17 @@ for target in site docs; do
       status=1
     fi
   done <<< "${designed}"
+
+  # A badge and its claim must render as one block, and two claims must never
+  # share one — because a retraction's rescue scope is the enclosing block, so
+  # two claims in one block means either can read as covered by the other's
+  # evidence. The inline badge is a <span> so it can sit in a sentence, which
+  # means two in one paragraph DO share a block; nothing about the component
+  # can prevent that without making it unusable inline. Hence a check.
+  if ! find "${dist}" -name '*.html' -type f -print0 \
+      | xargs -0 python3 "${web_dir}/scripts/block_scope.py"; then
+    status=1
+  fi
 
   echo "==> ${target}: claims resolved above"
 done

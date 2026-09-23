@@ -17,6 +17,20 @@
  * The resolver below THROWS on a claim that cannot name its evidence. That is
  * the point of this module: a `measured` badge with no test name is a lie, and
  * a lie should fail the build rather than render.
+ *
+ * It is the weaker half, and deliberately not described as more. It catches
+ * the OMISSION; the live failures are the rename, the delete, and the
+ * wildcard, and none of those is visible from here — resolving a name against
+ * the Go tree needs the Go tree. `web/scripts/check-claims.sh` does that over
+ * the built HTML, and also enforces the rule this file cannot see at all:
+ *
+ *   ONE CLAIM PER BLOCK. A retraction's rescue scope is the enclosing block,
+ *   so two claims sharing one means either can read as covered by the other's
+ *   evidence. The `inline` variant is a <span> so it can sit in a sentence,
+ *   which is exactly why two of them can end up in one paragraph.
+ *
+ * That rule is stated here for the reader and enforced there. A comment is not
+ * a gate — which is the argument this whole component exists to make.
  */
 
 export type ClaimClassName = "measured" | "designed" | "not-built";

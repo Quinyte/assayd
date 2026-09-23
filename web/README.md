@@ -120,6 +120,30 @@ It checks **existence, not truth**. It does not run the test, and it cannot
 know whether the named test proves the sentence the badge sits beside. `make
 test` says the first; a human says the second.
 
+A test name that is not `^[A-Za-z0-9_]+$` is refused before it reaches the
+grep. `test=".*"` previously matched the first function in the tree and
+certified itself — a claim with no evidence behind it, manufactured by the
+gate that exists to prevent exactly that.
+
+### One claim per block
+
+**A badge and its claim must render as one block, and two claims must never
+share one.** A retraction's rescue scope is the enclosing block, and an HTML
+block is coarser than it looks — a `<div>` of inline pills is one block, and so
+is a table. Two claims in one block means either can read as covered by the
+other's evidence: the precise failure the claim classes exist to prevent.
+
+The `header` variant renders a `<div>`, so it is always its own block. The
+`inline` variant renders a `<span>`, because it has to sit in a sentence —
+which means two of them in one paragraph **do** share that paragraph. Nothing
+about the component can prevent that without making it unusable inline, so
+`check:claims` fails on it instead, using a real HTML parser
+(`scripts/block_scope.py`) because "nearest block-level ancestor" is a tree
+question and a regex would have to guess at nesting.
+
+`td`, `th` and `tr` are deliberately **not** block boundaries, matching the
+gate this mirrors: two claims in one table row are reported, not excused.
+
 The three states are told apart by stroke — filled, hairline, dashed — and by a
 mark that survives greyscale. Colour carries none of the meaning. The visible
 badge is hidden from the accessibility tree and one complete sentence is
@@ -196,7 +220,9 @@ To publish, a human must:
    repository **variable** `ASSAYD_WEB_PUBLISH_ENABLED` to exactly `true`.
    That variable is the stop that cannot be satisfied by accident: until it is
    set, the job fails on its first step regardless of secrets, environment or
-   input.
+   input. Set it on the **repository**, not the organization — `vars.*` reads
+   both, so the same step also refuses to run anywhere but `Quinyte/assayd`,
+   and a fork cannot inherit an org-level arming variable.
 3. **Set these repository secrets** (the workflow's preflight names each one it
    cannot find):
 

@@ -21,12 +21,25 @@ import ClaimClass from "@assayd/web-shared/ClaimClass.astro";
     components. It is not the landing page and carries no product copy.
   </p>
 
+  {/*
+    ONE CLAIM PER BLOCK. The inline badge is a <span>, so it cannot break the
+    paragraph it sits in — which means a second badge in this same <p> would
+    share its block. A retraction's rescue scope is the enclosing block, so two
+    claims in one block means either can read as covered by the other's
+    evidence: the exact failure the claim classes exist to prevent.
+
+    `pnpm run check:claims` fails on it rather than trusting this comment. An
+    earlier version of this paragraph invited the unsafe pattern in so many
+    words, which is how it got found.
+  */}
   <p>
     A claim can appear in a sentence — like this one <ClaimClass
       claim="designed"
       design="design 03"
       section="§3.3.2"
-    /> — without breaking the line it sits in.
+    /> — without breaking the line it sits in. It must be the only claim in
+    that sentence's block; a second one belongs in its own paragraph, list item
+    or header badge.
   </p>
 </BaseLayout>
 

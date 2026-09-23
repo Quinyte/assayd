@@ -168,9 +168,11 @@ jobs:
   #
   #   1. `if:` — it runs only on a manual dispatch whose `deploy` input is not
   #      "none". A push to main and a pull request cannot reach it at all.
-  #   2. The `ASSAYD_WEB_PUBLISH_ENABLED` preflight below. A repository
-  #      VARIABLE that a human must set to "true" by hand. It depends on no
-  #      platform behaviour: absent or anything else, the job stops.
+  #   2. The `ASSAYD_WEB_PUBLISH_ENABLED` preflight below. A VARIABLE a human
+  #      must set to exactly "true" by hand, in a step that also refuses to run
+  #      anywhere but Quinyte/assayd — because `vars.*` reads organization
+  #      variables too. Absent, differently spelled, or set on a different
+  #      repository: the job stops.
   #   3. The last step exits non-zero. No upload command is written, because
   #      nobody here has run one against the host and a command that has never
   #      been executed is not a deploy path — it is a guess that would be read
@@ -199,22 +201,37 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The stop that depends on nothing but this repository's own state.
+      # The stop that depends on this repository's own state.
       #
-      # A repository variable, not a secret, because it carries no value worth
-      # hiding and a human should be able to see at a glance whether publishing
-      # is armed. It is checked before the credentials so that the first thing
-      # a dispatcher is told is that nobody has authorised publishing, rather
-      # than a list of secrets to go and set.
+      # A variable, not a secret, because it carries no value worth hiding and
+      # a human should be able to see at a glance whether publishing is armed.
+      # It is checked before the credentials so that the first thing a
+      # dispatcher is told is that nobody authorised publishing, rather than a
+      # list of secrets to go and set.
+      #
+      # `vars.*` resolves ORGANIZATION variables as well as repository ones, so
+      # an org-level ASSAYD_WEB_PUBLISH_ENABLED=true would otherwise arm this
+      # repository without anyone touching it. The repository guard below is
+      # what keeps the stop specific to this repository rather than to the
+      # organization — without it, the comment above would claim more than the
+      # step enforces.
       - name: preflight — has a human armed publishing
         env:
           PUBLISH_ENABLED: ${{ vars.ASSAYD_WEB_PUBLISH_ENABLED }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if [ "${REPO}" != "Quinyte/assayd" ]; then
+            echo "Refusing to publish from '${REPO}'."
+            echo "This job publishes Quinyte/assayd and nothing else; a fork"
+            echo "or a rename must not inherit an arming variable set"
+            echo "elsewhere in the organization."
+            exit 1
+          fi
           if [ "${PUBLISH_ENABLED:-}" != "true" ]; then
             echo "Publishing is not armed."
             echo
-            echo "Repository variable ASSAYD_WEB_PUBLISH_ENABLED is"
+            echo "Variable ASSAYD_WEB_PUBLISH_ENABLED is"
             echo "'${PUBLISH_ENABLED:-<unset>}', and must be exactly 'true'."
             echo
             echo "Setting it is a deliberate act by a human who has read"
