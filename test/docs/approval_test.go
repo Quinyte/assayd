@@ -23,7 +23,7 @@ import (
 // approval", and rows 21, 26 and 27 named a precondition owed before their ADR
 // instead — and the human had approved none of them. The only human approvals on record
 // are design 03's first slice (2026-09-12), design 16's first slice
-// (2026-09-14) and design 03 amendment A84 (2026-09-23). AGENTS.md tells every
+// (2026-09-14) and design 03 amendments A84 and A85 (both 2026-09-23). AGENTS.md tells every
 // reader to trust a design's own Status line over any summary, so the line that
 // was wrong was the one a reader was told to believe. The human corrected it on
 // 2026-09-23; this test is what keeps the two from drifting apart again.
@@ -169,8 +169,9 @@ func TestTheHeadReaderReadsTheWholeBullet(t *testing.T) {
 
 // humanApprovals is the human's decision, not a reading of the documents: the
 // approval each design may claim. Designs 03 and 16 are approved in part —
-// 03's first slice (ADR-0034 Amendment 4, 2026-09-12) and its amendment A84
-// (2026-09-23), and 16's first slice (ADR-0024 Amendment 1, 2026-09-14). Every
+// 03's first slice (ADR-0034 Amendment 4, 2026-09-12) and its amendments A84
+// and A85 (both 2026-09-23, recorded in design 03's §11, each with no ADR
+// amendment because neither makes ADR-0034 false), and 16's first slice (ADR-0024 Amendment 1, 2026-09-14). Every
 // other design number, including one that does not exist yet, is not approved.
 //
 // Changing this table is recording a human decision. Do it only in the change
@@ -213,7 +214,7 @@ func TestNoDesignClaimsAnApprovalTheHumanDidNotGive(t *testing.T) {
 	sort.Strings(wrong)
 	if len(wrong) > 0 {
 		t.Errorf("%d claims of approval differ from what the human decided. The only approvals the human has "+
-			"given are design 03's first slice and A84, and design 16's first slice. Correct the document. "+
+			"given are design 03's first slice, A84 and A85, and design 16's first slice. Correct the document. "+
 			"Changing humanApprovals instead requires a human decision, recorded as an ADR amendment in the "+
 			"same change:\n  %s", len(wrong), strings.Join(wrong, "\n  "))
 	}
