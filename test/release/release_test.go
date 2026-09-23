@@ -51,6 +51,7 @@ type step struct {
 	Env             map[string]string `yaml:"env"`
 	Run             string            `yaml:"run"`
 	Shell           string            `yaml:"shell"`
+	With            map[string]any    `yaml:"with"`
 	ContinueOnError yaml.Node         `yaml:"continue-on-error"`
 }
 
@@ -423,5 +424,37 @@ func TestNoRunScriptCarriesAnExpressionOutsideTheAllowlist(t *testing.T) {
 	// ever found nothing, this test would pass on any script.
 	if seen == 0 {
 		t.Fatal("found no `${{ }}` in any run: script; the parser is broken, since release.yml has several")
+	}
+}
+
+// TestEveryCheckoutBuildsTheCommitThatTriggeredTheRun pins the premise the
+// version step's guard rests on. The guard compares github.ref with the tag
+// input, and that comparison says something about the published code only
+// because every checkout builds github.sha, the commit on that ref, which is
+// what actions/checkout does when it is given no `ref:`. A checkout given a
+// `ref:` (or a `repository:`) builds something else: `ref: main` would publish
+// main under whatever tag the run was started from, which is the hazard the
+// guard exists to close, with the guard still passing.
+func TestEveryCheckoutBuildsTheCommitThatTriggeredTheRun(t *testing.T) {
+	w := load(t)
+	checkouts := 0
+	for name, j := range w.Jobs {
+		for _, s := range j.Steps {
+			if !strings.HasPrefix(s.Uses, "actions/checkout@") {
+				continue
+			}
+			checkouts++
+			for _, key := range []string{"ref", "repository"} {
+				if v, ok := s.With[key]; ok {
+					t.Errorf("job %q: checkout sets `%s: %v`; every checkout must build "+
+						"github.sha, the commit the run was started from, or the version "+
+						"step's ref check no longer describes what is published", name, key, v)
+				}
+			}
+		}
+	}
+	// Vacuity: a test that finds no checkout passes for the wrong reason.
+	if checkouts < 2 {
+		t.Fatalf("found %d actions/checkout steps; expected one in each of image and chart", checkouts)
 	}
 }
