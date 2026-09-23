@@ -1,11 +1,12 @@
 # Publishing, held to the bar assayd sets for the agents it runs.
 #
-# ADR-0019 requires agent images to be cosign-signed and admission rejects
-# unsigned ones; design 07 §4 says the chart ships "as a cosign-signed OCI
-# chart, all images pinned by digest, SBOM attached — the same admission story
-# agents get". A platform that demands this of its users and not of itself is
-# making an argument it does not believe, and that inconsistency is the first
-# thing a security review finds.
+# ADR-0019 requires agent images to be cosign-signed — admission enforces only
+# digest-pinning today and verifies no signature (docs/supply-chain.md); design
+# 07 §4 says the chart ships "as a cosign-signed OCI chart, all images pinned
+# by digest, SBOM attached — the same admission story agents get". A platform
+# that demands this of its users and not of itself is making an argument it
+# does not believe, and that inconsistency is the first thing a security
+# review finds.
 #
 # Signing is KEYLESS (Fulcio/Rekor via GitHub's OIDC token). There is no private
 # key to store, rotate, or leak: the signature is bound to this workflow, in this
@@ -52,11 +53,33 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # A dispatch must be started FROM the tag it names. Neither checkout in
+      # this workflow takes a `ref:`, so both build github.sha — the commit of
+      # the ref the run was started from — while the version string comes from
+      # the `tag` input. Dispatching `tag: v0.4.1` from main therefore built
+      # main and published it as 0.4.1, signed and attested, and the
+      # start-anchored identity regexp in the verify steps below matches any
+      # ref, so every check passed. This step refuses that run before anything
+      # is pushed, signed or attested: every step after it has no `if:`, or an
+      # `if:` with no status function (so GitHub applies success()), or
+      # requires steps.push.outcome == 'success'; and the chart job `needs:`
+      # this one. On a tag push the event is `push`, the test below is false,
+      # and the step does exactly what it did before.
+      #
+      # The values arrive through env, not `${{ }}` in the script, so the
+      # free-text input is data to the shell and never script text.
       - id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          v="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "version=${v#v}" >> "$GITHUB_OUTPUT"
+          if [ "${EVENT}" = "workflow_dispatch" ] && [ "${REF}" != "refs/tags/${TAG}" ]; then
+            echo "::error::refusing to publish '${TAG}' from ${REF}: a dispatch builds the ref it was started from, so it must be started from refs/tags/${TAG} (choose the tag, not a branch, in 'Use workflow from'), and the tag input must be the tag's exact name"
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 

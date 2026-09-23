@@ -17,14 +17,30 @@ So read what follows as a claim about **assayd's own released artifacts**, which
 
 Both are published by `.github/workflows/release.yml`. **Two things trigger it, not one**, and this page said "only … on a `v*` tag": a push of a `v*` tag, **and `workflow_dispatch` with a `tag` input**.
 
-**A dispatch is NOT equivalent to a tag push, and treating it as one is the hazard.** Only the version *string* comes from the input — `github.event.inputs.tag || github.ref_name` — and **neither job's checkout takes a `ref:`** (`release.yml:53`, `:170`). So a dispatch builds whatever ref it was launched from, and publishes it under the name you typed: **dispatching `tag: v0.4.1` from `main` publishes `main`'s code as `0.4.1`**, signs it, and attests it.
+**A dispatch is NOT equivalent to a tag push, and treating it as one was the hazard.** Only the version *string* comes from the input — `github.event.inputs.tag || github.ref_name` — and **neither job's checkout takes a `ref:`** (`release.yml:54`, `:193`), so both build `github.sha`, the commit of the ref the run was started from. Before the guard below, **dispatching `tag: v0.4.1` from `main` published `main`'s code as `0.4.1`**, signed it, and attested it.
+
+**The guard.** Since 2026-09-23 (PR #60), the image job's `version` step — the step right after checkout, before `push`, `cosign sign`, both attestations and the whole chart job — fails the run when the event is `workflow_dispatch` and `github.ref` is not exactly `refs/tags/<the tag input>`. That test is false on a tag push, so a tag push publishes exactly as before. It closes three things:
+
+- a dispatch from a branch, `main` included, with any tag input;
+- a dispatch from one tag that names another, such as `v0.4.0` dispatched as `v0.4.1`;
+- a dispatch whose input is not the tag's exact name, such as `0.4.1` for `v0.4.1`. That one used to publish the right code; it is now refused too, because the rule is one string comparison and not a guess.
+
+What the guard does **not** do:
+
+- **It only guards runs of a workflow file that contains it.** GitHub runs the `release.yml` *on the ref you dispatch from*. Every tag up to and including `v0.4.1` carries the old workflow. A dispatch from one of them still builds that tag under whatever name you type, unguarded, and so does a dispatch from any branch whose `release.yml` predates the guard.
+- **It changes nothing a verifier downstream sees.** The certificate still names the ref the run started from. The workflow's own `cosign verify` steps still pass only `--certificate-identity-regexp '^https://github.com/<owner>/<repo>/'` and the issuer. That regexp is anchored at the start only, so it matches **any** ref. A consumer cannot learn from the signature that the guard ran. Use the commands below to check what you pulled.
 
 **The certificate can tell you, and the default verification command does not ask.** An earlier version of this paragraph said "nothing downstream can tell" and then told you to check the certificate's `Subject` for the commit. Both were wrong, and the second more dangerously: the **Subject (SAN) is the workflow identity, and it ends in a `ref`, not a commit** — `https://github.com/Quinyte/assayd/.github/workflows/release.yml@refs/tags/v0.4.1` for a tag build, `…@refs/heads/main` for a dispatch from `main`. Someone following that instruction would read a ref and believe they had checked a commit. The **commit** lives in a different claim, which cosign exposes as its own flag.
 
-Two claims, two flags — ask for the one you mean:
+Two claims, two flags — ask for the one you mean. The block runs as written against v0.4.0, whose digest is recorded below; for another release, substitute its tag and its digest from `helm show values` or the release notes:
 
 ```bash
-# Was it built from the TAG? (this is what tells a tag push from a dispatch)
+IMAGE=ghcr.io/quinyte/assayd-operator
+DIGEST=sha256:232673c6ecbc0a497a6076cd0914e56286ae6f960ecc35ebffacb7bcf0241823   # v0.4.0
+
+# Was it built from the TAG's ref? (a ref, not an event: a dispatch started from
+# refs/tags/v0.4.0 passes this too. The trigger is its own claim, checked with
+# --certificate-github-workflow-trigger.)
 cosign verify "${IMAGE}@${DIGEST}" \
   --certificate-identity "https://github.com/Quinyte/assayd/.github/workflows/release.yml@refs/tags/v0.4.0" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
@@ -36,11 +52,11 @@ cosign verify "${IMAGE}@${DIGEST}" \
   --certificate-github-workflow-sha "$(git rev-parse v0.4.0^{commit})"
 ```
 
-**The workflow's own verification does not make either check, and one line would.** All three of its `cosign verify` invocations pass only `--certificate-identity-regexp '^https://github.com/<owner>/<repo>/'` and the issuer. That regexp is anchored at the start only, so it matches **any** ref — a dispatch from `main` satisfies it exactly as a tag push does. Replacing it with an exact `--certificate-identity …@refs/tags/v${version}`, or adding `--certificate-github-workflow-ref refs/tags/v${version}`, closes it in one line per job and fails closed.
+Both were run against v0.4.0 on 2026-09-23 and both pass. The same identity with `…@refs/heads/main` fails, and so does the sha check with a wrong commit. The second command needs a clone that has the tag; `v0.4.0^{commit}` is `e061faca8863dabae4b475717a60db0175e9557d`. `--certificate-github-workflow-trigger push` also passes for v0.4.0, and `workflow_dispatch` fails.
 
-**That change is not made here, deliberately.** It alters release behaviour and cannot be exercised without cutting a release; getting the claim string wrong would fail *after* the artifact had been pushed and signed, which is precisely the v0.2.0 shape this page documents below. It is recorded as owed rather than slipped into a documentation change.
+**Tightening the workflow's own verification is still owed, and is not made here.** Replacing its regexp with an exact `--certificate-identity …@refs/tags/v${version}`, or adding `--certificate-github-workflow-ref refs/tags/v${version}`, would make the release refuse a wrong ref from the outside as well. It alters release behaviour and cannot be exercised without cutting a release. And it runs *after* the artifact has been pushed and signed, so a wrong claim string would fail a release half-published — precisely the v0.2.0 shape this page documents below. The guard above covers the same wrong-ref case *before* anything is published, for runs of a workflow that contains it.
 
-Until then: **use a tag push**, and if you must dispatch, run the first command above against the version you published.
+So: **prefer a tag push.** If you must dispatch, start it from the tag itself (`refs/tags/<tag>` in "Use workflow from") on a tag whose `release.yml` has the guard — no tag up to and including `v0.4.1` does — and run the first command above against what was published.
 
 **What the workflow verifies of itself, and what it does not.** Before it finishes, the image job runs `cosign verify` and `cosign verify-attestation --type spdxjson` against the digest it just pushed, and the chart job runs `cosign verify` against the chart digest. It **never** runs `cosign verify-attestation --type slsaprovenance1` and **never** runs `gh attestation verify`. So the signature and the SBOM attestation are checked by the release itself; **the SLSA provenance is not** — every provenance claim on this page comes from a dated manual check, named as such below.
 
