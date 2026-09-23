@@ -379,6 +379,37 @@ esac
 # consent the run-namespace move needs.
 if [ "${DISTRO}" = "k3d" ] && [ "${ASSAYD_E2E_GATEWAY:-1}" = "1" ]; then
   echo "==> installing Gateway API + agentgateway ${AGW_VERSION}"
+  # Put agentgateway's two images into the node from the HOST, rather than let
+  # the node pull them. Measured on 2026-09-23: a fresh k3d node took 7m1s to
+  # pull the 29 MB controller image that the host pulled in ~10s, so the
+  # install below (--wait --timeout 5m) failed on every fresh cluster.
+  #
+  # Both images are multi-platform indexes, and `k3d image import <name>` is
+  # NOT reliable for them: the host holds only its own platform's layers, the
+  # import fails on the other platform's missing blobs — and still exits 0 and
+  # prints "Successfully imported". So this saves a SINGLE-platform tar and
+  # imports that, then checks the node actually has the image, instead of
+  # trusting any exit code. Both images are pulled `IfNotPresent` (the proxy by
+  # Kubernetes' default, since the controller sets no policy for it), so a
+  # present image is used as-is. Best effort: on any failure it warns, saying
+  # why, and the node pulls as before.
+  agw_arch="$(docker version --format '{{.Server.Arch}}' 2>/dev/null || echo amd64)"
+  agw_tar="$(mktemp "${TMPDIR:-/tmp}/assayd-e2e-agw.XXXXXX")"
+  for agw_img in "cr.agentgateway.dev/controller:v${AGW_VERSION}" "cr.agentgateway.dev/agentgateway:v${AGW_VERSION}"; do
+    if ! agw_err="$(docker pull -q --platform "linux/${agw_arch}" "${agw_img}" 2>&1)"; then
+      echo "WARNING: could not pull ${agw_img} on the host (${agw_err##*$'\n'}); the node will pull it" >&2
+      continue
+    fi
+    # A Docker whose `save` has no --platform falls back to a plain save. The
+    # presence check below is what decides whether either one worked.
+    docker save --platform "linux/${agw_arch}" -o "${agw_tar}" "${agw_img}" >/dev/null 2>&1 \
+      || docker save -o "${agw_tar}" "${agw_img}" >/dev/null 2>&1 || true
+    agw_err="$(k3d image import "${agw_tar}" -c "${CLUSTER}" 2>&1)" || true
+    if ! docker exec "k3d-${CLUSTER}-server-0" crictl inspecti "${agw_img}" >/dev/null 2>&1; then
+      echo "WARNING: ${agw_img} is not on the node after import ($(printf '%s' "${agw_err}" | grep -iE 'erro|fail' | tail -1)); the node will pull it" >&2
+    fi
+  done
+  rm -f "${agw_tar}"
   kubectl apply -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/${GWAPI_VERSION}/standard-install.yaml" >/dev/null
   helm upgrade --install agentgateway-crds     oci://ghcr.io/agentgateway/charts/agentgateway-crds --version "${AGW_VERSION}"     -n agentgateway --create-namespace >/dev/null
   helm upgrade --install agentgateway     oci://ghcr.io/agentgateway/charts/agentgateway --version "${AGW_VERSION}"     -n agentgateway --wait --timeout 5m >/dev/null
