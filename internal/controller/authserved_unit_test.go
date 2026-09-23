@@ -198,6 +198,33 @@ func TestTheServedPolicyReportHasThreeAnswers(t *testing.T) {
 	}
 }
 
+// What the policy half may say about the route, on each route reading and
+// stored route claim (design 03 §8.1 item 11). Only a route reason standing on
+// the pass — a refusal read now or held from status.auth — puts a route reading
+// in PolicyApplyIncomplete for the hedge to point at; an unknown reading with
+// no claim standing puts none there.
+func TestThePolicyHalfSaysOnlyWhatWasReadOfTheRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		rep     gatewayReport
+		refused bool
+		want    routeLead
+	}{
+		{"accepted", reportHolding, false, routeServing},
+		{"accepted, with a stale claim the route half is about to clear", reportHolding, true, routeServing},
+		{"refused on this pass", reportBroken, false, routeNamed},
+		{"refused on this pass and before", reportBroken, true, routeNamed},
+		{"unknown, a refusal held", reportUnknown, true, routeNamed},
+		{"unknown, nothing standing", reportUnknown, false, routeUnread},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := servedRouteLead(tc.rep, servedClaims{routeRefused: tc.refused}); got != tc.want {
+				t.Errorf("servedRouteLead = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 // The four leads A83 splits policyBrokenMessage into, each asserted by what it
 // must NOT say as well as by what it must. The reason does not branch — (B1)
 // is kept — so what a clause says is the only thing that separates it, and a
@@ -206,35 +233,57 @@ func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		clause        policyClause
-		routeOK       bool
+		route         routeLead
 		judged        bool
 		says, saysNot []string
 	}{
-		{"unattached on an accepted route", clauseUnattached, true, true,
+		{"unattached on an accepted route", clauseUnattached, routeServing, true,
 			[]string{"does not attach", "no credential required", "announced, not closed"},
 			[]string{"THIS PASS DID NOT READ IT AS ACCEPTED", "but not the whole of it"}},
-		{"unattached beside a route this pass did not read as accepted", clauseUnattached, false, true,
-			[]string{"does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED"},
-			[]string{"route is accepted and SERVING"}},
-		{"rejected outright on an accepted route", clauseRejected, true, true,
+		{"unattached beside a route reason that names the route", clauseUnattached, routeNamed, true,
+			[]string{"does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED",
+				"PolicyApplyIncomplete also carries the route's own reading"},
+			[]string{"route is accepted and SERVING", "reading at its current generation is unknown",
+				"names the route's own reading first"}},
+		// §8.1 item 11: on an UNKNOWN reading with no route claim standing,
+		// nothing names a route reading, so the hedge must not send the reader
+		// to one. It keeps "THIS PASS DID NOT READ IT AS ACCEPTED".
+		{"unattached beside a route this pass read as unknown", clauseUnattached, routeUnread, true,
+			[]string{"does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED",
+				"reading at its current generation is unknown", "announced, not closed",
+				// The one controllerName assayd reads, which is what points an
+				// operator on a renamed-controller cluster at the real cause.
+				"controllerName agentgateway.dev/agentgateway, the only one assayd reads"},
+			[]string{"route is accepted and SERVING", "names the route's own reading first"}},
+		{"rejected outright on an accepted route", clauseRejected, routeServing, true,
 			[]string{"REJECTED", "none of this Agent's authentication or authorization is in force",
 				"announced, not closed"},
 			[]string{"does not attach", "but not the whole of it"}},
 		// The row A83's own review found missing, and it found it by DELETING
-		// this lead's !routeOK block and watching the whole suite stay green.
+		// this lead's !routeOK block (since A85, `route != routeServing`) and
+		// watching the whole suite stay green.
 		// The arm is live — §5 keeps it for a release that starts producing
 		// Accepted=False — and unpinned it reaches A81's MAJOR 2 verbatim:
 		// "route is accepted and SERVING" on a pass that recorded the route
 		// refused, with nothing able to fail on it (rule 5).
-		{"rejected beside a route this pass did not read as accepted", clauseRejected, false, true,
-			[]string{"REJECTED", "THIS PASS DID NOT READ IT AS ACCEPTED"},
-			[]string{"route is accepted and SERVING"}},
+		{"rejected beside a route reason that names the route", clauseRejected, routeNamed, true,
+			[]string{"REJECTED", "THIS PASS DID NOT READ IT AS ACCEPTED",
+				"PolicyApplyIncomplete also carries the route's own reading"},
+			[]string{"route is accepted and SERVING", "reading at its current generation is unknown",
+				"names the route's own reading first"}},
+		{"rejected beside a route this pass read as unknown", clauseRejected, routeUnread, true,
+			[]string{"REJECTED", "THIS PASS DID NOT READ IT AS ACCEPTED",
+				"reading at its current generation is unknown", "announced, not closed",
+				// The one controllerName assayd reads, which is what points an
+				// operator on a renamed-controller cluster at the real cause.
+				"controllerName agentgateway.dev/agentgateway, the only one assayd reads"},
+			[]string{"route is accepted and SERVING", "names the route's own reading first"}},
 		// The shape A82 measured, and the one A83 exists for: the Gateway
 		// says Attached=True and the route is measured refusing, so a lead
 		// asserting non-attachment or an open route is rule 8. The ConfigMap
 		// attribution is HEDGED, because 1.5.0 reports the same PartiallyValid
 		// for three measured causes and only one of them is namespace-wide.
-		{"accepted only in part", clausePartlyValid, true, true,
+		{"accepted only in part", clausePartlyValid, routeServing, true,
 			[]string{"but not the whole of it", "NOT reporting the policy unattached",
 				"makes no request of its own", "IF it is the key ConfigMap",
 				"shared by every Agent in this run namespace",
@@ -255,7 +304,7 @@ func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
 		// unjudgedNote. Saying "neither held path checked either" here was
 		// wrong twice over: there are three, and the claim belongs to the
 		// lead alone (A83's second review, MAJOR 1).
-		{"held over a pass that still judged the policy", clauseUnknown, true, true,
+		{"held over a pass that still judged the policy", clauseUnknown, routeServing, true,
 			[]string{"re-derived nothing", "restates the claim and cannot narrow it",
 				"The policy is present"},
 			[]string{"does not attach", "no credential required", "REJECTED",
@@ -266,13 +315,13 @@ func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
 		// every pass after a foreign takeover of the -auth name and every pass
 		// after an upgrade that renders a digest status.auth does not record —
 		// permanently, in the second case.
-		{"held over a pass that judged no policy", clauseUnknown, true, false,
+		{"held over a pass that judged no policy", clauseUnknown, routeServing, false,
 			[]string{"re-derived nothing", "restates the claim and cannot narrow it"},
 			[]string{"The policy is present", "carries this Agent's UID",
 				"stands until the Gateway reports again"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			msg := policyBrokenMessage(tc.clause, "WHY", tc.routeOK, tc.judged)
+			msg := policyBrokenMessage(tc.clause, "WHY", tc.route, tc.judged)
 			for _, s := range tc.says {
 				if !strings.Contains(msg, s) {
 					t.Errorf("the message does not say %q: %s", s, msg)

@@ -216,11 +216,6 @@ reasons:
       as does the `status.auth.policyUnattached` field name. And a policy
       carrying the synthetic ancestor beside a real one reporting `Attached=True`
       still takes the non-attachment lead, which design 03 records as owed.
-      And on a route read UNKNOWN with no route claim standing, the hedged lead
-      says "PolicyApplyIncomplete names the route's own reading first" while
-      being that condition's whole message, which carries no route reading —
-      permanently so on a cluster whose agentgateway controller is renamed.
-      Design 03 records it as owed (§8.1 item 11, A84).
 
   - reason: AuthRecordNotKept
     state: >-

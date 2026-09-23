@@ -433,6 +433,74 @@ const policyJudgedNote = ". The policy is present, carries this Agent's UID and 
 // answering unauthenticated.
 const announcedNotClosed = ". The hole is announced, not closed"
 
+// routeLead is what the policy half's lead may say about the ROUTE, which is
+// three things and not the two a boolean held.
+//
+// A81's routeOK split "an explicit good tuple on this pass" from everything
+// else, and everything else took one hedge that sent the reader to
+// PolicyApplyIncomplete for "the route's own reading". That is true where a
+// route reason stands: a refusal read on this pass, or one held from stored
+// status, puts ServingRouteNotAccepted into PolicyApplyIncomplete — at its
+// head unless ForeignTrafficPolicy or GatewayAuthPolicy, both above it in
+// incompleteOrder, or an unranked reason such as a deadline or a NACK leads
+// the pass, which is why the hedge says "also carries" and not "first"
+// (design 03 §8.1 item 12). On an UNKNOWN reading with NO route claim standing it is false — nothing
+// raises or holds the route half, so the policy half's message IS
+// PolicyApplyIncomplete's whole message and names no route reading at all —
+// and on a cluster whose agentgateway controller is renamed, which routeReport
+// matches nothing on, that is every pass. Rule 8: a message naming a report
+// that does not exist (design 03 §8.1 item 11).
+type routeLead int
+
+const (
+	// routeServing is routeReport's reportHolding on this pass: the only
+	// reading that licenses "accepted and SERVING".
+	routeServing routeLead = iota
+	// routeNamed is a route reason standing on this pass — a refusal read now,
+	// or one held from status.auth.routeRefused — so PolicyApplyIncomplete
+	// carries the route's own reading — leading only when no reason
+	// incompleteOrder ranks higher, and no unranked one, stands (§8.1 item 12).
+	routeNamed
+	// routeUnread is an unknown reading at the route's current generation with
+	// no refusal standing: no condition on this Agent names a route reading.
+	routeUnread
+)
+
+// servedRouteLead folds routeReport's answer and the stored route claim into
+// what the policy half may say about the route. It mirrors the route half's own
+// switch in judgeServed: broken raises, unknown holds a standing claim.
+func servedRouteLead(rep gatewayReport, stored servedClaims) routeLead {
+	switch {
+	case rep == reportHolding:
+		return routeServing
+	case rep == reportBroken, stored.routeRefused:
+		return routeNamed
+	}
+	return routeUnread
+}
+
+// routeHedge is the second sentence of a hedged clauseUnattached or
+// clauseRejected lead, and it says only what this pass read about the route.
+func routeHedge(route routeLead) string {
+	hedge := "Whether the route is answering with no credential required depends on the route, " +
+		"and THIS PASS DID NOT READ IT AS ACCEPTED: "
+	if route == routeNamed {
+		// "also carries", not "names … first": a reason incompleteOrder ranks
+		// above ServingRouteNotAccepted, or an unranked one, may lead the pass,
+		// and the route's reading is then in the condition but not first
+		// (design 03 §8.1 item 12).
+		return hedge + "PolicyApplyIncomplete also carries the route's own reading, under " +
+			"ServingRouteNotAccepted, and if it says the route is refused then nothing is reaching " +
+			"this Agent at all and this half is the smaller of the two problems: "
+	}
+	return hedge + "the route's reading at its current generation is unknown — this pass found no " +
+		"status entry for the assayd Gateway from controllerName " + AgentgatewayControllerName +
+		", the only one assayd reads, reporting both Accepted and ResolvedRefs at that generation " +
+		"or either of them False at it, and no refusal of the route is standing — so no condition " +
+		"on this Agent names a route reading. If the route is serving, it may be answering with " +
+		"no credential required: "
+}
+
 // policyBrokenMessage says what the assayd Gateway ACTUALLY SAID about this
 // Agent's <agent>-auth, which is two branchings and not one.
 //
@@ -471,7 +539,8 @@ const announcedNotClosed = ". The hole is announced, not closed"
 // It is true on every raised clause by construction — `out.judgePolicy` is set
 // only where the three guards passed — and false on a held claim whose pass
 // read no policy, which is what `policyJudgedNote` exists to keep honest.
-func policyBrokenMessage(clause policyClause, why string, routeOK, judged bool) string {
+// route says what this pass read about the route; see routeLead.
+func policyBrokenMessage(clause policyClause, why string, route routeLead, judged bool) string {
 	var lead, consequence string
 	switch clause {
 	case clauseUnattached:
@@ -479,12 +548,9 @@ func policyBrokenMessage(clause policyClause, why string, routeOK, judged bool) 
 		lead = "this Agent's route is accepted and SERVING while the assayd Gateway reports that it " +
 			"does not attach the <agent>-auth policy, so the route may be answering with no credential " +
 			"required: "
-		if !routeOK {
+		if route != routeServing {
 			lead = "the assayd Gateway reports that it does not attach this Agent's <agent>-auth " +
-				"policy. Whether the route is answering with no credential required depends on the " +
-				"route, and THIS PASS DID NOT READ IT AS ACCEPTED: PolicyApplyIncomplete names the " +
-				"route's own reading first, and if it says the route is refused then nothing is " +
-				"reaching this Agent at all and this half is the smaller of the two problems: "
+				"policy. " + routeHedge(route)
 		}
 	case clauseRejected:
 		consequence = announcedNotClosed
@@ -492,16 +558,13 @@ func policyBrokenMessage(clause policyClause, why string, routeOK, judged bool) 
 			"REJECTED the <agent>-auth policy outright, so none of this Agent's authentication or " +
 			"authorization is in force at the gateway and the route may be answering with no " +
 			"credential required: "
-		if !routeOK {
+		if route != routeServing {
 			lead = "the assayd Gateway reports that it REJECTED this Agent's <agent>-auth policy " +
 				"outright, so none of this Agent's authentication or authorization is in force at " +
-				"the gateway. Whether the route is answering with no credential required depends on " +
-				"the route, and THIS PASS DID NOT READ IT AS ACCEPTED: PolicyApplyIncomplete names " +
-				"the route's own reading first, and if it says the route is refused then nothing is " +
-				"reaching this Agent at all and this half is the smaller of the two problems: "
+				"the gateway. " + routeHedge(route)
 		}
 	case clausePartlyValid:
-		// No routeOK branch, and its absence is the point rather than an
+		// No route branch, and its absence is the point rather than an
 		// omission: this lead makes no claim about the route at all, because
 		// the Gateway did not report non-attachment and the judgement issues
 		// no request, so neither reading of the route would let it say more.
@@ -574,7 +637,12 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 	// policy half's message as well. That is a second reach of the fail-open
 	// this comparison opens, in the message rather than in what is raised, and
 	// it is stated in §3.3.3 rather than left to be discovered (A81).
-	routeOK := routeRep == reportHolding
+	//
+	// The hedge itself then splits on whether a route reason stands, because
+	// only then does PolicyApplyIncomplete carry a route reading for the hedge
+	// to point at (design 03 §8.1 item 11). It reads the STORED route claim, as
+	// the route half's own hold below does.
+	route := servedRouteLead(routeRep, stored)
 	switch rep, why := routeRep, routeWhy; rep {
 	case reportBroken:
 		claims.routeRefused = true
@@ -612,11 +680,12 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 	// "the route is accepted and serving while its authentication is attached
 	// to nothing", which states a precondition no code here has ever had, and
 	// which §5 and §3.3.3 stated too until design 03 A84 corrected all three.
-	// routeOK above selects the LEAD'S WORDING inside policyBrokenMessage and
-	// gates nothing; when the route half raised or held too, incompleteOrder
-	// decides which reason leads. The comment at routeOK's own definition says
-	// the same thing the right way round — "in the message rather than in what
-	// is raised" — and was right while this one was wrong (A84).
+	// `route` above (A81's routeOK, split in three by §8.1 item 11) selects the
+	// LEAD'S WORDING inside policyBrokenMessage and gates nothing; when the
+	// route half raised or held too, incompleteOrder decides which reason
+	// leads. The comment at its own definition says the same thing the right
+	// way round — "in the message rather than in what is raised" — and was
+	// right while this one was wrong (A84).
 	//
 	// Only a served apikey Agent has a policy, and out.judgePolicy is set only
 	// where §3.2's name-and-label rule and the appliedDigest comparison both
@@ -626,7 +695,7 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 		claims.policyUnattached = true
 		// judged is true by construction: out.judgePolicy is set only where
 		// §5's three guards passed.
-		msg := policyBrokenMessage(clause, why, routeOK, true)
+		msg := policyBrokenMessage(clause, why, route, true)
 		raiseIncomplete(conds, ReasonAuthPolicyNotAttached, msg)
 		appendGovernance(conds, ReasonAuthPolicyNotAttached, msg)
 		withholdInOrder(out, ReasonAuthPolicyNotAttached, msg)
@@ -664,7 +733,9 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 				why = "the Gateway has not reported on it at its current generation since"
 				note = heldNote
 			}
-			held := policyBrokenMessage(clauseUnknown, why, routeOK, judged)
+			// The held lead (clauseUnknown) does not read `route`; it is passed
+			// for the signature's sake and no test can fail on its value.
+			held := policyBrokenMessage(clauseUnknown, why, route, judged)
 			holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, note)
 			holdGovernance(agent, conds, held, note)
 		}
@@ -696,7 +767,11 @@ func (r *AgentReconciler) holdServedJudgement(agent *assaydv1alpha1.Agent,
 	if stored.policyUnattached {
 		// judged is FALSE: this pass's -auth step errored, so it read no
 		// policy and may assert nothing about one.
-		held := policyBrokenMessage(clauseUnknown, "this pass could not re-read it", false, false)
+		// The held lead (clauseUnknown) does not read the route argument, so
+		// the value passed is unobservable; it is the stored claim's own
+		// answer, so that it is at least not wrong.
+		held := policyBrokenMessage(clauseUnknown, "this pass could not re-read it",
+			servedRouteLead(reportUnknown, stored), false)
 		holdIncomplete(agent, conds, out, ReasonAuthPolicyNotAttached, held, note)
 		holdGovernance(agent, conds, held, note)
 	}
@@ -778,10 +853,21 @@ func holdIncomplete(agent *assaydv1alpha1.Agent, conds *conditionSet, out *gatew
 //     pass, and this pass observed nothing. carry keeps the generation that
 //     did. Case 19 (k)'s fourth half asserts it, because without that
 //     assertion deleting this branch leaves the suite green (A81).
+//
+// The whole-restore runs ONLY when this pass has not already asserted a reason
+// §5 says keeps GovernanceSkipped — ForeignTrafficPolicy or GatewayAuthPolicy.
+// Carrying unconditionally overwrote the one reportForeign or
+// reportAboveServed wrote earlier on the same pass, so after a foreign
+// takeover of the -auth name PolicyApplyIncomplete and Ready named the foreign
+// policy while GovernanceSkipped — the condition the held message sends its
+// reader to — read AuthPolicyNotAttached and never named it: rule 8 on the
+// tier condition (§8.1 item 9). appendGovernance keeps that reason and appends
+// the claim, as it does for a fresh raise.
 func holdGovernance(agent *assaydv1alpha1.Agent, conds *conditionSet, fallback, note string) {
 	msg := heldMessage(fallback, note)
 	c := meta.FindStatusCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGovernanceSkipped))
-	if c != nil && c.Status == metav1.ConditionTrue && c.Reason == ReasonAuthPolicyNotAttached {
+	if c != nil && c.Status == metav1.ConditionTrue && c.Reason == ReasonAuthPolicyNotAttached &&
+		!governanceKeptAbove(conds) {
 		// Whole means its times, not its message: see holdIncomplete.
 		held := *c
 		held.Message = msg
@@ -799,14 +885,24 @@ func holdGovernance(agent *assaydv1alpha1.Agent, conds *conditionSet, fallback, 
 // GatewayAuthPolicy or §3.2's ForeignTrafficPolicy from the condition that
 // records the tier.
 func appendGovernance(conds *conditionSet, reason, msg string) {
-	if c, ok := conds.get(assaydv1alpha1.CondGovernanceSkipped); ok &&
-		c.Status == metav1.ConditionTrue &&
-		(c.Reason == ReasonForeignTrafficPolicy || c.Reason == ReasonGatewayAuthPolicy) {
+	if governanceKeptAbove(conds) {
+		c, _ := conds.get(assaydv1alpha1.CondGovernanceSkipped)
 		conds.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, c.Reason,
 			c.Message+" | "+reason+": "+msg)
 		return
 	}
 	conds.set(assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, reason, msg)
+}
+
+// governanceKeptAbove says whether this pass has already asserted
+// GovernanceSkipped=True with a reason §5 says keeps the condition:
+// ForeignTrafficPolicy or GatewayAuthPolicy. appendGovernance and
+// holdGovernance both ask it, so a raised claim and a held one compose the same
+// way.
+func governanceKeptAbove(conds *conditionSet) bool {
+	c, ok := conds.get(assaydv1alpha1.CondGovernanceSkipped)
+	return ok && c.Status == metav1.ConditionTrue &&
+		(c.Reason == ReasonForeignTrafficPolicy || c.Reason == ReasonGatewayAuthPolicy)
 }
 
 // noteGovernance appends a note to GovernanceSkipped, keeping its status and

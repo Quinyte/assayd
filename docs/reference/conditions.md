@@ -384,7 +384,7 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:1160` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
-- `internal/controller/authserved.go:809` in `appendGovernance()` — from the local `reason`, which folds to this one reason
+- `internal/controller/authserved.go:894` in `appendGovernance()` — from the local `reason`, which folds to this one reason
 - `internal/controller/authtxn.go:605` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
 - `internal/controller/authtxn.go:607` in `raiseIncomplete()` — from the local `reason`, one of 8 reasons it folds to
 - `internal/controller/agent_controller.go:1158` in `withholdReady()` — from `w.reason`, one of the 12 reasons that field can hold
@@ -397,7 +397,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
-**Code and design disagree:** The REASON still names non-attachment for a clause where the Gateway says the opposite, and only the message says otherwise — as does the `status.auth.policyUnattached` field name. And a policy carrying the synthetic ancestor beside a real one reporting `Attached=True` still takes the non-attachment lead, which design 03 records as owed. And on a route read UNKNOWN with no route claim standing, the hedged lead says "PolicyApplyIncomplete names the route's own reading first" while being that condition's whole message, which carries no route reading — permanently so on a cluster whose agentgateway controller is renamed. Design 03 records it as owed (§8.1 item 11, A84).
+**Code and design disagree:** The REASON still names non-attachment for a clause where the Gateway says the opposite, and only the message says otherwise — as does the `status.auth.policyUnattached` field name. And a policy carrying the synthetic ancestor beside a real one reporting `Attached=True` still takes the non-attachment lead, which design 03 records as owed.
 
 **Note:** Nothing is withdrawn, deleted or rewritten: this is the fail-open half, ANNOUNCED AND NOT CLOSED. Since design 03 A83 the MESSAGE says which of the four answers the Gateway gave, and the partly-valid one — the only shape a cluster measurement on agentgateway 1.5.0 has reached with a byte-unchanged policy, where the route was still answering `401` — no longer claims the policy is unattached or that a credential may not be required. It says instead that the judgement reads the Gateway's report, issues no request, and so did not check. The REASON does not branch: one string covers all four answers.
 

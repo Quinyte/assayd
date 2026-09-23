@@ -201,7 +201,7 @@ var rules = []rule{
 		// of design 03's status. Design 03 was consolidated on 2026-09-10 with
 		// no critique PASS, and two summaries said so in words that outlived
 		// the fact: its thirteenth critique passed its first slice, the human
-		// approved that slice on 2026-09-12 and amendment A84 on 2026-09-23.
+		// approved that slice on 2026-09-12 and amendments A84 and A85 on 2026-09-23.
 		// "Designs 02 and 03 are critique pending — not approved" sat in
 		// docs/architecture.md's Status line, and "no design 02 or 03 critique
 		// has returned PASS" in architecture.html's §18 note, until 2026-09-23.
@@ -214,7 +214,7 @@ var rules = []rule{
 		name:    "design-03-never-passed",
 		banned:  regexp.MustCompile(`(?i)designs? 02 and 03 (are|is|were|remain) (critique pending|not approved)|no (design )?02 or 03 critique has (ever )?returned pass`),
 		allowed: regexp.MustCompile(`(?i)withdrawn|retracted`),
-		why:     "design 03's thirteenth critique passed its first slice, which the human approved on 2026-09-12, and A84 was approved on 2026-09-23; only design 02 is wholly unapproved (design 03's Status line, ADR-0034 Amendment 4)",
+		why:     "design 03's thirteenth critique passed its first slice, which the human approved on 2026-09-12, and A84 and A85 were approved on 2026-09-23; only design 02 is wholly unapproved (design 03's Status line, ADR-0034 Amendment 4)",
 	},
 	{
 		// A REGRESSION PIN for one historical sentence. architecture.md §20 and
@@ -229,7 +229,7 @@ var rules = []rule{
 		// "withdrawn" let the restored sentence pass there — measured.
 		name:   "already-approved-design",
 		banned: regexp.MustCompile(`(?i)already[- ]approved`),
-		why:    "no design is approved whole; the human approved only design 03's first slice and A84, and design 16's first slice (docs/designs/README.md, ADR-0030 Amendment 1)",
+		why:    "no design is approved whole; the human approved only design 03's first slice, A84 and A85, and design 16's first slice (docs/designs/README.md, ADR-0030 Amendment 1)",
 	},
 	{
 		name:    "superseded-research-note",
