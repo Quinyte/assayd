@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -571,6 +572,100 @@ func TestARuleMissingFromItsOwnNodeIsRefused(t *testing.T) {
 	if err := verifyEveryRuleIsPublished(cut, src); err == nil {
 		t.Errorf("a page with %s removed entirely passed the gate — its rules are byte-identical to "+
 			"another node's, which is exactly how the original omission hid", twin)
+	}
+}
+
+// The census check must be scoped and unique, because taking the first match
+// over the whole page failed in BOTH directions.
+//
+// A decoy carrying the true numbers, placed before the real sentence, was
+// validated while the sentence a reader gets went unchecked — a silent false
+// pass. And a CEL message containing the census pattern renders in the field
+// tables, which sit EARLIER in the page than the rule section, so it matched
+// first and a correct page was refused under a cause that was never true —
+// rule 8, in the gate built to catch rule-8 defects.
+func TestTheCensusIsReadFromTheRuleSectionAndOnlyOnce(t *testing.T) {
+	src := filepath.Join(repoRoot, CRDSource)
+	rules, err := celRules(src)
+	if err != nil {
+		t.Fatalf("read the CRD: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(repoRoot, "docs", "reference", "crd-agent.md"))
+	if err != nil {
+		t.Fatalf("read the committed page: %v — run `make reference`", err)
+	}
+	page := string(b)
+	if err := verifyCensus(page, rules); err != nil {
+		t.Fatalf("the committed page's census does not check out: %v", err)
+	}
+
+	truth := fmt.Sprintf("All %d `x-kubernetes-validations` rules in the CRD, on all %d schema nodes",
+		len(rules), countNodes(rules))
+	lie := fmt.Sprintf("All %d `x-kubernetes-validations` rules in the CRD, on all %d schema nodes",
+		len(rules)+7, countNodes(rules)+3)
+
+	// A decoy INSIDE the section must be refused rather than validated in place
+	// of the real sentence.
+	decoyed := strings.Replace(page, celSectionHeading, celSectionHeading+"\n\n"+truth, 1)
+	decoyed = strings.Replace(decoyed, truth+" that carry any.", lie+" that carry any.", 1)
+	if err := verifyCensus(decoyed, rules); err == nil {
+		t.Error("a page carrying a decoy census before a lying one passed; the gate is checking " +
+			"whichever sentence comes first rather than the one a reader gets")
+	}
+
+	// A CEL MESSAGE containing the census pattern must not be mistaken for the
+	// census — not in the field tables, and not in the rule section, which
+	// renders every message. This is the case that would otherwise refuse a
+	// correct page and cost a contributor an afternoon.
+	before := strings.Index(page, celSectionHeading)
+	if before < 0 {
+		t.Fatal("the committed page has no rule section")
+	}
+	inTables := page[:before] + "> " + lie + " that carry any.\n\n" + page[before:]
+	if err := verifyCensus(inTables, rules); err != nil {
+		t.Errorf("a page whose FIELD TABLES contain the census pattern was refused, though its own "+
+			"census is correct: %v", err)
+	}
+	firstNode := strings.Index(page, "\n### Rules on ")
+	if firstNode < 0 {
+		t.Fatal("the committed page's rule section has no per-node heading")
+	}
+	// INSIDE the first node's body, which is where a rendered message actually
+	// sits. Putting it above the heading would be putting it in the preamble,
+	// where no message ever appears.
+	bodyStart := firstNode + 1 + strings.Index(page[firstNode+1:], "\n")
+	inRuleBody := page[:bodyStart] + "\n\n> " + lie + " that carry any.\n" + page[bodyStart:]
+	if err := verifyCensus(inRuleBody, rules); err != nil {
+		t.Errorf("a page whose RULE SECTION quotes a message containing the census pattern was "+
+			"refused, though its own census is correct: %v", err)
+	}
+}
+
+// The message transformation must round-trip, not merely not shrink.
+//
+// A length bound was the first attempt at this and it only covered shortening:
+// reversing the rendered bytes preserves length and corrupts every message,
+// and widening a character grows it. escapeMD is invertible, so the exact
+// property costs the same few lines.
+func TestTheMessageTransformationRoundTrips(t *testing.T) {
+	for _, msg := range []string{
+		"plain", "a > b", "a < b", "a & b", "&lt; literal", "&amp;", "<registry>[:port]",
+		"line\nbreak", "em — dash", "", "&&&", "<<>>", "a &lt; b &gt; c",
+	} {
+		if got, want := unescapeMD(renderedMessage(msg)), strings.ReplaceAll(msg, "\n", " "); got != want {
+			t.Errorf("renderedMessage(%q) does not round-trip: un-escaped to %q, want %q", msg, got, want)
+		}
+	}
+	// And the mangles a length bound let through must now fail it.
+	for name, mangle := range map[string]func(string) string{
+		"reversed":  func(s string) string { r := []byte(s); slices.Reverse(r); return string(r) },
+		"widened":   func(s string) string { return strings.ReplaceAll(s, "—", "-----") },
+		"truncated": func(s string) string { return s[:min(len(s), 12)] },
+	} {
+		const msg = "an Agent name must be at most 52 characters — the operator appends a suffix"
+		if mangled := mangle(renderedMessage(msg)); unescapeMD(mangled) == strings.ReplaceAll(msg, "\n", " ") {
+			t.Errorf("a %s message still round-trips, so the gate would publish it", name)
+		}
 	}
 }
 

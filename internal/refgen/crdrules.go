@@ -281,15 +281,20 @@ func verifyEveryRuleIsPublished(page, crdPath string) error {
 		// both sides and passes. A review truncated every message to twelve
 		// characters and the gate stayed green.
 		//
-		// This is the invariant that kills that class without re-opening the
-		// false failure: escaping can only GROW a string or leave it the same
-		// length. `\n` → " " is length-preserving and still passes; truncation,
-		// and most other mangling, is not.
-		if n := len(renderedMessage(r.Message)); n < len(r.Message) {
-			return fmt.Errorf("the renderer's message transformation SHORTENED the message for %q "+
-				"on %s, from %d bytes to %d. Escaping can only grow a string; anything shorter is "+
-				"dropping text a user reads when the API server refuses their write",
-				r.Rule, r.Node, len(r.Message), n)
+		// The check is a ROUND TRIP, not a length bound. A length bound was the
+		// first attempt and it only killed the shortening subclass: reversing
+		// the rendered bytes preserves length, and widening an em dash to five
+		// hyphens grows it, and both publish a corrupted message under a green
+		// gate. escapeMD is invertible, so the exact property is available for
+		// the same few lines — and it still lets `\n` → " " through, which is
+		// what the false FAILURE this replaced was about.
+		if got, want := unescapeMD(renderedMessage(r.Message)),
+			strings.ReplaceAll(r.Message, "\n", " "); got != want {
+			return fmt.Errorf("the renderer's message transformation does not round-trip for the "+
+				"rule %q on %s. Un-escaping what would be published gives:\n    %q\nand the CRD "+
+				"says:\n    %q\nThe published message is what a user reads when the API server "+
+				"refuses their write, so it must be the CRD's message and nothing else",
+				r.Rule, r.Node, got, want)
 		}
 		body, ok := sections[r.Node]
 		if !ok {
@@ -327,9 +332,37 @@ func verifyEveryRuleIsPublished(page, crdPath string) error {
 	return nil
 }
 
+// celSectionHeading opens the complete rule list, and bounds where the census
+// sentence is looked for.
+const celSectionHeading = "## Every validation rule"
+
 // censusLine matches the sentence the page opens its rule section with.
 var censusLine = regexp.MustCompile(
 	"All (\\d+) `x-kubernetes-validations` rules in the CRD, on all (\\d+) schema nodes")
+
+// censusScope is the rule section's PREAMBLE: from its heading to the first
+// per-node heading under it, or to the next section if it has none.
+//
+// The preamble and not the whole section, because the section renders every CEL
+// MESSAGE, and a message is author-controlled text out of the CRD. Scoping to
+// the section still counted a message containing the census pattern as a second
+// census, so a contributor who wrote one would have had `make reference` refuse
+// a correct page — which is the failure this scoping exists to prevent, not to
+// relocate. Nothing author-controlled reaches the preamble.
+func censusScope(page string) (string, bool) {
+	i := strings.Index(page, celSectionHeading)
+	if i < 0 {
+		return "", false
+	}
+	rest := page[i+len(celSectionHeading):]
+	end := len(rest)
+	for _, mark := range []string{"\n### ", "\n## ", "\n# "} {
+		if j := strings.Index(rest, mark); j >= 0 && j < end {
+			end = j
+		}
+	}
+	return rest[:end], true
+}
 
 // verifyCensus holds the page's own count of itself to the CRD.
 //
@@ -344,12 +377,33 @@ var censusLine = regexp.MustCompile(
 // a sentence built here, so that the check does not depend on the renderer's
 // wording being reproduced correctly in two places.
 func verifyCensus(page string, rules []CELRule) error {
-	m := censusLine.FindStringSubmatch(page)
-	if m == nil {
+	// SCOPED to the rule section, and then required to be UNIQUE within it.
+	// Taking the first match over the whole page failed both ways. A decoy
+	// sentence carrying the true numbers, placed before the real one, was
+	// validated while the sentence a reader gets went unchecked. And a CEL
+	// message that happened to contain this pattern would match FIRST, because
+	// the field tables render messages earlier in the page than this section —
+	// so a correct page was refused, with the gate naming a cause that was
+	// never true. That is rule 8 committed by the gate that exists to catch it.
+	scope, ok := censusScope(page)
+	if !ok {
+		return fmt.Errorf("the CRD reference would have been written without its %q section, which "+
+			"is where the complete list of validation rules lives", celSectionHeading)
+	}
+	all := censusLine.FindAllStringSubmatch(scope, -1)
+	switch len(all) {
+	case 1:
+	case 0:
 		return fmt.Errorf("the CRD reference would have been written without the sentence that " +
 			"states how many validation rules the CRD has, which is the claim the rest of the " +
 			"section is the evidence for")
+	default:
+		return fmt.Errorf("the CRD reference would have been written with %d sentences matching the "+
+			"census pattern inside %q, and a gate that took the first would be checking whichever "+
+			"came first rather than the one a reader gets. Emit one, or narrow censusLine",
+			len(all), celSectionHeading)
 	}
+	m := all[0]
 	gotRules, err := strconv.Atoi(m[1])
 	if err != nil {
 		return fmt.Errorf("the rule count in the page's own census is not a number: %q", m[1])
@@ -416,6 +470,19 @@ func ruleSections(page string) map[string]string {
 // exists to report, committed by the generator itself.
 func renderedMessage(msg string) string {
 	return strings.ReplaceAll(escapeMD(msg), "\n", " ")
+}
+
+// unescapeMD is escapeMD's inverse, and exists so that the gate can assert the
+// exact round trip rather than a one-sided bound on length.
+//
+// The substitutions are undone in the REVERSE order they were applied, which is
+// what makes it an inverse rather than an approximation: escapeMD rewrites `&`
+// first, so a message containing the literal text `&lt;` becomes `&amp;lt;`,
+// and undoing `&amp;` last turns that back into `&lt;` rather than into `<`.
+func unescapeMD(s string) string {
+	s = strings.ReplaceAll(s, "&gt;", ">")
+	s = strings.ReplaceAll(s, "&lt;", "<")
+	return strings.ReplaceAll(s, "&amp;", "&")
 }
 
 // escapeMD keeps a CRD message from being read as Markdown or HTML. The
