@@ -67,7 +67,10 @@ jobs:
       # and the step does exactly what it did before.
       #
       # The values arrive through env, not `${{ }}` in the script, so the
-      # free-text input is data to the shell and never script text.
+      # free-text input is data to the shell, never shell text. The same holds
+      # for the version in the chart job. It is still text to `yq` there,
+      # because the chart step splices it into a yq expression; a tag whose
+      # name carries a `"` can therefore still reach that expression.
       - id: version
         env:
           EVENT: ${{ github.event_name }}
@@ -76,7 +79,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${EVENT}" = "workflow_dispatch" ] && [ "${REF}" != "refs/tags/${TAG}" ]; then
-            echo "::error::refusing to publish '${TAG}' from ${REF}: a dispatch builds the ref it was started from, so it must be started from refs/tags/${TAG} (choose the tag, not a branch, in 'Use workflow from'), and the tag input must be the tag's exact name"
+            # One line: a newline in the input would end the ::error:: early.
+            shown="$(printf '%s' "${TAG}" | tr '\r\n' '  ')"
+            echo "::error::refusing to publish '${shown}' from ${REF}: a dispatch builds the ref it was started from, so it must be started from refs/tags/${shown} (choose the tag, not a branch, in 'Use workflow from'), and the tag input must be the tag's exact name"
             exit 1
           fi
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
@@ -209,18 +214,25 @@ jobs:
       # a tag that could later point elsewhere. This is the same rule assayd
       # enforces on agent images, applied to assayd.
       - name: pin the chart to the published digest
+        # Through env, like the version step: the version is the tag's name,
+        # and a tag name may carry quotes and `$(...)`.
+        env:
+          VERSION: ${{ needs.image.outputs.version }}
+          DIGEST: ${{ needs.image.outputs.digest }}
         run: |
           set -euo pipefail
           # yq ships in the ubuntu-latest image. The pinned installer that used
           # to live here fetched yq_linux_arm64 — correct only for the DGX, and
           # an unrunnable binary anywhere else.
-          v="${{ needs.image.outputs.version }}"
-          d="${{ needs.image.outputs.digest }}"
+          v="${VERSION}"
+          d="${DIGEST}"
           yq -i ".version = \"${v}\" | .appVersion = \"${v}\"" charts/assayd/Chart.yaml
           yq -i ".operator.image.tag = \"${v}\" | .operator.image.digest = \"${d}\"" charts/assayd/values.yaml
           grep -E "digest|tag" charts/assayd/values.yaml | head -4
 
       - name: package and push
+        env:
+          VERSION: ${{ needs.image.outputs.version }}
         run: |
           set -euo pipefail
           # helm ships in the ubuntu-latest image. An arm64 fallback lived here
@@ -232,7 +244,7 @@ jobs:
           # 2>&1 matters: helm writes "Pushed:" and "Digest:" to STDERR, so a
           # plain pipe to tee captures an empty file and the digest extraction
           # below finds nothing — after the chart has already been pushed.
-          helm push "/tmp/assayd-${{ needs.image.outputs.version }}.tgz" \
+          helm push "/tmp/assayd-${VERSION}.tgz" \
             "oci://${REGISTRY}/${CHART_REPO}" 2>&1 | tee /tmp/push.log
           # grep -m1, not `grep | head -1`: head closes the pipe, grep takes
           # SIGPIPE, and pipefail turns a successful push into a failed step.
