@@ -613,10 +613,10 @@ func (r *AgentReconciler) judgeServed(agent *assaydv1alpha1.Agent, status *assay
 	// to nothing", which states a precondition no code here has ever had, and
 	// which §5 and §3.3.3 stated too until design 03 A84 corrected all three.
 	// routeOK above selects the LEAD'S WORDING inside policyBrokenMessage and
-	// gates nothing; when the route half raised too, incompleteOrder decides
-	// which reason leads. The comment at routeOK's own definition says the same
-	// thing the right way round — "in the message rather than in what is
-	// raised" — and was right while this one was wrong (A84).
+	// gates nothing; when the route half raised or held too, incompleteOrder
+	// decides which reason leads. The comment at routeOK's own definition says
+	// the same thing the right way round — "in the message rather than in what
+	// is raised" — and was right while this one was wrong (A84).
 	//
 	// Only a served apikey Agent has a policy, and out.judgePolicy is set only
 	// where §3.2's name-and-label rule and the appliedDigest comparison both
