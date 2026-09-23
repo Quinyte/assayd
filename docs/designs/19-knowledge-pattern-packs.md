@@ -1,6 +1,6 @@
 # Design 19: Knowledge pattern packs (`sop-decision-tree` first)
 
-- **Status**: **approved** — critique PASS at r2 (reviews/19-review.md) · ADR-0023
+- **Status**: **HYPOTHESIS (ADR-0030)** · **not approved by the human** — critique PASS at r2 (reviews/19-review.md) · ADR-0023 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P2–P3 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0008 (packs/sockets), 0005 · interfaces: 12 (patterns instantiate ontology/v1), 08 (`kg init --pattern` wizard), 14 (starter labels, resolve defaults), 15 (auto-probes), 09-precedent (OCI-artifact delivery pre-design-18)
 

@@ -1,6 +1,6 @@
 # Design 12: The ontology/v1 specification
 
-- **Status**: **approved** — critique PASS at r2 (reviews/12-review.md) · ADR-0023
+- **Status**: **HYPOTHESIS (ADR-0030)** · **not approved by the human** — critique PASS at r2 (reviews/12-review.md) · ADR-0023 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P2 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0005, 0017 (kgp contract carries the document) · interfaces: 01 (served by `kg.schema`), 13 (drives Graphiti extraction), 14 (drives pipeline gates), 15 (probes), 16 (golden-set derivation), 19 (patterns instantiate it)
 - **Research**: `docs/research/connectors-2026-08.md` §graphiti — custom entity/edge types in graphiti-core are **Pydantic models** passed to `add_episode`; the ontology→extraction mapping is therefore mechanical.

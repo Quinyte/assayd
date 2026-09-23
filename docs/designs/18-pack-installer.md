@@ -1,6 +1,6 @@
 # Design 18: Pack format + installer (`pack/v1`)
 
-- **Status**: **approved** — critique PASS at r2 (reviews/18-review.md) · ADR-0024
+- **Status**: **HYPOTHESIS (ADR-0030)** · **not approved by the human** — critique PASS at r2 (reviews/18-review.md) · ADR-0024 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P3 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0008 (packs are the fast plane's delivery vehicle) · interfaces: 07 (contracts ledger), 08 (`assayd pack` verbs, wizard consumption), 09 (template packs — the recorded constraint: formalize around the existing artifact), 19 (knowledge patterns), 16 (runner images), 11 (reader/catalog types), 10 (dashboards/signals)
 - **Research**: `docs/research/oci-packs-2026-08.md` — OCI 1.1 referrers API finalized (2024; Harbor/Quay/ECR support landed 2024-25); cosign v3 defaults to referrers + the new bundle format; `oras discover` audits the attestation chain.

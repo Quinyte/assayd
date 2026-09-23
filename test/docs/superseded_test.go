@@ -194,7 +194,7 @@ var rules = []rule{
 		headRescue: regexp.MustCompile(`(?i)is withdrawn by ADR-0030`),
 		banned:     regexp.MustCompile(`(?i)27/27|design phase is complete|all 27 designs|every component[^.]{0,80}approved`),
 		allowed:    regexp.MustCompile(`(?i)withdraw|retract|w(as|ere) false|are now false|is false|is not true|not approved|first slice|no longer|never meant`),
-		why:        "no central design is approved whole: design 02 is not approved by its own header, and 03 and 16 approve only their first slice (ADR-0030; docs/designs/README.md arbitrates)",
+		why:        "no central design is approved whole: design 02 is not approved by its own header, and 03 and 16 approve only their first slice (ADR-0030; a design's own Status line is the source of truth, and docs/designs/README.md summarises it — ADR-0030 Amendment 1)",
 	},
 	{
 		name:    "superseded-research-note",

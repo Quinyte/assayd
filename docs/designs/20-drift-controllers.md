@@ -1,6 +1,6 @@
 # Design 20: Drift controllers (detect → condition → remediate → verify)
 
-- **Status**: **approved** · **A7 (2026-09-04) uncritiqued** — the fallback witness is withdrawn; `llmFallbackActive` cannot go true until design 04 A5 names its producers — critique PASS at r2 (reviews/20-review.md) · ADR-0025
+- **Status**: **not approved by the human** · **A7 (2026-09-04) uncritiqued** — the fallback witness is withdrawn; `llmFallbackActive` cannot go true until design 04 A5 names its producers — critique PASS at r2 (reviews/20-review.md) · ADR-0025 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P4 · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0007 (drift-as-reconciliation) · interfaces: 15 (KG detection; this design routes remediation), 10 (signals), 16 (nightly trends, last-eval-passing revisions), 04 (receipts/model ids), 02 (rollout machinery actions), 14 (rebuild trigger)
 

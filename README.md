@@ -61,7 +61,7 @@ make e2e     # k3d: a real cluster, a real gateway, real agents
 | `AGENTS.md` | How to work in this repo: the rules, the commands, what each test layer can honestly claim |
 | `CONTRIBUTING.md` · `GOVERNANCE.md` · `SECURITY.md` | Contributing (DCO), how decisions get made, how to report a vulnerability |
 
-**"Approved" on a design does not mean settled or buildable.** Check the Status line of the document you are about to rely on; `docs/designs/README.md` arbitrates.
+**"Approved" on a design does not mean settled or buildable.** Check the Status line of the document you are about to rely on: a design's own Status line is the source of truth, and `docs/designs/README.md` summarises it (ADR-0030 Amendment 1). The human has approved only design 03's first slice and its amendment A84, and design 16's first slice; every other design is not approved.
 
 ## Licence
 

@@ -1,6 +1,6 @@
 # Design 22: Loop governance (hops, cycles, approvals, kill switch)
 
-- **Status**: **approved** — critique PASS at r2 (reviews/22-review.md) · ADR-0025
+- **Status**: **not approved by the human** — critique PASS at r2 (reviews/22-review.md) · ADR-0025 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P4 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0020 (reserved mappings now filled), 0021 (lineage in receipts) · interfaces: 03 (emits everything here), 06 (per-hop re-exchange pairs with lineage), 21 (workflows in the lineage), 08 (`assayd approve`), architecture §14 (the governance ring, made mechanical)
 - **Research**: agentgateway OSS: in-proxy **CEL** over request context (compiled at config load), Envoy-compatible ext-authz for external decisions — `docs/research/authz-2026-08.md`

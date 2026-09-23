@@ -1,6 +1,6 @@
 # Design 26: Tenant CR — the multi-tenancy fan-out (enterprise)
 
-- **Status**: **approved** — critique PASS (reviews/26-review.md) · ADR-0026, **Amendment 1 (2026-09-04)** · amendments A1 (2026-09-03) and A2 (2026-09-04) below, neither yet critiqued
+- **Status**: **HYPOTHESIS (ADR-0030)** · **not approved by the human** — critique PASS (reviews/26-review.md) · ADR-0026, **Amendment 1 (2026-09-04)** · amendments A1 (2026-09-03) and A2 (2026-09-04) below, neither yet critiqued · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: enterprise · **Size**: L · **Date**: 2026-08-20
 - **ADRs**: 0013 (layered tenancy, mostly inherited), 0015 (enterprise module) · interfaces: the seams every prior design named — 04 D4 (per-tenant RECEIPTS streams), 11 (EVENTS), 22 (APPROVALS), 05 (DIRECTORY), 06 (IdP orgs), 21 r2 f4 (runtime tenancy), 24 (per-tenant FGA stores), 18 (per-tenant pack allowlists), 03 (gateway partitions)
 - **Research**: `docs/research/landscape-2026-08.md` §tenancy (vCluster dominant for hard isolation; Capsule for soft)

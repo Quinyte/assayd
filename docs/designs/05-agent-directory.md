@@ -1,6 +1,6 @@
 # Design 05: Agent directory (OASF on JetStream KV, OCI exchange)
 
-- **Status**: **approved** — critique PASS at r2 (reviews/05-review.md) · ADR-0022
+- **Status**: **not approved by the human** — critique PASS at r2 (reviews/05-review.md) · ADR-0022 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
 - **Phase**: P1 · **Size**: S · **Date**: 2026-08-20
 - **ADRs**: 0003 (OASF), 0013 (tenancy) · interfaces: 02 (writer), 08 (CLI reads), 09 (templates read tools), exposure (§05 arch)
 - **Research**: `docs/research/oasf-ads-2026-08.md` (ADS/OASF claims, cited; **OASF schema 1.1.0 verified live**) — we adopt the *format and exchange semantics* without running ADS.
