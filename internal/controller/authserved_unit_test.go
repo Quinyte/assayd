@@ -242,8 +242,9 @@ func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
 			[]string{"THIS PASS DID NOT READ IT AS ACCEPTED", "but not the whole of it"}},
 		{"unattached beside a route reason that names the route", clauseUnattached, routeNamed, true,
 			[]string{"does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED",
-				"names the route's own reading first"},
-			[]string{"route is accepted and SERVING", "reading at its current generation is unknown"}},
+				"PolicyApplyIncomplete also carries the route's own reading"},
+			[]string{"route is accepted and SERVING", "reading at its current generation is unknown",
+				"names the route's own reading first"}},
 		// §8.1 item 11: on an UNKNOWN reading with no route claim standing,
 		// nothing names a route reading, so the hedge must not send the reader
 		// to one. It keeps "THIS PASS DID NOT READ IT AS ACCEPTED".
@@ -264,8 +265,9 @@ func TestThePolicyMessageNamesWhatTheGatewaySaid(t *testing.T) {
 		// refused, with nothing able to fail on it (rule 5).
 		{"rejected beside a route reason that names the route", clauseRejected, routeNamed, true,
 			[]string{"REJECTED", "THIS PASS DID NOT READ IT AS ACCEPTED",
-				"names the route's own reading first"},
-			[]string{"route is accepted and SERVING", "reading at its current generation is unknown"}},
+				"PolicyApplyIncomplete also carries the route's own reading"},
+			[]string{"route is accepted and SERVING", "reading at its current generation is unknown",
+				"names the route's own reading first"}},
 		{"rejected beside a route this pass read as unknown", clauseRejected, routeUnread, true,
 			[]string{"REJECTED", "THIS PASS DID NOT READ IT AS ACCEPTED",
 				"reading at its current generation is unknown", "announced, not closed"},

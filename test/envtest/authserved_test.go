@@ -770,8 +770,54 @@ func TestTheHedgeSaysWhatWasReadOfTheRoute(t *testing.T) {
 				"PolicyApplyIncomplete": c, "GovernanceSkipped": g, "Ready": ready} {
 				mustContain(t, cond, what, tc.says, "THIS PASS DID NOT READ IT AS ACCEPTED",
 					"the route's reading at its current generation is unknown")
+				// Both wordings of the routeNamed sentence: A81's "… first", and
+				// item 12's "also carries …", neither of which is true here.
 				mustNotContain(t, cond, what, "names the route's own reading first",
+					"also carries the route's own reading",
 					"route is accepted and SERVING", "ServingRouteNotAccepted")
+			}
+		})
+	}
+}
+
+// The routeNamed hedge is true WHATEVER leads the pass — design 03 §8.1
+// item 12. It used to say "PolicyApplyIncomplete names the route's own reading
+// first", which is false where ForeignTrafficPolicy or GatewayAuthPolicy —
+// both above ServingRouteNotAccepted in incompleteOrder — or an unranked
+// reason leads: the route's reading is then in the condition but not first.
+// The state is the listener-rename incident (route refused, policy attached to
+// nothing) on a cluster with a Gateway-level policy, or a foreign one.
+//
+// Mutation, one edit: put "first" back into routeHedge's routeNamed sentence.
+// It compiles, and both subtests must fail.
+func TestTheRouteHedgeHoldsWhateverLeads(t *testing.T) {
+	for _, tc := range []struct {
+		name, lead string
+		plant      func(*testing.T, *assaydv1alpha1.Agent)
+	}{
+		{"a widening Gateway-level policy", "GatewayAuthPolicy", func(t *testing.T, a *assaydv1alpha1.Agent) {
+			gatewayPolicy(t, "gw-"+a.Name, map[string]any{
+				"targetRefs": onGateway(suiteGatewayName, ""), "traffic": apiKeyTraffic(t, a)})
+		}},
+		{"a foreign traffic policy", "ForeignTrafficPolicy", func(t *testing.T, a *assaydv1alpha1.Agent) {
+			plantForeign(t, a)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, r, _ := servedAPIKeyAgent(t, "a85lead"+strings.ToLower(tc.lead[:7]))
+			refuseRoute(t, a.Namespace, a.Name)
+			tc.plant(t, a)
+			unattachPolicy(t, a)
+			reconcileOnce(t, r, a)
+
+			c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, tc.lead)
+			mustContain(t, c, "PolicyApplyIncomplete", "ServingRouteNotAccepted", "AuthPolicyNotAttached")
+			g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, tc.lead)
+			for what, cond := range map[string]*metav1.Condition{"PolicyApplyIncomplete": c, "GovernanceSkipped": g} {
+				mustContain(t, cond, what, "does not attach", "THIS PASS DID NOT READ IT AS ACCEPTED",
+					"PolicyApplyIncomplete also carries the route's own reading, under ServingRouteNotAccepted")
+				mustNotContain(t, cond, what, "names the route's own reading first",
+					"reading at its current generation is unknown", "route is accepted and SERVING")
 			}
 		})
 	}

@@ -439,14 +439,12 @@ const announcedNotClosed = ". The hole is announced, not closed"
 // A81's routeOK split "an explicit good tuple on this pass" from everything
 // else, and everything else took one hedge that sent the reader to
 // PolicyApplyIncomplete for "the route's own reading". That is true where a
-// route reason stands and nothing outranks it: a refusal read on this pass, or
-// one held from stored status, puts ServingRouteNotAccepted at the head of
-// PolicyApplyIncomplete. It is NOT true where ForeignTrafficPolicy or
-// GatewayAuthPolicy — both above it in incompleteOrder — or an unranked reason
-// such as a deadline or a NACK already leads on the pass: the route's reading
-// is then in the message but not first, and the routeNamed sentence still says
-// "first". That cell is recorded as owed (design 03 §8.1 item 12), not fixed
-// here. On an UNKNOWN reading with NO route claim standing it is false — nothing
+// route reason stands: a refusal read on this pass, or one held from stored
+// status, puts ServingRouteNotAccepted into PolicyApplyIncomplete — at its
+// head unless ForeignTrafficPolicy or GatewayAuthPolicy, both above it in
+// incompleteOrder, or an unranked reason such as a deadline or a NACK leads
+// the pass, which is why the hedge says "also carries" and not "first"
+// (design 03 §8.1 item 12). On an UNKNOWN reading with NO route claim standing it is false — nothing
 // raises or holds the route half, so the policy half's message IS
 // PolicyApplyIncomplete's whole message and names no route reading at all —
 // and on a cluster whose agentgateway controller is renamed, which routeReport
@@ -460,8 +458,8 @@ const (
 	routeServing routeLead = iota
 	// routeNamed is a route reason standing on this pass — a refusal read now,
 	// or one held from status.auth.routeRefused — so PolicyApplyIncomplete
-	// carries the route's own reading, and leads with it unless a reason
-	// incompleteOrder ranks higher, or an unranked one, stands (§8.1 item 12).
+	// carries the route's own reading — leading only when no reason
+	// incompleteOrder ranks higher, and no unranked one, stands (§8.1 item 12).
 	routeNamed
 	// routeUnread is an unknown reading at the route's current generation with
 	// no refusal standing: no condition on this Agent names a route reading.
@@ -487,9 +485,13 @@ func routeHedge(route routeLead) string {
 	hedge := "Whether the route is answering with no credential required depends on the route, " +
 		"and THIS PASS DID NOT READ IT AS ACCEPTED: "
 	if route == routeNamed {
-		return hedge + "PolicyApplyIncomplete names the route's own reading first, and if it says " +
-			"the route is refused then nothing is reaching this Agent at all and this half is the " +
-			"smaller of the two problems: "
+		// "also carries", not "names … first": a reason incompleteOrder ranks
+		// above ServingRouteNotAccepted, or an unranked one, may lead the pass,
+		// and the route's reading is then in the condition but not first
+		// (design 03 §8.1 item 12).
+		return hedge + "PolicyApplyIncomplete also carries the route's own reading, under " +
+			"ServingRouteNotAccepted, and if it says the route is refused then nothing is reaching " +
+			"this Agent at all and this half is the smaller of the two problems: "
 	}
 	return hedge + "the route's reading at its current generation is unknown — this pass found no " +
 		"status entry for the assayd Gateway from controllerName " + AgentgatewayControllerName +
