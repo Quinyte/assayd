@@ -1,0 +1,87 @@
+---
+title: What runs today
+description: Exactly what a helm install of assayd puts in a cluster, what the end-to-end harness adds around it, and what the architecture names that nothing installs.
+---
+
+import ClaimClass from "@assayd/web-shared/ClaimClass.astro";
+
+{/*
+  Every sentence below that says what the software renders, runs or refuses
+  carries one badge, in its own block (web/README.md, "One claim per block").
+  The inventory is pinned by TestADefaultInstallRunsOneOperatorAndNothingElse
+  (test/chart/whatruns_test.go), which was written for this page: the tests
+  that existed before it bound the pod count from above and the replica count
+  from below, and neither said "exactly this".
+*/}
+
+This page answers one question: after `helm install`, what is in your cluster?
+It is short on purpose. The architecture describes much more than ships, and the
+difference is the point of the page.
+
+Every claim below carries its evidence. A chart test renders the chart with
+`helm template` and reads what it produced; it does not start a pod. Where a
+sentence says something runs, the test named beside it is an end-to-end test
+on a real cluster.
+
+## What the chart installs
+
+At the default `prod` profile, the chart renders one workload: the Deployment
+`assayd-agent-operator`, at two replicas. That is two pods, and the only assayd
+code in the cluster. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
+
+The `local` profile renders the same Deployment at one replica. <ClaimClass claim="measured" test="TestLocalProfileRenders" />
+
+Admission is four `ValidatingAdmissionPolicy` objects written in CEL, each with
+its binding: `assayd-namespace-labels`, `assayd-gateway-routes`,
+`assayd-gateway-policies` and `assayd-api-keys`. No webhook is registered, and
+no Service is rendered to serve one. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
+
+The chart ships one CustomResourceDefinition, `agents.assayd.dev`, and it is
+byte-identical to the one the operator is generated against. <ClaimClass claim="measured" test="TestChartShipsTheGeneratedCRD" />
+
+Beside those, the chart renders a Namespace, a ServiceAccount, a ClusterRole
+and its binding, and, at `prod`, a PodDisruptionBudget. None of them runs
+anything.
+
+## What `gateway.enabled` changes
+
+Turning the gateway on adds two Roles and two RoleBindings and no workload: the
+same single Deployment, at the same two replicas, and still no Gateway object of
+any kind. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
+
+The chart refuses to render `gateway.enabled=true` without `gateway.servingUrl`,
+because the operator it installs publishes a new Agent's route only after an
+anonymous request to that address is refused, and will not start without it. <ClaimClass claim="measured" test="TestAnEnabledGatewayWithNoServingURLDoesNotRender" />
+
+## What the test harness adds, and assayd does not
+
+The chart ships no Gateway, no GatewayClass and no agentgateway: nothing it
+renders has an API group under `gateway.networking.k8s.io` or agentgateway's,
+and it vendors no subchart. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
+
+On k3d, `hack/e2e.sh` installs Gateway API v1.6.0 and agentgateway 1.5.0, creates
+the Gateway itself, and a request then reaches an agent through that Gateway's
+own Service on a route the operator wrote. The kind lane skips every gateway
+test and reports the path unverified. <ClaimClass claim="measured" test="TestAnAgentAnswersThroughTheGateway" />
+
+On a real cluster, the operator Deployment the chart installs is running the
+image the same run built, on every pod. This is an end-to-end test; it skips
+when no cluster is reachable. <ClaimClass claim="measured" test="TestTheOperatorUnderTestIsTheOneJustBuilt" />
+
+## What the architecture names and nothing installs
+
+SPIRE, Zitadel, NATS, Postgres and OpenObserve are core components in the
+architecture, and the chart deploys none of them; its own description says they
+arrive with the designs that bind them. <ClaimClass claim="not-built" note="no subchart, no template and no dependency declares any of them" />
+
+Setting `tier: plus` does not install Argo Workflows, Phoenix, OpenFGA or eval
+runners. It fails the render, and the error says they are not built. <ClaimClass claim="measured" test="TestUnimplementedTierIsRefusedNotIgnored" />
+
+## Where to go next
+
+- [Chart values](/reference/helm-values.html) — every key in `values.yaml` and
+  its default, generated from the chart.
+- [The Agent CRD](/reference/crd-agent.html) — every field of the one custom
+  resource the chart installs, generated from the CRD.
+- [Conditions and reasons](/reference/conditions.html) — every condition the
+  operator writes, generated from the code.

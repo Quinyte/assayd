@@ -12,3 +12,7 @@ web/**/node_modules/
 web/**/dist/
 web/**/.astro/
 web/.build.log
+# The generated reference, copied in by web/scripts/build.sh before the docs
+# build. docs/reference/ is the committed copy, held to the code by
+# `make verify`; a second committed copy here would be one nothing checks.
+web/docs/src/content/docs/reference/
