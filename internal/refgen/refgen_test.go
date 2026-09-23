@@ -104,38 +104,112 @@ func TestAFieldReasonIsNarrowedThroughItsProducer(t *testing.T) {
 }
 
 // The test-reference scan is what the "no test names this reason" list rests
-// on, and an over-eager matcher would empty that list and make the page claim
-// coverage it does not have. AuthLockPending and AuthLockUnverified share a
-// prefix, so a substring match would cross-credit them.
+// on, and an over-eager matcher would shrink that list and make the page claim
+// coverage it does not have.
+//
+// Several reasons CONTAIN another as a substring — `EnvSourceUnresolved`
+// contains `Unresolved` — so a matcher without word boundaries credits the
+// inner one everywhere the outer one is mentioned. The first version of this
+// test only counted referenced-versus-unreferenced, and the independent review
+// removed the boundaries and still got `ok`, with the headline count moving
+// 17 → 14 underneath it. So this now drives the matcher over a SYNTHETIC corpus
+// that names only the outer reasons, where the inner one being credited is
+// unambiguous.
 func TestTheTestReferenceScanMatchesOnWordBoundaries(t *testing.T) {
 	v := vocabulary(t)
-	refs, err := ScanTestReferences(repoRoot, v)
+
+	var inner, outer []string
+	seen := map[string]bool{}
+	for a := range v.ReasonsByName {
+		for b := range v.ReasonsByName {
+			if a != b && strings.Contains(b, a) && !seen[a] {
+				seen[a] = true
+				inner = append(inner, a)
+				outer = append(outer, b)
+			}
+		}
+	}
+	if len(inner) == 0 {
+		t.Fatal("no reason contains another as a substring, so this test proves nothing; if the " +
+			"vocabulary really has no such pair, delete it rather than leaving it passing vacuously")
+	}
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "test")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var corpus strings.Builder
+	corpus.WriteString("package fixture\n\n// Names only the OUTER reasons.\nvar _ = []string{\n")
+	for _, o := range outer {
+		corpus.WriteString("\t\"" + o + "\",\n")
+	}
+	corpus.WriteString("}\n")
+	if err := os.WriteFile(filepath.Join(dir, "fixture_test.go"), []byte(corpus.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	refs, err := ScanTestReferences(root, v)
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if len(refs) != len(v.ReasonsByName) {
-		t.Fatalf("scanned %d reasons, the operator can set %d", len(refs), len(v.ReasonsByName))
+	for i, in := range inner {
+		if n := len(refs[in].Files); n != 0 {
+			t.Errorf("%q was credited to %d file(s) by a corpus that names only %q — the matcher is "+
+				"matching a substring, so the unpinned list is shorter than the truth",
+				in, n, outer[i])
+		}
+	}
+	for _, o := range outer {
+		if len(refs[o].Files) == 0 {
+			t.Errorf("%q was NOT credited by a corpus that names it; the matcher matches nothing", o)
+		}
+	}
+
+	// And over the real repository, both halves must be non-empty: all-referenced
+	// means the matcher matches anything, none-referenced means it matches
+	// nothing, and either way the published list is worthless.
+	real, err := ScanTestReferences(repoRoot, v)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(real) != len(v.ReasonsByName) {
+		t.Fatalf("scanned %d reasons, the operator can set %d", len(real), len(v.ReasonsByName))
 	}
 	var referenced, unreferenced int
-	for _, tr := range refs {
+	for _, tr := range real {
 		if len(tr.Files) > 0 {
 			referenced++
 		} else {
 			unreferenced++
 		}
 	}
-	// Both halves must be non-empty. All-referenced would mean the matcher
-	// matches anything; none-referenced would mean it matches nothing. Either
-	// way the published list is worthless.
 	if referenced == 0 || unreferenced == 0 {
 		t.Fatalf("the scan found %d referenced and %d unreferenced reasons; one of those being zero "+
 			"means the matcher is broken, not that the repository changed", referenced, unreferenced)
 	}
-	for _, f := range refs["AuthLockPending"].Files {
-		if !mentions(t, f, "AuthLockPending") && !mentions(t, f, "ReasonAuthLockPending") {
-			t.Errorf("%s was credited with AuthLockPending and names neither the string nor its "+
-				"constant; the matcher is matching a prefix", f)
-		}
+}
+
+// Every in-page link this generator emits must land, and two headings must not
+// slug alike. The first version shipped 51 dead anchors — 23 index entries for
+// condition types it gave no section, and 28 chart keys slugged by an algorithm
+// no renderer uses — so the check now runs inside write() and this pins that it
+// really refuses.
+func TestABrokenAnchorIsRefusedRatherThanWritten(t *testing.T) {
+	if err := checkAnchors("x.md", "## A heading\n\n[ok](#a-heading)\n"); err != nil {
+		t.Fatalf("a link that lands was refused: %v", err)
+	}
+	if err := checkAnchors("x.md", "## A heading\n\n[dead](#no-such-thing)\n"); err == nil {
+		t.Error("a link to an anchor the page does not have was accepted")
+	}
+	// github-slugger drops dots and backticks rather than turning them into
+	// hyphens: `gateway.enabled` is #gatewayenabled, never #gateway-enabled.
+	if got := anchor("gateway.enabled"); got != "gatewayenabled" {
+		t.Errorf("anchor(\"gateway.enabled\") = %q, want %q — links in the chart index are dead "+
+			"on GitHub with any other answer", got, "gatewayenabled")
+	}
+	if err := checkAnchors("x.md", "## Same\n\n## Same\n"); err == nil {
+		t.Error("two headings that slug alike were accepted; every link to the second lands on the first")
 	}
 }
 
@@ -248,21 +322,98 @@ func TestTheDriftCheckIsWiredIntoVerify(t *testing.T) {
 	if i := strings.Index(verify, "\n## "); i > 0 {
 		verify = verify[:i]
 	}
-	if !strings.Contains(verify, "$(MAKE) reference") {
-		t.Error("`make verify` does not regenerate the reference, so a stale docs/reference/ " +
-			"would pass CI")
+
+	// RECIPE LINES ONLY. The first version of this test asked whether the
+	// verify block CONTAINED the string "docs/reference", and a comment inside
+	// that block says it — so deleting docs/reference from the real argument
+	// list left the test green, and the independent review ran exactly that
+	// mutation and got `ok`. A comment is not a check.
+	var recipe []string
+	for _, line := range strings.Split(verify, "\n") {
+		if strings.HasPrefix(line, "\t") && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			recipe = append(recipe, line)
+		}
 	}
-	if !strings.Contains(verify, "docs/reference") {
-		t.Error("`make verify` does not compare docs/reference, so a reference that regenerated " +
-			"differently would pass CI")
+	body := strings.Join(recipe, "\n")
+	if len(recipe) == 0 {
+		t.Fatal("no recipe lines found under `verify:`; this test is reading the wrong block")
+	}
+	if !strings.Contains(body, "$(MAKE) reference") {
+		t.Error("no recipe line of `make verify` regenerates the reference, so a stale " +
+			"docs/reference/ would pass CI")
+	}
+	// The path must be in the argument list of the porcelain comparison, not
+	// merely somewhere in the block. crd-agent.md is covered by NOTHING else:
+	// TestTheCommittedReferenceMatchesAFreshGeneration excludes it by design,
+	// so without this argument a hand-edited CRD reference reaches main.
+	compare := regexp.MustCompile(`(?m)^\t.*--porcelain\b[^\n]*\bdocs/reference\b`)
+	if !compare.MatchString(body) {
+		t.Errorf("`make verify` does not pass docs/reference to its --porcelain comparison, so a "+
+			"reference that regenerated differently — crd-agent.md included, which nothing else "+
+			"checks — would pass CI. Recipe:\n%s", body)
 	}
 	if !strings.Contains(mk, "\nreference:") {
 		t.Error("there is no `make reference` target")
 	}
-	if !strings.Contains(mk, "CRDOC_VERSION            ?= ") {
-		t.Error("crdoc is not pinned to an exact version; a generator whose output depends on when " +
-			"it ran makes `make verify` fail for whoever picks up a new version first")
+
+	// An EXACT version, not a column position. The first version of this test
+	// asked for the literal "CRDOC_VERSION            ?= " — twelve spaces — so
+	// `CRDOC_VERSION            ?= latest` passed, which is verbatim the failure
+	// its own message describes, and a correctly pinned but re-aligned
+	// `CRDOC_VERSION ?= v0.6.4` failed with a message that was then false.
+	pinned := regexp.MustCompile(`(?m)^CRDOC_VERSION\s*\?=\s*v\d+\.\d+\.\d+\s*$`)
+	if !pinned.MatchString(mk) {
+		t.Error("crdoc is not pinned to an exact vMAJOR.MINOR.PATCH; a generator whose output " +
+			"depends on when it ran makes `make verify` fail for whoever picks up a new version first")
 	}
+}
+
+// Two honesty mechanisms shipped WRITE-ONLY in the first version: the count of
+// conditions re-asserted from an earlier pass, and the mark on a struct reason
+// field whose writes did not all fold. Both were computed, neither was
+// rendered, and the package doc promised both. The independent review found
+// them. These pin the rendering, so deleting it fails rather than quietly
+// restoring a page that over-claims.
+func TestTheHonestyMechanismsAreRendered(t *testing.T) {
+	v := vocabulary(t)
+	if v.CarrySites == 0 {
+		t.Fatal("no conditionSet.carry sites found; the extractor counts them and there are some, " +
+			"so the counter is broken")
+	}
+	page := conditionsPage(t)
+	if !strings.Contains(page, "re-assert a condition an EARLIER pass stored") {
+		t.Error("the page does not say that some conditions are re-asserted rather than decided, " +
+			"though the generator counts those sites")
+	}
+
+	// The open-field mark: pinned on the renderer, because producing a genuinely
+	// open field needs a change in internal/controller that this test cannot
+	// make. What is asserted is that an open row READS differently from a closed
+	// one — so the mark cannot be silently dropped.
+	open := resolutionNote(Site{Resolution: ResolvedField, Expr: "w.reason",
+		Reasons: []string{"A", "B"}, FieldOpen: true})
+	closed := resolutionNote(Site{Resolution: ResolvedField, Expr: "w.reason",
+		Reasons: []string{"A", "B"}})
+	if open == closed {
+		t.Error("a call site whose reason field has unfolded writes reads exactly like one whose " +
+			"set is closed, so the page presents a partial set as the whole one")
+	}
+	if !strings.Contains(open, "NOT necessarily all") {
+		t.Errorf("an open field row does not say its set may be incomplete: %q", open)
+	}
+}
+
+func conditionsPage(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := renderConditions(repoRoot, dir); err != nil {
+		t.Fatalf("render conditions: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "conditions.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 func vocabulary(t *testing.T) *Vocabulary {
@@ -286,13 +437,4 @@ func reasonsOf(t *testing.T, v *Vocabulary, condition string) []string {
 	}
 	t.Fatalf("%s is not a declared condition type", condition)
 	return nil
-}
-
-func mentions(t *testing.T, rel, token string) bool {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(repoRoot, rel))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return regexp.MustCompile(`\b` + regexp.QuoteMeta(token) + `\b`).Match(b)
 }

@@ -18,30 +18,35 @@ import (
 // controller-gen that could disagree with it.
 const CRDSource = "config/crd/assayd.dev_agents.yaml"
 
-// crdocBin is the generator. It is ADOPTED rather than written here.
+// crdocBin renders the FIELD TABLES — names, types, required, defaults, doc
+// text, and the nested-type sections they link to. That is what it is adopted
+// for, and it does it well.
 //
-// The survey that chose it: elastic/crd-ref-docs is better maintained and reads
-// the Go types directly, but it DROPS the CEL rules — processor.go carries a
-// live `case "XValidation": continue` — and this CRD's most load-bearing
-// constraints are CEL. crdoc renders x-kubernetes-validations, emits Markdown,
-// and reads the CRD YAML the repository already generates. ahmetb's generator
-// emits HTML only and its own README points at crd-ref-docs;
-// kubernetes-sigs/reference-docs is built for Kubernetes' own API.
+// It is NOT adopted for the CEL rules, and an earlier version of this file said
+// it was. It renders a Validations block for an object-typed field and none for
+// an array-item schema or for the root, so it published 6 of this CRD's 9
+// rule-carrying nodes and said nothing about the other 3 — the same silent
+// dropping of `x-kubernetes-validations` that ruled out elastic/crd-ref-docs,
+// found by the independent review. The complete rule list is extracted from the
+// CRD by crdrules.go, and verifyEveryRuleIsPublished fails generation rather
+// than letting the page under-report again.
 //
+// What crd-ref-docs would still have cost: it reads the Go types directly and
+// resolves named types better, but it drops XValidation in its processor
+// outright, so the same section would have been owed. ahmetb's generator emits
+// HTML only; kubernetes-sigs/reference-docs is built for Kubernetes' own API.
 // Apache-2.0, like this repository.
 const crdocBin = "crdoc"
 
 // renderCRD produces docs/reference/crd-agent.md.
-//
-// crdoc writes the field tables; this function writes the header in front of
-// them. The header is not decoration: crdoc prints `Default: x` and says
-// nothing about who applies it, and a reader who assumes the operator does
-// would reason wrongly about what an object looks like the moment it is
-// created. So the preamble answers that once, for every default in the file.
 func renderCRD(root, out string) error {
 	src := filepath.Join(root, CRDSource)
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("the CRD the reference is generated from is missing: %w — run `make manifests`", err)
+	}
+	rules, err := celRules(src)
+	if err != nil {
+		return err
 	}
 
 	tmp, err := os.MkdirTemp("", "refgen-crd")
@@ -70,37 +75,55 @@ func renderCRD(root, out string) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(header("The Agent CRD"))
-	sb.WriteString(`
+	sb.WriteString(frontMatter("The Agent CRD",
+		"Every field of the Agent custom resource: type, required, default, CEL validation and doc text."))
+	sb.WriteString(generatedNotice())
+	sb.WriteString(fmt.Sprintf(`
 This page is the schema of the only custom resource assayd installs.
 
-**` + "`Agent`" + ` is the whole API surface today.** ` + "`make manifests`" + ` produces exactly one CRD, from
-` + "`api/v1alpha1/agent_types.go`" + `, and the chart ships that one file. The generator checks this
+**`+"`Agent`"+` is the whole API surface today.** `+"`make manifests`"+` produces exactly one CRD, from
+`+"`api/v1alpha1/agent_types.go`"+`, and the chart ships that one file. The generator checks this
 before writing the page and refuses to write it if a second CRD appears, so the sentence cannot
-outlive the fact. (` + "`AgentList`" + ` carries the same root marker and is the list type of this CRD, not
+outlive the fact. (`+"`AgentList`"+` carries the same root marker and is the list type of this CRD, not
 a second one.) Documentation elsewhere that counts several assayd CRDs is describing designs, not
 this build.
 
-**Defaults are applied by the API SERVER, not by the operator.** Every ` + "`Default`" + ` below comes from a
-` + "`+kubebuilder:default`" + ` marker, which controller-gen writes into the structural schema as
-` + "`default:`" + `. The API server substitutes it on write, so the value is present on the stored object
-and in ` + "`kubectl get -o yaml`" + ` whether or not the field was typed. A field with no ` + "`Default`" + ` row is
+**Defaults are applied by the API SERVER, not by the operator.** Every `+"`Default`"+` below comes from a
+`+"`+kubebuilder:default`"+` marker, which controller-gen writes into the structural schema as
+`+"`default:`"+`. The API server substitutes it on write, so the value is present on the stored object
+and in `+"`kubectl get -o yaml`"+` whether or not the field was typed. A field with no `+"`Default`"+` row is
 absent when it is not set, and the operator's own behaviour for an absent field is described in
 that field's text, not here.
 
-**Validations are CEL, evaluated by the API server on every write.** Each ` + "`Validations`" + ` entry is one
-` + "`x-kubernetes-validations`" + ` rule: the expression, then the message a rejected write is refused
-with. They are refusals at admission, so an object that exists has already satisfied all of them —
-except where validation ratcheting applies, which the affected fields say.
+**The field tables do NOT list every validation rule. [Every validation rule](#every-validation-rule)
+does.** The tool that renders the tables emits a `+"`Validations`"+` row for object-typed fields only —
+never for an array item's schema, and never for the root — so of this CRD's %d rules on %d schema
+nodes the tables carry %d nodes' worth. A field with no `+"`Validations`"+` row in a table is therefore
+NOT a field with no rules. The complete list is read out of the CRD itself and its presence on this
+page is checked before the page is written.
 
-**Required is the schema's ` + "`required`" + ` list**, not "the operator needs it". A field marked
-` + "`false`" + ` may still be one without which the operator cannot do anything useful.
+**Required is the schema's `+"`required`"+` list**, not "the operator needs it". A field marked
+`+"`false`"+` may still be one without which the operator cannot do anything useful.
 
-`)
+`, len(rules), countNodes(rules), renderedValidationNodes(text)))
 	sb.WriteString("---\n\n")
 	sb.WriteString(text)
 	if !strings.HasSuffix(text, "\n") {
 		sb.WriteString("\n")
 	}
-	return write(filepath.Join(out, "crd-agent.md"), sb.String())
+	sb.WriteString("\n---\n\n")
+	sb.WriteString(renderCELSection(rules, text))
+
+	page := sb.String()
+	if err := verifyEveryRuleIsPublished(page, rules); err != nil {
+		return err
+	}
+	return write(filepath.Join(out, "crd-agent.md"), page)
+}
+
+// renderedValidationNodes counts the Validations blocks the table renderer
+// actually emitted, so the sentence above reports what this run produced rather
+// than a number someone typed once.
+func renderedValidationNodes(text string) int {
+	return strings.Count(text, "<i>Validations</i>")
 }

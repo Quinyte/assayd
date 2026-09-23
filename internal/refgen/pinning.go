@@ -36,12 +36,13 @@ var testTrees = []string{"internal", "api", "test"}
 
 // excludedTrees are tests that name reasons without testing the operator.
 //
-// This package's own tests name a dozen reasons as fixtures — they assert that
-// the GENERATOR resolves them, not that the operator sets them for the right
-// state. Counting those as "referenced by a test" would credit six reasons to
-// this file and shrink the unpinned list by writing the reference, which is the
-// reference lying about itself. Found by the drift check on the pass that added
-// those tests.
+// This package's own tests name reasons as fixtures — they assert that the
+// GENERATOR resolves them, not that the operator sets them for the right state.
+// Counting those as "referenced by a test" would let the reference shrink its
+// own unpinned list by being written, which is the page lying about itself.
+// Found by the drift check on the pass that added those tests; the exclusion is
+// load-bearing, and the page states the count it makes rather than restating it
+// here, where it would be a number to keep correct by hand.
 var excludedTrees = []string{filepath.Join("internal", "refgen")}
 
 // ScanTestReferences finds, for every reason, the test files that mention it —

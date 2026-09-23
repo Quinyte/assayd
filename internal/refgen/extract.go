@@ -38,6 +38,10 @@ type extractor struct {
 	// resolver could not fold, so the rendered set is not presented as closed.
 	unfoldedField map[string]bool
 	carrySites    int
+	// lastFieldOpen carries resolveReason's "that field's set is not closed"
+	// answer out to the site it was resolved for.
+	lastFieldOpen bool
+	lastFieldKey  string
 }
 
 // collectFieldReasons fills fieldReasons. It runs TWICE by design: the first
@@ -251,6 +255,7 @@ func (e *extractor) setCall(call *ast.CallExpr, fnName string, fn *ast.FuncDecl)
 		cond = "<not a constant: " + exprText(e.pkg, call.Args[0]) + ">"
 	}
 	status, _ := constString(e.pkg, call.Args[1])
+	e.lastFieldOpen, e.lastFieldKey = false, ""
 	reasons, res := e.resolveReason(fn, call.Args[2], 0)
 	pos := e.pkg.Fset.Position(call.Pos())
 	return Site{
@@ -262,6 +267,8 @@ func (e *extractor) setCall(call *ast.CallExpr, fnName string, fn *ast.FuncDecl)
 		Func:       fnName,
 		File:       baseName(pos.Filename),
 		Line:       pos.Line,
+		FieldOpen:  res == ResolvedField && e.lastFieldOpen,
+		FieldKey:   e.lastFieldKey,
 	}, true
 }
 
@@ -337,9 +344,11 @@ func (e *extractor) resolveReason(fn *ast.FuncDecl, expr ast.Expr, depth int) ([
 			// whole failure.reason set against PolicyCompileFailed would say
 			// that condition can carry ServingRouteNotAccepted, which it cannot.
 			if rs, ok := e.narrowThroughProducer(fn, v, key, depth); ok {
+				e.lastFieldOpen, e.lastFieldKey = false, key
 				return rs, ResolvedField
 			}
 			if rs := e.fieldReasons[key]; len(rs) > 0 {
+				e.lastFieldOpen, e.lastFieldKey = e.unfoldedField[key], key
 				return append([]string(nil), rs...), ResolvedField
 			}
 		}

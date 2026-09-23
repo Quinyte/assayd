@@ -56,7 +56,9 @@ func renderValues(root, out string) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(header("Chart values"))
+	sb.WriteString(frontMatter("Chart values",
+		"Every key in the assayd chart's values.yaml, its default, and the chart's own note on it."))
+	sb.WriteString(generatedNotice())
 	sb.WriteString(fmt.Sprintf(`
 Every value in `+"`%s`"+`, its default, and what the chart says about it.
 

@@ -76,6 +76,14 @@ type Site struct {
 	Func       string // the enclosing function
 	File       string // base name, never a path from the machine that generated this
 	Line       int
+	// FieldOpen marks a `field` row whose struct field has at least one write
+	// the resolver could not fold, so the listed reasons are not the closed set.
+	// Without it the page said "one of N reasons that field can hold" for a set
+	// that might be larger, which is the shape of overclaim this generator
+	// exists to refuse.
+	FieldOpen bool
+	// FieldKey names the struct field a `field` row read, as "Type.field".
+	FieldKey string
 }
 
 // ConditionType is one member of the closed vocabulary in api/v1alpha1.
@@ -104,6 +112,14 @@ type Vocabulary struct {
 	Conditions   []ConditionType
 	ReasonConsts []ReasonConst
 	Sites        []Site
+	// CarrySites counts the calls that re-assert a condition an earlier pass
+	// stored, verbatim. They introduce no reason and so appear in no site list;
+	// the count is published so their existence is not invisible.
+	CarrySites int
+	// OpenFields names the struct reason fields that a PUBLISHED row reads and
+	// whose writes did not all fold. Fields nothing on the page reads are left
+	// out: naming them would be a warning about rows that do not exist.
+	OpenFields []string
 	// ReasonsByName maps a reason string to every site that can set it.
 	ReasonsByName map[string][]Site
 }
@@ -175,6 +191,15 @@ func ExtractVocabulary(root string) (*Vocabulary, error) {
 	ex := &extractor{pkg: ctrl, fieldReasons: map[string][]string{}, unfoldedField: map[string]bool{}}
 	ex.collectFieldReasons()
 	v.Sites = ex.sites()
+	v.CarrySites = ex.carrySites
+	openSeen := map[string]bool{}
+	for _, s := range v.Sites {
+		if s.FieldOpen && s.FieldKey != "" && !openSeen[s.FieldKey] {
+			openSeen[s.FieldKey] = true
+			v.OpenFields = append(v.OpenFields, s.FieldKey)
+		}
+	}
+	sort.Strings(v.OpenFields)
 
 	byCond := map[string][]Site{}
 	for _, s := range v.Sites {

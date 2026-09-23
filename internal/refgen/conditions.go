@@ -155,7 +155,10 @@ func renderConditions(root, out string) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(header("Conditions and reasons"))
+	sb.WriteString(frontMatter("Conditions and reasons",
+		"Every condition the assayd operator writes and every reason string it can set, with what "+
+			"produces it, what the operator does, and whether traffic is withdrawn."))
+	sb.WriteString(generatedNotice())
 	sb.WriteString(conditionsPreamble(v))
 
 	// Phases.
@@ -230,7 +233,7 @@ Agent in this build never carries one unless something else wrote it.
 
 %s
 
-`, len(unwritten), len(v.Conditions), bullets(unwritten)))
+`, len(unwritten), len(v.Conditions), bulletsPlain(unwritten)))
 	}
 
 	// The reason vocabulary.
@@ -436,6 +439,26 @@ their own section above. This page reports them; it does not settle them.
 `, len(disagreements), bullets(disagreements)))
 	}
 
+	if v.CarrySites > 0 {
+		sb.WriteString(fmt.Sprintf("**Conditions re-asserted rather than decided.** %d call site(s) "+
+			"re-assert a condition an EARLIER pass stored, verbatim — the mechanism that keeps a "+
+			"standing report from being retracted by a pass that learned nothing new. They introduce "+
+			"no reason of their own, so they appear in no reason's site list above, and the reason "+
+			"they carry is whichever one was stored.\n\n", v.CarrySites))
+	}
+	if len(v.OpenFields) > 0 {
+		sb.WriteString(fmt.Sprintf(`**Reason sets that are not closed.** %d struct reason field(s) have at least one write the
+resolver could not fold, so the reasons listed for the call sites that read them are the ones that
+WERE folded and not necessarily all of them. Every such site says so where it appears.
+
+%s
+
+`, len(v.OpenFields), bulletsPlain(v.OpenFields)))
+	} else {
+		sb.WriteString("**Every reason set is closed.** Each struct reason field the page reads had all " +
+			"of its writes folded, so a `field` row lists every reason that field can hold.\n\n")
+	}
+
 	withRef := 0
 	for _, tr := range refs {
 		if len(tr.Files) > 0 {
@@ -456,7 +479,11 @@ func resolutionNote(s Site) string {
 	case ResolvedConstant:
 		return "constant at the call site"
 	case ResolvedField:
-		return fmt.Sprintf("from `%s`, one of %d reasons that field can hold", s.Expr, len(s.Reasons))
+		if s.FieldOpen {
+			return fmt.Sprintf("from `%s`; that field's writes did not all fold, so these %d reasons "+
+				"are the ones that did and NOT necessarily all it can hold", s.Expr, len(s.Reasons))
+		}
+		return fmt.Sprintf("from `%s`, one of the %d reasons that field can hold", s.Expr, len(s.Reasons))
 	case ResolvedLocal:
 		if len(s.Reasons) == 1 {
 			return fmt.Sprintf("from the local `%s`, which folds to this one reason", s.Expr)
@@ -493,6 +520,18 @@ func cell(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// bulletsPlain lists names WITHOUT linking them, for the condition types that
+// have no section of their own on this page. Linking them emitted 23 dead
+// anchors in the first version — an index entry for every declared-but-unwritten
+// type, and no heading anywhere for any of them.
+func bulletsPlain(xs []string) string {
+	var sb strings.Builder
+	for _, x := range xs {
+		sb.WriteString("- `" + x + "`\n")
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 func bullets(xs []string) string {
