@@ -1,0 +1,24 @@
+{
+  "name": "@assayd/docs",
+  "version": "0.0.0",
+  "private": true,
+  "description": "assayd.dev — the docs. Starlight, static output for a plain static host.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@assayd/web-shared": "workspace:*",
+    "@astrojs/markdown-remark": "7.3.1",
+    "@astrojs/starlight": "0.42.2",
+    "astro": "7.3.3"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "typescript": "6.0.3"
+  }
+}

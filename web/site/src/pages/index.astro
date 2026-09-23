@@ -1,0 +1,59 @@
+---
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+//
+// PLACEHOLDER. This page exists to prove the layout, the tokens and the
+// components render. It carries no product copy on purpose: the information
+// architecture and the landing narrative belong to another agent, and
+// inventing them here would collide with that work.
+import BaseLayout from "../layouts/BaseLayout.astro";
+import ClaimClass from "@assayd/web-shared/ClaimClass.astro";
+---
+
+<BaseLayout
+  title="assayd"
+  description="Scaffold placeholder for the assayd site."
+  current="/index.html"
+>
+  <h1>Placeholder</h1>
+  <p class="lede">
+    This page proves the shell: tokens, type scale, navigation, and the shared
+    components. It is not the landing page and carries no product copy.
+  </p>
+
+  {/*
+    ONE CLAIM PER BLOCK. The inline badge is a <span>, so it cannot break the
+    paragraph it sits in — which means a second badge in this same <p> would
+    share its block. A retraction's rescue scope is the enclosing block, so two
+    claims in one block means either can read as covered by the other's
+    evidence: the exact failure the claim classes exist to prevent.
+
+    `pnpm run check:claims` fails on it rather than trusting this comment. An
+    earlier version of this paragraph invited the unsafe pattern in so many
+    words, which is how it got found.
+  */}
+  <p>
+    A claim can appear in a sentence — like this one <ClaimClass
+      claim="designed"
+      design="design 03"
+      section="§3.3.2"
+    /> — without breaking the line it sits in. It must be the only claim in
+    that sentence's block; a second one belongs in its own paragraph, list item
+    or header badge.
+  </p>
+</BaseLayout>
+
+<style>
+  .lede {
+    max-width: 62ch;
+    margin-top: var(--ax-space-3);
+    font-size: var(--ax-body-lg);
+    line-height: var(--ax-leading-snug);
+    color: var(--ax-ink-soft);
+  }
+
+  p + p {
+    max-width: 62ch;
+    margin-top: var(--ax-space-4);
+  }
+</style>

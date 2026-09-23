@@ -1,0 +1,83 @@
+---
+// SPDX-FileCopyrightText: 2026 Quinyte
+// SPDX-License-Identifier: Apache-2.0
+//
+// PLACEHOLDER. The second of this target's two scaffold pages. It shows every
+// state of the shared components in both variants, so a reviewer can see the
+// whole surface on one screen. The prose here describes the components, not
+// the product.
+import BaseLayout from "../layouts/BaseLayout.astro";
+import ClaimClass from "@assayd/web-shared/ClaimClass.astro";
+---
+
+<BaseLayout
+  title="Claim classes — assayd"
+  description="Every state of the shared claim-class and figure components."
+  current="/claim-classes.html"
+>
+  <ClaimClass
+    variant="header"
+    claim="measured"
+    test="TestAnAgentAnswersThroughTheGateway"
+  />
+
+  <h1>Claim classes</h1>
+  <p class="lede">
+    Three classes, and deliberately no fourth. The header above states the class
+    of a whole page; the badges below sit inside a sentence.
+  </p>
+
+  <h2>Inline</h2>
+  <ul class="states">
+    <li>
+      <ClaimClass claim="measured" test="TestTheGatewayRefusesADisallowedPrincipal" />
+    </li>
+    <li><ClaimClass claim="designed" design="design 07" section="§4" /></li>
+    <li><ClaimClass claim="not-built" /></li>
+    <li><ClaimClass claim="not-built" note="design 10 does not exist yet" /></li>
+  </ul>
+
+  <h2>Header</h2>
+  <ClaimClass variant="header" claim="designed" design="design 16" section="§4.4" />
+  <ClaimClass variant="header" claim="not-built" note="no alert rule ships in this repository" />
+
+  {/*
+    The Figure component is demonstrated on the DOCS target, not here.
+    Diagrams are a docs concern, and shipping the same placeholder plate in
+    both public/ trees would be two byte-identical copies with no generator
+    between them — the duplication this whole workspace exists to avoid.
+  */}
+</BaseLayout>
+
+<style>
+  h1 {
+    margin-top: var(--ax-space-2);
+  }
+
+  h2 {
+    margin-top: var(--ax-space-6);
+    font-size: var(--ax-heading-sm);
+  }
+
+  .lede {
+    max-width: 62ch;
+    margin-top: var(--ax-space-3);
+    font-size: var(--ax-body-lg);
+    line-height: var(--ax-leading-snug);
+    color: var(--ax-ink-soft);
+  }
+
+  p {
+    max-width: 62ch;
+    margin-top: var(--ax-space-3);
+  }
+
+  .states {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ax-space-2);
+    margin: var(--ax-space-3) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+</style>

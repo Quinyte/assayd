@@ -47,6 +47,16 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Quinyte"
 SPDX-License-Identifier = "Apache-2.0"
 
+# The website workspace. Source files under web/ carry their own SPDX headers
+# where the format allows one; this block covers the rest — package manifests
+# and the lockfile, which are JSON and YAML with no comment syntax to put a
+# header in, and the placeholder .webp plate, which is a binary.
+[[annotations]]
+path = ["web/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Quinyte"
+SPDX-License-Identifier = "Apache-2.0"
+
 # THIRD PARTY, and deliberately not swept into the block above. This is the
 # agentgateway CRD chart, vendored as e2e test data. It is Apache-2.0 like this
 # project, but the copyright is Solo.io's, and annotating someone else's

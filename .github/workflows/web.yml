@@ -1,0 +1,279 @@
+# The website gate: both targets must build from a clean checkout.
+#
+# Actions are pinned by commit SHA and tools by exact version, matching ci.yml.
+# The reasoning there applies here unchanged — a repository whose admission
+# story requires digest-pinned, signed images should not run CI off a moving
+# tag.
+#
+# NOTHING HERE DEPLOYS. The publish job is gated on a manual dispatch input, it
+# targets a GitHub environment that does not exist yet, and its final step
+# stops with a non-zero exit. Publishing is the human's call and has not been
+# given. See the note above the `publish` job.
+name: web
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/web.yml"]
+  pull_request:
+    paths: ["web/**", ".github/workflows/web.yml"]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: >-
+          Which target to publish. Leave as "none" to build only.
+          Anything else is refused until a human has completed the setup in
+          web/README.md.
+        required: true
+        default: "none"
+        type: choice
+        options:
+          - none
+          - site
+          - docs
+          - both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned by version AND by checksum, and fetched as a release binary rather
+  # than run as a third-party action — the same shape ci.yml already uses for
+  # kubeconform. lycheeverse/lychee-action would also work, but its default
+  # `args` check Markdown SOURCE, which is precisely the input that cannot see
+  # the bug this gate exists to catch; overriding them wholesale and pinning
+  # the action is more moving parts than fetching one verified tarball.
+  LYCHEE_VERSION: v0.24.2
+  LYCHEE_SHA256: 73657a111819a30c47c08352896796f23d64e4eb2b3ed39b6d32149241566fc5
+
+jobs:
+  build:
+    name: build both targets
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Version comes from web/package.json#packageManager; naming it twice
+      # would let the two drift.
+      #
+      # package_json_file is required and not optional polish: `defaults.run`
+      # applies to `run` steps only, so this action executes at the repository
+      # root, where there is no package.json at all — the workspace lives one
+      # level down. Without it the action fails with "No pnpm version is
+      # specified", which is how this line came to exist.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: web/package.json
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: web/.nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      # --frozen-lockfile makes the lockfile the pin it claims to be: a
+      # manifest edited without regenerating the lockfile fails here rather
+      # than resolving to something nobody chose.
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: typecheck both targets
+        run: pnpm run check
+
+      - name: build both targets
+        run: pnpm run build
+
+      # "The build succeeded" and "the build said nothing new" are different
+      # claims, and only the first one is an exit code.
+      - name: build warnings are all known ones
+        run: pnpm run check:warnings
+
+      # A build that produced nothing still exits 0. These two steps are what
+      # turn "the command succeeded" into "the artifact exists", and they are
+      # also where the flat-.html requirement is actually enforced rather than
+      # asserted in a config comment.
+      - name: site produced real .html files
+        run: |
+          set -euo pipefail
+          test -f site/dist/index.html
+          test -f site/dist/claim-classes.html
+          echo "site: $(find site/dist -name '*.html' | wc -l) html file(s)"
+
+      - name: docs produced real .html files
+        run: |
+          set -euo pipefail
+          test -f docs/dist/index.html
+          test -f docs/dist/guides/figures.html
+          echo "docs: $(find docs/dist -name '*.html' | wc -l) html file(s)"
+
+      - name: install lychee
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          target="lychee-x86_64-unknown-linux-musl"
+          curl -sSLo "/tmp/${target}.tar.gz" \
+            "https://github.com/lycheeverse/lychee/releases/download/lychee-${LYCHEE_VERSION}/${target}.tar.gz"
+          echo "${LYCHEE_SHA256}  /tmp/${target}.tar.gz" | sha256sum --check --strict
+          # The binary sits one directory down, beside its man page and shell
+          # completions — --strip-components is not optional here.
+          sudo tar -xzf "/tmp/${target}.tar.gz" \
+            -C /usr/local/bin --strip-components=1 "${target}/lychee"
+          lychee --version
+
+      # Runs against the BUILT output of both targets, so it reproduces the
+      # rewrite-less host. Internal links and anchors only — external links are
+      # excluded by --offline inside the script, because a flaky third-party
+      # host must never be able to fail this repository's CI.
+      #
+      # The same script is what a person runs locally. One definition, so the
+      # gate and the local command cannot drift into disagreeing.
+      - name: internal links and anchors
+        run: ./scripts/check-links.sh
+
+      # Every `measured` badge must name a Go test that exists, and every
+      # `designed` badge a design document that exists. The component already
+      # refuses a badge that names NOTHING; this catches the live failure,
+      # which is the rename and the delete.
+      - name: claim badges name evidence that exists
+        run: ./scripts/check-claims.sh
+
+      - name: upload site artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: assayd-site
+          path: web/site/dist
+          if-no-files-found: error
+
+      - name: upload docs artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: assayd-docs
+          path: web/docs/dist
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- publish --
+  #
+  # THIS JOB DOES NOT PUBLISH, AND IS NOT SUPPOSED TO YET.
+  #
+  # It is here so the shape of the deploy is reviewable — which secrets, which
+  # artifact, which target — without the shape being mistaken for a working
+  # pipeline. Three independent things stop it, any one of which is sufficient:
+  #
+  #   1. `if:` — it runs only on a manual dispatch whose `deploy` input is not
+  #      "none". A push to main and a pull request cannot reach it at all.
+  #   2. The `ASSAYD_WEB_PUBLISH_ENABLED` preflight below. A VARIABLE a human
+  #      must set to exactly "true" by hand, in a step that also refuses to run
+  #      anywhere but Quinyte/assayd — because `vars.*` reads organization
+  #      variables too. Absent, differently spelled, or set on a different
+  #      repository: the job stops.
+  #   3. The last step exits non-zero. No upload command is written, because
+  #      nobody here has run one against the host and a command that has never
+  #      been executed is not a deploy path — it is a guess that would be read
+  #      as a guarantee the first time someone needed it.
+  #
+  # `environment:` IS NOT ONE OF THE STOPS, and an earlier version of this
+  # comment wrongly said it was. GitHub does the opposite of what that assumed:
+  # anyone who can edit workflows can create an environment via a workflow
+  # file, so the first dispatch that reaches this job CREATES `web-production`
+  # — and the environment it creates has no protection rules and no secrets.
+  #
+  # That is worse than no stop, because it is a trap with a delay on it: the
+  # next person follows web/README.md, goes to add the required reviewer, finds
+  # the environment already there, ticks it off, and the permanent human gate
+  # never gets added. The environment is kept here because it is where that
+  # gate BELONGS once a human configures it — not because it currently is one.
+  #
+  # Removing any stop is a deliberate change by whoever has the credentials and
+  # has read web/README.md, not a line to delete in passing.
+  publish:
+    name: publish (refused until configured)
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy != 'none'
+    runs-on: ubuntu-latest
+    environment: web-production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The stop that depends on this repository's own state.
+      #
+      # A variable, not a secret, because it carries no value worth hiding and
+      # a human should be able to see at a glance whether publishing is armed.
+      # It is checked before the credentials so that the first thing a
+      # dispatcher is told is that nobody authorised publishing, rather than a
+      # list of secrets to go and set.
+      #
+      # `vars.*` resolves ORGANIZATION variables as well as repository ones, so
+      # an org-level ASSAYD_WEB_PUBLISH_ENABLED=true would otherwise arm this
+      # repository without anyone touching it. The repository guard below is
+      # what keeps the stop specific to this repository rather than to the
+      # organization — without it, the comment above would claim more than the
+      # step enforces.
+      - name: preflight — has a human armed publishing
+        env:
+          PUBLISH_ENABLED: ${{ vars.ASSAYD_WEB_PUBLISH_ENABLED }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "${REPO}" != "Quinyte/assayd" ]; then
+            echo "Refusing to publish from '${REPO}'."
+            echo "This job publishes Quinyte/assayd and nothing else; a fork"
+            echo "or a rename must not inherit an arming variable set"
+            echo "elsewhere in the organization."
+            exit 1
+          fi
+          if [ "${PUBLISH_ENABLED:-}" != "true" ]; then
+            echo "Publishing is not armed."
+            echo
+            echo "Variable ASSAYD_WEB_PUBLISH_ENABLED is"
+            echo "'${PUBLISH_ENABLED:-<unset>}', and must be exactly 'true'."
+            echo
+            echo "Setting it is a deliberate act by a human who has read"
+            echo "web/README.md and completed the setup there — including"
+            echo "adding a required reviewer to the 'web-production'"
+            echo "environment, which GitHub will have auto-created WITHOUT"
+            echo "protection rules the first time this job ran."
+            exit 1
+          fi
+
+      # Named here so the required secrets are discoverable from the workflow
+      # itself. None of them is set; the preflight below reports which.
+      - name: preflight — are the credentials present
+        env:
+          ASSAYD_WEB_HOST: ${{ secrets.ASSAYD_WEB_HOST }}
+          ASSAYD_WEB_USER: ${{ secrets.ASSAYD_WEB_USER }}
+          ASSAYD_WEB_SSH_KEY: ${{ secrets.ASSAYD_WEB_SSH_KEY }}
+          ASSAYD_WEB_KNOWN_HOSTS: ${{ secrets.ASSAYD_WEB_KNOWN_HOSTS }}
+          ASSAYD_SITE_PATH: ${{ secrets.ASSAYD_SITE_PATH }}
+          ASSAYD_DOCS_PATH: ${{ secrets.ASSAYD_DOCS_PATH }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in ASSAYD_WEB_HOST ASSAYD_WEB_USER ASSAYD_WEB_SSH_KEY \
+                      ASSAYD_WEB_KNOWN_HOSTS ASSAYD_SITE_PATH ASSAYD_DOCS_PATH; do
+            if [ -z "${!name:-}" ]; then
+              echo "missing repository secret: ${name}"
+              missing=1
+            fi
+          done
+          [ "${missing}" -eq 0 ] || {
+            echo "refusing to continue: the secrets above are not set."
+            exit 1
+          }
+
+      - name: publish
+        run: |
+          set -euo pipefail
+          echo "Refusing to publish '${{ inputs.deploy }}'."
+          echo
+          echo "No publish command has ever been run against the host from this"
+          echo "repository, so there is nothing here that can honestly be called"
+          echo "a deploy path. web/README.md lists exactly what a human must"
+          echo "decide and supply before this job is allowed to do anything."
+          exit 1

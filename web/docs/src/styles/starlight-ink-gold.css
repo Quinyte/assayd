@@ -1,0 +1,91 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Quinyte
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Ink + Gold, mapped onto Starlight's own custom properties.
+ *
+ * Starlight themes itself through a documented set of `--sl-*` variables, so
+ * the right way to restyle it is to redefine those from the assayd tokens
+ * rather than to fight its selectors. tokens.css is loaded immediately before
+ * this file, so every `--ax-*` below is already defined.
+ *
+ * SCOPE: this is the scaffold's colour and type mapping only. It is not a
+ * finished docs theme, and it deliberately restyles nothing structural.
+ */
+
+:root,
+:root[data-theme="light"] {
+  --sl-color-accent: var(--ax-ink);
+  --sl-color-accent-low: var(--ax-gold-tint);
+  --sl-color-accent-high: var(--ax-ink);
+
+  --sl-color-white: var(--ax-ink);
+  --sl-color-gray-1: var(--ax-ink);
+  --sl-color-gray-2: var(--ax-ink-soft);
+  --sl-color-gray-3: var(--ax-on-surface-variant);
+  --sl-color-gray-4: var(--ax-outline);
+  --sl-color-gray-5: var(--ax-outline-variant);
+  --sl-color-gray-6: var(--ax-gold-tint);
+  --sl-color-gray-7: var(--ax-surface);
+  --sl-color-black: var(--ax-surface);
+
+  --sl-color-text: var(--ax-on-surface);
+  --sl-color-text-accent: var(--ax-ink);
+  --sl-color-bg: var(--ax-background);
+  --sl-color-bg-nav: var(--ax-background);
+  --sl-color-bg-sidebar: var(--ax-background);
+  --sl-color-hairline: var(--ax-outline-variant);
+  --sl-color-hairline-light: var(--ax-outline-variant);
+  --sl-color-hairline-shade: var(--ax-outline-variant);
+
+  --sl-font: var(--ax-font-sans);
+  --sl-font-mono: var(--ax-font-mono);
+}
+
+/*
+ * Dark is the hero surface, used here because Starlight ships a theme toggle
+ * and a reader who picks dark must get something coherent rather than
+ * Starlight's default blues. Ink-dark is otherwise reserved for full-bleed
+ * sections; this is the one place it stands in as a ground.
+ */
+:root[data-theme="dark"] {
+  --sl-color-accent: var(--ax-on-ink);
+  --sl-color-accent-low: var(--ax-ink-soft);
+  --sl-color-accent-high: var(--ax-on-ink);
+
+  --sl-color-text: var(--ax-on-background-dark);
+  --sl-color-text-accent: var(--ax-on-ink);
+  --sl-color-bg: var(--ax-background-dark);
+  --sl-color-bg-nav: var(--ax-background-dark);
+  --sl-color-bg-sidebar: var(--ax-background-dark);
+  --sl-color-hairline: var(--ax-ink-soft);
+  --sl-color-hairline-light: var(--ax-ink-soft);
+  --sl-color-hairline-shade: var(--ax-ink-soft);
+}
+
+/*
+ * Headings stay at weight 400 here too. Starlight sets 600 on its own headings,
+ * so without this the docs target would quietly violate the house rule that the
+ * site target obeys — the exact two-copies-that-drift problem this workspace
+ * exists to prevent.
+ */
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+.sl-markdown-content h4,
+.sl-markdown-content h5,
+.sl-markdown-content h6,
+.content-panel h1 {
+  font-weight: var(--ax-weight-regular);
+  letter-spacing: var(--ax-tracking-display);
+}
+
+/*
+ * THE ONE GOLD BEAT for this target: a 2px rule under the site header, the
+ * same beat the site target spends under its masthead. Nothing else on a docs
+ * page may be gold — and in particular not a link, a sidebar selection or any
+ * other interactive thing.
+ */
+.header {
+  border-bottom: 2px solid var(--ax-gold);
+}
