@@ -197,6 +197,22 @@ var rules = []rule{
 		why:        "no central design is approved whole: design 02 is not approved by its own header, and 03 and 16 approve only their first slice (ADR-0030; a design's own Status line is the source of truth, and docs/designs/README.md summarises it — ADR-0030 Amendment 1)",
 	},
 	{
+		// Design 03 was consolidated on 2026-09-10 with no critique PASS, and
+		// two summaries said so in words that outlived the fact: its thirteenth
+		// critique passed its first slice, the human approved that slice on
+		// 2026-09-12 and amendment A84 on 2026-09-23. Both sentences sat in
+		// docs/architecture.md's Status line and architecture.html's §18 note
+		// until 2026-09-23, while the design's own Status line said otherwise.
+		// Design 02 alone is still unapproved and unpassed; a sentence saying so
+		// of 02 is not caught. The rescue is narrow on purpose: both live
+		// blocks carried "are now false" and "were false" about OTHER claims,
+		// and a looser clause would have spared them.
+		name:    "design-03-never-passed",
+		banned:  regexp.MustCompile(`(?i)designs? 02 and 03 (are|is|were|remain) (critique pending|not approved)|no (design )?02 or 03 critique has (ever )?returned pass`),
+		allowed: regexp.MustCompile(`(?i)withdrawn|retracted`),
+		why:     "design 03's thirteenth critique passed its first slice, which the human approved on 2026-09-12, and A84 was approved on 2026-09-23; only design 02 is wholly unapproved (design 03's Status line, ADR-0034 Amendment 4)",
+	},
+	{
 		name:    "superseded-research-note",
 		banned:  regexp.MustCompile(regexp.QuoteMeta(supersededNote)),
 		allowed: regexp.MustCompile(`(?i)supersedes|superseded[ -]by|superseding|the superseded note|no such|replaces|written against`),
@@ -1012,6 +1028,7 @@ var ruleFixtures = map[string]string{
 	"referent-drift-refusal":    "If the referent's content has moved, rollback is refused naming both digests.",
 	"verifier-undecided":        "Ship a Sigstore policy-controller or a Kyverno verifyImages binding.",
 	"inert-tightening":          "A tightening update must make the dependent routes inert first.",
+	"design-03-never-passed":    "Designs 02 and 03 are critique pending and not approved.",
 }
 
 // livePhrasingFixtures are the exact sentences that were sitting in an
@@ -1029,6 +1046,8 @@ var livePhrasingFixtures = map[string]string{
 	"blanket-approval-claim": "<span><b>status</b> 27/27 designs approved · 26 ADRs</span>",
 	"spec-only-hash":         "1. Spec change → `revisionHash(spec)` — **spec only**; the card digest is status.",
 	"env-referent-hash":      "| `runtime.env`, `runtime.envFrom` (by **referent**, not contents) | `runtime.port` |\n|---|---|\n| a | b |",
+	// docs/architecture.md's Status line, as it read on main until 2026-09-23.
+	"design-03-never-passed": "- **Status**: **superseded in part — read §18 before relying on this document.** Its original header said \"design phase complete · 27/27 component designs approved, each through independent adversarial critique; 26 ADRs recorded. Implementation may begin.\" **Two of those are now false.** Designs **02 and 03** are `critique pending — not approved` by their own Status lines, and there are **34 ADRs**, not 26.",
 }
 
 // TestTheLivePhrasingsThatSlippedThroughAreCaught pins r6 MAJOR 5's second half.
@@ -1192,6 +1211,8 @@ var htmlFixtures = map[string]string{
 	"overshoot-bound":      "<p>Status publishes a measured\novershoot bound per replica.</p>",
 	"exact-usd-tier":       `<p>The <code>exact</code> <em>tier</em> &mdash; the receipt backstop.</p>`,
 	"superseded-adr":       `<td><a href="decisions/0020-policy-compiler.md">ADR</a>-0020 governs compilation order</td>`,
+	// docs/architecture.html's §18 note, as it read on main until 2026-09-23.
+	"design-03-never-passed": `<div class="prose"><p><b>Status:</b> this line is superseded. An earlier version claimed all five phases were "designed and approved (27/27, each critique-passed)" and that implementation had not started. Both were false: no design 02 or 03 critique has returned PASS, and the operator, its CRD, the chart and a proven gateway path all run and are tested.</p></div>`,
 }
 
 // TestAWithdrawnGuaranteeCannotHideInTheRenderedPage is the gate's HTML half.
