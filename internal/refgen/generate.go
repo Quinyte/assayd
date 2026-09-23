@@ -75,14 +75,15 @@ func checkSingleCRD(root string) error {
 // renders the front-matter title as the page's heading, and a body H1 would
 // show twice. GitHub renders the block itself, so the page is still titled when
 // it is read in the repository.
-// It is QUOTED, and that is the whole of the second attempt at this. The first
-// emitted the description as a bare scalar, and one of the three descriptions
-// contains ": " — "…custom resource: type, required…" — which YAML reads as a
-// nested mapping key. The page parsed as invalid YAML and the site build failed
-// on it, while `make reference`, `make verify` and `make unit` were all green,
-// because reproducible invalid YAML is still reproducible. The interaction
-// problem had moved from "no front matter" to "invalid front matter", which
-// reads as fixed and is worse. TestTheFrontMatterIsValidYAML now parses it.
+//
+// The values are QUOTED, which is the whole of the second attempt at this. The
+// first emitted them as bare scalars, and one description contains ": " —
+// "…custom resource: type, required…" — which YAML reads as a nested mapping
+// key. The site build failed on it while `make reference`, `make verify` and
+// `make unit` were all green, because reproducible invalid YAML is still
+// reproducible and nothing here parsed what it wrote. The interaction problem
+// had moved from "no front matter" to "invalid front matter", which reads as
+// fixed and is worse. write() now parses every page before writing it.
 func frontMatter(title, description string) string {
 	return fmt.Sprintf("---\ntitle: %s\ndescription: %s\n---\n",
 		yamlScalar(title), yamlScalar(description))
