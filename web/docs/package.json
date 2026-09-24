@@ -6,8 +6,8 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
+    "dev": "../scripts/copy-reference.sh && astro dev",
+    "build": "../scripts/copy-reference.sh && astro build",
     "preview": "astro preview",
     "check": "astro check"
   },

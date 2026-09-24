@@ -497,17 +497,39 @@ func TestTheOperatorUnderTestIsTheOneJustBuilt(t *testing.T) {
 		t.Fatalf("the deployed operator is %q and this run built %q.\n"+
 			"Every assertion in this suite is about the wrong binary.", got, want)
 	}
+	// Only this Deployment's pods, by its own selector, and only those that
+	// are Running or Pending: a Failed or evicted pod left by an older
+	// ReplicaSet is not serving and would fail this test falsely.
 	var pods corev1.PodList
-	if err := k8s.List(context.Background(), &pods, client.InNamespace("assayd-system")); err != nil {
+	if err := k8s.List(context.Background(), &pods, client.InNamespace("assayd-system"),
+		client.MatchingLabels(d.Spec.Selector.MatchLabels)); err != nil {
 		t.Fatalf("list operator pods: %v", err)
 	}
+	// Matched by the template's own container name. This loop used to match
+	// "manager", a name the chart's container has never had ("operator"), so it
+	// checked no pod and could not fail (independent review of PR #67). A
+	// count of zero is now a failure rather than a pass.
+	name := d.Spec.Template.Spec.Containers[0].Name
+	checked := 0
 	for _, p := range pods.Items {
+		if p.DeletionTimestamp != nil ||
+			(p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodPending) {
+			continue // a pod on its way out, or already gone, is not what serves
+		}
 		for _, c := range p.Spec.Containers {
-			if c.Name == "manager" && c.Image != want {
+			if c.Name != name {
+				continue
+			}
+			checked++
+			if c.Image != want {
 				t.Errorf("pod %s is still running %q, not %q — the rollout did not complete",
 					p.Name, c.Image, want)
 			}
 		}
+	}
+	if checked == 0 {
+		t.Errorf("no pod in assayd-system runs a container named %q, so no pod's image was "+
+			"checked", name)
 	}
 }
 

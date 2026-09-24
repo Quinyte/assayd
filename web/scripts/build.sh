@@ -12,6 +12,12 @@ set -euo pipefail
 web_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${web_dir}"
 
+# The generated reference is copied into the docs target by
+# scripts/copy-reference.sh, which @assayd/docs runs as the first half of its
+# own `build` and `dev` scripts, so it happens before every Astro build of the
+# docs whichever command starts it, and check-links.sh then reads the copied
+# pages in dist/.
+
 # tee returns its own status, so without PIPESTATUS a failed build would be
 # reported as a success by the pipeline.
 set +e

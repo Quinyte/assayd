@@ -56,6 +56,8 @@ and flips to `False` rather than disappearing, because for a normal-true conditi
 absence is indistinguishable from "never evaluated". Both are read from `ownedTypes` and
 `stickyTypes` in `internal/controller/conditions.go`.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Table under Condition types. Scroll or use the arrow keys to pan.">
+
 | Condition | Written here | Owned | Sticky | Reasons |
 |---|---|---|---|---|
 | `BudgetEnforcementDegraded` | no | no | no | — |
@@ -97,6 +99,8 @@ absence is indistinguishable from "never evaluated". Both are read from `ownedTy
 | `SandboxDowngraded` | 1 site(s) | yes | no | [`SandboxRuntimeUnavailable`](#sandboxruntimeunavailable) |
 | `ScratchpadDegraded` | no | no | no | — |
 | `TaskStateUnverified` | 1 site(s) | yes | no | [`ProtocolHasNoDeclaration`](#protocolhasnodeclaration) |
+
+</div>
 
 ### What each type means
 
@@ -1688,6 +1692,8 @@ unpinned.
 **How each reason was resolved.** A call site passes its reason as a constant, a struct field or a
 local, and the three are not equally strong:
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Table under Honesty notes. Scroll or use the arrow keys to pan.">
+
 | Resolution | Sites | What it means |
 |---|---|---|
 | `constant` | 62 | A string literal or a `Reason*` constant at the call site. Exact. |
@@ -1695,6 +1701,8 @@ local, and the three are not equally strong:
 | `local` | 17 | A local whose assignments — and, one hop, the in-package function they call — all fold to constants. |
 | `carried` | 6 | The reason is read back off a condition an earlier pass stored. It introduces no new reason and appears in no reason's site list. |
 | `unresolved` | 0 | The generator could not fold the expression. |
+
+</div>
 
 **Every call site resolved.** No condition write in `internal/controller` has a reason this page could not fold, so the list above is the whole vocabulary this build can set.
 

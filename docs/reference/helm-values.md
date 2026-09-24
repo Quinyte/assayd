@@ -29,6 +29,8 @@ The file opens by saying:
 
 ## Every key
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Table under Every key. Scroll or use the arrow keys to pan.">
+
 | Key | Default |
 |---|---|
 | [`tier`](#tier) | `core` |
@@ -62,6 +64,8 @@ The file opens by saying:
 | [`admission.apiKeyWriters.groups`](#admissionapikeywritersgroups) | `[system:masters]` |
 | [`admission.toolRouteWriters.users`](#admissiontoolroutewritersusers) | `[]` |
 | [`admission.toolRouteWriters.groups`](#admissiontoolroutewritersgroups) | `[]` |
+
+</div>
 
 ---
 
@@ -348,6 +352,8 @@ Unlike extraOperators, an identity here gains nothing else: it cannot write the 
 
 `charts/assayd/values-local.yaml` overrides these keys. Install with `-f charts/assayd/values-local.yaml` to take them.
 
+<div class="ref-table" role="region" tabindex="0" aria-label="Table under The local profile. Scroll or use the arrow keys to pan.">
+
 | Key | Local value | Default |
 |---|---|---|
 | `profile` | `local` | `prod` |
@@ -358,4 +364,6 @@ Unlike extraOperators, an identity here gains nothing else: it cannot write the 
 | `operator.resources.requests.cpu` | `50m` | `100m` |
 | `operator.resources.requests.memory` | `64Mi` | `128Mi` |
 | `operator.resources.limits.memory` | `256Mi` | `512Mi` |
+
+</div>
 

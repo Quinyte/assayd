@@ -13,11 +13,14 @@ export interface Props {
 
 const { title, description, current } = Astro.props;
 
-// Two entries is the whole navigation for a scaffold. The information
-// architecture belongs to whoever owns it; this exists to prove the shell.
+// The navigation grows with the pages that exist, and no further: the
+// information architecture (docs/web/information-architecture.md §3.1) names
+// more, and a nav entry for a page that is not built would be a dead link the
+// link gate fails.
 const nav = [
   { href: "/index.html", label: "Overview" },
   { href: "/claim-classes.html", label: "Claim classes" },
+  { href: "/concepts/the-auth-transaction.html", label: "The auth transaction" },
 ];
 ---
 

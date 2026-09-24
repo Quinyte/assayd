@@ -68,11 +68,35 @@ export default defineConfig({
       // reference can add pages without editing this file — and so that a page
       // added on disk cannot silently fail to appear in the navigation.
       sidebar: [
+        // A single top-level page, named by slug: Starlight fails the build if
+        // the slug has no page, so this entry cannot dangle.
+        { slug: "what-runs-today" },
         {
           label: "Guides",
           items: [{ autogenerate: { directory: "guides" } }],
         },
+        // Generated. The pages under reference/ are NOT in git here: they are
+        // docs/reference/*.md, written by cmd/refgen and held to the code by
+        // `make verify`, and web/scripts/copy-reference.sh copies them in before the
+        // build so the link gate reads them. Edit the generator, never the copy.
+        {
+          label: "Reference",
+          items: [{ autogenerate: { directory: "reference" } }],
+        },
       ],
+      // The generated CRD reference fences its x-kubernetes-validations as
+      // ```cel, and Shiki bundles no CEL grammar, so each block warned and fell
+      // back to plain text anyway. Aliasing to plain text says that on purpose
+      // rather than as a warning: mapping CEL to a language it only resembles
+      // would colour it by rules it does not follow.
+      expressiveCode: {
+        shiki: { langAlias: { cel: "txt" } },
+        // Long lines wrap rather than scroll. A code block that scrolls is a
+        // scroll region Expressive Code does not make focusable, so it cannot
+        // be panned from the keyboard (axe scrollable-region-focusable, four of
+        // them on the CRD reference's CEL rules).
+        defaultProps: { wrap: true },
+      },
       pagination: false,
       credits: false,
     }),
