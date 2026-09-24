@@ -389,7 +389,8 @@ func TestThePartlyValidReportCarriesTheGatewaysMessage(t *testing.T) {
 // ForeignTrafficPolicy are withdrawn too, and are seeded by their own blocks
 // (A81, the review's MINOR 8).
 func TestSeedAndWithdrawAreTheSameSet(t *testing.T) {
-	for _, r := range []string{ReasonServingRouteNotAccepted, ReasonAuthPolicyNotAttached} {
+	for _, r := range []string{ReasonServingRouteNotAccepted, ReasonAuthPolicyNotAttached,
+		ReasonAPIKeySourceEmpty} {
 		if !a80Carried(r) {
 			t.Errorf("seedStoredAbove's A80 block does not seed %s, so a pass that returns before "+
 				"the -auth step drops the report and resets design 10's clock", r)
@@ -442,6 +443,16 @@ func TestPolicyApplyIncompleteNamesTheOutrankingCauseFirst(t *testing.T) {
 			ReasonServingRouteNotAccepted, ReasonServingRouteNotAccepted, ReasonAuthPolicyNotAttached},
 		{"an unattached policy does not outrank a refused route", ReasonServingRouteNotAccepted,
 			ReasonAuthPolicyNotAttached, ReasonServingRouteNotAccepted, ReasonAuthPolicyNotAttached},
+		// A86: the empty key source ranks LAST, below all four reasons that
+		// can stand beside it, raised before or after it.
+		{"a broken policy tuple outranks an empty key source", ReasonAPIKeySourceEmpty,
+			ReasonAuthPolicyNotAttached, ReasonAuthPolicyNotAttached, ReasonAPIKeySourceEmpty},
+		{"an empty key source does not outrank a refused route", ReasonServingRouteNotAccepted,
+			ReasonAPIKeySourceEmpty, ReasonServingRouteNotAccepted, ReasonAPIKeySourceEmpty},
+		{"an empty key source does not outrank a Gateway-level policy", ReasonGatewayAuthPolicy,
+			ReasonAPIKeySourceEmpty, ReasonGatewayAuthPolicy, ReasonAPIKeySourceEmpty},
+		{"a foreign policy outranks an empty key source", ReasonAPIKeySourceEmpty,
+			ReasonForeignTrafficPolicy, ReasonForeignTrafficPolicy, ReasonAPIKeySourceEmpty},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			conds := newConditionSet(1)

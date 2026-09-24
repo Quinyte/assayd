@@ -169,6 +169,10 @@ type gatewayOutcome struct {
 	// is never judged.
 	judgeRoute  *gatewayv1.HTTPRoute
 	judgePolicy *unstructured.Unstructured
+	// keyPolicy is the live `<agent>-auth` A86's key-source half reads its
+	// selector from: reassertServedPolicy's second return, under §3.2's UID
+	// guard ALONE, never the digest guard (authkeysource.go).
+	keyPolicy keySourcePolicy
 }
 
 // authDesire is what the current spec's -auth compiles to, and whether any
@@ -373,6 +377,14 @@ func (r *AgentReconciler) reconcileGateway(ctx context.Context, agent *assaydv1a
 			r.holdServedJudgement(agent, status, conds, &out, claims, err)
 		}
 	}
+	// A86's key-source half, AFTER A80's two, under a gate of its own: the
+	// slot as this pass LEAVES it, which takes in the pass that reached
+	// `Served` (authkeysource.go).
+	if err == nil {
+		r.judgeKeySource(ctx, agent, runNS, status, conds, &out, claims)
+	} else {
+		r.holdKeySource(agent, status, conds, &out, claims, err)
+	}
 	return out, err
 }
 
@@ -518,15 +530,21 @@ func (r *AgentReconciler) seedStoredAbove(agent *assaydv1alpha1.Agent, status *a
 // carriedNote marks a condition seedStoredAbove carries. A pass that returns
 // before the -auth step re-reads nothing, so what it carries can outlive its
 // policy until a pass reaches that step, and the condition says so.
-const carriedNote = " | carried as the last pass that read the Gateway stored it, at the generation it " +
-	"names; this pass returned before the -auth step and did not read the Gateway again (design 03 A75)"
+//
+// It is written for every reason it carries, and A86 rewrote it whole: the old
+// text said the Gateway stored the claim "at the generation it names", which is
+// false for ApiKeySourceEmpty, derived from a list with no generation.
+const carriedNote = " | carried as the last pass that derived it stored it — from the Gateway's report at " +
+	"the generation it names, or from a live list of the key source; this pass returned before the " +
+	"-auth step and re-read neither (design 03 A75, A86)"
 
 // carriedReason reports whether a condition's reason is one seedStoredAbove
 // carries, and so one the -auth step withdraws and derives afresh. Neither is
 // raised by anything that runs before that step.
 func carriedReason(reason string) bool {
 	return reason == ReasonGatewayAuthPolicy || reason == ReasonForeignTrafficPolicy ||
-		reason == ReasonServingRouteNotAccepted || reason == ReasonAuthPolicyNotAttached
+		reason == ReasonServingRouteNotAccepted || reason == ReasonAuthPolicyNotAttached ||
+		reason == ReasonAPIKeySourceEmpty
 }
 
 // a80Carried is the predicate of seedStoredAbove's A80 block: A80's two
@@ -543,7 +561,8 @@ func carriedReason(reason string) bool {
 // lists. TestSeedAndWithdrawAreTheSameSet is the pin.
 func a80Carried(reason string) bool {
 	return carriedReason(reason) &&
-		(reason == ReasonServingRouteNotAccepted || reason == ReasonAuthPolicyNotAttached)
+		(reason == ReasonServingRouteNotAccepted || reason == ReasonAuthPolicyNotAttached ||
+			reason == ReasonAPIKeySourceEmpty)
 }
 
 // carried is c, as the last pass stored it, marked once as carried.
@@ -584,8 +603,14 @@ func heldAbove(conds *conditionSet) bool {
 // all. An Agent nothing can reach is the cause to name first.
 //
 // Both can also stand beside ForeignTrafficPolicy and W1's GatewayAuthPolicy.
+//
+// A86's ApiKeySourceEmpty comes LAST. The four reasons that can stand beside
+// it each make "every keyed request gets 401" false or unknown — a foreign or
+// Gateway-level policy may widen the route, a refused route reaches nothing,
+// a policy the Gateway reports broken may not be enforcing — and none of them
+// depends on the key source, so each outranks it.
 var incompleteOrder = []string{ReasonAuthPolicyMissing, ReasonForeignTrafficPolicy, ReasonGatewayAuthPolicy,
-	ReasonServingRouteNotAccepted, ReasonAuthPolicyNotAttached}
+	ReasonServingRouteNotAccepted, ReasonAuthPolicyNotAttached, ReasonAPIKeySourceEmpty}
 
 func incompleteRank(reason string) int {
 	for i, r := range incompleteOrder {
@@ -1643,10 +1668,13 @@ func (r *AgentReconciler) reconcileServed(ctx context.Context, agent *assaydv1al
 		}
 		// Re-asserted before the route, so that a promotion never moves the
 		// route's backendRef while the policy has been changed out of band.
-		p, err := r.reassertServedPolicy(ctx, agent, runNS, status.Auth)
+		p, live, err := r.reassertServedPolicy(ctx, agent, runNS, status.Auth)
 		if err != nil {
 			return out, &gatewayError{reason: ReasonPolicyWriteFailed, err: err}
 		}
+		// A86 reads the key source from the live object whenever it is this
+		// Agent's, whether or not it renders to appliedDigest.
+		out.keyPolicy = keySourcePolicy{read: true, obj: live}
 		// A80 judges the policy only where BOTH of that call's guards passed:
 		// a policy at this name that is not this Agent's is ForeignTrafficPolicy
 		// and is never judged here.
@@ -2387,30 +2415,36 @@ func (r *AgentReconciler) authPolicyPresent(ctx context.Context, agent *assaydv1
 // and rendering to status.auth.appliedDigest — and nil when any of those three
 // does not hold, because A80 judges the Gateway's report on THIS Agent's
 // policy and on nothing else. It returned error alone until A80.
+//
+// Its SECOND return is design 03 A86's: the live object whenever §3.2's UID
+// guard passes, whether or not it renders to appliedDigest — the policy as
+// written, where this pass re-asserted it. The key-source half takes its
+// selector from it and deliberately skips the digest guard, which an upgrade
+// that changes the render fails permanently (case 20 (n)).
 func (r *AgentReconciler) reassertServedPolicy(ctx context.Context, agent *assaydv1alpha1.Agent,
-	runNS string, auth *assaydv1alpha1.AuthStatus) (*unstructured.Unstructured, error) {
+	runNS string, auth *assaydv1alpha1.AuthStatus) (judged, live *unstructured.Unstructured, err error) {
 	recorded, err := compiler.AuthPolicy(compiler.AuthInput{AgentName: agent.Name,
 		AgentNamespace: agent.Namespace, AgentUID: agent.UID, RunNamespace: runNS})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	digest, err := compiler.Digest(recorded)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	existing := NewAgentgatewayPolicy()
 	switch err := r.Get(ctx, types.NamespacedName{Namespace: runNS, Name: recorded.GetName()}, existing); {
 	case apierrors.IsNotFound(err):
-		return nil, nil
+		return nil, nil, nil
 	case err != nil:
-		return nil, fmt.Errorf("read policy %s in %s: %w", recorded.GetName(), runNS, err)
+		return nil, nil, fmt.Errorf("read policy %s in %s: %w", recorded.GetName(), runNS, err)
 	}
 	if existing.GetLabels()[LabelAgentUID] != string(agent.UID) {
 		// Not this Agent's by the name-and-label rule: reported as
 		// ForeignTrafficPolicy, and neither taken over nor deleted (§3.2).
 		log.FromContext(ctx).Info("not re-asserting a policy at this Agent's -auth name that does not "+
 			"carry its UID", "policy", recorded.GetName())
-		return nil, nil
+		return nil, nil, nil
 	}
 	if digest != auth.AppliedDigest {
 		// What this build renders is not what was served, so the served policy
@@ -2418,13 +2452,13 @@ func (r *AgentReconciler) reassertServedPolicy(ctx context.Context, agent *assay
 		log.FromContext(ctx).Info("not re-asserting the served -auth policy: this operator renders a "+
 			"different digest than status.auth records", "policy", recorded.GetName(),
 			"recorded", auth.AppliedDigest, "rendered", digest)
-		return nil, nil
+		return nil, existing, nil
 	}
 	written, err := r.writeAuthPolicy(ctx, agent, existing, recorded, digest)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return written, nil
+	return written, written, nil
 }
 
 // refuseAdopt is `Adopt`, refused (§3.3.3): no policy is written, and the

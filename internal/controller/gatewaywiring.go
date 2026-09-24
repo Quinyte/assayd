@@ -198,6 +198,12 @@ func (r *AgentReconciler) reportTeardownWaiting(ctx context.Context, agent *assa
 // policies from this cache but the watch: teardown and the NACK mapping read
 // live, and §3.2's ForeignTrafficPolicy detection, when it is built, must list
 // live too, because a foreign policy is exactly one this cache may not hold.
+//
+// ConfigMaps: only those carrying the API-key source label, held as stripped
+// metadata, for design 03 A86's key-set watch and for nothing else. Nothing
+// reads a key set from this cache: the key-source half LISTs full objects live,
+// because counting entries needs `data`, and the watch's map lists policies
+// live.
 func GatewayWatchCacheOptions(base cache.Options, gatewayNamespace string) (cache.Options, error) {
 	agentLabelled, err := labels.NewRequirement(compiler.LabelAgent, selection.Exists, nil)
 	if err != nil {
@@ -212,8 +218,29 @@ func GatewayWatchCacheOptions(base cache.Options, gatewayNamespace string) (cach
 			}),
 		},
 		NewAgentgatewayPolicy(): {Label: labels.NewSelector().Add(*agentLabelled)},
+		// Design 03 A86's key-set watch: ConfigMaps carrying the key-source
+		// label, as METADATA only (gatewaySources registers a
+		// PartialObjectMetadata source), with annotations and managedFields
+		// stripped. Metadata alone would still hold hashes: a key set written
+		// by client-side `kubectl apply` carries its whole data in the
+		// last-applied-configuration annotation. Stripping keeps true
+		// cmd/operator/main.go's reason for reading ConfigMaps uncached.
+		&corev1.ConfigMap{}: {
+			Label:     labels.SelectorFromSet(labels.Set{compiler.APIKeySourceLabel: compiler.APIKeySourceValue}),
+			Transform: stripKeySetMetadata,
+		},
 	}
 	return base, nil
+}
+
+// stripKeySetMetadata is the key-set watch's transform: it drops what could
+// carry a copy of a key set's data, and everything the watch does not map by.
+func stripKeySetMetadata(i any) (any, error) {
+	if o, ok := i.(metav1.Object); ok {
+		o.SetAnnotations(nil)
+		o.SetManagedFields(nil)
+	}
+	return i, nil
 }
 
 // gatewaySources are the policy watch (design 03 §3.2) and the NACK watch
@@ -234,9 +261,16 @@ func (r *AgentReconciler) gatewaySources(mgr ctrl.Manager, byAgentLabels handler
 	if err := mgr.Add(c); err != nil {
 		return nil, fmt.Errorf("add the gateway watch cache: %w", err)
 	}
+	keySets := &metav1.PartialObjectMetadata{}
+	keySets.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
 	return []source.Source{
 		source.Kind[client.Object](c, NewAgentgatewayPolicy(), byAgentLabels),
 		source.Kind(c, &corev1.Event{}, handler.TypedEnqueueRequestsFromMapFunc(r.nackToAgents)),
+		// A86: a key set created, emptied, relabelled or deleted enqueues every
+		// Agent with a policy in its run namespace. It only enqueues; the
+		// pass's live LIST decides. Status writes produce no ConfigMap event
+		// and the cache has no resync, so there is no hot loop.
+		source.Kind[client.Object](c, keySets, handler.EnqueueRequestsFromMapFunc(r.KeySetRequests)),
 	}, nil
 }
 

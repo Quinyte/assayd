@@ -181,7 +181,7 @@ kubectl -n assayd-system get pods
 
 An Agent with no `expose` block, or with `spec.expose.a2a.auth: apikey`, is served under API keys. Callers send a key as `Authorization: Bearer <key>`. The operator's policy admits exactly one group: the name of the **Agent's own namespace**. No field names another group.
 
-**The keys are yours to write.** The operator writes the policy and no key set, so until you add one, every caller gets `401`. A key set is a `ConfigMap` that:
+**The keys are yours to write.** The operator writes the policy and no key set, so until you add one, every caller gets `401`. Since design 03 A87 the operator says so: a served API-key Agent whose key source holds no key reads `PolicyApplyIncomplete=True` and `Ready=False`, both reason `ApiKeySourceEmpty`, phase `Degraded`, and `status.auth.keySourceEmpty: true`. That includes a new Agent on a fresh install, before you have written any key. Nothing is withdrawn, and it clears on the first reconcile after a key set with an entry appears, which a watch on the label triggers. A key set is a `ConfigMap` that:
 
 - is in the Agent's **run namespace**, not in the Agent's own namespace. A key set in another namespace was measured not to admit, at agentgateway 1.5.0;
 - carries the label `assayd.dev/api-keys: "true"`. That label is a constant, with no chart value to change it;
@@ -676,7 +676,8 @@ The last row needs no allowlist in place, so it cannot be seen after section 6.6
 | `PolicyApplyIncomplete`, reason `AuthRecordNotKept` | The Agent CRD predates `status.auth`: apply the chart's CRDs (section 4). |
 | The key set is refused, naming `assayd-api-keys` | You are not in `admission.apiKeyWriters` (section 3). |
 | `Registered=False`, reason `CardNameMismatch` | The card's `name` is not the Agent's name. `docs/agent-contract.md` lists the other card reasons. |
-| Every keyed request gets `401` | No key set in the run namespace, the wrong label, or the wrong hash. Hash the key's bytes with no trailing newline. |
+| `Ready=False`, phase `Degraded`, reason `ApiKeySourceEmpty` | No `ConfigMap` in the run namespace carries `assayd.dev/api-keys: "true"`, or every one that does holds no entry, so every request gets `401`. Write a key set (section 3); it clears on the next reconcile. The operator counts entries and does not parse them, so a key set with a wrong hash, or with keys only for another group, does not raise this. |
+| Every keyed request gets `401` | No key set in the run namespace, the wrong label, or the wrong hash. Hash the key's bytes with no trailing newline. The first reads `ApiKeySourceEmpty` on the Agent; the other two are reported by nothing. |
 | A tool route is refused, naming `assayd-gateway-routes` | The writer is not in `admission.toolRouteWriters`, the route names `http` or no `sectionName`, or a hostname is missing or an Agent's. The message says which (section 6.4). On chart `0.3.0` and earlier, the value does not exist (section 6.2). |
 | Every tool request gets `503 mcp: no backends configured` | The MCP Service's port has no `appProtocol: agentgateway.dev/mcp` (section 6.3). |
 | A tool task fails with `ASSAYD_GATEWAY_URL is not set` | `gateway.url` is unset (section 6.2), or the Pods of the revision taking traffic were rendered before it was set. Read which revision serves and what it carries, with the two commands in section 6.7. |

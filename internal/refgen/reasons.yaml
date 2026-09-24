@@ -64,6 +64,35 @@ reasons:
       `TestAnUnaddressableActiveServiceAndARefusedRouteOnOnePass`. `Ready=False`
       and phase `Degraded` agree with design 03; only the reason differs.
 
+  - reason: ApiKeySourceEmpty
+    state: >-
+      On a pass of a SERVED API-key Agent (`status.auth.mode` is `apikey`) that
+      leaves the transaction slot empty — including the pass on which a `Create`
+      or `Lock` reaches `Served` — a live, uncached list of the ConfigMaps its
+      live `<agent>-auth` selects (by `matchLabels`, in the policy's own
+      namespace) succeeded and found no entry in `data` or `binaryData`: no
+      ConfigMap carries the label, or every one that does is empty. While the
+      policy is enforcing, every request then gets `401`, with a key or without
+      one.
+    operator: >-
+      Sets `PolicyApplyIncomplete=True`, `Ready=False` and `Degraded=True`, phase
+      `Degraded` (the human's K1, ADR-0034 Amendment 7), and records the claim on
+      `status.auth.keySourceEmpty` so it is held, under its own marker, across a
+      pass whose list fails, whose policy GET fails, whose selector is not
+      `matchLabels` alone, or that finds no policy of this Agent's. A list that
+      finds an entry clears it. It ranks last in `PolicyApplyIncomplete`'s order,
+      and writes nothing to `GovernanceSkipped`. A labelled-ConfigMap watch,
+      metadata only and filtered to run namespaces, enqueues every Agent with a
+      policy in the namespace.
+    traffic: not-withdrawn
+    note: >-
+      Entries are counted, never parsed: an entry agentgateway rejects is the
+      policy half's `PartiallyValid` report, and a key set holding keys but
+      none in this Agent's group is not detected. A list that fails on every
+      pass leaves a real outage unreported; it is logged and written to no
+      condition. On an Agent CRD that predates the field the claim is re-derived
+      every pass and the pruning is logged, never refused (design 03 A86).
+
   - reason: AuthAbandonWaiting
     state: >-
       A transaction whose target no longer matches the spec was abandoned, and

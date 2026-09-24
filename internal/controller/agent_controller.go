@@ -1079,14 +1079,16 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				withhold: &failure{reason, fmt.Sprintf("the -auth %s is in stage %s, and this pass lost "+
 					"a race and is retried: %v", tx.Kind, tx.Stage, rerr)}})
 		} else if w := gw.withhold; w != nil && (w.reason == ReasonGatewayAuthPolicy ||
-			w.reason == ReasonServingRouteNotAccepted || w.reason == ReasonAuthPolicyNotAttached) {
+			w.reason == ReasonServingRouteNotAccepted || w.reason == ReasonAuthPolicyNotAttached ||
+			w.reason == ReasonAPIKeySourceEmpty) {
 			// W1 on a served Agent, which reconcileGateway re-derives on a lost
 			// race too: Ready stays withheld for the pass (design 03 A75).
 			// A80 widens this arm to its two reasons, which is the one change
 			// it makes outside its own judgement: for a served Agent with an
 			// empty slot or a refused Adopt none of the other two arms fires,
 			// so a restored report would come back beside Ready=True — the
-			// defect one path over.
+			// defect one path over. A86's key-source half holds its claim on
+			// a lost race too, and is admitted for the same reason.
 			withholdReady(status, conds, gw)
 		}
 		status.Conditions = conds.merge(agent.Status.Conditions)
@@ -1517,9 +1519,9 @@ func (r *AgentReconciler) carryGatewayReport(conds *conditionSet, agent *assaydv
 			continue
 		}
 		// Each half gets the note that is TRUE of it. carriedNote says the pass
-		// did not read the Gateway again, which is the right account of
-		// PolicyApplyIncomplete's reasons and the wrong one for a compile: the
-		// compiler reads the spec and status.auth, not the Gateway.
+		// re-read neither the Gateway nor the key source, which is the right
+		// account of PolicyApplyIncomplete's reasons and the wrong one for a
+		// compile: the compiler reads the spec and status.auth, not the Gateway.
 		note := carriedNote
 		if t == assaydv1alpha1.CondPolicyCompileFailed {
 			note = compileCarriedNote
@@ -2298,9 +2300,24 @@ func (r *AgentReconciler) writeStatus(ctx context.Context, agent *assaydv1alpha1
 	if equalStatus(&agent.Status, status) {
 		return nil // no-op writes churn the API server and fight other controllers
 	}
+	keySourceEmpty := status.Auth != nil && status.Auth.KeySourceEmpty
 	agent.Status = *status
 	if err := r.Status().Update(ctx, agent); err != nil {
 		return fmt.Errorf("update status of %s/%s: %w", agent.Namespace, agent.Name, err)
+	}
+	// Design 03 A86: a write that sets status.auth.keySourceEmpty reads it
+	// back from the response, as persistServiceRecord does for
+	// status.revisionServices. An installed Agent CRD that predates the field
+	// prunes it without an error, and then every pass re-derives the claim and
+	// a failed list drops it for that pass. That is LOGGED, never refused:
+	// authKept deliberately does not compare this field, because on a pruning
+	// CRD the stored value and the wanted one are both false and a refusal
+	// could never fire on a real install (A86, case 20 (m)).
+	if keySourceEmpty && (agent.Status.Auth == nil || !agent.Status.Auth.KeySourceEmpty) {
+		log.FromContext(ctx).Info("the installed Agent CRD pruned status.auth.keySourceEmpty: a claim "+
+			"that this Agent's API-key source is empty is re-derived on every pass and not held across "+
+			"one whose list fails. Apply this release's charts/assayd/crds/ with kubectl; helm upgrade "+
+			"never updates a chart's crds/", "agent", client.ObjectKeyFromObject(agent))
 	}
 	return nil
 }

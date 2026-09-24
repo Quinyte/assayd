@@ -1090,6 +1090,17 @@ spec:
                       KeySource is the canonical selector the served policy selects. Present
                       exactly when Mode is apikey.
                     type: string
+                  keySourceEmpty:
+                    description: |-
+                      KeySourceEmpty says the last pass whose live list of this Agent's API-key
+                      source succeeded found no key there: no ConfigMap carrying the label its
+                      <agent>-auth selects in the run namespace, or none holding an entry in
+                      data or binaryData. PolicyApplyIncomplete then stands under
+                      ApiKeySourceEmpty, and Ready is withheld (design 03 A86, ADR-0034
+                      Amendment 7). A list that fails leaves it as it stood; a list that finds
+                      an entry clears it. It records a count of entries, not a working key: an
+                      entry agentgateway rejects still counts.
+                    type: boolean
                   mode:
                     description: |-
                       Mode is the served -auth mode. It is absent until a transaction first

@@ -862,7 +862,7 @@ func TestAnEarlyReturnCarriesAForeignTrafficPolicy(t *testing.T) {
 	for _, typ := range []assaydv1alpha1.ConditionType{assaydv1alpha1.CondGovernanceSkipped,
 		assaydv1alpha1.CondPolicyApplyIncomplete} {
 		c := condIs(t, a, typ, metav1.ConditionTrue, "ForeignTrafficPolicy")
-		mustContain(t, c, string(typ), "intruder", "carried as the last pass that read the Gateway stored it")
+		mustContain(t, c, string(typ), "intruder", "carried as the last pass that derived it stored it")
 	}
 	r.LabelAuthorityPresent = orig
 	if err := k8s.Delete(context.Background(), intruder); err != nil {
@@ -907,7 +907,7 @@ func TestACarriedForeignTrafficPolicyIsWithdrawnOnATransientError(t *testing.T) 
 	r.LabelAuthorityPresent = func(context.Context) (bool, error) { return false, nil }
 	reconcileOnce(t, r, a)
 	g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "ForeignTrafficPolicy")
-	mustContain(t, g, "GovernanceSkipped", "carried as the last pass that read the Gateway stored it")
+	mustContain(t, g, "GovernanceSkipped", "carried as the last pass that derived it stored it")
 	r.LabelAuthorityPresent = orig
 	if err := k8s.Delete(context.Background(), intruder); err != nil {
 		t.Fatal(err)
@@ -942,7 +942,7 @@ func TestARestoredHoldDropsTheCarriedMark(t *testing.T) {
 	r.LabelAuthorityPresent = func(context.Context) (bool, error) { return false, nil }
 	reconcileOnce(t, r, a)
 	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
-	mustContain(t, c, "PolicyApplyIncomplete", "carried as the last pass that read the Gateway stored it")
+	mustContain(t, c, "PolicyApplyIncomplete", "carried as the last pass that derived it stored it")
 	r.LabelAuthorityPresent = orig
 	// Drift the prepared route, so this pass updates it before it reads the
 	// Gateway, and the update loses the race.
@@ -957,7 +957,7 @@ func TestARestoredHoldDropsTheCarriedMark(t *testing.T) {
 	}
 	c = condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
 	mustContain(t, c, "PolicyApplyIncomplete", key.String())
-	if c != nil && strings.Contains(c.Message, "carried as the last pass that read the Gateway stored it") {
+	if c != nil && strings.Contains(c.Message, "carried as the last pass that derived it stored it") {
 		t.Errorf("a hold put back on a lost race kept an early return's carried mark: %s", c.Message)
 	}
 }
@@ -973,7 +973,7 @@ func TestTheCarriedMarkIsAddedOnce(t *testing.T) {
 		reconcileOnce(t, r, a)
 	}
 	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
-	if n := strings.Count(c.Message, "carried as the last pass that read the Gateway stored it"); c != nil && n != 1 {
+	if n := strings.Count(c.Message, "carried as the last pass that derived it stored it"); c != nil && n != 1 {
 		t.Errorf("three early returns marked the hold carried %d times: %s", n, c.Message)
 	}
 }
@@ -1050,7 +1050,7 @@ func TestAnEarlyReturnMarksWhatItCarries(t *testing.T) {
 		if !c.LastTransitionTime.Equal(&before.LastTransitionTime) {
 			t.Errorf("%s's LastTransitionTime moved from %v to %v", typ, before.LastTransitionTime, c.LastTransitionTime)
 		}
-		if !strings.Contains(c.Message, "carried as the last pass that read the Gateway stored it") {
+		if !strings.Contains(c.Message, "carried as the last pass that derived it stored it") {
 			t.Errorf("%s does not say it is carried: %s", typ, c.Message)
 		}
 	}

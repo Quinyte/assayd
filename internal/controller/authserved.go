@@ -290,7 +290,10 @@ func policyReport(p *unstructured.Unstructured, gw GatewayConfig) (gatewayReport
 // separator raiseIncomplete and reportAboveServed both reuse, so a claim's
 // extent in it is ambiguous — and because in the ordinary case a standing
 // claim is a FRAGMENT under another reason, which a reason match cannot find.
-type servedClaims struct{ routeRefused, policyUnattached bool }
+//
+// keySourceEmpty is design 03 A86's claim, beside A80's two for A80's reason:
+// in the composed state it is a fragment under another reason.
+type servedClaims struct{ routeRefused, policyUnattached, keySourceEmpty bool }
 
 // storedClaims reads the claim store from STORED status, which must happen
 // BEFORE the -auth step: refuseAdopt assigns status.auth wholesale on every
@@ -299,7 +302,8 @@ type servedClaims struct{ routeRefused, policyUnattached bool }
 // where it uses them would read them wiped.
 func storedClaims(agent *assaydv1alpha1.Agent) servedClaims {
 	if a := agent.Status.Auth; a != nil {
-		return servedClaims{routeRefused: a.RouteRefused, policyUnattached: a.PolicyUnattached}
+		return servedClaims{routeRefused: a.RouteRefused, policyUnattached: a.PolicyUnattached,
+			keySourceEmpty: a.KeySourceEmpty}
 	}
 	return servedClaims{}
 }
@@ -310,6 +314,7 @@ func (c servedClaims) writeTo(status *assaydv1alpha1.AgentStatus) {
 	}
 	status.Auth.RouteRefused = c.routeRefused
 	status.Auth.PolicyUnattached = c.policyUnattached
+	status.Auth.KeySourceEmpty = c.keySourceEmpty
 }
 
 // judgesServed is A80's gate: a served Agent with no transaction in the slot,
