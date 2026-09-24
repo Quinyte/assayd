@@ -287,37 +287,41 @@ func keyGroup(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus) s
 }
 
 // KeySetRequests maps a change to a labelled key ConfigMap to every Agent
-// that has an <agent>-auth in its namespace (A86's watch). Events outside run
-// namespaces are dropped FIRST: the label is not reserved there, and every
-// event reaching the list below costs a live policy LIST. The policies are
-// listed LIVE, never from the gateway watch cache.
+// whose run namespace it is in (A86's watch). Events outside run namespaces
+// are dropped FIRST: the label is not reserved there, so any namespace can
+// produce them.
+//
+// The Agents are listed through the reconciler's client, which in the
+// operator is the manager's CACHE of Agents, not a live read. A86 specified a
+// live LIST of the namespace's policies, and A87 changes that on its review's
+// finding: a live LIST that fails LOSES the event, and the only fallback is
+// the CardDriftInterval requeue, which runs only while the active revision is
+// ready — so a restored key set could leave a false ApiKeySourceEmpty standing
+// for five minutes, or indefinitely. A cache read does not fail that way, and
+// costs no API call. It enqueues every Agent there, API-key or not; a pass of
+// any other Agent makes no key-source read, since the half is gated on
+// status.auth.mode.
 func (r *AgentReconciler) KeySetRequests(ctx context.Context, o client.Object) []reconcile.Request {
 	if !strings.HasPrefix(o.GetNamespace(), RunNamespacePrefix) {
 		return nil
 	}
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(AgentgatewayPolicyGVK.GroupVersion().WithKind(compiler.PolicyKind + "List"))
-	if err := r.reader().List(ctx, list, client.InNamespace(o.GetNamespace()),
-		client.HasLabels{compiler.LabelAgent, compiler.LabelAgentNamespace}); err != nil {
-		log.FromContext(ctx).Error(err, "list the policies a key-set change concerns",
+	var agents assaydv1alpha1.AgentList
+	if err := r.List(ctx, &agents); err != nil {
+		log.FromContext(ctx).Error(err, "list the Agents a key-set change concerns",
 			"namespace", o.GetNamespace())
 		return nil
 	}
-	return keySetRequests(list.Items)
+	return keySetRequests(o.GetNamespace(), agents.Items)
 }
 
-// keySetRequests is every Agent a list of policies names, once each.
-func keySetRequests(policies []unstructured.Unstructured) []reconcile.Request {
-	seen := map[types.NamespacedName]bool{}
+// keySetRequests is every Agent whose run namespace is runNS.
+func keySetRequests(runNS string, agents []assaydv1alpha1.Agent) []reconcile.Request {
 	var out []reconcile.Request
-	for i := range policies {
-		l := policies[i].GetLabels()
-		key := types.NamespacedName{Namespace: l[compiler.LabelAgentNamespace], Name: l[compiler.LabelAgent]}
-		if key.Namespace == "" || key.Name == "" || seen[key] {
+	for i := range agents {
+		if RunNamespaceName(agents[i].Namespace) != runNS {
 			continue
 		}
-		seen[key] = true
-		out = append(out, reconcile.Request{NamespacedName: key})
+		out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&agents[i])})
 	}
 	return out
 }

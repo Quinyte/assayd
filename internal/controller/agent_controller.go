@@ -190,6 +190,11 @@ type AgentReconciler struct {
 	// runNamespaceLocks serializes the writers of one binding record within
 	// this process; see lockRunNamespace.
 	runNamespaceLocks sync.Map
+	// keySourcePruneLogged holds the UIDs of Agents whose pruned
+	// status.auth.keySourceEmpty this process has already logged at the
+	// default level, so that an old CRD logs once per Agent and not on every
+	// pass (design 03 A87).
+	keySourcePruneLogged sync.Map
 }
 
 // NewAgentReconciler builds a reconciler with its dependencies stated, so that
@@ -2313,11 +2318,26 @@ func (r *AgentReconciler) writeStatus(ctx context.Context, agent *assaydv1alpha1
 	// authKept deliberately does not compare this field, because on a pruning
 	// CRD the stored value and the wanted one are both false and a refusal
 	// could never fire on a real install (A86, case 20 (m)).
-	if keySourceEmpty && (agent.Status.Auth == nil || !agent.Status.Auth.KeySourceEmpty) {
-		log.FromContext(ctx).Info("the installed Agent CRD pruned status.auth.keySourceEmpty: a claim "+
-			"that this Agent's API-key source is empty is re-derived on every pass and not held across "+
-			"one whose list fails. Apply this release's charts/assayd/crds/ with kubectl; helm upgrade "+
-			"never updates a chart's crds/", "agent", client.ObjectKeyFromObject(agent))
+	//
+	// ONCE per Agent at the default level, and at V(1) after that. On a pruning
+	// CRD every pass of an Agent with an empty key source wants the field and
+	// gets it back false, so it writes again — a write the API server stores
+	// as a no-op, with no event — and without this the line would repeat on
+	// every pass (A87, the review's MINOR 9). The memory is cleared when the
+	// field comes back, so a later downgrade logs again.
+	if keySourceEmpty {
+		logger := log.FromContext(ctx)
+		if agent.Status.Auth == nil || !agent.Status.Auth.KeySourceEmpty {
+			if _, seen := r.keySourcePruneLogged.LoadOrStore(agent.UID, true); seen {
+				logger = logger.V(1)
+			}
+			logger.Info("the installed Agent CRD pruned status.auth.keySourceEmpty: a claim "+
+				"that this Agent's API-key source is empty is re-derived on every pass and not held across "+
+				"one whose list fails. Apply this release's charts/assayd/crds/ with kubectl; helm upgrade "+
+				"never updates a chart's crds/", "agent", client.ObjectKeyFromObject(agent))
+		} else {
+			r.keySourcePruneLogged.Delete(agent.UID)
+		}
 	}
 	return nil
 }

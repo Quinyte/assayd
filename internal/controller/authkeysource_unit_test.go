@@ -12,27 +12,27 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
+	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 	"github.com/Quinyte/assayd/internal/compiler"
 )
 
 // Design 03 §8.1 case 20's unit row: a key set in a run namespace maps to
-// EVERY Agent with a policy there, because in the slice every <agent>-auth in
-// a run namespace selects the same key set.
+// EVERY Agent whose run namespace it is, because in the slice every
+// <agent>-auth in a run namespace selects the same key set — and to no Agent of
+// another namespace. Since A87 the map reads the cached Agent list rather than
+// listing policies live.
 //
-// Mutation: return only the first. It compiles, and this must fail.
+// Mutations, one per run: return only the first; drop the run-namespace
+// comparison. Each compiles, and this must fail.
 func TestAKeySetMapsToEveryAgentWithAPolicyThere(t *testing.T) {
-	policy := func(agent string) unstructured.Unstructured {
-		p, err := compiler.AuthPolicy(compiler.AuthInput{AgentName: agent, AgentNamespace: "payments",
-			AgentUID: "0f0e0d0c-0000-0000-0000-00000000cafe", RunNamespace: "assayd-run-payments"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return *p
+	agent := func(ns, name string) assaydv1alpha1.Agent {
+		return assaydv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}
 	}
-	got := keySetRequests([]unstructured.Unstructured{policy("billing"), policy("refunds"), policy("billing")})
+	got := keySetRequests(RunNamespaceName("payments"), []assaydv1alpha1.Agent{
+		agent("payments", "billing"), agent("ledger", "books"), agent("payments", "refunds")})
 	want := []types.NamespacedName{{Namespace: "payments", Name: "billing"}, {Namespace: "payments", Name: "refunds"}}
 	if len(got) != len(want) {
-		t.Fatalf("a key-set event maps to %v, want both Agents once each: %v", got, want)
+		t.Fatalf("a key-set event maps to %v, want exactly the two Agents of its run namespace: %v", got, want)
 	}
 	for i := range want {
 		if got[i].NamespacedName != want[i] {

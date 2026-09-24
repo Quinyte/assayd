@@ -82,8 +82,8 @@ reasons:
       `matchLabels` alone, or that finds no policy of this Agent's. A list that
       finds an entry clears it. It ranks last in `PolicyApplyIncomplete`'s order,
       and writes nothing to `GovernanceSkipped`. A labelled-ConfigMap watch,
-      metadata only and filtered to run namespaces, enqueues every Agent with a
-      policy in the namespace.
+      metadata only and filtered to run namespaces, enqueues every Agent whose
+      run namespace it is, read from the manager's Agent cache.
     traffic: not-withdrawn
     note: >-
       Entries are counted, never parsed: an entry agentgateway rejects is the

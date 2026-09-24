@@ -233,6 +233,17 @@ func GatewayWatchCacheOptions(base cache.Options, gatewayNamespace string) (cach
 	return base, nil
 }
 
+// KeySetWatchObject is the object gatewaySources registers the key-set watch
+// on: ConfigMaps as PartialObjectMetadata, so the informer holds no data. It is
+// exported so that a test takes the informer the operator actually registers
+// from a cache GatewayWatchCacheOptions builds, rather than one of its own
+// (design 03 A87, the review's MAJOR).
+func KeySetWatchObject() client.Object {
+	o := &metav1.PartialObjectMetadata{}
+	o.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
+	return o
+}
+
 // stripKeySetMetadata is the key-set watch's transform: it drops what could
 // carry a copy of a key set's data, and everything the watch does not map by.
 func stripKeySetMetadata(i any) (any, error) {
@@ -261,16 +272,17 @@ func (r *AgentReconciler) gatewaySources(mgr ctrl.Manager, byAgentLabels handler
 	if err := mgr.Add(c); err != nil {
 		return nil, fmt.Errorf("add the gateway watch cache: %w", err)
 	}
-	keySets := &metav1.PartialObjectMetadata{}
-	keySets.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
 	return []source.Source{
 		source.Kind[client.Object](c, NewAgentgatewayPolicy(), byAgentLabels),
 		source.Kind(c, &corev1.Event{}, handler.TypedEnqueueRequestsFromMapFunc(r.nackToAgents)),
 		// A86: a key set created, emptied, relabelled or deleted enqueues every
-		// Agent with a policy in its run namespace. It only enqueues; the
-		// pass's live LIST decides. Status writes produce no ConfigMap event
-		// and the cache has no resync, so there is no hot loop.
-		source.Kind[client.Object](c, keySets, handler.EnqueueRequestsFromMapFunc(r.KeySetRequests)),
+		// Agent whose run namespace it is in. It only enqueues; the pass's live
+		// LIST decides. Status writes produce no ConfigMap event, so there is
+		// no hot loop. The cache DOES resync, at controller-runtime's default
+		// of every 10 hours: that redelivers each held key set as an update and
+		// enqueues its Agents once more, which costs one pass each and makes no
+		// API call to deliver (A87 corrects A86's "no resync").
+		source.Kind[client.Object](c, KeySetWatchObject(), handler.EnqueueRequestsFromMapFunc(r.KeySetRequests)),
 	}, nil
 }
 

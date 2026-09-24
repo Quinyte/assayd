@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -125,10 +126,15 @@ func lostKeys(t *testing.T, r *controller.AgentReconciler, a *assaydv1alpha1.Age
 type keySourceReader struct {
 	client.Reader
 	failKeyList bool
-	mu          sync.Mutex
-	policyGets  int
-	keyLists    int
-	policyLists int
+	// foreignPolicy makes every policy GET through this reader return the
+	// object with another Agent's UID label. Only the key-source half GETs a
+	// policy through the uncached reader (liveAuthPolicy), so nothing else
+	// the pass does sees it.
+	foreignPolicy bool
+	mu            sync.Mutex
+	policyGets    int
+	keyLists      int
+	policyLists   int
 }
 
 func (k *keySourceReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object,
@@ -137,6 +143,13 @@ func (k *keySourceReader) Get(ctx context.Context, key client.ObjectKey, obj cli
 		k.mu.Lock()
 		k.policyGets++
 		k.mu.Unlock()
+		if err := k.Reader.Get(ctx, key, obj, opts...); err != nil || !k.foreignPolicy {
+			return err
+		}
+		l := u.GetLabels()
+		l[controller.LabelAgentUID] = "someone-else"
+		u.SetLabels(l)
+		return nil
 	}
 	return k.Reader.Get(ctx, key, obj, opts...)
 }
@@ -310,20 +323,29 @@ func TestTheKeySetWatchRequeuesEveryAgentInTheNamespace(t *testing.T) {
 	}
 }
 
-// (b″) The transform: the watch cache holds a key set's metadata with its
-// annotations stripped, so a `kubectl apply` last-applied-configuration — a
-// full copy of the data, hashes included — is never held in memory.
+// (b″) The watch holds what it maps by and nothing else. The informer is the
+// one the operator REGISTERS — controller.KeySetWatchObject(), which
+// gatewaySources passes to its source — taken from a cache built by
+// GatewayWatchCacheOptions, and its store is listed. A row that built its own
+// PartialObjectMetadata read could not fail whatever the operator registered
+// (A87, the review's MAJOR).
 //
-// Mutation: drop the transform. It compiles, and this must fail.
+// Mutations, one per run: drop the transform; register a full ConfigMap
+// (KeySetWatchObject returns &corev1.ConfigMap{}); drop the label selector.
+// Each compiles, and this must fail.
 func TestTheKeySetWatchCacheHoldsNoData(t *testing.T) {
 	ctx := context.Background()
 	ns := newNamespace(t)
-	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "applied", Namespace: ns,
-		Labels:      map[string]string{compiler.APIKeySourceLabel: compiler.APIKeySourceValue},
-		Annotations: map[string]string{"kubectl.kubernetes.io/last-applied-configuration": `{"data":{"caller":"x"}}`}},
-		Data: map[string]string{"caller": "x"}}
-	if err := k8s.Create(ctx, cm); err != nil {
-		t.Fatal(err)
+	for _, cm := range []*corev1.ConfigMap{
+		{ObjectMeta: metav1.ObjectMeta{Name: "applied", Namespace: ns,
+			Labels:      map[string]string{compiler.APIKeySourceLabel: compiler.APIKeySourceValue},
+			Annotations: map[string]string{"kubectl.kubernetes.io/last-applied-configuration": `{"data":{"caller":"x"}}`}},
+			Data: map[string]string{"caller": "x"}, BinaryData: map[string][]byte{"bin": []byte("x")}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "unlabelled", Namespace: ns}, Data: map[string]string{"k": "v"}},
+	} {
+		if err := k8s.Create(ctx, cm); err != nil {
+			t.Fatal(err)
+		}
 	}
 	opts, err := controller.GatewayWatchCacheOptions(cache.Options{Scheme: scheme}, ns)
 	if err != nil {
@@ -336,34 +358,87 @@ func TestTheKeySetWatchCacheHoldsNoData(t *testing.T) {
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() { _ = c.Start(cctx) }()
-	held := &metav1.PartialObjectMetadata{}
-	held.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
-	eventually(t, "the watch cache to hold the key set", func() bool {
-		return c.Get(ctx, client.ObjectKeyFromObject(cm), held) == nil
+	inf, err := c.GetInformer(ctx, controller.KeySetWatchObject())
+	if err != nil {
+		t.Fatalf("the cache has no informer for the object the operator registers: %v", err)
+	}
+	shared, ok := inf.(toolscache.SharedIndexInformer)
+	if !ok {
+		t.Fatalf("the informer is a %T, whose store this row cannot list", inf)
+	}
+	var mine []any
+	eventually(t, "the watch to hold the labelled key set", func() bool {
+		if !shared.HasSynced() {
+			return false
+		}
+		mine = mine[:0]
+		for _, o := range shared.GetStore().List() {
+			if m, ok := o.(metav1.Object); ok && m.GetNamespace() == ns {
+				mine = append(mine, o)
+			}
+		}
+		for _, o := range mine {
+			if o.(metav1.Object).GetName() == "applied" {
+				return true
+			}
+		}
+		return false
 	})
-	if len(held.GetAnnotations()) != 0 || len(held.GetManagedFields()) != 0 {
-		t.Errorf("the watch cache holds a key set's annotations or managedFields, which can carry its "+
-			"data: %v, %d managedFields", held.GetAnnotations(), len(held.GetManagedFields()))
+	for _, o := range mine {
+		m := o.(metav1.Object)
+		if m.GetName() == "unlabelled" {
+			t.Errorf("the watch holds %s, which carries no key-source label: it is not scoped to key sets", m.GetName())
+		}
+		if len(m.GetAnnotations()) != 0 || len(m.GetManagedFields()) != 0 {
+			t.Errorf("the watch holds %s's annotations or managedFields, which can carry its data: %v, %d "+
+				"managedFields", m.GetName(), m.GetAnnotations(), len(m.GetManagedFields()))
+		}
+		if cm, ok := o.(*corev1.ConfigMap); ok && len(cm.Data)+len(cm.BinaryData) > 0 {
+			t.Errorf("the watch holds %s's data: it is not metadata-only", cm.Name)
+		}
 	}
 }
 
-// (b‴) The run-namespace filter: a labelled ConfigMap outside a run namespace
-// makes no policy LIST.
-//
-// Mutation: drop the filter. It compiles, and this must fail.
-func TestAKeySetOutsideARunNamespaceListsNothing(t *testing.T) {
-	r, _ := createReconciler()
-	rec := &keySourceReader{Reader: k8s}
-	r.Reader = rec
-	outside := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "keys", Namespace: "payments"}}
-	if got := r.KeySetRequests(context.Background(), outside); len(got) != 0 || rec.policyLists != 0 {
-		t.Errorf("a key set outside a run namespace mapped to %v and made %d policy LISTs", got, rec.policyLists)
+// agentListCounter counts LISTs of Agents: the key-set map's only read.
+type agentListCounter struct {
+	client.Client
+	mu    sync.Mutex
+	lists int
+}
+
+func (c *agentListCounter) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*assaydv1alpha1.AgentList); ok {
+		c.mu.Lock()
+		c.lists++
+		c.mu.Unlock()
 	}
-	inside := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "keys",
-		Namespace: controller.RunNamespacePrefix + "payments"}}
-	r.KeySetRequests(context.Background(), inside)
-	if rec.policyLists != 1 {
-		t.Errorf("a key set inside a run namespace made %d policy LISTs, want 1", rec.policyLists)
+	return c.Client.List(ctx, list, opts...)
+}
+
+// (b‴) The run-namespace filter, and the namespace match. A labelled
+// ConfigMap outside a run namespace reads nothing; one inside maps to the
+// Agents of THAT run namespace and to no other's.
+//
+// Mutations, one per run: drop the filter; drop the run-namespace comparison
+// in keySetRequests. Each compiles, and this must fail.
+func TestAKeySetOutsideARunNamespaceListsNothing(t *testing.T) {
+	ns, other := newNamespace(t), nsName(t, "-other")
+	if err := k8s.Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: other}}); err != nil {
+		t.Fatal(err)
+	}
+	here := mustCreateAgent(t, ns, "a86maphere", nil)
+	mustCreateAgent(t, other, "a86mapthere", nil)
+	r, _ := createReconciler()
+	counter := &agentListCounter{Client: k8s}
+	r.Client = counter
+	outside := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "keys", Namespace: ns}}
+	if got := r.KeySetRequests(context.Background(), outside); len(got) != 0 || counter.lists != 0 {
+		t.Errorf("a key set outside a run namespace mapped to %v and made %d Agent LISTs", got, counter.lists)
+	}
+	inside := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "keys", Namespace: runNS(ns)}}
+	got := r.KeySetRequests(context.Background(), inside)
+	if len(got) != 1 || got[0].NamespacedName != client.ObjectKeyFromObject(here) {
+		t.Errorf("a key set in %s mapped to %v, want only %s/%s", runNS(ns), got, here.Namespace, here.Name)
 	}
 }
 
@@ -677,6 +752,18 @@ func (l *logCapture) reconcile(t *testing.T, r *controller.AgentReconciler, a *a
 	}
 }
 
+func (l *logCapture) count(part string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, line := range l.lines {
+		if strings.Contains(line, part) {
+			n++
+		}
+	}
+	return n
+}
+
 func (l *logCapture) any(parts ...string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -722,6 +809,12 @@ func TestAnOldCRDIsNeverRefusedForTheKeySourceClaim(t *testing.T) {
 	}
 	if !logs.any("pruned status.auth.keySourceEmpty", "charts/assayd/crds/") {
 		t.Errorf("the pruning was not logged naming charts/assayd/crds/: %v", logs.lines)
+	}
+	// ONCE at the default level across three passes, each of which wrote the
+	// field and got it back false (A87, the review's MINOR 9). Mutation: log
+	// every pass at the default level; this must fail.
+	if n := logs.count("pruned status.auth.keySourceEmpty"); n != 1 {
+		t.Errorf("the pruning was logged %d times in three passes, want once per Agent", n)
 	}
 }
 
@@ -838,5 +931,90 @@ func TestAnInstalledCRDWithoutTheFieldIsLoggedNotRefused(t *testing.T) {
 	}
 	if !logs.any("pruned status.auth.keySourceEmpty", "charts/assayd/crds/") {
 		t.Errorf("a real pruning CRD was not logged: %v", logs.lines)
+	}
+}
+
+// A transaction in the slot as the pass leaves it is not judged: a pass that
+// enters or holds a missing-policy Lock makes no key-source read, and the flag
+// stays as it stood (A86's gate; A87, the review's MINOR 2).
+//
+// Mutation: drop `auth.Transaction == nil` from judgesKeySource. It compiles,
+// and this must fail.
+func TestALockInTheSlotDoesNotReadTheKeySource(t *testing.T) {
+	a, r, stub := healthyServedAPIKeyAgent(t, "a86lockslot")
+	recordCard(t, a)
+	stub.hold(a.Name, true)
+	deletePolicy(t, a)
+	rec := &keySourceReader{Reader: readerOf(r)}
+	r.Reader = rec
+	reconcileOnce(t, r, a)
+	acceptPolicy(t, a.Namespace, a.Name)
+	reconcileOnce(t, r, a)
+	if tx := txOf(t, a); tx == nil || tx.Kind != "Lock" {
+		t.Fatalf("want a Lock of the missing policy still in the slot: %+v", tx)
+	}
+	if rec.keyLists != 0 || rec.policyGets != 0 {
+		t.Errorf("a pass with a Lock in the slot read the key source: %d key-set LISTs, %d policy GETs",
+			rec.keyLists, rec.policyGets)
+	}
+}
+
+// The Served pass's GET applies §3.2's UID guard: a policy at the -auth name
+// that is not this Agent's gives no selector, so the reading is UNKNOWN and
+// nothing is raised, even with no key set (A87, the review's MINOR 3). A later
+// steady pass, which reads this Agent's own policy, raises.
+//
+// Mutation: drop the UID comparison in liveAuthPolicy. It compiles, and this
+// must fail.
+func TestTheServedPassReadsOnlyThisAgentsPolicy(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "a86uidguard", nil)
+	r, stub := createReconciler()
+	promote(t, r, a)
+	deleteKeySets(t, ns)
+	rec := &keySourceReader{Reader: readerOf(r), foreignPolicy: true}
+	r.Reader = rec
+	driveToServed(t, r, stub, a)
+	if rec.policyGets == 0 {
+		t.Fatal("the Served pass made no policy GET, so nothing here measured the guard")
+	}
+	if c := condition(liveAgent(t, a), assaydv1alpha1.CondPolicyApplyIncomplete); c != nil &&
+		(c.Reason == "ApiKeySourceEmpty" || strings.Contains(c.Message, "ApiKeySourceEmpty")) {
+		t.Errorf("a selector was read from a policy that is not this Agent's: %s", c.Message)
+	}
+	if keySourceClaim(t, a) {
+		t.Error("a reading from another Agent's policy set status.auth.keySourceEmpty")
+	}
+	// A steady pass reads this Agent's own policy through
+	// reassertServedPolicy and raises: the silence above was the guard's.
+	reconcileOnce(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "ApiKeySourceEmpty")
+}
+
+// A87's reading 2: on a digest match reassertServedPolicy's second return is
+// the policy as THIS pass wrote it, so an out-of-band selector is repaired and
+// read in one pass. Read from the object as found, the drifted selector would
+// match no key set and report a false empty (the review's MINOR 5).
+//
+// Mutation: return `existing` rather than `written` as the second return. It
+// compiles, and this must fail.
+func TestARepairedSelectorIsReadAsRepaired(t *testing.T) {
+	a, r, _ := healthyServedAPIKeyAgent(t, "a86repaired")
+	p := policyExists(t, runNS(a.Namespace), policyNameOf(a))
+	if err := unstructured.SetNestedStringMap(p.Object, map[string]string{compiler.APIKeySourceLabel: "elsewhere"},
+		"spec", "traffic", "apiKeyAuthentication", "configMapSelector", "matchLabels"); err != nil {
+		t.Fatal(err)
+	}
+	if err := k8s.Update(context.Background(), p); err != nil {
+		t.Fatalf("drift the selector: %v", err)
+	}
+	reconcileOnce(t, r, a)
+	if c := condition(liveAgent(t, a), assaydv1alpha1.CondPolicyApplyIncomplete); c != nil {
+		t.Errorf("the drifted selector was read before the pass repaired it: %+v", c)
+	}
+	sel, _, _ := unstructured.NestedStringMap(policyExists(t, runNS(a.Namespace), policyNameOf(a)).Object,
+		"spec", "traffic", "apiKeyAuthentication", "configMapSelector", "matchLabels")
+	if sel[compiler.APIKeySourceLabel] != compiler.APIKeySourceValue {
+		t.Fatalf("the pass did not repair the selector (%v), so this row measured nothing", sel)
 	}
 }

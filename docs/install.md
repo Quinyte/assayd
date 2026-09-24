@@ -293,10 +293,13 @@ kubectl -n demo get agent hello -o jsonpath='{.status.auth}{"\n"}{.status.condit
 
 The second wait is needed. The card is fetched separately, once the Pod is available, and retried every 15 seconds. The auth wait can return first, while `Registered` is still `False`, reason `CardUnreachable`. In review it matched the table below about 30 seconds later.
 
-While it is not yet served, `Ready` is `False`, reason `AuthEnforcementPending`. Once it is, expect:
+While it is not yet served, `Ready` is `False`, reason `AuthEnforcementPending`. Once it is, and before you write any key in section 5.4, expect:
 
 | Condition | Status | Reason | Why |
 |---|---|---|---|
+| `Ready` | `False` | `ApiKeySourceEmpty` | No key set exists in the run namespace yet, so every request would get `401` (design 03 A86/A87). The phase is `Degraded`. |
+| `Degraded` | `True` | `ApiKeySourceEmpty` | The same cause. Nothing is withdrawn. |
+| `PolicyApplyIncomplete` | `True` | `ApiKeySourceEmpty` | The message names the label and namespace to write the key set in. |
 | `GovernanceSkipped` | `False` | `AuthVerifiedOnOneReplica` | One probe proves one gateway replica, and no replica count is declared. |
 | `Registered` | `True` | `CardValidated` | The operator fetched and validated the card. |
 | `CardUnsigned` | `True` | `NoSigningConfigured` | Nothing verifies card signatures yet. Raised on a managed Agent once its card has been fetched — **not** on an Agent that never became ready, and never on an external one, which returns before any card handling. Absence of this condition is not evidence that a card was checked. |
@@ -327,6 +330,12 @@ EOF
 ```
 
 `RUN_NS` is `assayd-run-demo`.
+
+The operator watches key sets, so within a reconcile `Ready` returns to `True`, reason `Available`, the phase to `Ready`, and `PolicyApplyIncomplete` clears:
+
+```bash
+kubectl -n demo wait agent/hello --for=condition=Ready --timeout=2m
+```
 
 ### 5.5 Send the task, three ways
 
