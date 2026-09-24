@@ -102,7 +102,10 @@ gateway:
   # for the Agent's namespace. That route is published only after an anonymous
   # request through it gets 401, so `servingUrl` below is required. auth: none
   # is published at once, unauthenticated, and says so. No AgentgatewayBackend
-  # is emitted and no budget, rate limit or tool allowlist is enforced.
+  # is emitted and no budget, rate limit or tool allowlist is enforced. The
+  # operator writes no key: until an administrator does, every served API-key
+  # Agent reads Ready=False, phase Degraded, reason ApiKeySourceEmpty
+  # (design 03 A86/A87).
   #
   # The Gateway API CRDs must be installed: with this true and them absent the
   # operator refuses to start rather than reporting everything is fine. The

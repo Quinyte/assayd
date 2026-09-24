@@ -360,6 +360,11 @@ func promote(t *testing.T, r *controller.AgentReconciler, a *assaydv1alpha1.Agen
 	if got := liveAgent(t, a).Status.ActiveRevision; got == "" {
 		t.Fatal("the revision never promoted")
 	}
+	// Design 03 A86: a served API-key Agent whose key source holds no key is
+	// Degraded (K1), so every fixture that reaches `Served` writes one key set
+	// first, as an administrator would. Case 20's rows delete it where they
+	// need an empty source.
+	writeKeySet(t, a.Namespace)
 }
 
 // driveToServed takes a promoted API-key Agent's `Create` to `Served` as a
@@ -902,6 +907,8 @@ func refusedAdoptAgent(t *testing.T, name string) (*assaydv1alpha1.Agent, *contr
 	if tx := txOf(t, a); tx == nil || tx.Kind != "Adopt" || tx.Stage != "Refused" {
 		t.Fatalf("the Adopt was not refused: %+v", tx)
 	}
+	// A K2 Lock from here reaches `Served` under apikey (design 03 A86).
+	writeKeySet(t, ns)
 	return liveAgent(t, a), r
 }
 

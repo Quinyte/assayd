@@ -401,7 +401,7 @@ func TestBudgetIsRefusedAtAdmission(t *testing.T) {
 
 // status.auth is design 03 §3.3's schema in the first slice's subset (§1.1):
 // "without its group and key-source transaction fields", plus A80's two-flag
-// claim store. The field sets are pinned exactly, so a later-scope field
+// claim store and A86's third flag, keySourceEmpty. The field sets are pinned exactly, so a later-scope field
 // (targetGroups, targetKeySource, afterShift) cannot arrive unapproved.
 // Nothing is required, because a refused Adopt records only its kind and
 // stage, and {mode: none} carries no key source, groups, digest or
@@ -409,8 +409,8 @@ func TestBudgetIsRefusedAtAdmission(t *testing.T) {
 func TestStatusAuthIsTheSlicesSubset(t *testing.T) {
 	s := agentSchema(t)
 	for path, want := range map[string]string{
-		"status.auth": "admittedGroups,appliedDigest,keySource,mode,policyUnattached,routeRefused," +
-			"transaction,verified",
+		"status.auth": "admittedGroups,appliedDigest,keySource,keySourceEmpty,mode,policyUnattached," +
+			"routeRefused,transaction,verified",
 		"status.auth.transaction": "beforeObserved,beforeRevision,deadline,kind,probe,refusedMode," +
 			"stage,targetDigest,targetMode,written",
 		"status.auth.verified":          "replicasDeclared,replicasProbed",

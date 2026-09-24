@@ -36,7 +36,7 @@ import (
 // current generation, and erroredMark for a pass whose step could not
 // complete.
 const (
-	carriedMark = "carried as the last pass that read the Gateway stored it"
+	carriedMark = "carried as the last pass that derived it stored it"
 	heldMark    = "carried from the last pass that got a report at this object's generation"
 	erroredMark = "carried across a pass whose -auth step could not complete"
 )

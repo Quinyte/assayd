@@ -190,6 +190,15 @@ type AgentReconciler struct {
 	// runNamespaceLocks serializes the writers of one binding record within
 	// this process; see lockRunNamespace.
 	runNamespaceLocks sync.Map
+	// keySourcePruneLogged holds the keys of Agents whose pruned
+	// status.auth.keySourceEmpty this process has already logged at the
+	// default level, so that an old CRD logs once per Agent and not on every
+	// pass (design 03 A87). An entry lives only while its Agent's claim does:
+	// writeStatus deletes it on any write whose status does not claim an empty
+	// key source, and Reconcile deletes it when the Agent is gone, so the map
+	// is bounded by the Agents currently claiming one, and an Agent whose keys
+	// are restored and then lost again logs again.
+	keySourcePruneLogged sync.Map
 }
 
 // NewAgentReconciler builds a reconciler with its dependencies stated, so that
@@ -357,6 +366,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	var agent assaydv1alpha1.Agent
 	if err := r.Get(ctx, req.NamespacedName, &agent); err != nil {
+		if apierrors.IsNotFound(err) {
+			r.keySourcePruneLogged.Delete(req.NamespacedName)
+		}
 		// A deleted Agent is not an error. Its workloads and material do NOT go
 		// with it by ownerReference — they live in the run namespace (A42) and a
 		// cross-namespace owner is treated as absent — so the finalizer below is
@@ -1079,14 +1091,16 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				withhold: &failure{reason, fmt.Sprintf("the -auth %s is in stage %s, and this pass lost "+
 					"a race and is retried: %v", tx.Kind, tx.Stage, rerr)}})
 		} else if w := gw.withhold; w != nil && (w.reason == ReasonGatewayAuthPolicy ||
-			w.reason == ReasonServingRouteNotAccepted || w.reason == ReasonAuthPolicyNotAttached) {
+			w.reason == ReasonServingRouteNotAccepted || w.reason == ReasonAuthPolicyNotAttached ||
+			w.reason == ReasonAPIKeySourceEmpty) {
 			// W1 on a served Agent, which reconcileGateway re-derives on a lost
 			// race too: Ready stays withheld for the pass (design 03 A75).
 			// A80 widens this arm to its two reasons, which is the one change
 			// it makes outside its own judgement: for a served Agent with an
 			// empty slot or a refused Adopt none of the other two arms fires,
 			// so a restored report would come back beside Ready=True — the
-			// defect one path over.
+			// defect one path over. A86's key-source half holds its claim on
+			// a lost race too, and is admitted for the same reason.
 			withholdReady(status, conds, gw)
 		}
 		status.Conditions = conds.merge(agent.Status.Conditions)
@@ -1517,9 +1531,9 @@ func (r *AgentReconciler) carryGatewayReport(conds *conditionSet, agent *assaydv
 			continue
 		}
 		// Each half gets the note that is TRUE of it. carriedNote says the pass
-		// did not read the Gateway again, which is the right account of
-		// PolicyApplyIncomplete's reasons and the wrong one for a compile: the
-		// compiler reads the spec and status.auth, not the Gateway.
+		// re-read neither the Gateway nor the key source, which is the right
+		// account of PolicyApplyIncomplete's reasons and the wrong one for a
+		// compile: the compiler reads the spec and status.auth, not the Gateway.
 		note := carriedNote
 		if t == assaydv1alpha1.CondPolicyCompileFailed {
 			note = compileCarriedNote
@@ -2295,12 +2309,46 @@ func (r *AgentReconciler) writeStatus(ctx context.Context, agent *assaydv1alpha1
 	// API server and cannot churn either (the truncation is deterministic, so a
 	// converged Agent still compares equal).
 	boundConditionMessages(status.Conditions)
+	keySourceEmpty := status.Auth != nil && status.Auth.KeySourceEmpty
+	if !keySourceEmpty {
+		// Design 03 A87: the claim is gone, so the next pruned one logs again.
+		r.keySourcePruneLogged.Delete(client.ObjectKeyFromObject(agent))
+	}
 	if equalStatus(&agent.Status, status) {
 		return nil // no-op writes churn the API server and fight other controllers
 	}
 	agent.Status = *status
 	if err := r.Status().Update(ctx, agent); err != nil {
 		return fmt.Errorf("update status of %s/%s: %w", agent.Namespace, agent.Name, err)
+	}
+	// Design 03 A86: a write that sets status.auth.keySourceEmpty reads it
+	// back from the response, as persistServiceRecord does for
+	// status.revisionServices. An installed Agent CRD that predates the field
+	// prunes it without an error, and then every pass re-derives the claim and
+	// a failed list drops it for that pass. That is LOGGED, never refused:
+	// authKept deliberately does not compare this field, because on a pruning
+	// CRD the stored value and the wanted one are both false and a refusal
+	// could never fire on a real install (A86, case 20 (m)).
+	//
+	// ONCE per Agent at the default level, and at V(1) after that. On a pruning
+	// CRD every pass of an Agent with an empty key source wants the field and
+	// gets it back false, so it writes again — a write the API server stores
+	// as a no-op, with no event — and without this the line would repeat on
+	// every pass (A87, the review's MINOR 9). The memory is cleared when the
+	// field comes back, when the claim clears, and when the Agent is gone.
+	if keySourceEmpty {
+		logger := log.FromContext(ctx)
+		if agent.Status.Auth == nil || !agent.Status.Auth.KeySourceEmpty {
+			if _, seen := r.keySourcePruneLogged.LoadOrStore(client.ObjectKeyFromObject(agent), true); seen {
+				logger = logger.V(1)
+			}
+			logger.Info("the installed Agent CRD pruned status.auth.keySourceEmpty: a claim "+
+				"that this Agent's API-key source is empty is re-derived on every pass and not held across "+
+				"one whose list fails. Apply this release's charts/assayd/crds/ with kubectl; helm upgrade "+
+				"never updates a chart's crds/", "agent", client.ObjectKeyFromObject(agent))
+		} else {
+			r.keySourcePruneLogged.Delete(client.ObjectKeyFromObject(agent))
+		}
 	}
 	return nil
 }
@@ -2359,6 +2407,11 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{
 			Namespace: l[LabelAgentNamespace], Name: l[LabelAgent]}}}
 	})
+	// Design 03 A86's key-set watch maps through this index (KeySetRequests).
+	// Registered before the manager starts its cache, as an index must be.
+	if err := IndexAgentRunNamespace(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return fmt.Errorf("index Agents by run namespace: %w", err)
+	}
 	// A ResourceQuota or LimitRange change in a source namespace must reach its
 	// run namespace (A60): every Agent in that namespace is enqueued, and the
 	// first to reconcile mirrors it.

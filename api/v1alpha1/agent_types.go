@@ -865,6 +865,16 @@ type AuthStatus struct {
 	// said; a pass that re-derives nothing cannot, and says so (design 03 A83).
 	// +optional
 	PolicyUnattached bool `json:"policyUnattached,omitempty"`
+	// KeySourceEmpty says the last pass whose live list of this Agent's API-key
+	// source succeeded found no key there: no ConfigMap carrying the label its
+	// <agent>-auth selects in the run namespace, or none holding an entry in
+	// data or binaryData. PolicyApplyIncomplete then stands under
+	// ApiKeySourceEmpty, and Ready is withheld (design 03 A86, ADR-0034
+	// Amendment 7). A list that fails leaves it as it stood; a list that finds
+	// an entry clears it. It records a count of entries, not a working key: an
+	// entry agentgateway rejects still counts.
+	// +optional
+	KeySourceEmpty bool `json:"keySourceEmpty,omitempty"`
 }
 
 // AuthVerification is how much of the gateway a passing -auth enforcement
