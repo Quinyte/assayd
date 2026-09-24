@@ -187,7 +187,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/authtxn.go:632` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
 - `internal/controller/agent_controller.go:1172` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/e2e/keysource_test.go`, `test/envtest/authkeysource_test.go`
+**Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/conformance/slice_keysource_cluster_test.go`, `test/e2e/keysource_test.go`, `test/envtest/authkeysource_test.go`
 
 **State:** On a pass of a SERVED API-key Agent (`status.auth.mode` is `apikey`) that leaves the transaction slot empty — including the pass on which a `Create` or `Lock` reaches `Served` — a live, uncached list of the ConfigMaps its live `<agent>-auth` selects (by `matchLabels`, in the policy's own namespace) succeeded and found no entry in `data` or `binaryData`: no ConfigMap carries the label, or every one that does is empty. While the policy is enforcing, every request then gets `401`, with a key or without one.
 
@@ -418,7 +418,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/authtxn.go:632` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
 - `internal/controller/agent_controller.go:1172` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/conformance/ancestor.go`, `test/conformance/slice_attach_cluster_test.go`, `test/envtest/authkeysource_test.go`, `test/envtest/authserved_test.go`, `test/envtest/service_reads_test.go`, `test/envtest/service_test.go`
+**Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/conformance/ancestor.go`, `test/conformance/slice_attach_cluster_test.go`, `test/conformance/slice_keysource_cluster_test.go`, `test/envtest/authkeysource_test.go`, `test/envtest/authserved_test.go`, `test/envtest/service_reads_test.go`, `test/envtest/service_test.go`
 
 **State:** A served `<agent>-auth` exists, carries the Agent's UID and renders to the recorded `appliedDigest`, and the Gateway reports its tuple broken at the policy's current generation. "Broken" is four different answers, and since design 03 A83 the message says which: the policy rejected outright (`Accepted=False`); accepted but not in whole (`Accepted=True` with a reason other than `Valid`); attached to nothing (`Attached=False`); or only the synthetic `StatusSummary` ancestor present.
 
