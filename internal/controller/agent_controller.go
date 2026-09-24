@@ -190,10 +190,14 @@ type AgentReconciler struct {
 	// runNamespaceLocks serializes the writers of one binding record within
 	// this process; see lockRunNamespace.
 	runNamespaceLocks sync.Map
-	// keySourcePruneLogged holds the UIDs of Agents whose pruned
+	// keySourcePruneLogged holds the keys of Agents whose pruned
 	// status.auth.keySourceEmpty this process has already logged at the
 	// default level, so that an old CRD logs once per Agent and not on every
-	// pass (design 03 A87).
+	// pass (design 03 A87). An entry lives only while its Agent's claim does:
+	// writeStatus deletes it on any write whose status does not claim an empty
+	// key source, and Reconcile deletes it when the Agent is gone, so the map
+	// is bounded by the Agents currently claiming one, and an Agent whose keys
+	// are restored and then lost again logs again.
 	keySourcePruneLogged sync.Map
 }
 
@@ -362,6 +366,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	var agent assaydv1alpha1.Agent
 	if err := r.Get(ctx, req.NamespacedName, &agent); err != nil {
+		if apierrors.IsNotFound(err) {
+			r.keySourcePruneLogged.Delete(req.NamespacedName)
+		}
 		// A deleted Agent is not an error. Its workloads and material do NOT go
 		// with it by ownerReference — they live in the run namespace (A42) and a
 		// cross-namespace owner is treated as absent — so the finalizer below is
@@ -2302,10 +2309,14 @@ func (r *AgentReconciler) writeStatus(ctx context.Context, agent *assaydv1alpha1
 	// API server and cannot churn either (the truncation is deterministic, so a
 	// converged Agent still compares equal).
 	boundConditionMessages(status.Conditions)
+	keySourceEmpty := status.Auth != nil && status.Auth.KeySourceEmpty
+	if !keySourceEmpty {
+		// Design 03 A87: the claim is gone, so the next pruned one logs again.
+		r.keySourcePruneLogged.Delete(client.ObjectKeyFromObject(agent))
+	}
 	if equalStatus(&agent.Status, status) {
 		return nil // no-op writes churn the API server and fight other controllers
 	}
-	keySourceEmpty := status.Auth != nil && status.Auth.KeySourceEmpty
 	agent.Status = *status
 	if err := r.Status().Update(ctx, agent); err != nil {
 		return fmt.Errorf("update status of %s/%s: %w", agent.Namespace, agent.Name, err)
@@ -2324,11 +2335,11 @@ func (r *AgentReconciler) writeStatus(ctx context.Context, agent *assaydv1alpha1
 	// gets it back false, so it writes again — a write the API server stores
 	// as a no-op, with no event — and without this the line would repeat on
 	// every pass (A87, the review's MINOR 9). The memory is cleared when the
-	// field comes back, so a later downgrade logs again.
+	// field comes back, when the claim clears, and when the Agent is gone.
 	if keySourceEmpty {
 		logger := log.FromContext(ctx)
 		if agent.Status.Auth == nil || !agent.Status.Auth.KeySourceEmpty {
-			if _, seen := r.keySourcePruneLogged.LoadOrStore(agent.UID, true); seen {
+			if _, seen := r.keySourcePruneLogged.LoadOrStore(client.ObjectKeyFromObject(agent), true); seen {
 				logger = logger.V(1)
 			}
 			logger.Info("the installed Agent CRD pruned status.auth.keySourceEmpty: a claim "+
@@ -2336,7 +2347,7 @@ func (r *AgentReconciler) writeStatus(ctx context.Context, agent *assaydv1alpha1
 				"one whose list fails. Apply this release's charts/assayd/crds/ with kubectl; helm upgrade "+
 				"never updates a chart's crds/", "agent", client.ObjectKeyFromObject(agent))
 		} else {
-			r.keySourcePruneLogged.Delete(agent.UID)
+			r.keySourcePruneLogged.Delete(client.ObjectKeyFromObject(agent))
 		}
 	}
 	return nil
@@ -2396,6 +2407,11 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{
 			Namespace: l[LabelAgentNamespace], Name: l[LabelAgent]}}}
 	})
+	// Design 03 A86's key-set watch maps through this index (KeySetRequests).
+	// Registered before the manager starts its cache, as an index must be.
+	if err := IndexAgentRunNamespace(context.Background(), mgr.GetFieldIndexer()); err != nil {
+		return fmt.Errorf("index Agents by run namespace: %w", err)
+	}
 	// A ResourceQuota or LimitRange change in a source namespace must reach its
 	// run namespace (A60): every Agent in that namespace is enqueued, and the
 	// first to reconcile mirrors it.

@@ -5,6 +5,8 @@ package envtest
 
 import (
 	"context"
+	"net/http"
+	"path"
 	"strings"
 	"sync"
 	"testing"
@@ -16,12 +18,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/rest"
 	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 	"github.com/Quinyte/assayd/internal/compiler"
@@ -415,30 +419,111 @@ func (c *agentListCounter) List(ctx context.Context, list client.ObjectList, opt
 	return c.Client.List(ctx, list, opts...)
 }
 
-// (b‴) The run-namespace filter, and the namespace match. A labelled
-// ConfigMap outside a run namespace reads nothing; one inside maps to the
-// Agents of THAT run namespace and to no other's.
+// (b‴) The run-namespace filter, and the index. A labelled ConfigMap outside
+// a run namespace reads nothing; one inside maps to the Agents of THAT run
+// namespace and to no other's. The map reads a cache indexed by
+// AgentRunNamespaceIndex, registered by the same helper SetupWithManager calls,
+// because a field selector on it is the cache's and not the API server's.
 //
-// Mutations, one per run: drop the filter; drop the run-namespace comparison
-// in keySetRequests. Each compiles, and this must fail.
+// Mutations, one per run: drop the filter; index an Agent by its own
+// namespace. Each compiles, and this must fail.
 func TestAKeySetOutsideARunNamespaceListsNothing(t *testing.T) {
+	ctx := context.Background()
 	ns, other := newNamespace(t), nsName(t, "-other")
-	if err := k8s.Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: other}}); err != nil {
+	if err := k8s.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: other}}); err != nil {
 		t.Fatal(err)
 	}
 	here := mustCreateAgent(t, ns, "a86maphere", nil)
 	mustCreateAgent(t, other, "a86mapthere", nil)
+
+	c, err := cache.New(cfg, cache.Options{Scheme: scheme,
+		DefaultNamespaces: map[string]cache.Config{ns: {}, other: {}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.IndexAgentRunNamespace(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = c.Start(cctx) }()
+	if !c.WaitForCacheSync(cctx) {
+		t.Fatal("the cache never synced")
+	}
+	cached, err := client.New(cfg, client.Options{Scheme: scheme, Cache: &client.CacheOptions{Reader: c}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	r, _ := createReconciler()
-	counter := &agentListCounter{Client: k8s}
+	counter := &agentListCounter{Client: cached}
 	r.Client = counter
 	outside := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "keys", Namespace: ns}}
-	if got := r.KeySetRequests(context.Background(), outside); len(got) != 0 || counter.lists != 0 {
+	if got := r.KeySetRequests(ctx, outside); len(got) != 0 || counter.lists != 0 {
 		t.Errorf("a key set outside a run namespace mapped to %v and made %d Agent LISTs", got, counter.lists)
 	}
 	inside := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "keys", Namespace: runNS(ns)}}
-	got := r.KeySetRequests(context.Background(), inside)
+	var got []reconcile.Request
+	eventually(t, "the cache to hold this row's Agent", func() bool {
+		got = r.KeySetRequests(ctx, inside)
+		return len(got) > 0
+	})
 	if len(got) != 1 || got[0].NamespacedName != client.ObjectKeyFromObject(here) {
 		t.Errorf("a key set in %s mapped to %v, want only %s/%s", runNS(ns), got, here.Namespace, here.Name)
+	}
+}
+
+// configMapWatches records every LIST and WATCH of configmaps that selects by
+// the key-source label, with the Accept header it was made with: a
+// metadata-only informer asks for PartialObjectMetadata, a typed one does not.
+type configMapWatches struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (w *configMapWatches) wrap(rt http.RoundTripper) http.RoundTripper {
+	return roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method == http.MethodGet && path.Base(req.URL.Path) == "configmaps" &&
+			strings.Contains(req.URL.Query().Get("labelSelector"), compiler.APIKeySourceLabel) {
+			w.mu.Lock()
+			w.seen = append(w.seen, req.Header.Get("Accept"))
+			w.mu.Unlock()
+		}
+		return rt.RoundTrip(req)
+	})
+}
+
+// The key-set watch the operator REGISTERS is metadata-only, measured on the
+// wire of a manager SetupWithManager wired: every configmaps LIST or WATCH
+// that selects by the key-source label asks for PartialObjectMetadata. Row
+// (b″) pins the object KeySetWatchObject returns; this pins that gatewaySources
+// is what passes it to the source (A87, review round 2).
+//
+// Mutation: register &corev1.ConfigMap{} at gatewaySources' call site. It
+// compiles, and this must fail.
+func TestTheRegisteredKeySetWatchIsMetadataOnly(t *testing.T) {
+	rec := &configMapWatches{}
+	recorded := rest.CopyConfig(cfg)
+	recorded.WrapTransport = rec.wrap
+	live, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := newNamespace(t)
+	reads := startGatewayManagerWith(t, ns, recorded, live)
+	a := externalAgent(t, ns, "a86wire")
+	key := client.ObjectKeyFromObject(a)
+	eventually(t, "the Agent to be reconciled", func() bool { return reads.count(key) > 0 })
+	rec.mu.Lock()
+	seen := append([]string(nil), rec.seen...)
+	rec.mu.Unlock()
+	if len(seen) == 0 {
+		t.Fatal("no configmaps LIST or WATCH selected by the key-source label, so no key-set watch was registered")
+	}
+	for _, accept := range seen {
+		if !strings.Contains(accept, "PartialObjectMetadata") {
+			t.Errorf("a key-set LIST or WATCH asked for %q: the registered informer holds full ConfigMaps, "+
+				"data and all", accept)
+		}
 	}
 }
 
@@ -815,6 +900,17 @@ func TestAnOldCRDIsNeverRefusedForTheKeySourceClaim(t *testing.T) {
 	// every pass at the default level; this must fail.
 	if n := logs.count("pruned status.auth.keySourceEmpty"); n != 1 {
 		t.Errorf("the pruning was logged %d times in three passes, want once per Agent", n)
+	}
+	// Restored, then lost again: the claim cleared in between, so the memory
+	// went with it and the second loss logs again at the default level (A87,
+	// review round 2). Mutation: keep the entry when the claim clears; this
+	// must fail.
+	writeKeySet(t, ns)
+	logs.reconcile(t, r, a)
+	deleteKeySets(t, ns)
+	logs.reconcile(t, r, a)
+	if n := logs.count("pruned status.auth.keySourceEmpty"); n != 2 {
+		t.Errorf("the pruning was logged %d times after the keys came back and went again, want 2", n)
 	}
 }
 
