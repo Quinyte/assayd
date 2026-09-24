@@ -71,7 +71,7 @@ reports the gateway path unverified. <ClaimClass claim="measured" test="TestAnAg
 On a real cluster, the operator Deployment the chart installs names, in its pod
 template, the image the same end-to-end run built, and every live pod of that
 Deployment runs it. The test is skipped unless the end-to-end suite is opted in
-(`ASSAYD_E2E=1`, which `make e2e` sets); opted in, a missing cluster fails it. <ClaimClass claim="measured" test="TestTheOperatorUnderTestIsTheOneJustBuilt" />
+(`ASSAYD_E2E=1`, which `make e2e` sets); opted in, a missing cluster fails the whole suite before any test runs. <ClaimClass claim="measured" test="TestTheOperatorUnderTestIsTheOneJustBuilt" />
 
 ## What the architecture names and nothing installs
 
