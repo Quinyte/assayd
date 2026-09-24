@@ -23,8 +23,8 @@ set -euo pipefail
 # not share a name. The seconds are taken modulo 10^6 because k3d refuses a
 # cluster name over 32 characters, and the slice cluster's name is this one
 # plus `-slice`: `assayd-cf-` (10) + 6 + `-` + a pid of up to 7 digits + 6 is
-# 30 at most. Two runs collide only with the same pid in the same second,
-# eleven days apart.
+# 30 at most. Two runs collide only with the same pid and the same seconds
+# modulo 10^6, a value that recurs every 10^6 s, about 11.6 days.
 RUN_ID="$(( $(date +%s) % 1000000 ))-$$"
 
 # Cluster naming. Until 2026-09-24 the default was a fixed name,
@@ -119,8 +119,8 @@ trap 'exit 143' TERM
 # hack/e2e.sh's reason for the single-platform save applies here too: `k3d
 # image import` of a multi-platform index the host holds one platform of
 # fails and still exits 0. So each image is saved for the node's platform —
-# or, for an image that has no such platform (the linux/386 curl the 1.4.1
-# phase uses), saved plainly — and the node is then asked whether it has it.
+# or, if that save fails, saved plainly — and the node is then asked whether
+# it has it.
 # Best effort: a failure warns, and the node pulls as before.
 #
 # Only TAGGED images: the suite's own digest-pinned images (curl, agnhost) do

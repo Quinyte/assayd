@@ -537,11 +537,9 @@ func policyAncestorsOn(t *testing.T, ns, name string) ([]policyAncestor, int64) 
 //     agent, and there is no unauthenticated path. That is what A81's
 //     route-first order says of this pass.
 //
-// envtest's summarisePolicy writes the synthetic ancestor with kind
-// `StatusSummary` and reason `NotAttached`, where 1.5.0 writes kind `Gateway`
-// and reason `Pending`. policyReport reads neither field, so the operator's
-// judgement is the same; the difference is recorded in design 03 A88 rather
-// than asserted here, because a fixture is not the dependency contract.
+// The same tuple is written by envtest's summarisePolicy and is a row of
+// internal/controller's TestTheServedPolicyReportHasThreeAnswers, so the
+// operator's policyReport is pinned against it there (design 03 A88 (4)).
 func TestSliceARenamedListenerReportsThePolicyOnTheSyntheticAncestor(t *testing.T) {
 	sliceFixture(t)
 	const gwName = "conf-slice-rename"
@@ -617,7 +615,11 @@ func TestSliceARenamedListenerReportsThePolicyOnTheSyntheticAncestor(t *testing.
 		t.Errorf("the unattached report does not say which route lost its Gateway: %q", att.Message)
 	}
 
-	rc, rgen := routeReportOn(t, sliceNS, sliceGatewayNS, gwName, route, "the renamed listener")
+	// Awaited rather than read once: the route's report and the policy's are
+	// two status writes, and the second may land after the first is seen.
+	rc, rgen := awaitRouteReportOn(t, sliceNS, sliceGatewayNS, gwName, route, 2*time.Minute,
+		"the route once its listener is renamed",
+		func(c map[string]ancestorCondition) bool { return c["Accepted"].Reason == "NoMatchingParent" })
 	t.Logf("RENAMED: route at generation %d reports %v", rgen, rc)
 	if rc["Accepted"].Status != "False" || rc["Accepted"].Reason != "NoMatchingParent" ||
 		rc["ResolvedRefs"].Status != "True" {

@@ -183,9 +183,12 @@ real.**
 
 - One release (1.5.0), one gateway replica, one proxy. Local rate limits are
   per proxy by the CRD's own description; two replicas are not measured.
-- `binaryData`: one entry shape, the valid JSON a `data` entry carries. Whether
-  some other encoding under `binaryData` is read is not tried; the CRD and the
-  controller's message say nothing about `binaryData` either way.
+- `binaryData`: one entry shape, the valid JSON a `data` entry carries, was
+  measured. Whether any other encoding under `binaryData` is read is answered
+  by the source rather than by more stimuli: agentgateway v1.5.0's
+  `controller/pkg/agentgateway/plugins/traffic_plugin.go` L948–956 builds the
+  API-key set from the ConfigMap's `Data` alone (read by the independent
+  review of PR #72), so no `binaryData` entry is read, whatever it encodes.
 - Every entry rejected: one rejected shape, the raw `key`. Other rejections
   (an unparseable value, an empty value) are not tried.
 - The rate-limit order: one limiter (`local`), with authentication and the

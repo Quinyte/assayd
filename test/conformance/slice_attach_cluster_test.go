@@ -228,9 +228,42 @@ func routeConditionsOn(t *testing.T, ns, gwNS, gw, route, why string) map[string
 // generation, and the route's own generation beside them.
 func routeReportOn(t *testing.T, ns, gwNS, gw, route, why string) (map[string]ancestorCondition, int64) {
 	t.Helper()
+	got, gen, problem := readRouteReportOn(t, ns, gwNS, gw, route)
+	if problem != "" {
+		t.Fatalf("%s: %s", why, problem)
+	}
+	return got, gen
+}
+
+// awaitRouteReportOn polls routeReportOn's reading until it is current and
+// `want` accepts it, for a case that waits for the route's report to MOVE.
+func awaitRouteReportOn(t *testing.T, ns, gwNS, gw, route string, timeout time.Duration, why string,
+	want func(map[string]ancestorCondition) bool) (map[string]ancestorCondition, int64) {
+	t.Helper()
+	last := "nothing was read at all"
+	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); {
+		got, gen, problem := readRouteReportOn(t, ns, gwNS, gw, route)
+		if problem == "" && want(got) {
+			return got, gen
+		}
+		last = problem
+		if problem == "" {
+			last = fmt.Sprintf("route at generation %d reports %v", gen, got)
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("%s: route %s/%s never published the report this case is about in %s; the last read "+
+		"was: %s", why, ns, route, timeout, last)
+	return nil, 0
+}
+
+// readRouteReportOn is routeReportOn's reading, reporting what is wrong with
+// it rather than failing the test.
+func readRouteReportOn(t *testing.T, ns, gwNS, gw, route string) (map[string]ancestorCondition, int64, string) {
+	t.Helper()
 	out, err := kubectl(t, "get", "httproute", route, "-n", ns, "-o", "json")
 	if err != nil {
-		t.Fatalf("%s: read route %s/%s: %s", why, ns, route, out)
+		return nil, 0, fmt.Sprintf("read route %s/%s: %s", ns, route, out)
 	}
 	var obj struct {
 		Metadata struct {
@@ -251,7 +284,7 @@ func routeReportOn(t *testing.T, ns, gwNS, gw, route, why string) (map[string]an
 		} `json:"status"`
 	}
 	if err := json.Unmarshal([]byte(out), &obj); err != nil {
-		t.Fatalf("%s: parse route %s/%s: %v", why, ns, route, err)
+		return nil, 0, fmt.Sprintf("parse route %s/%s: %v", ns, route, err)
 	}
 	for _, p := range obj.Status.Parents {
 		// An absent parentRef namespace means the ROUTE's namespace, as
@@ -269,18 +302,17 @@ func routeReportOn(t *testing.T, ns, gwNS, gw, route, why string) (map[string]an
 		got := map[string]ancestorCondition{}
 		for _, c := range p.Conditions {
 			if c.ObservedGeneration != obj.Metadata.Generation {
-				t.Fatalf("%s: the Gateway's entry on route %s/%s reports %s at generation %d, "+
-					"and the route is at %d; this case may not rest on a stale route report",
-					why, ns, route, c.Type, c.ObservedGeneration, obj.Metadata.Generation)
+				return nil, 0, fmt.Sprintf("the Gateway's entry on route %s/%s reports %s at generation "+
+					"%d, and the route is at %d; this case may not rest on a stale route report",
+					ns, route, c.Type, c.ObservedGeneration, obj.Metadata.Generation)
 			}
 			got[c.Type] = ancestorCondition{Status: c.Status, Reason: c.Reason, Message: c.Message,
 				ObservedGeneration: c.ObservedGeneration}
 		}
-		return got, obj.Metadata.Generation
+		return got, obj.Metadata.Generation, ""
 	}
-	t.Fatalf("%s: route %s/%s carries no status.parents entry from %s for Gateway %s/%s",
-		why, ns, route, controller.AgentgatewayControllerName, gwNS, gw)
-	return nil, 0
+	return nil, 0, fmt.Sprintf("route %s/%s carries no status.parents entry from %s for Gateway %s/%s",
+		ns, route, controller.AgentgatewayControllerName, gwNS, gw)
 }
 
 // keyCanary is the freshness control for the key-set case: a VALID key, in a
