@@ -176,9 +176,9 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `Degraded=True`, `PolicyApplyIncomplete=True`, `Ready=False`
 
-**Constant:** `ReasonAPIKeySourceEmpty` (`internal/controller/authkeysource.go:45`)
+**Constant:** `ReasonAPIKeySourceEmpty` (`internal/controller/authkeysource.go:46`)
 
-> ReasonAPIKeySourceEmpty is PolicyApplyIncomplete's, and Ready's and Degraded's under K1: a live list of the key source this Agent's &lt;agent&gt;-auth selects succeeded and found no entry in data or binaryData.
+> ReasonAPIKeySourceEmpty is PolicyApplyIncomplete's, and Ready's and Degraded's under K1: a live list of the key source this Agent's &lt;agent&gt;-auth selects succeeded and found no entry in data. An entry under binaryData is not one, since agentgateway 1.5.0 does not read binaryData (A89, §9 D8 (R1)).
 
 **Set at:**
 
@@ -189,13 +189,13 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/conformance/slice_keysource_cluster_test.go`, `test/e2e/keysource_test.go`, `test/envtest/authkeysource_test.go`
 
-**State:** On a pass of a SERVED API-key Agent (`status.auth.mode` is `apikey`) that leaves the transaction slot empty — including the pass on which a `Create` or `Lock` reaches `Served` — a live, uncached list of the ConfigMaps its live `<agent>-auth` selects (by `matchLabels`, in the policy's own namespace) succeeded and found no entry in `data` or `binaryData`: no ConfigMap carries the label, or every one that does is empty. While the policy is enforcing, every request then gets `401`, with a key or without one.
+**State:** On a pass of a SERVED API-key Agent (`status.auth.mode` is `apikey`) that leaves the transaction slot empty — including the pass on which a `Create` or `Lock` reaches `Served` — a live, uncached list of the ConfigMaps its live `<agent>-auth` selects (by `matchLabels`, in the policy's own namespace) succeeded and found no entry in `data`: no ConfigMap carries the label, or none that does holds an entry in `data`. An entry under `binaryData` is not counted, because agentgateway 1.5.0 builds its key set from `data` alone, and the message says how many of the ConfigMaps hold entries only there (design 03 A89, §9 D8 (R1)). While the policy is enforcing, every request then gets `401`, with a key or without one.
 
-**What the operator does:** Sets `PolicyApplyIncomplete=True`, `Ready=False` and `Degraded=True`, phase `Degraded` (the human's K1, ADR-0034 Amendment 7), and records the claim on `status.auth.keySourceEmpty` so it is held, under its own marker, across a pass whose list fails, whose policy GET fails, whose selector is not `matchLabels` alone, or that finds no policy of this Agent's. A list that finds an entry clears it. It ranks last in `PolicyApplyIncomplete`'s order, and writes nothing to `GovernanceSkipped`. A labelled-ConfigMap watch, metadata only and filtered to run namespaces, enqueues every Agent whose run namespace it is, read from the manager's Agent cache.
+**What the operator does:** Sets `PolicyApplyIncomplete=True`, `Ready=False` and `Degraded=True`, phase `Degraded` (the human's K1, ADR-0034 Amendment 7), and records the claim on `status.auth.keySourceEmpty` so it is held, under its own marker, across a pass whose list fails, whose policy GET fails, whose selector is not `matchLabels` alone, or that finds no policy of this Agent's. A list that finds an entry in `data` clears it. It ranks last in `PolicyApplyIncomplete`'s order, and writes nothing to `GovernanceSkipped`. A labelled-ConfigMap watch, metadata only and filtered to run namespaces, enqueues every Agent whose run namespace it is, read from the manager's Agent cache.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
-**Note:** Entries are counted, never parsed: an entry agentgateway rejects is the policy half's `PartiallyValid` report, and a key set holding keys but none in this Agent's group is not detected. A list that fails on every pass leaves a real outage unreported; it is logged and written to no condition. On an Agent CRD that predates the field the claim is re-derived every pass and the pruning is logged, never refused (design 03 A86).
+**Note:** Entries are counted, never parsed: an entry agentgateway rejects is the policy half's `PartiallyValid` report, and a key set holding keys but none in this Agent's group is not detected. A list that fails on every pass leaves a real outage unreported; it is logged and written to no condition. On an Agent CRD that predates the field the claim is re-derived every pass and the pruning is logged, never refused (design 03 A86). An agentgateway release that began reading `binaryData` would make the report false for a `binaryData`-only key set. CI's `make e2e` would catch it on the release `hack/e2e.sh` installs, whose key-source row requires a key held only under `binaryData` to get `401` through the gateway (design 03 A89).
 
 ### `AuthAbandonWaiting`
 

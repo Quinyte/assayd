@@ -75,20 +75,48 @@ func TestOnlyAMatchLabelsSelectorIsRead(t *testing.T) {
 	}
 }
 
-// Entries are counted across data AND binaryData, per ConfigMap, never
-// parsed; and the empty-case message names at most five ConfigMaps.
+// Entries are counted under data alone, per ConfigMap, never parsed: agentgateway
+// 1.5.0 builds its key set from a ConfigMap's data and never reads binaryData
+// (design 03 A88 (3), §9 D8 decided (R1), A89). The empty-case message names
+// at most five ConfigMaps, and says how many hold entries only under
+// binaryData.
+//
+// Mutation: count binaryData too (the binaryData-only rows must fail).
 func TestAKeySourceIsCountedNotParsed(t *testing.T) {
 	cm := func(name string, data map[string]string, bin map[string][]byte) corev1.ConfigMap {
 		return corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name}, Data: data, BinaryData: bin}
 	}
-	if r, _ := countKeySource("ns", "a=b", "g", []corev1.ConfigMap{cm("x", nil, nil),
-		cm("y", nil, map[string][]byte{"k": nil})}); r != keySourcePresent {
-		t.Error("an entry held only under binaryData did not count")
+	r, msg := countKeySource("ns", "a=b", "g", []corev1.ConfigMap{cm("x", nil, nil),
+		cm("y", nil, map[string][]byte{"k": nil})})
+	if r != keySourceEmpty {
+		t.Error("an entry held only under binaryData counted as a key; agentgateway does not read binaryData")
+	}
+	if !strings.Contains(msg, "2 ConfigMap(s)") || !strings.Contains(msg, "none of which holds an entry in data") ||
+		!strings.Contains(msg, "1 of them holds entries under binaryData") ||
+		!strings.Contains(msg, "which agentgateway 1.5.0 does not read") ||
+		!strings.Contains(msg, "under data rather than binaryData") {
+		t.Errorf("the binaryData-only message does not say the binaryData entries exist and are not read: %s", msg)
+	}
+	if strings.Contains(msg, "adds entries") {
+		t.Errorf("the binaryData-only message tells the administrator to add entries, which exist: %s", msg)
+	}
+	if _, msg := countKeySource("ns", "a=b", "g", []corev1.ConfigMap{cm("x", nil, map[string][]byte{"b": nil}),
+		cm("y", nil, nil), cm("z", nil, map[string][]byte{"c": nil})}); !strings.Contains(msg,
+		"3 ConfigMap(s)") || !strings.Contains(msg, "2 of them hold entries under binaryData") {
+		t.Errorf("the binaryData clause does not count the ConfigMaps holding binaryData alone: %s", msg)
+	}
+	if r, _ := countKeySource("ns", "a=b", "g", []corev1.ConfigMap{cm("x", nil, map[string][]byte{"b": nil}),
+		cm("y", map[string]string{"k": "v"}, map[string][]byte{"k2": nil})}); r != keySourcePresent {
+		t.Error("a data entry beside binaryData entries did not count")
+	}
+	if _, msg := countKeySource("ns", "a=b", "g", []corev1.ConfigMap{cm("x", nil, nil)}); strings.Contains(msg,
+		"binaryData") {
+		t.Errorf("a key source with no binaryData entry names binaryData: %s", msg)
 	}
 	if r, _ := countKeySource("ns", "a=b", "g", []corev1.ConfigMap{cm("x", map[string]string{"k": ""}, nil)}); r != keySourcePresent {
 		t.Error("an entry with an empty value did not count; if agentgateway rejects it, that is the policy half's report")
 	}
-	r, msg := countKeySource("ns", "a=b", "g", nil)
+	r, msg = countKeySource("ns", "a=b", "g", nil)
 	if r != keySourceEmpty || !strings.Contains(msg, "a live list found none there") {
 		t.Errorf("no labelled ConfigMap is not the absent report: %v %s", r, msg)
 	}

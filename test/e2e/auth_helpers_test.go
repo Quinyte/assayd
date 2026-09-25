@@ -47,6 +47,15 @@ const (
 // refuses anyone else in a run namespace.
 func ensureAPIKeys(t *testing.T, ctx context.Context) {
 	t.Helper()
+	writeAPIKeys(t, ctx, false)
+}
+
+// writeAPIKeys is ensureAPIKeys with the entries' placement chosen: under
+// binaryData instead of data when binary is set, the same bytes. agentgateway
+// 1.5.0 reads data only (design 03 A88 (3)), so a binaryData-only key set holds
+// no key it can use, and the operator counts it EMPTY (A89).
+func writeAPIKeys(t *testing.T, ctx context.Context, binary bool) {
+	t.Helper()
 	data := map[string]string{}
 	for key, group := range map[string]string{permittedKey: admittedGroup, refusedKey: "rogue"} {
 		sum := sha256.Sum256([]byte(key))
@@ -60,6 +69,13 @@ func ensureAPIKeys(t *testing.T, ctx context.Context) {
 			Labels:    map[string]string{compiler.APIKeySourceLabel: compiler.APIKeySourceValue},
 		},
 		Data: data,
+	}
+	if binary {
+		cm.BinaryData = map[string][]byte{}
+		for k, v := range data {
+			cm.BinaryData[k] = []byte(v)
+		}
+		cm.Data = nil
 	}
 	_ = k8s.Delete(ctx, cm)
 	if err := keyAdminClient(t).Create(ctx, cm); err != nil {

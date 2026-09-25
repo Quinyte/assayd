@@ -5,6 +5,8 @@ package e2e
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,4 +70,57 @@ func TestAnEmptiedKeySetDegradesAServedAgentUntilKeysReturn(t *testing.T) {
 
 	ensureAPIKeys(t, ctx)
 	waitForReason(t, ctx, name, assaydv1alpha1.CondReady, "Available", time.Minute)
+
+	// The same entries held under binaryData alone: agentgateway does not read
+	// binaryData (A88 (3)), so the human's §9 D8 (R1) counts data only and
+	// this is the same report (A89). The message names the entries it does
+	// not count. writeAPIKeys deletes before it creates, so the absent report
+	// may stand for a moment first: the row waits for the message, not only
+	// the reason.
+	writeAPIKeys(t, ctx, true)
+	const binaryNote = "entries under binaryData, which agentgateway 1.5.0 does not read"
+	last := ""
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(2 * time.Second) {
+		if err := k8s.Get(ctx, types.NamespacedName{Namespace: "assayd-e2e", Name: name}, &a); err == nil {
+			for _, c := range a.Status.Conditions {
+				if c.Type == string(assaydv1alpha1.CondPolicyApplyIncomplete) && c.Reason == "ApiKeySourceEmpty" {
+					last = c.Message
+				}
+			}
+		}
+		if strings.Contains(last, binaryNote) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a binaryData-only key set is not reported as one within a minute; the last "+
+				"ApiKeySourceEmpty message: %q", last)
+		}
+	}
+	waitForReason(t, ctx, name, assaydv1alpha1.CondReady, "ApiKeySourceEmpty", time.Minute)
+
+	// The report is true of the agentgateway THIS run installed, not only of
+	// the one make conformance-cluster pins: the permitted key, whose entry is
+	// held under binaryData, is refused, and stays refused. The report stood
+	// only after the binaryData write, so the gateway has had it for as long.
+	// A release that read binaryData would answer 200 here, and the report
+	// would be false (A89).
+	gwNS, gwName := requireGateway(t)
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", gatewayService(t, ctx, gwNS, gwName), gwNS) +
+		a2aSendMessage
+	host := emittedHostname(t, name, "assayd-e2e")
+	body := sendMessage("keysource")
+	for i := range 3 {
+		if code := probeCode(t, ctx, fmt.Sprintf("keysrc-binary-%d", i), url, host, permittedKey, body); code != "401" {
+			t.Fatalf("with its entry held only under binaryData, the permitted key got %s through the gateway, "+
+				"not 401: this agentgateway reads binaryData, and the ApiKeySourceEmpty report is false on it",
+				code)
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	// The same entries under data: the report clears, and the same key is
+	// admitted, so only where the entries were held differed.
+	ensureAPIKeys(t, ctx)
+	waitForReason(t, ctx, name, assaydv1alpha1.CondReady, "Available", time.Minute)
+	askThroughGateway(t, ctx, "keysrc-data", url, host, body)
 }

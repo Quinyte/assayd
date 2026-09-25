@@ -41,7 +41,8 @@ import (
 
 // ReasonAPIKeySourceEmpty is PolicyApplyIncomplete's, and Ready's and
 // Degraded's under K1: a live list of the key source this Agent's <agent>-auth
-// selects succeeded and found no entry in data or binaryData.
+// selects succeeded and found no entry in data. An entry under binaryData is
+// not one, since agentgateway 1.5.0 does not read binaryData (A89, §9 D8 (R1)).
 const ReasonAPIKeySourceEmpty = "ApiKeySourceEmpty"
 
 // keySourceHeldMark is the STABLE prefix of every note a held key-source claim
@@ -233,26 +234,37 @@ func keySourceSelector(p *unstructured.Unstructured) (string, map[string]string,
 }
 
 // countKeySource is EMPTY or PRESENT for a list that succeeded. An entry is any
-// key under data or binaryData; entries are COUNTED and never parsed, because
-// an entry agentgateway rejects is reported by the Gateway itself, as
-// PartiallyValid naming the entry, and a second parser here would be a second
-// opinion on a format the Gateway owns (A86; case 20 (c), (d)). A ConfigMap
-// being deleted is still listed, and counts like any other.
+// key under data, and ONLY data: agentgateway 1.5.0 builds its key set from a
+// ConfigMap's Data and never reads BinaryData (measured by A88 (3); its
+// traffic_plugin.go L948-956), so a key source whose every entry is under
+// binaryData authenticates nothing and reads EMPTY (§9 D8, the human's (R1);
+// A89). Its binaryData entries are counted only for the message. Entries are
+// COUNTED and never parsed, because an entry agentgateway rejects is reported
+// by the Gateway itself, as PartiallyValid naming the entry, and a second
+// parser here would be a second opinion on a format the Gateway owns (A86;
+// case 20 (c), (d)). A ConfigMap being deleted is still listed, and counts
+// like any other.
 func countKeySource(ns, selector, group string, items []corev1.ConfigMap) (keySourceReading, string) {
 	var names []string
+	binaryOnly := 0
 	for i := range items {
-		if len(items[i].Data)+len(items[i].BinaryData) > 0 {
+		if len(items[i].Data) > 0 {
 			return keySourcePresent, ""
+		}
+		if len(items[i].BinaryData) > 0 {
+			binaryOnly++
 		}
 		names = append(names, items[i].Name)
 	}
-	return keySourceEmpty, keySourceEmptyMessage(ns, selector, group, names)
+	return keySourceEmpty, keySourceEmptyMessage(ns, selector, group, names, binaryOnly)
 }
 
 // keySourceEmptyMessage is A86's fresh message: the absent case when no
 // ConfigMap carries the label, and the empty case, naming at most five of them,
-// when some do and none holds an entry.
-func keySourceEmptyMessage(ns, selector, group string, empty []string) string {
+// when some do and none holds an entry in data. When binaryOnly of them hold
+// entries under binaryData, the empty case says so and says agentgateway does
+// not read them, under the same reason (A89: R3's own reason was not taken).
+func keySourceEmptyMessage(ns, selector, group string, empty []string, binaryOnly int) string {
 	found := "and a live list found none there"
 	fix := fmt.Sprintf("an administrator (admission.apiKeyWriters) creates a ConfigMap in %s labelled %s", ns,
 		selector)
@@ -265,9 +277,19 @@ func keySourceEmptyMessage(ns, selector, group string, empty []string) string {
 			named = named[:keySourceMaxNamedConfigMs]
 		}
 		found = fmt.Sprintf("and a live list found %d ConfigMap(s) carrying that label there (%s%s), none of "+
-			"which holds an entry in data or binaryData", len(empty), strings.Join(named, ", "), more)
+			"which holds an entry in data", len(empty), strings.Join(named, ", "), more)
 		fix = fmt.Sprintf("an administrator (admission.apiKeyWriters) adds entries to one of them, or creates "+
 			"a ConfigMap in %s labelled %s", ns, selector)
+		if binaryOnly > 0 {
+			verb := "hold"
+			if binaryOnly == 1 {
+				verb = "holds"
+			}
+			found += fmt.Sprintf("; %d of them %s entries under binaryData, which agentgateway 1.5.0 does not "+
+				"read as API keys", binaryOnly, verb)
+			fix = fmt.Sprintf("an administrator (admission.apiKeyWriters) writes the keys under data rather "+
+				"than binaryData, in one of them or in a new ConfigMap in %s labelled %s", ns, selector)
+		}
 	}
 	return fmt.Sprintf("no API key can authenticate to this Agent: its <agent>-auth policy selects keys "+
 		"from ConfigMaps labelled %s in namespace %s, %s. While the policy is attached and enforcing, "+
@@ -275,7 +297,7 @@ func keySourceEmptyMessage(ns, selector, group string, empty []string) string {
 		"in this run namespace, so expect this on all of them. To fix it, %s, with one data key per API "+
 		"key whose value is {\"keyHash\": \"sha256:<hex>\", \"metadata\": {\"group\": \"%s\"}}, in the "+
 		"group %s this Agent admits. assayd writes no keys. Nothing is withdrawn (design 03 §3.4.4, §5, "+
-		"A86)", selector, ns, found, fix, group, group)
+		"A86, A89)", selector, ns, found, fix, group, group)
 }
 
 // keyGroup is the group this Agent admits, as status.auth records it.

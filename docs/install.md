@@ -187,7 +187,7 @@ An Agent with no `expose` block, or with `spec.expose.a2a.auth: apikey`, is serv
 - carries the label `assayd.dev/api-keys: "true"`. That label is a constant, with no chart value to change it;
 - is written by an identity in `admission.apiKeyWriters`. By default that is the `system:masters` group. Admission refuses anyone else, and the refusal names the `assayd-api-keys` policy.
 
-**Each entry is one key.** The entry name is an identifier of your choosing. Do not use the key itself: a `ConfigMap` is not confidential. The value is a JSON object:
+**Each entry is one key, under `data`.** agentgateway 1.5.0 reads a key set's `data` only and never its `binaryData`, so a key written under `binaryData` admits nobody, and since design 03 A89 the operator counts `data` alone: a key set whose entries are all under `binaryData` reads `ApiKeySourceEmpty`, and the message says so. The entry name is an identifier of your choosing. Do not use the key itself: a `ConfigMap` is not confidential. The value is a JSON object:
 
 ```json
 {"keyHash":"sha256:<hex>","metadata":{"group":"<agent-namespace>"}}
@@ -685,8 +685,8 @@ The last row needs no allowlist in place, so it cannot be seen after section 6.6
 | `PolicyApplyIncomplete`, reason `AuthRecordNotKept` | The Agent CRD predates `status.auth`: apply the chart's CRDs (section 4). |
 | The key set is refused, naming `assayd-api-keys` | You are not in `admission.apiKeyWriters` (section 3). |
 | `Registered=False`, reason `CardNameMismatch` | The card's `name` is not the Agent's name. `docs/agent-contract.md` lists the other card reasons. |
-| `Ready=False`, phase `Degraded`, reason `ApiKeySourceEmpty` | No `ConfigMap` in the run namespace carries `assayd.dev/api-keys: "true"`, or every one that does holds no entry, so every request gets `401`. Write a key set (section 3); it clears on the next reconcile. The operator counts entries and does not parse them, so a key set with a wrong hash, or with keys only for another group, does not raise this. |
-| Every keyed request gets `401` | No key set in the run namespace, the wrong label, or the wrong hash. Hash the key's bytes with no trailing newline. The first reads `ApiKeySourceEmpty` on the Agent; the other two are reported by nothing. |
+| `Ready=False`, phase `Degraded`, reason `ApiKeySourceEmpty` | No `ConfigMap` in the run namespace carries `assayd.dev/api-keys: "true"`, or every one that does holds no entry under `data`, so every request gets `401`. An entry under `binaryData` is not read by agentgateway and not counted; the message says how many key sets hold entries only there. Write a key set, with its entries under `data` (section 3); it clears on the next reconcile. The operator counts entries and does not parse them, so a key set with a wrong hash, or with keys only for another group, does not raise this. |
+| Every keyed request gets `401` | No key set in the run namespace, entries under `binaryData` instead of `data`, the wrong label, or the wrong hash. Hash the key's bytes with no trailing newline. The first two read `ApiKeySourceEmpty` on the Agent; the other two are reported by nothing. |
 | A tool route is refused, naming `assayd-gateway-routes` | The writer is not in `admission.toolRouteWriters`, the route names `http` or no `sectionName`, or a hostname is missing or an Agent's. The message says which (section 6.4). On chart `0.3.0` and earlier, the value does not exist (section 6.2). |
 | Every tool request gets `503 mcp: no backends configured` | The MCP Service's port has no `appProtocol: agentgateway.dev/mcp` (section 6.3). |
 | A tool task fails with `ASSAYD_GATEWAY_URL is not set` | `gateway.url` is unset (section 6.2), or the Pods of the revision taking traffic were rendered before it was set. Read which revision serves and what it carries, with the two commands in section 6.7. |
