@@ -112,7 +112,8 @@ outage at the gateway — and the operator does not report it either, because A8
 counts a `binaryData` entry as PRESENT (§5's row, A86's "Settled" bullet, case
 20 (c)'s second half). A86 anticipated exactly this ("keys held where
 agentgateway does not read them are silent until measured") and deferred the
-counting rule to this row. Design 03 A88 records it for a decision. **Nothing
+counting rule to this row. Design 03 A88 records it, and §9 D8 was decided by
+the human on 2026-09-25 as (R1), count `data` only — not yet implemented. **Nothing
 in the operator is changed.**
 
 ## 4. The listener rename — the policy half's real report
