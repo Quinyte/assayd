@@ -155,15 +155,18 @@ func partiallyValidPolicy(t *testing.T, a *assaydv1alpha1.Agent) {
 }
 
 // summarisePolicy replaces the ancestor with agentgateway's synthetic
-// StatusSummary, which it writes when a policy attached to nothing (§3.3.2).
+// StatusSummary, which it writes when a policy attached to nothing (§3.3.2),
+// in the shape agentgateway 1.5.0 was measured writing on a listener rename
+// (design 03 A88 (4)): kind `Gateway`, no namespace, `Attached=False` with
+// reason `Pending`.
 func summarisePolicy(t *testing.T, a *assaydv1alpha1.Agent) {
 	t.Helper()
 	gen := policyExists(t, runNS(a.Namespace), policyNameOf(a)).GetGeneration()
 	reportPolicyAncestors(t, a, []any{map[string]any{
-		"ancestorRef":    map[string]any{"group": "agentgateway.dev", "kind": "StatusSummary", "name": "StatusSummary"},
+		"ancestorRef":    map[string]any{"group": "agentgateway.dev", "kind": "Gateway", "name": "StatusSummary"},
 		"controllerName": "agentgateway.dev/agentgateway",
 		"conditions": []any{policyCondition("Accepted", "True", "Valid", gen),
-			policyCondition("Attached", "False", "NotAttached", gen)},
+			policyCondition("Attached", "False", "Pending", gen)},
 	}})
 }
 

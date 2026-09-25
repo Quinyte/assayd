@@ -141,7 +141,10 @@ data:
 %s`, name, ns, compiler.APIKeySourceLabel, compiler.APIKeySourceValue, keyEntries(keys))
 }
 
-func backend(name string) string {
+func backend(name string) string { return backendIn(name, sliceNS) }
+
+// backendIn is backend in namespace ns.
+func backendIn(name, ns string) string {
 	return fmt.Sprintf(`
 apiVersion: apps/v1
 kind: Deployment
@@ -163,12 +166,15 @@ kind: Service
 metadata: {name: %[1]s, namespace: %[2]s}
 spec:
   selector: {app: %[1]s}
-  ports: [{port: 80, targetPort: 8080}]`, name, sliceNS, agnhostImage)
+  ports: [{port: 80, targetPort: 8080}]`, name, ns, agnhostImage)
 }
 
 // gatewayYAML is a Gateway shaped like hack/e2e.sh's: the serving listener,
 // named as the operator's routes name it, and a second listener, `tools`.
-func gatewayYAML(name string) string {
+func gatewayYAML(name string) string { return gatewayYAMLFor(name, sliceNS) }
+
+// gatewayYAMLFor is gatewayYAML admitting routes from namespace routeNS.
+func gatewayYAMLFor(name, routeNS string) string {
 	return fmt.Sprintf(`
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -184,8 +190,8 @@ spec:
     port: %d
     protocol: HTTP
     allowedRoutes: {namespaces: {from: Selector, selector: {matchLabels: {kubernetes.io/metadata.name: %s}}}}`,
-		name, sliceGatewayNS, controller.GatewayListenerName, servingPort, sliceNS,
-		otherListener, otherPort, sliceNS)
+		name, sliceGatewayNS, controller.GatewayListenerName, servingPort, routeNS,
+		otherListener, otherPort, routeNS)
 }
 
 // sliceFixture establishes, idempotently, everything the slice cases share,
@@ -313,6 +319,11 @@ func servingRoute(t *testing.T, agent, backend string) string {
 }
 
 func routeOn(name, gateway, host, backend string) string {
+	return routeOnIn(name, sliceNS, gateway, host, backend)
+}
+
+// routeOnIn is routeOn for a route in namespace ns.
+func routeOnIn(name, ns, gateway, host, backend string) string {
 	refs := ""
 	if backend != "" {
 		refs = fmt.Sprintf(`
@@ -330,7 +341,7 @@ spec:
   hostnames: [%q]
   rules:
   - matches: [{path: {type: PathPrefix, value: /}}]%s`,
-		name, sliceNS, gateway, sliceGatewayNS, controller.GatewayListenerName, host, refs)
+		name, ns, gateway, sliceGatewayNS, controller.GatewayListenerName, host, refs)
 }
 
 // authPolicy is the compiler's `<agent>-auth` for an Agent in sliceTeam,

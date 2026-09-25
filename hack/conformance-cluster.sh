@@ -18,44 +18,161 @@
 # loudly rather than skipping when a prerequisite is missing.
 set -euo pipefail
 
-CLUSTER="${CONF_CLUSTER:-assayd-conformance}"
+# Everything this run names is keyed off ONE id, as in hack/e2e.sh: the
+# seconds and the pid, so two runs started in the same second on one host do
+# not share a name. The seconds are taken modulo 10^6 because k3d refuses a
+# cluster name over 32 characters, and the slice cluster's name is this one
+# plus `-slice`: `assayd-cf-` (10) + 6 + `-` + a pid of up to 7 digits + 6 is
+# 30 at most. Two runs collide only with the same pid and the same seconds
+# modulo 10^6, a value that recurs every 10^6 s, about 11.6 days.
+RUN_ID="$(( $(date +%s) % 1000000 ))-$$"
+
+# Cluster naming. Until 2026-09-24 the default was a fixed name,
+# `assayd-conformance`, and each phase began by DELETING the cluster of that
+# name — so a second run started while a first was in phase 2 deleted the
+# first's cluster under it, and each run's `k3d kubeconfig write` went to the
+# same file under ~/.config/k3d. A run that is not told a name now invents one
+# nobody else can be using, and deletes it again on exit. Naming one with
+# CONF_CLUSTER is a deliberate choice to share, exactly as before: the
+# harness still deletes and re-creates that name, so two runs that name the
+# same cluster collide on purpose.
+CLUSTER="${CONF_CLUSTER:-assayd-cf-${RUN_ID}}"
 SLICE_CLUSTER="${CLUSTER}-slice"
 AGW_VERSION="${AGW_VERSION:-1.4.1}"
 SLICE_AGW_VERSION="${SLICE_AGW_VERSION:-1.5.0}"
 GWAPI_VERSION="${GWAPI_VERSION:-v1.6.0}"
 KEEP="${KEEP:-0}"
 
-for tool in k3d kubectl helm go; do
+# k3d refuses a cluster name over 32 characters, and a CONF_CLUSTER long
+# enough to push `-slice` past it would otherwise fail only after phase 1 had
+# run.
+if [ "${#SLICE_CLUSTER}" -gt 32 ]; then
+  echo "CONF_CLUSTER '$CLUSTER' is too long: '$SLICE_CLUSTER' exceeds k3d's 32-character limit"
+  exit 1
+fi
+
+for tool in k3d kubectl helm go docker; do
   command -v "$tool" >/dev/null || { echo "conformance needs $tool on PATH"; exit 1; }
 done
 
 # The run's own log, never a fixed path, so a run never reads another run's
-# `--- SKIP` lines. That alone does not make two runs safe together: each
-# deletes and re-creates its clusters by name, so two runs at once need
-# different CONF_CLUSTER values.
+# `--- SKIP` lines.
 LOG="$(mktemp "${TMPDIR:-/tmp}/conformance.XXXXXX")"
 
+# THE RUN GETS ITS OWN KUBECONFIG, one file per cluster, for hack/e2e.sh's
+# reason: kubectl, helm and `go test` all read $KUBECONFIG, so exporting a file
+# nobody else can name is what carries the isolation to every call site.
+# provision writes each phase's file and exports it; nothing is seeded from
+# the environment. Until then KUBECONFIG names an empty file of this run's, so
+# no tool can fall back to the shared default.
+KUBECONFIG="$(mktemp "${TMPDIR:-/tmp}/assayd-conf-kubeconfig.XXXXXX")"
+export KUBECONFIG
+KUBECONFIGS=("$KUBECONFIG")
+# KEPT pairs each cluster with its kubeconfig, for KEEP=1's message.
+KEPT=()
+
+# The image tar preload writes, global so that cleanup removes it when the run
+# is interrupted mid-import: it is image-sized.
+IMG_TAR=""
+
+# CREATED lists the clusters this run has created, so cleanup deletes exactly
+# those — and their docker networks. `k3d cluster delete` leaves `k3d-<name>`
+# behind when another container is still attached to it, and such networks,
+# leaked by the dozen, exhaust Docker's address pools (hack/e2e.sh). So every
+# container still attached is disconnected first, and the network removed.
+CREATED=()
+delete_cluster() {
+  local cluster="$1" net c
+  k3d cluster delete "$cluster" >/dev/null 2>&1 || true
+  net="k3d-${cluster}"
+  if docker network inspect "$net" >/dev/null 2>&1; then
+    for c in $(docker network inspect "$net" --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); do
+      docker network disconnect -f "$net" "$c" >/dev/null 2>&1 || true
+    done
+    docker network rm "$net" >/dev/null 2>&1 \
+      || echo "WARNING: could not remove docker network $net; remove it by hand, or Docker will run out of address pools" >&2
+  fi
+}
 cleanup() {
+  rm -f "$IMG_TAR"
   if [ "$KEEP" = "1" ]; then
-    echo "==> KEEP=1, leaving clusters $CLUSTER and $SLICE_CLUSTER up"
+    echo "==> KEEP=1, leaving clusters up with their kubeconfigs: ${KEPT[*]:-none}"
   else
-    k3d cluster delete "$CLUSTER" >/dev/null 2>&1 || true
-    k3d cluster delete "$SLICE_CLUSTER" >/dev/null 2>&1 || true
+    for c in "${CREATED[@]+"${CREATED[@]}"}"; do
+      echo "==> deleting $c, a cluster this run created"
+      delete_cluster "$c"
+    done
+    rm -f "${KUBECONFIGS[@]}"
   fi
   echo "==> log: $LOG"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# preload CLUSTER IMAGE...: put agentgateway's two images into the node from
+# the HOST, as hack/e2e.sh does, rather than let the node pull them.
+# Measured on 2026-09-24 on a fresh conformance cluster: the node was still
+# pulling cr.agentgateway.dev/agentgateway:v1.5.0 after ten minutes, the
+# Gateway's proxy never became ready, and every case timed out at the fixture.
+#
+# hack/e2e.sh's reason for the single-platform save applies here too: `k3d
+# image import` of a multi-platform index the host holds one platform of
+# fails and still exits 0. So each image is saved for the node's platform —
+# or, if that save fails, saved plainly — and the node is then asked whether
+# it has it.
+# Best effort: a failure warns, and the node pulls as before.
+#
+# Only TAGGED images: the suite's own digest-pinned images (curl, agnhost) do
+# not survive this route. `docker save` of a `repo@sha256:` reference writes
+# no repository tag, `k3d image import` still reports success, and the node
+# then holds no image by that reference — measured on 2026-09-24 by this
+# change's review. Those the node pulls itself; none of them was slow.
+preload() {
+  local cluster="$1"; shift
+  local arch tar img err
+  arch="$(docker version --format '{{.Server.Arch}}' 2>/dev/null || echo amd64)"
+  IMG_TAR="$(mktemp "${TMPDIR:-/tmp}/assayd-conf-img.XXXXXX")"
+  tar="$IMG_TAR"
+  for img in "$@"; do
+    if ! docker image inspect "$img" >/dev/null 2>&1 \
+      && ! err="$(docker pull -q --platform "linux/${arch}" "$img" 2>&1)" \
+      && ! err="$(docker pull -q "$img" 2>&1)"; then
+      echo "WARNING: could not pull $img on the host (${err##*$'\n'}); the node will pull it" >&2
+      continue
+    fi
+    docker save --platform "linux/${arch}" -o "$tar" "$img" >/dev/null 2>&1 \
+      || docker save -o "$tar" "$img" >/dev/null 2>&1 || true
+    err="$(k3d image import "$tar" -c "$cluster" 2>&1)" || true
+    if ! docker exec "k3d-${cluster}-server-0" crictl inspecti "$img" >/dev/null 2>&1; then
+      echo "WARNING: $img is not on the node after import ($(printf '%s' "$err" | grep -iE 'erro|fail' | tail -1)); the node will pull it" >&2
+    fi
+  done
+  rm -f "$tar"
+}
 
 # provision CLUSTER VERSION: a fresh k3d cluster with Gateway API and one
-# agentgateway release, and KUBECONFIG pointed at it alone.
+# agentgateway release, and the run's KUBECONFIG holding it alone.
 provision() {
   local cluster="$1" version="$2"
   echo "==> creating $cluster"
-  k3d cluster delete "$cluster" >/dev/null 2>&1 || true
+  delete_cluster "$cluster"
+  # Recorded before the create, so a create that fails half-way is still
+  # deleted on exit.
+  CREATED+=("$cluster")
   k3d cluster create "$cluster" --agents 0 --wait --timeout 180s \
     --kubeconfig-update-default=false --kubeconfig-switch-context=false >/dev/null
-  KUBECONFIG="$(k3d kubeconfig write "$cluster")"
+  # Into a file of THIS run's, one per cluster, never
+  # ~/.config/k3d/kubeconfig-<name>.yaml, which is keyed by the cluster name
+  # alone. One per cluster so that KEEP=1 leaves a way into each.
+  KUBECONFIG="$(mktemp "${TMPDIR:-/tmp}/assayd-conf-kubeconfig.XXXXXX")"
   export KUBECONFIG
+  KUBECONFIGS+=("$KUBECONFIG")
+  KEPT+=("$cluster=$KUBECONFIG")
+  k3d kubeconfig get "$cluster" >"$KUBECONFIG"
+
+  preload "$cluster" "cr.agentgateway.dev/controller:v${version}" \
+    "cr.agentgateway.dev/agentgateway:v${version}"
 
   echo "==> Gateway API $GWAPI_VERSION"
   kubectl apply -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/${GWAPI_VERSION}/standard-install.yaml" >/dev/null
@@ -99,7 +216,7 @@ status=0
 echo "==> phase 1: the dependency contract, on agentgateway $AGW_VERSION"
 provision "$CLUSTER" "$AGW_VERSION"
 run_suite -skip '^TestSlice' || status=1
-[ "$KEEP" = "1" ] || k3d cluster delete "$CLUSTER" >/dev/null 2>&1 || true
+[ "$KEEP" = "1" ] || delete_cluster "$CLUSTER"
 
 echo "==> phase 2: the first slice's cases, on agentgateway $SLICE_AGW_VERSION"
 provision "$SLICE_CLUSTER" "$SLICE_AGW_VERSION"

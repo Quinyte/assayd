@@ -128,8 +128,23 @@ func TestTheServedPolicyReportHasThreeAnswers(t *testing.T) {
 		return map[string]any{"ancestorRef": map[string]any{"group": gatewayv1.GroupName,
 			"kind": "Gateway", "name": "assayd", "namespace": "assayd-gateway"}, "conditions": conds}
 	}
+	// The synthetic ancestor's REF as agentgateway 1.5.0 writes it: kind
+	// `Gateway`, not `StatusSummary`, and no namespace (design 03 A88, measured
+	// by test/conformance's listener-rename case). An earlier fixture wrote
+	// kind `StatusSummary`, under which a policyReport that also required that
+	// kind passed every layer while going silent on the real report.
 	summary := any(map[string]any{"ancestorRef": map[string]any{"group": "agentgateway.dev",
-		"kind": "StatusSummary", "name": "StatusSummary"}, "conditions": []any{}})
+		"kind": "Gateway", "name": "StatusSummary"}, "conditions": []any{}})
+	// renamed is the WHOLE report 1.5.0 wrote on a served <agent>-auth once
+	// the Gateway's serving listener was renamed (A88 (4)): one ancestor, the
+	// synthetic one, carrying Accepted=True/Valid and Attached=False/Pending at
+	// the policy's current generation.
+	renamed := func(gen int64) any {
+		return map[string]any{"ancestorRef": map[string]any{"group": "agentgateway.dev",
+			"kind": "Gateway", "name": "StatusSummary"},
+			"controllerName": "agentgateway.dev/agentgateway",
+			"conditions":     []any{cond("Accepted", "True", "Valid", gen), cond("Attached", "False", "Pending", gen)}}
+	}
 
 	for _, tc := range []struct {
 		name   string
@@ -146,6 +161,8 @@ func TestTheServedPolicyReportHasThreeAnswers(t *testing.T) {
 		{"Accepted=True with a reason other than Valid", policy(2, ours(
 			cond("Accepted", "True", "Translated", 2), cond("Attached", "True", "Attached", 2))), reportBroken, clausePartlyValid},
 		{"the synthetic StatusSummary ancestor", policy(2, summary), reportBroken, clauseUnattached},
+		{"the listener-rename report exactly as agentgateway 1.5.0 wrote it (A88)", policy(1, renamed(1)),
+			reportBroken, clauseUnattached},
 		// A83's ranking, which is the whole of what splitting the message
 		// changes about the ANSWER: two clauses can fire on one policy, the
 		// report is broken either way, and the message must take the STRONGER
