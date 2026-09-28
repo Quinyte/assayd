@@ -281,6 +281,10 @@ func keySourceEmptyMessage(ns, selector, group string, empty []string, binaryOnl
 		fix = fmt.Sprintf("an administrator (admission.apiKeyWriters) adds entries to one of them, or creates "+
 			"a ConfigMap in %s labelled %s", ns, selector)
 		if binaryOnly > 0 {
+			// The release named is the one measured (A88 (3)). On an
+			// agentgateway bump the e2e row holds this text to the release
+			// hack/e2e.sh installs, so it fails until the measurement and this
+			// clause are brought forward together (A89).
 			verb := "hold"
 			if binaryOnly == 1 {
 				verb = "holds"

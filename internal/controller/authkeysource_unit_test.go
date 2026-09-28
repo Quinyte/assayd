@@ -94,7 +94,8 @@ func TestAKeySourceIsCountedNotParsed(t *testing.T) {
 	if !strings.Contains(msg, "2 ConfigMap(s)") || !strings.Contains(msg, "none of which holds an entry in data") ||
 		!strings.Contains(msg, "1 of them holds entries under binaryData") ||
 		!strings.Contains(msg, "which agentgateway 1.5.0 does not read") ||
-		!strings.Contains(msg, "under data rather than binaryData") {
+		!strings.Contains(msg, "under data rather than binaryData") ||
+		!strings.Contains(msg, "in one of them or in a new ConfigMap in ns labelled a=b") {
 		t.Errorf("the binaryData-only message does not say the binaryData entries exist and are not read: %s", msg)
 	}
 	if strings.Contains(msg, "adds entries") {

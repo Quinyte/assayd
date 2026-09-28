@@ -74,7 +74,9 @@ reasons:
       the label, or none that does holds an entry in `data`. An entry under
       `binaryData` is not counted, because agentgateway 1.5.0 builds its key set
       from `data` alone, and the message says how many of the ConfigMaps hold
-      entries only there (design 03 A89, §9 D8 (R1)). While the policy is
+      entries only there (design 03 A89, §9 D8 (R1)). A key under `binaryData`
+      beside any `data` entry in any labelled ConfigMap reads present, and is
+      not reported. While the policy is
       enforcing, every request then gets `401`, with a key or without one.
     operator: >-
       Sets `PolicyApplyIncomplete=True`, `Ready=False` and `Degraded=True`, phase

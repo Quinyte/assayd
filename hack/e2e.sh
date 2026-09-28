@@ -499,6 +499,10 @@ GWEOF
   kubectl -n "${GATEWAY_NS}" rollout status deploy/assayd --timeout=600s >/dev/null
   export ASSAYD_E2E_GATEWAY_NS="${GATEWAY_NS}"
   export ASSAYD_E2E_GATEWAY_NAME="assayd"
+  # The release installed, so a test can hold the operator's messages to the
+  # release they name: ApiKeySourceEmpty's binaryData clause says which
+  # agentgateway was measured not to read binaryData (design 03 A89).
+  export ASSAYD_E2E_AGW_VERSION="${AGW_VERSION}"
   export ASSAYD_E2E_TOOLS_NS="${TOOLS_NS}"
   # The operator is told the same three things the tests derive the emitted
   # route's identity from. The suffix is the chart's own default and is passed
