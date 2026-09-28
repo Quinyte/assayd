@@ -1,6 +1,6 @@
 # Design 01: KnowledgeGraphProvider contract (`kgp/v1alpha1`)
 
-- **Status**: **revised r2** — independent re-critique (reviews/01-recritique.md): 1 blocker + 9 findings, all addressed · ADR-0017
+- **Status**: **revised r2** — independent re-critique (reviews/01-recritique.md): 1 blocker + 9 findings, all addressed · ADR-0017 · The human's approvals, by design and part, are listed in `docs/designs/README.md`.
 - **Phase**: P2 · **Size**: M · **Author**: design session 2026-08-20 · **Date**: 2026-08-20
 - **ADRs**: 0005 (KG domain contract), 0003 (open standards), 0008 (provider slots)
 

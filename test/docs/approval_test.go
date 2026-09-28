@@ -21,11 +21,9 @@ import (
 // one of 04–15 and 17–27 opened with `**Status**: **approved** — critique
 // PASS`, while its README row claimed no approval — twenty said "awaiting user
 // approval", and rows 21, 26 and 27 named a precondition owed before their ADR
-// instead — and the human had approved none of them. The only human approvals on record
-// are design 03's first slice (2026-09-12), design 16's first slice
-// (2026-09-14), design 03 amendments A84 and A85 (both 2026-09-23), design
-// 03 amendment A86 (2026-09-24) and design 03 amendment A89 (2026-09-28).
-// AGENTS.md tells every
+// instead — and the human had approved none of them. The approvals the human
+// has given are the rows of humanApprovedParts (approval_parts_test.go), which
+// also pins WHICH part of a design each one is. AGENTS.md tells every
 // reader to trust a design's own Status line over any summary, so the line that
 // was wrong was the one a reader was told to believe. The human corrected it on
 // 2026-09-23; this test is what keeps the two from drifting apart again.
@@ -53,10 +51,29 @@ import (
 // means the two documents make the same KIND of claim. It does not mean either
 // is true: both could say "approved" of a design the human never approved.
 // TestNoDesignClaimsAnApprovalTheHumanDidNotGive closes that, by holding each
-// side to humanApprovals, the human's decision written down as a table. What
-// neither test reads is the decision's record — an ADR amendment
-// (ADR-0024 Amendment 1, ADR-0034 Amendment 4) or a design's amendment log —
-// so the table is only as true as the change that last edited it.
+// side to humanApprovals, which is derived from humanApprovedParts
+// (approval_parts_test.go), the human's decisions written down as a table.
+//
+// What the tests in approval_parts_test.go add, and exactly what they read:
+//
+//   - WHICH part. A design's Status line and README row must name, as "<part>
+//     … approved by the human on DATE" or "the human approved <part> on
+//     DATE", exactly the parts the table gives that design.
+//   - Every such claim anywhere in docs/ (reviews excepted, HTML as rendered),
+//     README.md, AGENTS.md and CLAUDE.md must match a row. A claim that the
+//     human approved something with NO date after it in its clause is not
+//     read by any of them; approvalClaim still reads it here, in a Status line
+//     or a README row only, as a claim that the design is approved whole or in
+//     part — never which part.
+//   - The three canonical lists (docs/designs/README.md, AGENTS.md, CLAUDE.md)
+//     name exactly the table; any other sentence that mentions approval and
+//     names two or more approved parts is the current list or says the day it
+//     was true; no Status line carries such a list; every design that is not
+//     approved, and TEMPLATE.md, carries approvalPointer.
+//
+// What none of them reads is the decision's record — an ADR amendment
+// (ADR-0024 Amendment 1, ADR-0034 Amendment 4) or the human's own words — so
+// the table is only as true as the change that last edited it.
 func TestADesignsStatusLineAndItsIndexRowAgreeAboutApproval(t *testing.T) {
 	designs := designStatusLines(t)
 	rows := indexRows(t)
@@ -169,25 +186,6 @@ func TestTheHeadReaderReadsTheWholeBullet(t *testing.T) {
 	}
 }
 
-// humanApprovals is the human's decision, not a reading of the documents: the
-// approval each design may claim. Designs 03 and 16 are approved in part —
-// 03's first slice (ADR-0034 Amendment 4, 2026-09-12) and its amendments A84
-// and A85 (both 2026-09-23, recorded in design 03's §11; neither adds an
-// ADR-0034 amendment, on the reading that ADR-0034 is silent on what they
-// change — a precedent, not a stated decision of the human's) and A86
-// (2026-09-24, with D6 answered K1, recorded as ADR-0034 Amendment 7; the
-// value below does not change, because 03 was already approved in part) and
-// A89 (2026-09-28, implementing D8's (R1); ADR-0034 Amendment 7 carries an
-// italic note and no new amendment; the value does not change either), and 16's first slice (ADR-0024 Amendment 1, 2026-09-14). Every
-// other design number, including one that does not exist yet, is not approved.
-//
-// Changing this table is recording a human decision. Do it only in the change
-// that records that decision as an ADR amendment, and cite it here.
-var humanApprovals = map[string]approval{
-	"03": approvedPart,
-	"16": approvedPart,
-}
-
 // TestNoDesignClaimsAnApprovalTheHumanDidNotGive pins the decision itself.
 //
 // Agreement between a Status line and its README row is not enough: setting
@@ -221,9 +219,9 @@ func TestNoDesignClaimsAnApprovalTheHumanDidNotGive(t *testing.T) {
 	sort.Strings(wrong)
 	if len(wrong) > 0 {
 		t.Errorf("%d claims of approval differ from what the human decided. The only approvals the human has "+
-			"given are design 03's first slice, A84, A85, A86 and A89, and design 16's first slice. Correct the document. "+
-			"Changing humanApprovals instead requires a human decision, recorded as an ADR amendment in the "+
-			"same change:\n  %s", len(wrong), strings.Join(wrong, "\n  "))
+			"given are %s. Correct the document. Changing humanApprovedParts instead requires a human decision, "+
+			"recorded as an ADR amendment in the same change:\n  %s",
+			len(wrong), grantList(humanApprovedParts), strings.Join(wrong, "\n  "))
 	}
 }
 
@@ -332,7 +330,19 @@ func approvalClaim(text string) approval {
 }
 
 var (
-	designFile = regexp.MustCompile(`^(\d{2})-.*\.md$`)
+	// The only Markdown files in docs/designs/ that are not designs. Every
+	// other .md there must be named NN-name.md, or the test fails: a design
+	// that does not match designFile would otherwise be skipped in silence,
+	// and every approval claim in it would go unread.
+	designDirNonDesigns = map[string]bool{
+		"README.md":   true, // the index; its table is read by indexRows
+		"TEMPLATE.md": true, // the skeleton a new design is copied from
+	}
+	// The only directories under docs/designs/: critiques and reviews, which
+	// record what was said about a design and are not designs themselves.
+	designDirSubdirs = map[string]bool{"reviews": true}
+
+	designFile = regexp.MustCompile(`(?i)^(\d{2})-.*\.md$`)
 	headBullet = regexp.MustCompile(`^\s*-\s*\*\*(Status|Approval)\*\*\s*:\s*(.+)$`)
 	newBlock   = regexp.MustCompile(`^\s*([-*+]|\d+[.)])\s|^\s*#|^\s*\|`)
 	indexRow   = regexp.MustCompile(`^\|\s*(\d{1,2})\s*\|`)
@@ -343,7 +353,8 @@ var (
 // lines, and any `- **Approval**:` bullet beside it, read the same way. Only
 // the first 20 lines are the head. A design without a Status bullet is
 // reported, not skipped, because a design this test cannot read is a design
-// it silently stops comparing.
+// it silently stops comparing. A Markdown file that is not named NN-name.md is
+// skipped here and reported once, by TestEveryDesignFileIsNamedAsADesign.
 func designStatusLines(t *testing.T) map[string]string {
 	t.Helper()
 	dir := filepath.Join(docsRoot, "designs")
@@ -353,6 +364,7 @@ func designStatusLines(t *testing.T) map[string]string {
 	}
 	out := map[string]string{}
 	for _, e := range entries {
+		// Every other entry is checked once, by TestEveryDesignFileIsNamedAsADesign.
 		m := designFile.FindStringSubmatch(e.Name())
 		if e.IsDir() || m == nil {
 			continue

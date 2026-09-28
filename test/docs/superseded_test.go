@@ -194,14 +194,15 @@ var rules = []rule{
 		headRescue: regexp.MustCompile(`(?i)is withdrawn by ADR-0030`),
 		banned:     regexp.MustCompile(`(?i)27/27|design phase is complete|all 27 designs|every component[^.]{0,80}approved`),
 		allowed:    regexp.MustCompile(`(?i)withdraw|retract|w(as|ere) false|are now false|is false|is not true|not approved|first slice|no longer|never meant`),
-		why:        "no central design is approved whole: design 02 is not approved by its own header, and 03 and 16 approve only their first slice (ADR-0030; a design's own Status line is the source of truth, and docs/designs/README.md summarises it — ADR-0030 Amendment 1)",
+		why:        "no central design is approved whole: design 02 is not approved by its own header, and 03 and 16 are approved only in part, in " + grantList(humanApprovedParts) + " (ADR-0030; a design's own Status line is the source of truth, and docs/designs/README.md summarises it — ADR-0030 Amendment 1)",
 	},
 	{
 		// A REGRESSION PIN for two historical sentences, not general coverage
 		// of design 03's status. Design 03 was consolidated on 2026-09-10 with
 		// no critique PASS, and two summaries said so in words that outlived
-		// the fact: its thirteenth critique passed its first slice, the human
-		// approved that slice on 2026-09-12, amendments A84 and A85 on 2026-09-23, A86 on 2026-09-24, and A89 on 2026-09-28.
+		// the fact: its thirteenth critique passed its first slice, and the
+		// human approved that slice on 2026-09-12 (the parts approved since
+		// are humanApprovedParts, which the message below is built from).
 		// "Designs 02 and 03 are critique pending — not approved" sat in
 		// docs/architecture.md's Status line, and "no design 02 or 03 critique
 		// has returned PASS" in architecture.html's §18 note, until 2026-09-23.
@@ -214,7 +215,7 @@ var rules = []rule{
 		name:    "design-03-never-passed",
 		banned:  regexp.MustCompile(`(?i)designs? 02 and 03 (are|is|were|remain) (critique pending|not approved)|no (design )?02 or 03 critique has (ever )?returned pass`),
 		allowed: regexp.MustCompile(`(?i)withdrawn|retracted`),
-		why:     "design 03's thirteenth critique passed its first slice, which the human approved on 2026-09-12, A84 and A85 were approved on 2026-09-23, A86 on 2026-09-24, and A89 on 2026-09-28; only design 02 is wholly unapproved (design 03's Status line, ADR-0034 Amendment 4)",
+		why:     "design 03's thirteenth critique passed its first slice; the parts the human has approved are " + grantList(humanApprovedParts) + "; only design 02 is wholly unapproved (design 03's Status line, ADR-0034 Amendment 4)",
 	},
 	{
 		// A REGRESSION PIN for one historical sentence. architecture.md §20 and
@@ -229,7 +230,7 @@ var rules = []rule{
 		// "withdrawn" let the restored sentence pass there — measured.
 		name:   "already-approved-design",
 		banned: regexp.MustCompile(`(?i)already[- ]approved`),
-		why:    "no design is approved whole; the human approved only design 03's first slice, A84, A85, A86 and A89, and design 16's first slice (docs/designs/README.md, ADR-0030 Amendment 1)",
+		why:    "no design is approved whole; the parts the human has approved are " + grantList(humanApprovedParts) + " (docs/designs/README.md, ADR-0030 Amendment 1)",
 	},
 	{
 		name:    "superseded-research-note",

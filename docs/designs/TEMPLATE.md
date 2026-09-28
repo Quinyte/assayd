@@ -1,6 +1,6 @@
 # Design: <component name>
 
-- **Status**: draft | in-review | approved
+- **Status**: draft | in-review | approved · The human's approvals, by design and part, are listed in `docs/designs/README.md`.
 - **Phase**: P1–P5 / ent · **Size**: S/M/L · **Author**: · **Date**:
 
 ## 1. Purpose & scope
