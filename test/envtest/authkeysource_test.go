@@ -527,26 +527,59 @@ func TestTheRegisteredKeySetWatchIsMetadataOnly(t *testing.T) {
 	}
 }
 
-// (c) An empty key set is the same report, and binaryData counts.
+// (c) An empty key set is the same report, and binaryData does not count
+// (A89, implementing §9 D8 (R1)): agentgateway 1.5.0 builds its key set from a
+// ConfigMap's data alone (A88 (3)), so a key source whose every entry is under
+// binaryData authenticates nothing, and it reads EMPTY under the same reason.
+// Its message says the binaryData entries exist and are not read. A ConfigMap
+// with entries under both counts its data.
 //
 // Mutations, one per run: count ConfigMaps instead of entries (the first half
-// must fail); count data only (the second must).
-func TestAnEmptyKeySetIsReportedAndBinaryDataCounts(t *testing.T) {
+// must fail); count binaryData too (binaryData must).
+func TestAnEmptyKeySetIsReportedAndBinaryDataDoesNotCount(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		a, r, _ := healthyServedAPIKeyAgent(t, "a86empty")
 		writeKeySetWith(t, a.Namespace, nil, nil)
 		reconcileOnce(t, r, a)
 		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "ApiKeySourceEmpty")
 		mustContain(t, c, "PolicyApplyIncomplete", keySourceFresh, "1 ConfigMap(s) carrying that label",
-			keySetName, "none of which holds an entry", "adds entries")
+			keySetName, "none of which holds an entry in data", "adds entries")
+		if strings.Contains(c.Message, "binaryData") {
+			t.Errorf("a key set with no binaryData entry names binaryData: %s", c.Message)
+		}
 		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "ApiKeySourceEmpty")
 	})
 	t.Run("binaryData", func(t *testing.T) {
 		a, r, _ := healthyServedAPIKeyAgent(t, "a86binary")
 		writeKeySetWith(t, a.Namespace, nil, map[string][]byte{"caller": []byte("x")})
 		reconcileOnce(t, r, a)
+		c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "ApiKeySourceEmpty")
+		mustContain(t, c, "PolicyApplyIncomplete", keySourceFresh, "1 ConfigMap(s) carrying that label",
+			keySetName, "none of which holds an entry in data", "1 of them holds entries under binaryData",
+			"which agentgateway 1.5.0 does not read", "under data rather than binaryData")
+		if strings.Contains(c.Message, "adds entries") {
+			t.Errorf("a binaryData-only key set's fix says to add entries, which exist: %s", c.Message)
+		}
+		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "ApiKeySourceEmpty")
+		condIs(t, a, assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ApiKeySourceEmpty")
+		if !keySourceClaim(t, liveAgent(t, a)) {
+			t.Error("a binaryData-only key source raised the report but left status.auth.keySourceEmpty unset")
+		}
+		// The same entry moved to data is a key: the claim clears.
+		writeKeySetWith(t, a.Namespace, map[string]string{"caller": "x"}, nil)
+		reconcileOnce(t, r, a)
 		if c := condition(liveAgent(t, a), assaydv1alpha1.CondPolicyApplyIncomplete); c != nil {
-			t.Errorf("a key held only under binaryData was reported: %+v", c)
+			t.Errorf("the entry moved from binaryData to data is still reported: %+v", c)
+		}
+		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available")
+	})
+	t.Run("both", func(t *testing.T) {
+		a, r, _ := healthyServedAPIKeyAgent(t, "a86both")
+		writeKeySetWith(t, a.Namespace, map[string]string{"caller": "x"},
+			map[string][]byte{"other": []byte("x")})
+		reconcileOnce(t, r, a)
+		if c := condition(liveAgent(t, a), assaydv1alpha1.CondPolicyApplyIncomplete); c != nil {
+			t.Errorf("a key set with an entry under data beside one under binaryData was reported: %+v", c)
 		}
 		condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available")
 	})

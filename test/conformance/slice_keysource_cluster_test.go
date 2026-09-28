@@ -402,13 +402,18 @@ func TestSliceAKeySourceWhoseEveryEntryIsRejectedReportsPartiallyValid(t *testin
 // to `data` admits the key at once, so the entry is good and only where it is
 // held differs.
 //
-// That makes the shape a silent outage the operator's count does not catch: a
-// key source whose only entries are under `binaryData` reads PRESENT to
+// That made the shape a silent outage the operator's count did not catch: a
+// key source whose only entries are under `binaryData` read PRESENT to
 // `countKeySource`, so no `ApiKeySourceEmpty`, while every key is refused and
-// the Gateway reports `Valid`. It contradicts nothing A86 asserted as fact —
-// A86 recorded it as a residue "silent until measured" — but it decides A86's
-// counting rule against the reading built, and design 03 A88 records it for a
-// decision. No behaviour is changed here.
+// the Gateway reports `Valid`. It contradicted nothing A86 asserted as fact —
+// A86 recorded it as a residue "silent until measured" — but it decided A86's
+// counting rule against the reading built, design 03 A88 recorded it for a
+// decision, and the human decided §9 D8 as (R1), count `data` only, which
+// design 03 A89 implements: the operator now reads such a key source EMPTY.
+// This case is what A89's report rests on. If it fails because a release
+// began reading `binaryData`, A89's report is false on that release. CI does
+// not run this suite; A89's row in test/e2e/keysource_test.go measures the
+// same 401 on the release hack/e2e.sh installs, and CI runs that.
 func TestSliceAKeyHeldOnlyInBinaryDataIsNotRead(t *testing.T) {
 	gw := keySourceFixture(t)
 	writeKeySource(t, map[string]string{keyCanary: validEntry(keyCanary, "conf-canary")},

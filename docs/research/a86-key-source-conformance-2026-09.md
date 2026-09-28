@@ -108,13 +108,23 @@ authenticates nothing, is not reported as rejected, and leaves the policy
 `Valid`; the same bytes under `data` admit the key within 226 ms of the write
 starting. So a key source
 whose only entries are under `binaryData` is a complete, silent authentication
-outage at the gateway — and the operator does not report it either, because A86
-counts a `binaryData` entry as PRESENT (§5's row, A86's "Settled" bullet, case
+outage at the gateway — and the operator did not report it either, because A86
+counted a `binaryData` entry as PRESENT (§5's row, A86's "Settled" bullet, case
 20 (c)'s second half). A86 anticipated exactly this ("keys held where
 agentgateway does not read them are silent until measured") and deferred the
 counting rule to this row. Design 03 A88 records it, and §9 D8 was decided by
-the human on 2026-09-25 as (R1), count `data` only — not yet implemented. **Nothing
-in the operator is changed.**
+the human on 2026-09-25 as (R1), count `data` only. **Nothing in the operator
+is changed by this measurement**; design 03 A89 implements (R1) in a separate
+change: the operator now counts `data` only, so a key source like the second
+row's reads `ApiKeySourceEmpty`, and its message says how many labelled
+ConfigMaps hold entries only under `binaryData` and that 1.5.0 does not read
+them. If a later agentgateway release reads `binaryData`, A89's report would
+be false for such a key source. This row's case,
+`TestSliceAKeyHeldOnlyInBinaryDataIsNotRead`, would show it, but only when
+`make conformance-cluster` is run against that release: CI does not run it, and
+it pins its release apart from `hack/e2e.sh`. What CI does run is A89's e2e
+row, which requires a key held only under `binaryData` to get `401` through
+the gateway `hack/e2e.sh` installs.
 
 ## 4. The listener rename — the policy half's real report
 

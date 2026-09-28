@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 	"github.com/Quinyte/assayd/internal/compiler"
@@ -55,7 +56,7 @@ func ensureAPIKeys(t *testing.T, ctx context.Context) {
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "assayd-e2e-api-keys",
+			Name:      apiKeySetName,
 			Namespace: runNS,
 			Labels:    map[string]string{compiler.APIKeySourceLabel: compiler.APIKeySourceValue},
 		},
@@ -66,6 +67,42 @@ func ensureAPIKeys(t *testing.T, ctx context.Context) {
 		t.Fatalf("write the API key set: %v", err)
 	}
 	t.Cleanup(func() { _ = k8s.Delete(context.Background(), cm) })
+}
+
+// apiKeySetName is the key set ensureAPIKeys writes.
+const apiKeySetName = "assayd-e2e-api-keys"
+
+// moveAPIKeys moves every entry of ensureAPIKeys' key set between data and
+// binaryData IN PLACE — one UPDATE of the same ConfigMap, never a delete — as
+// the administrator, the same bytes under the other field. With no delete, a
+// gateway that answers 401 after it cannot be answering for a key set it saw
+// vanish, and the operator hears the move through the key-set watch as an
+// update (design 03 A89).
+func moveAPIKeys(t *testing.T, ctx context.Context, toBinary bool) {
+	t.Helper()
+	admin := keyAdminClient(t)
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var cm corev1.ConfigMap
+		if err := admin.Get(ctx, types.NamespacedName{Namespace: runNS, Name: apiKeySetName}, &cm); err != nil {
+			return err
+		}
+		if toBinary {
+			cm.BinaryData = map[string][]byte{}
+			for k, v := range cm.Data {
+				cm.BinaryData[k] = []byte(v)
+			}
+			cm.Data = nil
+		} else {
+			cm.Data = map[string]string{}
+			for k, v := range cm.BinaryData {
+				cm.Data[k] = string(v)
+			}
+			cm.BinaryData = nil
+		}
+		return admin.Update(ctx, &cm)
+	}); err != nil {
+		t.Fatalf("move the API key set's entries in place (to binaryData: %v): %v", toBinary, err)
+	}
 }
 
 // waitForPublishedRoute waits until the operator's route carries backendRefs,

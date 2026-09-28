@@ -2520,11 +2520,12 @@ exactly when Mode is apikey.<br/>
           KeySourceEmpty says the last pass whose live list of this Agent's API-key
 source succeeded found no key there: no ConfigMap carrying the label its
 <agent>-auth selects in the run namespace, or none holding an entry in
-data or binaryData. PolicyApplyIncomplete then stands under
-ApiKeySourceEmpty, and Ready is withheld (design 03 A86, ADR-0034
-Amendment 7). A list that fails leaves it as it stood; a list that finds
-an entry clears it. It records a count of entries, not a working key: an
-entry agentgateway rejects still counts.<br/>
+data. Entries under binaryData are not counted, because agentgateway
+1.5.0 does not read them (design 03 A89). PolicyApplyIncomplete then
+stands under ApiKeySourceEmpty, and Ready is withheld (design 03 A86,
+ADR-0034 Amendment 7). A list that fails leaves it as it stood; a list
+that finds an entry in data clears it. It records a count of entries, not
+a working key: an entry agentgateway rejects still counts.<br/>
         </td>
         <td>false</td>
       </tr><tr>
