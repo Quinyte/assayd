@@ -110,7 +110,17 @@ var (
 	// The only phrasings read as a claim that the HUMAN approved something.
 	// "approved on", "approved by a reviewer" and "the approved first slice"
 	// are not: they do not say who approved.
-	humanApproval = regexp.MustCompile(`(?i)\bapproved,? by the human\b|\bthe human(?: has| had)? approved\b|\bthe human['’]s approval(?: of)?\b`)
+	// One word may sit between "the human" and "approved" ("has", "had",
+	// "also", "then"); "not" and "never" there withdraw the claim.
+	humanApproval = regexp.MustCompile(`(?i)\bapproved,? by the human\b|\bthe human(?: (\w+))? approved\b|\bthe human['’]s approval(?: of)?\b`)
+	// A bare approval by id, with no approver named: "A90 was approved on
+	// DATE", "A20 approved on DATE". Read only in an approved design's own
+	// Status line and README row, where an ADR's or a reviewer's approval
+	// cannot be what it means.
+	bareApproval = regexp.MustCompile(`(?i)\bapproved\b([^.;|]{0,40}?)\bon (\d{4}-\d{2}-\d{2})\b`)
+	// An ADR as the subject of an approval: "ADR-0031 was approved by the
+	// human on 2026-09-05" approves a decision record, not a part of a design.
+	adrRef = regexp.MustCompile(`\bADR-\d{4}\b`)
 	// The word just before the phrase that withdraws it: "not approved by the
 	// human", "never approved by the human", "would be approved by the human".
 	withdrawnBefore = regexp.MustCompile(`(?i)\b(?:not|never|be)\s*$`)
@@ -122,6 +132,7 @@ var (
 	isoDate       = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
 	approvalWord  = regexp.MustCompile(`(?i)\bapprov`)
 	approvalsWord = regexp.MustCompile(`(?i)\bapprovals\b`)
+	listMarker    = regexp.MustCompile(`(?i)\bonly\b|\bapprovals\b`)
 	asOfDate      = regexp.MustCompile(`(?i)\bas of (\d{4}-\d{2}-\d{2})\b`)
 	// Sentence ends and table-cell breaks, without the semicolon: a list's
 	// parts and its dates are often separated by one, as in "(both
@@ -138,8 +149,10 @@ func approvalProse(text string) string {
 }
 
 // humanApprovalClaims returns every claim in a text that the human approved a
-// part of a design on a day. It reads ONLY the phrasings humanApproval names,
-// each with the first date after it in its clause. The subject is the ids
+// part of a design on a day. It reads ONLY the phrasings humanApproval names —
+// "approved by the human", "the human [one word] approved", "the human's
+// approval of" — each with the first date after it in its clause. A clause
+// whose subject is an ADR (adrSubject) is skipped. The subject is the ids
 // between the phrase and the date ("the human approved A84 and A85 on"), or a
 // slice there; failing both, the last run of ids before the phrase in the
 // clause, every id in it ("A90 and A85, …, both approved by the human on"),
@@ -156,10 +169,13 @@ func approvalProse(text string) string {
 func humanApprovalClaims(text, def string) []grant {
 	var out []grant
 	for _, clause := range sentenceBreak.Split(approvalProse(text), -1) {
-		for _, loc := range humanApproval.FindAllStringIndex(clause, -1) {
+		for _, loc := range humanApproval.FindAllStringSubmatchIndex(clause, -1) {
 			head := clause[:loc[0]]
 			if withdrawnBefore.MatchString(head) {
 				continue
+			}
+			if loc[2] >= 0 && withdrawnWord[strings.ToLower(clause[loc[2]:loc[3]])] {
+				continue // "the human never approved"
 			}
 			rest := clause[loc[1]:]
 			d := isoDate.FindStringIndex(rest)
@@ -172,6 +188,8 @@ func humanApprovalClaims(text, def string) []grant {
 			var parts []string
 			where := gap
 			switch runs := amendmentRun.FindAllString(head, -1); {
+			case adrSubject(gap, head):
+				continue // an ADR was approved, not a part of a design
 			case amendmentID.MatchString(gap):
 				parts = amendmentID.FindAllString(gap, -1)
 			case sliceWord.MatchString(gap):
@@ -190,6 +208,66 @@ func humanApprovalClaims(text, def string) []grant {
 			}
 			for _, p := range parts {
 				g.part = p
+				out = append(out, g)
+			}
+		}
+	}
+	return out
+}
+
+// withdrawnWord is the word between "the human" and "approved" that
+// withdraws the claim.
+var withdrawnWord = map[string]bool{"not": true, "never": true}
+
+// adrSubject reports whether an approval's subject is an ADR: one is named
+// between the phrase and the date with no part beside it, or, failing a
+// subject there, the last thing named before the phrase is an ADR rather than
+// an amendment id or a slice.
+func adrSubject(gap, head string) bool {
+	if amendmentID.MatchString(gap) || sliceWord.MatchString(gap) {
+		return false
+	}
+	if adrRef.MatchString(gap) {
+		return true
+	}
+	last := func(re *regexp.Regexp) int {
+		l := re.FindAllStringIndex(head, -1)
+		if l == nil {
+			return -1
+		}
+		return l[len(l)-1][0]
+	}
+	a := last(adrRef)
+	return a >= 0 && a > last(amendmentID) && a > last(sliceWord)
+}
+
+// bareApprovalClaims returns every "<id> … approved on DATE" in a text, by
+// amendment id only: the ids between "approved" and the date, else the last
+// run of ids before it in its clause, every id in the run. A claim with no id
+// is not returned. It names no approver, so it is read only where the
+// approver can only be the human: an approved design's own Status line and
+// README row (TestAPartlyApprovedDesignNamesTheApprovedParts).
+func bareApprovalClaims(text, def string) []grant {
+	var out []grant
+	for _, clause := range sentenceBreak.Split(approvalProse(text), -1) {
+		for _, m := range bareApproval.FindAllStringSubmatchIndex(clause, -1) {
+			head := negatedID.ReplaceAllString(clause[:m[0]], " ")
+			if withdrawnBefore.MatchString(clause[:m[0]]) {
+				continue
+			}
+			gap := negatedID.ReplaceAllString(clause[m[2]:m[3]], " ")
+			ids := amendmentID.FindAllString(gap, -1)
+			if ids == nil {
+				if runs := amendmentRun.FindAllString(head, -1); runs != nil {
+					ids = amendmentID.FindAllString(runs[len(runs)-1], -1)
+				}
+			}
+			g := grant{design: def, date: clause[m[4]:m[5]]}
+			if d := designRef.FindAllStringSubmatch(head, -1); d != nil {
+				g.design = d[len(d)-1][1]
+			}
+			for _, id := range ids {
+				g.part = id
 				out = append(out, g)
 			}
 		}
@@ -397,9 +475,11 @@ func TestEveryDesignFileIsNamedAsADesign(t *testing.T) {
 // and design 16 are each "approved in part", and approvalClaim does not read
 // which part: a Status line that dropped A86, or gained an amendment the human
 // never approved, still reads as "part of it approved". So each design's Status
-// line and its README row must claim, in a phrasing humanApprovalClaims reads,
-// exactly the parts humanApprovedParts gives that design, each on its day — no
-// fewer and no more.
+// line and its README row must claim exactly the parts humanApprovedParts
+// gives that design, each on its day — no fewer and no more. Both readers
+// apply here: humanApprovalClaims, and, for a design with an approved part,
+// bareApprovalClaims, so "A20 approved on DATE" in design 16's row is read as
+// a claim of design 16's even though it names no approver.
 func TestAPartlyApprovedDesignNamesTheApprovedParts(t *testing.T) {
 	seen := map[grant]bool{}
 	for _, g := range humanApprovedParts {
@@ -416,7 +496,11 @@ func TestAPartlyApprovedDesignNamesTheApprovedParts(t *testing.T) {
 	for where, texts := range map[string]map[string]string{"Status line": designStatusLines(t), "README row": indexRows(t)} {
 		for n, text := range texts {
 			var own []grant
-			for _, g := range humanApprovalClaims(text, n) {
+			claims := humanApprovalClaims(text, n)
+			if humanApprovals[n] != notApproved {
+				claims = append(claims, bareApprovalClaims(text, n)...)
+			}
+			for _, g := range claims {
 				if g.design == n && g.part != "" {
 					own = append(own, g)
 				}
@@ -427,8 +511,8 @@ func TestAPartlyApprovedDesignNamesTheApprovedParts(t *testing.T) {
 	sort.Strings(wrong)
 	if len(wrong) > 0 {
 		t.Errorf("%d differences between what a design's Status line or README row says the human approved and "+
-			"humanApprovedParts (%s). An approval is read only as \"<part> … approved by the human on YYYY-MM-DD\" "+
-			"or \"the human approved <part> on YYYY-MM-DD\". Correct the document. Changing humanApprovedParts "+
+			"humanApprovedParts (%s). An approval is read as \"<part> … approved by the human on YYYY-MM-DD\", "+
+			"\"the human approved <part> on YYYY-MM-DD\", or, here only, \"<id> … approved on YYYY-MM-DD\". Correct the document. Changing humanApprovedParts "+
 			"instead requires a human decision, recorded as an ADR amendment in the same change:\n  %s",
 			len(wrong), grantList(humanApprovedParts), strings.Join(wrong, "\n  "))
 	}
@@ -507,8 +591,9 @@ func TestNoStatusLineCarriesAListOfApprovals(t *testing.T) {
 }
 
 // TestNoDocumentCarriesAStaleListOfApprovals finds every other list of
-// approvals by its structure — a sentence that mentions approval and names two
-// or more parts the human approved — anywhere in approvalCorpus, and requires
+// approvals by its structure (approvalList: a sentence that mentions approval
+// and names three or more approved parts, or two beside "only" or
+// "approvals") anywhere in approvalCorpus, and requires
 // it to be current, or to say the day it was true. Inside a design, and in a
 // design's README row, the design's own parts do not count: TestAPartly…
 // holds those. The three canonical lists are held exactly by
@@ -529,21 +614,6 @@ func TestNoStatusLineCarriesAListOfApprovals(t *testing.T) {
 // edited to name a new part still passes. A stated day is checked against the
 // table, so the note is either true or the test fails.
 func TestNoDocumentCarriesAStaleListOfApprovals(t *testing.T) {
-	// trueOn reports whether a list named, on day, every part then approved of
-	// each design it names, and nothing approved after day.
-	trueOn := func(list map[grant]bool, day string) bool {
-		named := map[string]bool{}
-		for k := range list {
-			named[k.design] = true
-		}
-		for _, p := range humanApprovedParts {
-			k := grant{design: p.design, part: p.part}
-			if named[p.design] && ((p.date < day && !list[k]) || (p.date > day && list[k])) {
-				return false
-			}
-		}
-		return true
-	}
 	used := map[int]bool{}
 	lists := 0
 	for _, f := range approvalCorpus(t) {
@@ -558,26 +628,19 @@ func TestNoDocumentCarriesAStaleListOfApprovals(t *testing.T) {
 		for _, u := range proseUnits(f) {
 			for _, sent := range listBreak.Split(approvalProse(u.text), -1) {
 				sent = strings.Join(strings.Fields(sent), " ")
-				if !approvalWord.MatchString(sent) || canonical[sent] {
+				if canonical[sent] {
 					continue
 				}
-				list := map[grant]bool{}
-				for _, g := range listedGrants(sent) {
-					if k, ok := approvedPartKey(g); ok && (u.def == "" || (g.design != "" && k.design != u.def)) {
-						list[k] = true
-					}
-				}
-				if len(list) < 2 {
+				list, isList := approvalList(sent, u.def)
+				if !isList {
 					continue
 				}
 				lists++
-				if trueOn(list, "9999-12-31") { // the current list
+				if listStands(list, sent) {
 					continue
 				}
 				if m := asOfDate.FindStringSubmatch(sent); m != nil {
-					if !trueOn(list, m[1]) {
-						t.Errorf("%s: a list of approvals says it is as of %s, and was not true that day: %q", f.rel, m[1], sent)
-					}
+					t.Errorf("%s: a list of approvals says it is as of %s, and was not true that day: %q", f.rel, m[1], sent)
 					continue
 				}
 				exempt := -1
@@ -593,7 +656,9 @@ func TestNoDocumentCarriesAStaleListOfApprovals(t *testing.T) {
 					}
 					sort.Strings(names)
 					t.Errorf("%s lists approvals (%s) that are not the current list, and says no day it was true: %q. "+
-						"Point to docs/designs/README.md instead, or mark the day in the sentence, \"(as of YYYY-MM-DD)\"",
+						"If it is a list of approvals, point to docs/designs/README.md instead, or mark the day in the "+
+						"sentence, \"(as of YYYY-MM-DD)\". If it is not a list — it only mentions parts — reword it or "+
+						"split it, so that no one sentence says \"only\" or \"approvals\" beside two approved parts",
 						f.rel, strings.Join(names, ", "), sent)
 					continue
 				}
@@ -620,6 +685,55 @@ func TestNoDocumentCarriesAStaleListOfApprovals(t *testing.T) {
 	if lists == 0 {
 		t.Fatalf("found no list of approvals outside the canonical three; ADR-0030's is one, so the reader is broken")
 	}
+}
+
+// trueOn reports whether a list named, on day, every part then approved of
+// each design it names, and nothing approved after day. A part approved on
+// day itself may be in it or not: the table does not record the hour.
+func trueOn(list map[grant]bool, day string) bool {
+	named := map[string]bool{}
+	for k := range list {
+		named[k.design] = true
+	}
+	for _, p := range humanApprovedParts {
+		k := grant{design: p.design, part: p.part}
+		if named[p.design] && ((p.date < day && !list[k]) || (p.date > day && list[k])) {
+			return false
+		}
+	}
+	return true
+}
+
+// listStands reports whether a list of approvals is accepted without an ADR
+// exemption: it is the current list for the designs it names, or it says
+// "as of D" and was true on D.
+func listStands(list map[grant]bool, sent string) bool {
+	if trueOn(list, "9999-12-31") {
+		return true
+	}
+	m := asOfDate.FindStringSubmatch(sent)
+	return m != nil && trueOn(list, m[1])
+}
+
+// approvalList reports whether a sentence is a list of approvals, and the
+// approved parts it names. It is one when it mentions approval and names
+// three or more parts the human approved, or two with a word that makes a
+// list of them: "only" ("approved only in its first slice and its amendment
+// A84") or "approvals". A sentence that mentions two approved parts in passing
+// — "the approval of A89 changed text that A86 approved" — is not. Inside a
+// design (def), the design's own parts do not count, nor does an id with no
+// design named.
+func approvalList(sent, def string) (map[grant]bool, bool) {
+	list := map[grant]bool{}
+	if !approvalWord.MatchString(sent) {
+		return list, false
+	}
+	for _, g := range listedGrants(sent) {
+		if k, ok := approvedPartKey(g); ok && (def == "" || (g.design != "" && k.design != def)) {
+			list[k] = true
+		}
+	}
+	return list, len(list) >= 3 || (len(list) == 2 && listMarker.MatchString(sent))
 }
 
 // proseUnit is a stretch of text a sentence cannot run out of, with the design
@@ -665,6 +779,34 @@ func proseUnits(f corpusFile) []proseUnit {
 	}
 	flush()
 	return out
+}
+
+// TestTheListReaderTellsAListFromAMention pins what approvalList counts as a
+// list of approvals, and what listStands accepts, on the shapes the corpus and
+// a review of 2026-09-28 used.
+func TestTheListReaderTellsAListFromAMention(t *testing.T) {
+	for _, tc := range []struct {
+		name, text   string
+		list, stands bool
+	}{
+		{"two parts in passing", "The approval of A89 changed text that A86 approved.", false, false},
+		{"two parts with only", "design 03 is approved only in its first slice and its amendment A84", true, false},
+		{"two parts with only, dated", "design 03 is approved only in its first slice and its amendment A84 (as of 2026-09-23)", true, true},
+		{"two parts with only, dated too early", "design 03 is approved only in its first slice and its amendment A84 (as of 2026-09-22)", true, false},
+		{"three parts", "The human has approved design 03's first slice and its amendment A84, and design 16's first slice.", true, false},
+		{"three parts, dated", "The human has approved design 03's first slice and its amendment A84, and design 16's first slice (as of 2026-09-23).", true, true},
+		{"every part of design 03", "Design 03 is approved in its first slice and in A84, A85, A86 and A89.", true, true},
+		{"no approval word", "design 03's first slice, A84 and A85 are built", false, false},
+	} {
+		list, isList := approvalList(approvalProse(tc.text), "")
+		if isList != tc.list {
+			t.Errorf("%s: %q: list %v, want %v (parts %v)", tc.name, tc.text, isList, tc.list, list)
+			continue
+		}
+		if isList && listStands(list, tc.text) != tc.stands {
+			t.Errorf("%s: %q: stands %v, want %v", tc.name, tc.text, !tc.stands, tc.stands)
+		}
+	}
 }
 
 // TestNoDocumentClaimsAnApprovedPartTheHumanDidNotGive reads every claim that
@@ -734,10 +876,30 @@ func TestTheApprovedPartReaderFindsTheSubject(t *testing.T) {
 		{"no date", "A84 was approved by the human after five rounds.", nil},
 		{"not the human", "ADR-0031 was approved on 2026-09-05, and the approved first slice on 2026-09-12 stands", nil},
 		{"a quoted claim", `this line read "A90, approved by the human on 2026-09-29"`, nil},
+		{"a word between: also", "The human also approved A90 on 2026-09-29.", []grant{{"03", "A90", "2026-09-29"}}},
+		{"a word between: then", "The human then approved A90 on 2026-09-29.", []grant{{"03", "A90", "2026-09-29"}}},
+		{"a word between: never", "The human never approved A90 on 2026-09-29.", nil},
+		{"an ADR before the phrase", "ADR-0031 was approved by the human on 2026-09-05", nil},
+		{"an ADR after the phrase", "the human approved ADR-0031 on 2026-09-05", nil},
+		{"an id after an ADR", "ADR-0034 records it: A86 was approved by the human on 2026-09-24", []grant{{"03", "A86", "2026-09-24"}}},
 	} {
 		got := humanApprovalClaims(tc.text, "03")
 		if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 			t.Errorf("%s: %q reads as %v, want %v", tc.name, tc.text, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		name, text string
+		want       []grant
+	}{
+		{"bare, id first", "A90 was approved on 2026-09-29 on its critique PASS.", []grant{{"16", "A90", "2026-09-29"}}},
+		{"bare, no verb before", "A20 approved on 2026-09-29.", []grant{{"16", "A20", "2026-09-29"}}},
+		{"bare, a run", "A84 and A85, both approved on 2026-09-23", []grant{{"16", "A84", "2026-09-23"}, {"16", "A85", "2026-09-23"}}},
+		{"bare, no id", "the first slice was approved on 2026-09-14", nil},
+		{"bare, withdrawn", "A20 was not approved on 2026-09-29", nil},
+	} {
+		if got := bareApprovalClaims(tc.text, "16"); fmt.Sprint(got) != fmt.Sprint(tc.want) {
+			t.Errorf("bare %s: %q reads as %v, want %v", tc.name, tc.text, got, tc.want)
 		}
 	}
 	for _, tc := range []struct {

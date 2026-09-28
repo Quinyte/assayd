@@ -57,18 +57,20 @@ import (
 // What the tests in approval_parts_test.go add, and exactly what they read:
 //
 //   - WHICH part. A design's Status line and README row must name, as "<part>
-//     … approved by the human on DATE" or "the human approved <part> on
-//     DATE", exactly the parts the table gives that design.
+//     … approved by the human on DATE", "the human [one word] approved <part>
+//     on DATE", or, in an approved design's own lines only, "<id> … approved
+//     on DATE", exactly the parts the table gives that design.
 //   - Every such claim anywhere in docs/ (reviews excepted, HTML as rendered),
-//     README.md, AGENTS.md and CLAUDE.md must match a row. A claim that the
-//     human approved something with NO date after it in its clause is not
-//     read by any of them; approvalClaim still reads it here, in a Status line
+//     README.md, AGENTS.md and CLAUDE.md must match a row, except one whose
+//     subject is an ADR. Outside an approved design's own lines, an approval
+//     that does not name the human as approver ("A90 was approved on DATE")
+//     is not read, and nowhere is a claim with NO date after it in its clause; approvalClaim still reads it here, in a Status line
 //     or a README row only, as a claim that the design is approved whole or in
 //     part — never which part.
 //   - The three canonical lists (docs/designs/README.md, AGENTS.md, CLAUDE.md)
 //     name exactly the table; any other sentence that mentions approval and
-//     names two or more approved parts is the current list or says the day it
-//     was true; no Status line carries such a list; every design that is not
+//     names three or more approved parts, or two beside "only" or
+//     "approvals", is the current list or says the day it was true; no Status line carries such a list; every design that is not
 //     approved, and TEMPLATE.md, carries approvalPointer.
 //
 // What none of them reads is the decision's record — an ADR amendment
