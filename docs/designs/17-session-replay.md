@@ -1,6 +1,6 @@
 # Design 17: Session replay engine
 
-- **Status**: **not approved by the human** — critique PASS at r2 (reviews/17-review.md) · ADR-0024 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The only human approvals on record are design 03's first slice and its amendment A84, and design 16's first slice.
+- **Status**: **not approved by the human** — critique PASS at r2 (reviews/17-review.md) · ADR-0024 · **Corrected 2026-09-23 by the human's decision**: until then this line opened "approved". The human has not approved any part of this design; a critique PASS is evidence about the prose, not an approval. The human's approvals, by design and part, are listed in `docs/designs/README.md`.
 - **Phase**: P3 · **Size**: M · **Date**: 2026-08-20
 - **ADRs**: 0021 (receipts, fidelity consumers, capture levels) · interfaces: 04 (the stream + object store), 16 (dataset sampler), 08 (`assayd session` verbs), 02 (dev-revision targets)
 
