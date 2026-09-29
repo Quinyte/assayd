@@ -1263,7 +1263,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 - `internal/controller/release.go:118` in `reportUnresolvablePin()` — constant at the call site
 
-**Referenced by a test:** `test/envtest/release_test.go`
+**Referenced by a test:** `test/envtest/imagesignature_test.go`, `test/envtest/release_test.go`
 
 **State:** `spec.release` pins a revision digest that no retained revision carries — collected, or never minted. A digest is a full SHA-256, so a typo reads the same as a collected revision.
 

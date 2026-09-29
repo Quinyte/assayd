@@ -303,7 +303,7 @@ While it is not yet served, `Ready` is `False`, reason `AuthEnforcementPending`.
 | `GovernanceSkipped` | `False` | `AuthVerifiedOnOneReplica` | One probe proves one gateway replica, and no replica count is declared. |
 | `Registered` | `True` | `CardValidated` | The operator fetched and validated the card. |
 | `CardUnsigned` | `True` | `NoSigningConfigured` | Nothing verifies card signatures yet. Raised on a managed Agent once its card has been fetched — **not** on an Agent that never became ready, and never on an external one, which returns before any card handling. Absence of this condition is not evidence that a card was checked. |
-| `ImageSignatureUnverified` | `True` | `SignatureVerificationNotBuilt` | Nothing verifies image signatures yet; the digest says which image runs, not who built it. Set on every Agent, external ones included, from its first status write. It changes no phase and does not affect `Ready`, and nothing clears it (design 02 A78). |
+| `ImageSignatureUnverified` | `True` | `SignatureVerificationNotBuilt` | Nothing verifies image signatures yet; a digest fixes which bytes the reference names, not who built them. Set on every Agent, external ones included, by the end of its first reconcile after the finalizer is added. It changes no phase and does not affect `Ready`, and nothing clears it (design 02 A78). |
 
 ### 5.4 Write two keys
 

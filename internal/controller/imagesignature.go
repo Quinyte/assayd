@@ -42,8 +42,8 @@ func assessImageSignature(agent *assaydv1alpha1.Agent, c *conditionSet) {
 	var lead string
 	switch {
 	case agent.Spec.Runtime != nil && digestPinned.MatchString(agent.Spec.Runtime.Image):
-		lead = "spec.runtime.image is pinned by a sha256 digest, so the digest says which image " +
-			"runs, but not who built it: no image signature is checked. "
+		lead = "spec.runtime.image is pinned by a sha256 digest, which fixes the bytes that " +
+			"reference names but not who built them: no image signature is checked. "
 	case agent.Spec.Runtime != nil:
 		lead = fmt.Sprintf("spec.runtime.image %q is not pinned by a sha256 digest, so a tag can "+
 			"be repointed at other bytes, and no image signature is checked either. The current "+

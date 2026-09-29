@@ -4,6 +4,7 @@
 package envtest
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -125,6 +126,25 @@ func TestAnUnresolvedEnvSourceKeepsTheImageSignatureAnnouncement(t *testing.T) {
 	if c := condition(&got, assaydv1alpha1.CondEnvSourceUnresolved); c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatalf("the fixture did not reach the env-source refusal: %+v", c)
 	}
+	imageSignatureUnverified(t, a, "pinned by a sha256 digest")
+}
+
+// Every early exit of the ordinary path merges the condition set the pass
+// built at its top, so the announcement must be asserted there, before any of
+// them. An unresolvable release pin is one of those exits, reached after the
+// run namespace and before the workload: an assessor moved below the first
+// return would clear the announcement here, on an Agent that is serving.
+func TestAnEarlyExitOfTheOrdinaryPathKeepsTheImageSignatureAnnouncement(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "earlyexit", nil)
+	r := newReconciler(false)
+	settle(t, r, a)
+	imageSignatureUnverified(t, a)
+	mustEdit(t, a, func(x *assaydv1alpha1.Agent) {
+		x.Spec.Release = &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: strings.Repeat("c", 64)}
+	})
+	settle(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ReleasePinUnresolvable")
 	imageSignatureUnverified(t, a, "pinned by a sha256 digest")
 }
 
