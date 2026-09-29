@@ -27,6 +27,10 @@ import (
 //     ConfigMap or the network, or built from strings that split the key —
 //     because the volume scan reads source text, not what the binary does;
 //   - code outside internal/, cmd/, api/ and pkg/, and files under testdata/.
+//
+// And what it over-reads: the scan matches inside string literals, on
+// purpose, because that is where a JSON or YAML pod overlay lives. So a
+// string that merely mentions "hostPath" fails it too, and is exempted by line.
 
 // storageKinds are the "group/resource" pairs through which a workload gets
 // storage that outlives a pod: directly, or by a controller that makes PVCs.
@@ -154,18 +158,24 @@ func TestStorageGrantsFindsWhatItLooksFor(t *testing.T) {
 // unstructured maps and JSON, and in YAML: a `Volumes:` or `volumes:` field or
 // key, a `"volumes"` key, `.Volumes`, `corev1.Volume`, any `...VolumeSource`,
 // and the storage keys themselves. Case-insensitive, so `"hostPath"` in a
-// map[string]any is found as well as `HostPath` in a struct.
-var volumeToken = regexp.MustCompile(`(?i)\bvolumes"?\s*:|"volumes"|\.volumes\b|corev1\.volume\b|volumesource\b|volumeclaimtemplates|hostpath|persistentvolumeclaim|persistentvolume\b`)
+// map[string]any is found as well as `HostPath` in a struct. `volumes :=`, a
+// short variable declaration, is not a field or key, and does not match.
+var volumeToken = regexp.MustCompile(`(?i)\bvolumes"?\s*:(?:[^=]|$)|"volumes"|\.volumes\b|corev1\.volume\b|volumesource\b|volumeclaimtemplates|hostpath|persistentvolumeclaim|persistentvolume\b`)
 
 // volumeExempt holds "path|trimmed line" pairs for a volume the human has
 // classified under ADR-0035 D5 (a configMap or secret volume, say), with the
-// reason. It exempts that line, never the file. Empty today, because the
+// reason. It exempts every line of that file with exactly that content, and
+// never the whole file. Empty today, because the
 // operator gives its pods no volume at all.
 var volumeExempt = map[string]string{}
 
-// codeOf returns the part of a line that is not a comment: a whole-line
-// comment is dropped, and a trailing `//` outside a string is cut off.
-func codeOf(line string, goFile bool) string {
+// codeOf returns the part of a line that is not a comment. In Go it drops
+// `//` comments and `/* … */` comments, tracking a block across lines in
+// *inBlock, and it tracks string literals so that `//` or `/*` inside one is
+// kept. A line that begins with `*` is code unless a block is open: `*dst = …`
+// is a pointer dereference, not a comment. In any other file a line that
+// begins with `#` is dropped.
+func codeOf(line string, goFile bool, inBlock *bool) string {
 	trimmed := strings.TrimSpace(line)
 	if !goFile {
 		if strings.HasPrefix(trimmed, "#") {
@@ -173,21 +183,35 @@ func codeOf(line string, goFile bool) string {
 		}
 		return trimmed
 	}
-	if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") || strings.HasPrefix(trimmed, "*") {
-		return ""
-	}
+	var out strings.Builder
 	inString, inRaw := false, false
 	for i := 0; i < len(trimmed); i++ {
-		switch c := trimmed[i]; {
+		c := trimmed[i]
+		next := byte(0)
+		if i+1 < len(trimmed) {
+			next = trimmed[i+1]
+		}
+		switch {
+		case *inBlock:
+			if c == '*' && next == '/' {
+				*inBlock = false
+				i++
+			}
+			continue
 		case c == '`' && !inString:
 			inRaw = !inRaw
 		case c == '"' && !inRaw && (i == 0 || trimmed[i-1] != '\\'):
 			inString = !inString
-		case c == '/' && !inString && !inRaw && i+1 < len(trimmed) && trimmed[i+1] == '/':
-			return strings.TrimSpace(trimmed[:i])
+		case c == '/' && next == '/' && !inString && !inRaw:
+			return strings.TrimSpace(out.String())
+		case c == '/' && next == '*' && !inString && !inRaw:
+			*inBlock = true
+			i++
+			continue
 		}
+		out.WriteByte(c)
 	}
-	return trimmed
+	return strings.TrimSpace(out.String())
 }
 
 // volumeUses scans every regular file under the roots, except _test.go files
@@ -216,8 +240,9 @@ func volumeUses(t *testing.T, exempt map[string]string, roots ...string) []strin
 				return err
 			}
 			rel := filepath.ToSlash(path)
+			inBlock := false
 			for i, line := range strings.Split(string(src), "\n") {
-				code := codeOf(line, strings.HasSuffix(path, ".go"))
+				code := codeOf(line, strings.HasSuffix(path, ".go"), &inBlock)
 				if code == "" || !volumeToken.MatchString(code) {
 					continue
 				}
@@ -283,16 +308,28 @@ func TestVolumeUsesFindsAPlantedVolume(t *testing.T) {
 	write("x_test.go", "package x\nvar v = corev1.Volume{}\n")
 	write("testdata/golden.yaml", "volumes:\n")
 	write("two.go", "package x\nvar a = corev1.Volume{Name: \"cm\"}\nvar b = corev1.Volume{Name: \"hp\"}\n")
+	write("deref.go", "package x\nfunc f(dst, src *corev1.PodSpec) {\n\t*dst = corev1.PodSpec{Volumes: src.Volumes}\n}\n")
+	write("block.go", "package x\n/*\n * a PersistentVolumeClaim is not created here,\n * nor a hostPath.\n */\nvar z = 1 /* nor volumes: here */\n")
+	write("shortvar.go", "package x\nfunc g() int { volumes := 3; return volumes }\n")
 
 	got := volumeUses(t, nil, dir)
-	if len(got) != 6 {
-		t.Errorf("found %d hits, want 6 (typed, unstructured, decoded, embedded, two.go twice):\n%s",
+	if len(got) != 7 {
+		t.Errorf("found %d hits, want 7 (typed, unstructured, decoded, embedded, two.go twice, deref):\n%s",
 			len(got), strings.Join(got, "\n"))
 	}
 	for _, h := range got {
-		if strings.Contains(h, "comment.go") || strings.Contains(h, "_test.go") || strings.Contains(h, "testdata") {
-			t.Errorf("a comment, a test file or testdata was counted: %s", h)
+		for _, never := range []string{"comment.go", "block.go", "shortvar.go", "_test.go", "testdata"} {
+			if strings.Contains(h, never) {
+				t.Errorf("a comment, a short variable declaration, a test file or testdata was counted: %s", h)
+			}
 		}
+	}
+	found := false
+	for _, h := range got {
+		found = found || strings.Contains(h, "deref.go")
+	}
+	if !found {
+		t.Errorf("a pointer dereference that sets Volumes was dropped as a comment: %v", got)
 	}
 
 	exempt := map[string]string{filepath.ToSlash(filepath.Join(dir, "two.go")) + `|var a = corev1.Volume{Name: "cm"}`: "D5"}
