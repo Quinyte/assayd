@@ -93,7 +93,7 @@ func TestUnreconcilableAgentDegradesRatherThanPanicking(t *testing.T) {
 		string(assaydv1alpha1.CondImageSignatureUnverified)); c == nil ||
 		c.Status != metav1.ConditionTrue || c.Reason != ReasonSignatureVerificationNotBuilt ||
 		!strings.Contains(c.Message, "names no image") {
-		t.Errorf("an unreconcilable Agent does not announce that no image signature is checked: %+v", c)
+		t.Errorf("an unreconcilable Agent does not announce that assayd verifies no image signature: %+v", c)
 	}
 }
 

@@ -4,6 +4,7 @@
 package envtest
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -27,11 +28,11 @@ func imageSignatureUnverified(t *testing.T, a *assaydv1alpha1.Agent, parts ...st
 	t.Helper()
 	c := condIs(t, a, assaydv1alpha1.CondImageSignatureUnverified, metav1.ConditionTrue,
 		controller.ReasonSignatureVerificationNotBuilt)
-	mustContain(t, c, "ImageSignatureUnverified", append([]string{"no image signature is checked"}, parts...)...)
+	mustContain(t, c, "ImageSignatureUnverified", append([]string{"assayd verifies no image signature, and does not detect an admission verifier installed outside it"}, parts...)...)
 	return c
 }
 
-func TestAFreshAgentAnnouncesThatNoImageSignatureIsChecked(t *testing.T) {
+func TestAFreshAgentAnnouncesThatAssaydVerifiesNoImageSignature(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "unsigned", nil)
 	r := newReconciler(false)
@@ -99,15 +100,17 @@ func TestTheImageSignatureAnnouncementDoesNotChurn(t *testing.T) {
 
 // Every Agent, not only the ones this cluster runs: an external Agent runs no
 // image here, and the message must not claim a digest it does not have.
-func TestAnExternalAgentAnnouncesThatNoImageSignatureIsChecked(t *testing.T) {
+func TestAnExternalAgentAnnouncesThatAssaydVerifiesNoImageSignature(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "external", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Runtime = nil
 		a.Spec.External = &assaydv1alpha1.ExternalAgent{Endpoint: "https://agent.example.com"}
 	})
 	settle(t, newReconciler(false), a)
-	c := imageSignatureUnverified(t, a, "runs outside this cluster")
-	mustNotContain(t, c, "ImageSignatureUnverified", "pinned by a sha256 digest")
+	c := imageSignatureUnverified(t, a, "runs outside this cluster",
+		"nothing designed would clear this condition for it")
+	mustNotContain(t, c, "ImageSignatureUnverified", "pinned by a sha256 digest", "nothing clears it yet",
+		"no image signature is checked")
 	// This exit sets Ready BEFORE the announcement, so it is the one where an
 	// announcement that touched Ready would show.
 	condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "ExternalRegistrationUnimplemented")
@@ -131,9 +134,23 @@ func TestAnUnresolvedEnvSourceKeepsTheImageSignatureAnnouncement(t *testing.T) {
 
 // Every early exit of the ordinary path merges the condition set the pass
 // built at its top, so the announcement must be asserted there, before any of
-// them. An unresolvable release pin is one of those exits, reached after the
-// run namespace and before the workload: an assessor moved below the first
-// return would clear the announcement here, on an Agent that is serving.
+// them. Two exits pin that. The run-namespace refusal is the EARLIEST: an
+// assessor moved to anywhere after it clears the announcement there, which
+// the release-pin case alone did not catch (the independent review of PR #76
+// moved the call to just after it, and the whole suite stayed green). The
+// unresolvable release pin is a later exit, reached on an Agent that is
+// serving.
+func TestTheEarliestExitOfTheOrdinaryPathKeepsTheImageSignatureAnnouncement(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "noauthority", nil)
+	r := newReconciler(false)
+	r.LabelAuthorityPresent = func(context.Context) (bool, error) { return false, nil }
+	settle(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondRunNamespaceUnavailable, metav1.ConditionTrue,
+		controller.ReasonLabelAuthorityAbsent)
+	imageSignatureUnverified(t, a, "pinned by a sha256 digest")
+}
+
 func TestAnEarlyExitOfTheOrdinaryPathKeepsTheImageSignatureAnnouncement(t *testing.T) {
 	ns := newNamespace(t)
 	a := mustCreateAgent(t, ns, "earlyexit", nil)

@@ -107,7 +107,7 @@ absence is indistinguishable from "never evaluated". Both are read from `ownedTy
 The doc comment attached to each type's declaration in `api/v1alpha1`, verbatim. For the first constant of a group that is sometimes the comment introducing the GROUP rather than that one type — the generator reproduces what is attached and does not re-attribute it.
 
 - **`EnvSourceProtectionUnavailable`** — CondEnvSourceProtectionUnavailable is NO LONGER RAISED. It announced the env-source bypass while A20, A35 and A42 were design; A42's run namespace closed the last of it (design 02 A61) and a real-cluster test proves it. The type stays in §3.1's closed vocabulary so an operator built after A42 can still CLEAR a stale True left by one built before; removing it from the API is a later, separate amendment.
-- **`ImageSignatureUnverified`** — CondImageSignatureUnverified is True on every Agent, reason SignatureVerificationNotBuilt: nothing in this build verifies an image signature, and the message says whether a sha256 digest pins spec.runtime.image. It is an announcement, not an incident, and touches neither Ready nor Degraded (design 02 A78, the human's decision of 2026-09-29; design 07 A2).
+- **`ImageSignatureUnverified`** — CondImageSignatureUnverified is set True, reason SignatureVerificationNotBuilt, from each exit that builds a pass's conditions: assayd verifies no image signature and does not detect an admission verifier installed outside it, and the message says whether a sha256 digest pins spec.runtime.image. It is an announcement, not an incident, and touches neither Ready nor Degraded (design 02 A78, the human's decision of 2026-09-29; design 07 A2).
 - **`PolicyCompileFailed`** — Thirteen conditions design 02 §3.1 declares that had no constant here. Nine predate the round that added this comment; the vocabulary drifted unnoticed because the closure test asserted a hard-coded count and never compared a single name. Grouped by the design that raises each.
 - **`Progressing`** — CondProgressing reports a rollout in flight. Added by A13: without it, a spec edit on a serving agent had to be reported either as Canary — whose meaning §3.3 fixes as "weights are shifting", which is false before design 03 exists — or as Ready=False on an agent that is serving normally, which trips every alert keyed on the canonical condition.
 - **`RevisionHashCollision`** — CondRevisionHashCollision reports two DIFFERENT projections sharing one 40-bit revision name (A37). It is terminal: the operator will not adopt or rewrite a workload whose recorded digest disagrees with the desired one, because doing so is exactly the gate bypass the collision buys.
@@ -1043,7 +1043,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 - `internal/controller/agent_controller.go:467` in `Reconcile()` — from `rerr.reason`, one of the 5 reasons that field can hold
 
-**Referenced by a test:** `test/chart/chart_test.go`, `test/envtest/authabove_test.go`, `test/envtest/runnamespace_test.go`
+**Referenced by a test:** `test/chart/chart_test.go`, `test/envtest/authabove_test.go`, `test/envtest/imagesignature_test.go`, `test/envtest/runnamespace_test.go`
 
 **State:** The admission policies that reserve the `assayd.dev` namespace labels to the operator identities are not installed, so those labels — which SPIRE and the Gateway act on — would be forgeable.
 
@@ -1550,13 +1550,13 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/imagesignature.go:59` in `assessImageSignature()` — constant at the call site
+- `internal/controller/imagesignature.go:77` in `assessImageSignature()` — constant at the call site
 
 **Referenced by a test:** `internal/controller/imagesignature_test.go`, `internal/controller/unreconcilable_test.go`, `test/e2e/responder_test.go`, `test/envtest/imagesignature_test.go`
 
-**State:** Always. Nothing in this build verifies an image signature: the Sigstore policy-controller binding design 07 A2 chose is not built, and CEL cannot check a signature.
+**State:** Always. assayd verifies no image signature: the Sigstore policy-controller binding design 07 A2 chose is not built, and CEL cannot check a signature. assayd also does not detect an admission verifier installed outside it, such as a policy-controller a namespace opted into or a Kyverno `verifyImages` rule, so one may exist and this still reads `True` (design 07 A2's "absent or unverifiable").
 
-**What the operator does:** Sets `ImageSignatureUnverified=True` on every Agent, from each exit that builds a pass's conditions: a runtime Agent's, an external Agent's, an unresolved env source's, and a workload-less Agent's. A teardown pass leaves it as it stood. The message says whether a sha256 digest pins `spec.runtime.image`, read from the spec rather than assumed from the CRD rule, because an install whose CRD predates that rule admits a tag. It changes no phase and does not touch `Ready` or `Degraded`. Nothing clears it.
+**What the operator does:** Sets `ImageSignatureUnverified=True` from each exit that builds a pass's conditions: a runtime Agent's, an external Agent's, an unresolved env source's, and a workload-less Agent's. A teardown pass leaves it as it stood, and a pass that returns a bare error writes no status: a workload apply refused with anything but `Invalid` is one, so an Agent whose every pass ends there carries no conditions at all. The message says whether a sha256 digest pins `spec.runtime.image`, read from the spec rather than assumed from the CRD rule, because an install whose CRD predates that rule admits a tag. It changes no phase and does not touch `Ready` or `Degraded`. Nothing clears it, and for an external Agent nothing designed would.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 

@@ -535,10 +535,11 @@ const (
 	CondGovernanceSkipped        = ConditionType("GovernanceSkipped")
 	CondEnvSourceUnresolved      = ConditionType("EnvSourceUnresolved")     // A20
 	CondRevisionMaterialChanged  = ConditionType("RevisionMaterialChanged") // A20/A23
-	// CondImageSignatureUnverified is True on every Agent, reason
-	// SignatureVerificationNotBuilt: nothing in this build verifies an image
-	// signature, and the message says whether a sha256 digest pins
-	// spec.runtime.image. It is an announcement, not an incident, and touches
+	// CondImageSignatureUnverified is set True, reason
+	// SignatureVerificationNotBuilt, from each exit that builds a pass's
+	// conditions: assayd verifies no image signature and does not detect an
+	// admission verifier installed outside it, and the message says whether a
+	// sha256 digest pins spec.runtime.image. It is an announcement, not an incident, and touches
 	// neither Ready nor Degraded (design 02 A78, the human's decision of
 	// 2026-09-29; design 07 A2).
 	CondImageSignatureUnverified = ConditionType("ImageSignatureUnverified")

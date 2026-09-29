@@ -22,14 +22,31 @@ const ReasonSignatureVerificationNotBuilt = "SignatureVerificationNotBuilt"
 // here is only whether a digest names the bytes.
 var digestPinned = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
 
-// imageSignatureTail is the part of every message that is true of the whole
-// install, whatever the Agent's shape.
-const imageSignatureTail = "Nothing in this install verifies an image signature: the Sigstore " +
-	"policy-controller binding design 07 A2 chose is not built, so this condition is set on every " +
-	"Agent and nothing clears it yet. It is an announcement, not an incident: it changes no phase " +
-	"and does not affect Ready or Degraded (design 02 A78)"
+// imageSignatureUnchecked is what assayd knows, and all it knows: it verifies
+// no signature itself, and it does not look for a verifier someone installed
+// beside it — a Sigstore policy-controller opted into by a namespace label, or
+// a Kyverno verifyImages rule. So the message never says that NO signature is
+// checked, only that assayd checks none and cannot tell whether anything else
+// does (design 02 A78, design 07 A2's "absent or unverifiable").
+const imageSignatureUnchecked = "assayd verifies no image signature, and does not detect an " +
+	"admission verifier installed outside it"
 
-// assessImageSignature puts ImageSignatureUnverified on every Agent (design 02
+// imageSignatureTail ends every message but an external Agent's.
+const imageSignatureTail = "The Sigstore policy-controller binding design 07 A2 chose is not " +
+	"built, so this condition is set from every exit that builds a pass's conditions and nothing " +
+	"clears it yet. It is an announcement, not an incident: it changes no phase and does not " +
+	"affect Ready or Degraded (design 02 A78)"
+
+// externalTail ends an external Agent's message. Design 07 A2's binding
+// covers the namespaces assayd creates workloads in, and an external Agent
+// has none, so nothing designed would clear it there.
+const externalTail = "Design 07 A2's verifier binding covers only the namespaces assayd creates " +
+	"workloads in, and an external Agent has none, so nothing designed would clear this " +
+	"condition for it. It is an announcement, not an incident: it changes no phase and does not " +
+	"affect Ready or Degraded (design 02 A78)"
+
+// assessImageSignature puts ImageSignatureUnverified on an Agent from every
+// exit that builds a pass's conditions (design 02
 // A78, the human's decision of 2026-09-29; design 07 A2). It is owned and not
 // sticky, so every exit that builds its own condition set must call it, or
 // merge() clears the announcement on that pass.
@@ -39,23 +56,24 @@ const imageSignatureTail = "Nothing in this install verifies an image signature:
 // helm upgrade never updates crds/, and validation ratcheting keeps an Agent
 // stored before the rule updatable.
 func assessImageSignature(agent *assaydv1alpha1.Agent, c *conditionSet) {
-	var lead string
+	var msg string
 	switch {
 	case agent.Spec.Runtime != nil && digestPinned.MatchString(agent.Spec.Runtime.Image):
-		lead = "spec.runtime.image is pinned by a sha256 digest, which fixes the bytes that " +
-			"reference names but not who built them: no image signature is checked. "
+		msg = "spec.runtime.image is pinned by a sha256 digest, which fixes the bytes that " +
+			"reference names but not who built them: " + imageSignatureUnchecked + ". " +
+			imageSignatureTail
 	case agent.Spec.Runtime != nil:
-		lead = fmt.Sprintf("spec.runtime.image %q is not pinned by a sha256 digest, so a tag can "+
-			"be repointed at other bytes, and no image signature is checked either. The current "+
-			"Agent CRD refuses an unpinned image; an install whose CRD predates that rule, or an "+
-			"Agent stored before it, can still hold one. ", agent.Spec.Runtime.Image)
+		msg = fmt.Sprintf("spec.runtime.image %q is not pinned by a sha256 digest, so a tag can "+
+			"be repointed at other bytes; and %s. The current Agent CRD refuses an unpinned "+
+			"image; an install whose CRD predates that rule, or an Agent stored before it, can "+
+			"still hold one. %s", agent.Spec.Runtime.Image, imageSignatureUnchecked, imageSignatureTail)
 	case agent.Spec.External != nil:
-		lead = "this Agent runs outside this cluster (spec.external), so assayd runs no image for " +
-			"it: no image digest is pinned here and no image signature is checked. "
+		msg = "this Agent runs outside this cluster (spec.external), so assayd runs no image for " +
+			"it and pins no digest, and " + imageSignatureUnchecked + ". " + externalTail
 	default:
-		lead = "this Agent names no image, because neither spec.runtime nor spec.external is set, " +
-			"and no image signature is checked. "
+		msg = "this Agent names no image, because neither spec.runtime nor spec.external is set; " +
+			imageSignatureUnchecked + ". " + imageSignatureTail
 	}
 	c.set(assaydv1alpha1.CondImageSignatureUnverified, metav1.ConditionTrue,
-		ReasonSignatureVerificationNotBuilt, lead+imageSignatureTail)
+		ReasonSignatureVerificationNotBuilt, msg)
 }
