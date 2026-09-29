@@ -11,7 +11,11 @@
 package chart
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,13 +51,14 @@ func renderSourced(t *testing.T, extraArgs ...string) []sourcedDoc {
 	t.Helper()
 	out, err := helmTemplate(t, extraArgs...)
 	if err != nil {
-		t.Fatalf("helm template failed: %v\n%s", err, out)
+		t.Fatalf("helm template failed: %v", err)
 	}
 	return parseRendered(t, out)
 }
 
 // helmTemplate runs `helm template` with release name assayd and returns its
-// combined output, whether or not it refused.
+// standard output, which is the YAML and nothing else. Helm's standard error,
+// where a refusal is written, is carried in the error.
 func helmTemplate(t *testing.T, extraArgs ...string) (string, error) {
 	t.Helper()
 	if _, err := exec.LookPath("helm"); err != nil {
@@ -61,16 +66,33 @@ func helmTemplate(t *testing.T, extraArgs ...string) (string, error) {
 			"untested deployment: install helm")
 	}
 	args := append([]string{"template", "assayd", chartPath}, extraArgs...)
-	out, err := exec.Command("helm", args...).CombinedOutput()
-	return string(out), err
+	var stderr strings.Builder
+	cmd := exec.Command("helm", args...)
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return string(out), fmt.Errorf("%w: %s", err, stderr.String())
+	}
+	return string(out), nil
 }
 
 // parseRendered splits a render into documents, keeping each one's `# Source:`.
 // Helm writes its own Source line first, so the first one is taken: a
 // template that writes a second cannot claim another template's path. A
-// `kind: List`, or any `…List` with items, is replaced by its items, each with
-// the List's Source, because `helm install` creates every item in it.
+// document with an `items` array, whatever its kind, is replaced by its
+// items, each with the document's Source: the API machinery reads any such
+// document as a list, and `helm install` creates every item in it, so a
+// `kind: ConfigMap` carrying `items: [a PVC]` creates the PVC. A list nested
+// in a list is refused by Helm's builder, so `helm install` fails on it;
+// flattening it anyway is stricter than Helm and costs nothing.
 func parseRendered(t *testing.T, out string) []sourcedDoc {
+	t.Helper()
+	return parseDocs(t, out, "")
+}
+
+// parseDocs splits YAML into documents. With source empty, each document's
+// source is its first `# Source:` line; otherwise every document gets source.
+func parseDocs(t *testing.T, out, fixedSource string) []sourcedDoc {
 	t.Helper()
 	var docs []sourcedDoc
 	for _, chunk := range strings.Split(out, "\n---") {
@@ -84,8 +106,11 @@ func parseRendered(t *testing.T, out string) []sourcedDoc {
 		if len(doc) == 0 {
 			continue
 		}
-		source := ""
+		source := fixedSource
 		for _, line := range strings.Split(chunk, "\n") {
+			if fixedSource != "" {
+				break
+			}
 			if rest, ok := strings.CutPrefix(line, "# Source: "); ok {
 				source = strings.TrimSpace(rest)
 				break
@@ -98,7 +123,7 @@ func parseRendered(t *testing.T, out string) []sourcedDoc {
 
 func flattenLists(d sourcedDoc) []sourcedDoc {
 	items, ok := d.doc["items"].([]any)
-	if !ok || !strings.HasSuffix(toStr(d.doc["kind"]), "List") {
+	if !ok {
 		return []sourcedDoc{d}
 	}
 	var out []sourcedDoc
@@ -106,6 +131,101 @@ func flattenLists(d sourcedDoc) []sourcedDoc {
 		if m := dig2(it); len(m) > 0 {
 			out = append(out, flattenLists(sourcedDoc{source: d.source, doc: m})...)
 		}
+	}
+	return out
+}
+
+// crdDocs reads every file under `crds/` in the chart at dir and in each of
+// its subcharts, unpacked or packaged as a `.tgz`, at any depth. `helm install`
+// creates every object in those files and `helm template` prints none of them
+// unless asked, and then with no `# Source:` line, so they are read here and
+// keyed by the path Helm would give them: `assayd/crds/<file>` for the
+// chart's own, `assayd/charts/<sub>/crds/<file>` for a subchart's.
+func crdDocs(t *testing.T, dir string) []sourcedDoc {
+	t.Helper()
+	files := map[string][]byte{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		files[filepath.ToSlash(rel)] = b
+		return err
+	})
+	if err != nil {
+		t.Fatalf("read chart %s: %v", dir, err)
+	}
+	return crdDocsOf(t, files, filepath.Base(dir))
+}
+
+// crdDocsOf reads crds/ from one chart's files, keyed by path relative to the
+// chart, and recurses into charts/.
+func crdDocsOf(t *testing.T, files map[string][]byte, prefix string) []sourcedDoc {
+	t.Helper()
+	var docs []sourcedDoc
+	subcharts := map[string]map[string][]byte{}
+	for rel, body := range files {
+		switch {
+		case strings.HasPrefix(rel, "crds/"):
+			ext := strings.ToLower(filepath.Ext(rel))
+			if ext == ".yaml" || ext == ".yml" || ext == ".json" {
+				docs = append(docs, parseDocs(t, string(body), prefix+"/"+rel)...)
+			}
+		case strings.HasPrefix(rel, "charts/") && strings.HasSuffix(rel, ".tgz") && strings.Count(rel, "/") == 1:
+			for name, sub := range untar(t, rel, body) {
+				subcharts[name] = sub
+			}
+		case strings.HasPrefix(rel, "charts/") && strings.Count(rel, "/") >= 2:
+			name, rest, _ := strings.Cut(strings.TrimPrefix(rel, "charts/"), "/")
+			if subcharts[name] == nil {
+				subcharts[name] = map[string][]byte{}
+			}
+			subcharts[name][rest] = body
+		}
+	}
+	for name, sub := range subcharts {
+		docs = append(docs, crdDocsOf(t, sub, prefix+"/charts/"+name)...)
+	}
+	return docs
+}
+
+// untar returns a packaged chart's files by chart name, then by path relative
+// to that chart, as Helm packages it: every entry under one top directory.
+func untar(t *testing.T, name string, body []byte) map[string]map[string][]byte {
+	t.Helper()
+	zr, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("read packaged subchart %s: %v", name, err)
+	}
+	out := map[string]map[string][]byte{}
+	tr := tar.NewReader(zr)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read packaged subchart %s: %v", name, err)
+		}
+		if h.Typeflag != tar.TypeReg {
+			continue
+		}
+		top, rest, ok := strings.Cut(strings.TrimPrefix(h.Name, "./"), "/")
+		if !ok {
+			continue
+		}
+		b, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("read packaged subchart %s: %v", name, err)
+		}
+		if out[top] == nil {
+			out[top] = map[string][]byte{}
+		}
+		out[top][rest] = b
 	}
 	return out
 }
@@ -172,6 +292,11 @@ func TestCorePodBudget(t *testing.T) {
 //     (D2(a)), Postgres and NATS as substrate and openobserve-standalone as the
 //     sink (D1(a)). None is rendered yet, so none is listed yet.
 //
+// What it reads: every document `helm template` prints on each row of
+// renderMatrix, with the items of any document that carries an `items` array
+// in place of the document; and every file under `crds/` in the chart and in
+// each subchart, unpacked or `.tgz`, which `helm template` does not print.
+//
 // What it cannot see (rule 7): a storage-claiming kind nobody listed in
 // storageClaimingKinds, since a render cannot know what another controller
 // will create (D4); a pod template in a kind outside D4(a)'s seven, such as a
@@ -198,14 +323,22 @@ func TestStatefulDependencyAllowlist(t *testing.T) {
 		// ADR-0035 Context's three open plus-tier rows (Phoenix, OpenFGA's
 		// datastore, Argo's storage).
 		plus := append(append([]string{}, row.args...), "--set", "tier=plus")
-		if out, err := helmTemplate(t, plus...); err == nil {
+		if _, err := helmTemplate(t, plus...); err == nil {
 			t.Errorf("tier: plus now renders on the %s row. Add it to renderMatrix, so its stateful "+
 				"objects are read, and settle ADR-0035 Context's open plus-tier rows in the same change.", row.name)
-		} else if !strings.Contains(out, plusRefusal) {
+		} else if !strings.Contains(err.Error(), plusRefusal) {
 			t.Errorf("tier: plus failed on the %s row, and not with its known refusal (%q), so what "+
-				"it would render is unread:\n%s", row.name, plusRefusal, out)
+				"it would render is unread:\n%v", row.name, plusRefusal, err)
 		}
 	}
+
+	// crds/ is values-independent, so it is read once. The CRDs there today are
+	// CustomResourceDefinitions, which hold no storage.
+	crds := crdDocs(t, chartPath)
+	if len(crds) == 0 {
+		t.Fatal("read no document under the chart's crds/, which ships the Agent CRD: the reader is broken")
+	}
+	union = append(union, crds...)
 
 	problems, stateful := checkStatefulAllowlist(union, statefulAllowlist, hostPathExempt, headings)
 	for _, p := range problems {
@@ -213,7 +346,7 @@ func TestStatefulDependencyAllowlist(t *testing.T) {
 	}
 	// Printed only under -v, and `make chart` runs without it: the fixture
 	// test, not this line, is what shows the check is not vacuous.
-	t.Logf("read %d documents from %d renders; %d distinct stateful objects", len(union), len(renderMatrix), stateful)
+	t.Logf("read %d documents from %d renders and crds/; %d distinct stateful objects", len(union), len(renderMatrix), stateful)
 }
 
 // renderMatrix is ADR-0035's render matrix: the local profile or not, crossed
@@ -350,7 +483,10 @@ func statefulness(d sourcedDoc, exempt []hostPathExemption, used map[int]bool) [
 				sources = append(sources, k)
 			}
 		}
-		if len(sources) != 1 {
+		if len(sources) == 0 {
+			continue // the API server defaults a volume with no source to emptyDir
+		}
+		if len(sources) > 1 {
 			reasons = append(reasons, fmt.Sprintf("volume %q has %d sources, and only one known "+
 				"harmless source is not counted", name, len(sources)))
 			continue
@@ -556,9 +692,9 @@ func TestStatefulAllowlistOnFixtures(t *testing.T) {
 		{"a StatefulSet with no claim templates is counted by its pod volumes", "assayd/templates/sts-host.yaml",
 			"apiVersion: apps/v1\nkind: StatefulSet\nmetadata: {name: sts-host}\nspec:\n" + podTemplate +
 				"      - {name: d, hostPath: {path: /var/data}}\n", true, true},
-		{"a volume with no source counts", "assayd/templates/nosource.yaml",
+		{"a volume with no source passes, since the API server defaults it to emptyDir", "assayd/templates/nosource.yaml",
 			"apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: nosource}\nspec:\n" + podTemplate +
-				"      - {name: d}\n", true, true},
+				"      - {name: d}\n", false, false},
 		{"a volume with two sources counts, though one is harmless", "assayd/templates/twosources.yaml",
 			"apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: twosources}\nspec:\n" + podTemplate +
 				"      - {name: d, emptyDir: {}, hostPath: {path: /var/data}}\n", true, true},
@@ -570,6 +706,9 @@ func TestStatefulAllowlistOnFixtures(t *testing.T) {
 		{"a PVC inside a List inside a List counts", "assayd/templates/nested.yaml",
 			"apiVersion: v1\nkind: List\nitems:\n- apiVersion: v1\n  kind: List\n  items:\n  - apiVersion: v1\n" +
 				"    kind: PersistentVolumeClaim\n    metadata: {name: nested}\n    spec: {}\n", true, true},
+		{"a PVC in the items of a document of any kind counts", "assayd/templates/cm-items.yaml",
+			"apiVersion: v1\nkind: ConfigMap\nmetadata: {name: carrier}\nitems:\n- apiVersion: v1\n  kind: PersistentVolumeClaim\n" +
+				"  metadata: {name: carried}\n  spec: {}\n", true, true},
 		{"a template's own Source line cannot claim an entry's path", "assayd/templates/claims-nats.yaml",
 			"# Source: " + natsSrc + "\napiVersion: apps/v1\nkind: StatefulSet\nmetadata: {name: assayd-nats}\nspec:\n" + vct, true, true},
 		{"every harmless volume source, and csi.spiffe.io, passes", "assayd/templates/harmless.yaml",
@@ -670,6 +809,108 @@ func TestStatefulAllowlistOnFixtures(t *testing.T) {
 	if p, _ := checkStatefulAllowlist(parseRendered(t, "---\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"),
 		nil, nil, adrHeadings(t)); len(p) != 1 || !strings.Contains(p[0], "no `# Source:` line") {
 		t.Errorf("a document with no Source line was not reported: %v", p)
+	}
+}
+
+// Only helm's standard output is YAML. A warning on standard error mixed
+// into it would be parsed as a document, or fail the parse; a refusal on
+// standard error must still reach the caller, in the error.
+func TestHelmTemplateParsesStandardOutputOnly(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"echo 'WARNING: this is not YAML: {[' >&2\n" +
+		"printf -- '---\\n# Source: assayd/templates/a.yaml\\napiVersion: v1\\nkind: ConfigMap\\nmetadata: {name: a}\\n'\n" +
+		"case \"$*\" in *refuse*) echo 'Error: refused on stderr' >&2; exit 1;; esac\n"
+	if err := os.WriteFile(filepath.Join(bin, "helm"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	docs := renderSourced(t)
+	if len(docs) != 1 || docs[0].source != "assayd/templates/a.yaml" {
+		t.Errorf("want the one document on standard output, got %v", docs)
+	}
+	if _, err := helmTemplate(t, "refuse"); err == nil || !strings.Contains(err.Error(), "refused on stderr") {
+		t.Errorf("a refusal written to standard error did not reach the caller: %v", err)
+	}
+}
+
+// crds/ is read in the chart and every subchart, unpacked or packaged, at any
+// depth, under the path Helm gives it; what is there is classified like any
+// rendered object, and a file that is not a manifest is skipped as Helm skips it.
+func TestCRDsDirectoriesAreRead(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "assayd")
+	pvc := func(name string) string {
+		return "apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata: {name: " + name + "}\nspec: {}\n"
+	}
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("Chart.yaml", "name: assayd\n")
+	write("templates/pvc.yaml", pvc("templated")) // helm template's business, not this reader's
+	write("crds/zz-probe.yaml", "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata: {name: x}\n---\n"+pvc("own"))
+	write("crds/nested/pv.json", `{"apiVersion": "v1", "kind": "PersistentVolume", "metadata": {"name": "nested"}}`)
+	write("crds/README.md", pvc("not-a-manifest"))
+	write("charts/sub/crds/sandbox.yaml", "apiVersion: agents.x-k8s.io/v1alpha1\nkind: Sandbox\nmetadata: {name: sub}\n")
+
+	var tgz bytes.Buffer
+	zw := gzip.NewWriter(&tgz)
+	tw := tar.NewWriter(zw)
+	for name, body := range map[string]string{
+		"pkg/Chart.yaml":                 "name: pkg\n",
+		"pkg/crds/pvc.yaml":              pvc("packaged"),
+		"pkg/charts/inner/crds/pvc.yaml": pvc("inner"),
+		"pkg/templates/not-a-crd.yaml":   pvc("pkg-templated"),
+	} {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	write("charts/pkg-1.0.0.tgz", tgz.String())
+
+	docs := crdDocs(t, dir)
+	got := map[string]bool{}
+	for _, d := range docs {
+		got[objectKey{d.source, toStr(d.doc["kind"]), nameOf(d.doc)}.String()] = true
+	}
+	want := []objectKey{
+		{"assayd/crds/zz-probe.yaml", "CustomResourceDefinition", "x"},
+		{"assayd/crds/zz-probe.yaml", "PersistentVolumeClaim", "own"},
+		{"assayd/crds/nested/pv.json", "PersistentVolume", "nested"},
+		{"assayd/charts/sub/crds/sandbox.yaml", "Sandbox", "sub"},
+		{"assayd/charts/pkg/crds/pvc.yaml", "PersistentVolumeClaim", "packaged"},
+		{"assayd/charts/pkg/charts/inner/crds/pvc.yaml", "PersistentVolumeClaim", "inner"},
+	}
+	for _, k := range want {
+		if !got[k.String()] {
+			t.Errorf("crds/ reader did not return %s; got %v", k, got)
+		}
+	}
+	if len(docs) != len(want) {
+		t.Errorf("crds/ reader returned %d documents, want %d (a template or a non-manifest was read): %v",
+			len(docs), len(want), got)
+	}
+
+	problems, stateful := checkStatefulAllowlist(docs, nil, nil, adrHeadings(t))
+	if stateful != 5 || len(problems) != 5 {
+		t.Errorf("want the five stateful objects under crds/ refused, got %d stateful and problems:\n%s",
+			stateful, strings.Join(problems, "\n"))
 	}
 }
 

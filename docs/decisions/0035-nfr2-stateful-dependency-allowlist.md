@@ -179,37 +179,42 @@ The options:
   3. **Each entry** carries its class, its reason, its keys under D3(a), and a heading reference checked against this file.
   4. **Every named object must be rendered**, so a renamed subchart cannot leave an entry standing unused. The count of stateful objects read is logged. It prints only under `-v`, because `make chart` runs without it, so the fixtures, not the log, are what show that the check is not vacuous.
   5. **D2(a) and D6(a) add entries**: SPIRE's key PVC as key material when the SPIRE subchart lands, and any external store the platform writes its records to.
-- ***Built*** *(2026-09-30, the follow-up PR). The five parts are in `test/chart/chart_test.go`. `TestStatefulDependencyAllowlist` renders the four rows of the matrix and reads their union. It attempts `tier: plus` on each row, and accepts only a refusal whose output contains "tier: plus is not implemented". It fails on a stateful object that no entry names exactly. It also fails on an entry or `hostPath` exemption that matches nothing, and on an entry whose class is not one of the three, which gives no reason, or which cites no `## D1`–`## D7` or `## Amendment N` heading of this file. `statefulAllowlist` and `hostPathExempt` are both empty, because the chart renders no subchart. An entry for an object that is not rendered fails part 4, so the entries of part 5 arrive with their subcharts.*
+- ***Built*** *(2026-09-30, the follow-up PR). The five parts are in `test/chart/chart_test.go`. `TestStatefulDependencyAllowlist` renders the four rows of the matrix and reads their union. It attempts `tier: plus` on each row, and accepts only a refusal whose output contains "tier: plus is not implemented". It reads every document `helm template` prints on each row, and every file under `crds/` in the chart and its subcharts, which `helm template` does not print. It fails on a stateful object that no entry names exactly. It also fails on an entry or `hostPath` exemption that matches nothing, and on an entry whose class is not one of the three, which gives no reason, or which cites no `## D1`–`## D7` or `## Amendment N` heading of this file. `statefulAllowlist` and `hostPathExempt` are both empty, because the chart renders no subchart. An entry for an object that is not rendered fails part 4, so the entries of part 5 arrive with their subcharts.*
 
-  *`TestStatefulAllowlistOnFixtures` plants thirty-three documents, with a fixture allowlist and fixture exemptions. Its first row is the positive control. Every part of an entry's key and of an exemption's key has a row that differs only in that part and must be refused. Some readings the text left open were taken the strict way:*
+  *`TestStatefulAllowlistOnFixtures` plants thirty-four documents, with a fixture allowlist and fixture exemptions. Its first row is the positive control. Every part of an entry's key and of an exemption's key has a row that differs only in that part and must be refused. Some readings the text left open were taken the strict way:*
   - *an exempt `hostPath` is keyed by five parts: the object's `# Source:` path, kind and name, the volume's name, **and** its host path;*
-  - *a volume with no source, or with more than one, counts;*
+  - *a volume with more than one source counts. A volume with no source does not: the API server defaults it to `emptyDir`, which was measured. Before the 2026-09-30 review this bullet said it counted;*
   - *the first `# Source:` line of a document is the one Helm wrote, so a template cannot claim another's path by writing its own;*
-  - *a `kind: List`, or a typed list such as `PersistentVolumeClaimList`, is read as its items, nested lists included, each under the list's Source, because `helm install` creates every item.*
+  - *a document with an `items` array, whatever its kind, is read as its items, each under the document's Source. The API machinery reads any such document as a list, and `helm install` creates every item, so a `kind: ConfigMap` carrying `items: [a PVC]` creates the PVC. A list nested in a list is flattened too; Helm's builder refuses that shape, so this is stricter than Helm, not a case Helm installs;*
+  - *`crds/` is read directly, in the chart and in every subchart, unpacked or `.tgz`, at any depth, keyed `assayd/crds/<file>` or `assayd/charts/<sub>/crds/<file>`, because `helm install` creates every object there and `helm template` prints them with no Source line, or not at all;*
+  - *only `helm template`'s standard output is parsed; its standard error, where a refusal or a warning is written, is carried in the error.*
 
   *Mutations were run on 2026-09-29 and 2026-09-30, and each was restored from a sha256-verified backup. Each of these fails the fixture test:*
   - *restoring a name-only `strings.Contains` match, or refusing everything;*
   - *dropping the Source path, or the kind, from an entry's key;*
   - *dropping any one of the five parts from an exemption's key, or ignoring exemptions altogether;*
-  - *a deny-list of PVC and `hostPath` in place of the allow set, or letting a volume with zero or two sources pass;*
+  - *a deny-list of PVC and `hostPath` in place of the allow set, or letting a volume with two sources pass, or counting one with none;*
   - *not counting `PersistentVolume`; not listing CNPG's `Cluster`, `Sandbox` or `SandboxTemplate`; not counting `volumeClaimTemplates`, or counting a `StatefulSet` by its kind;*
   - *dropping `Job`, `ReplicaSet` or `StatefulSet` from the pod-bearing kinds, or admitting any `csi` driver;*
   - *passing every heading, accepting any class, or dropping an exemption's reason-and-heading check;*
   - *dropping the unused-entry or unused-exemption check;*
   - *losing the Source line, or taking its last line rather than its first;*
-  - *not flattening a List, flattening `kind: List` only, or flattening one level only;*
+  - *not flattening a document's items, flattening only kinds that end in `List`, or flattening one level only;*
   - *dropping the check that an entry names its source, kind and name.*
 
   *In the chart, each of these fails `TestStatefulDependencyAllowlist`:*
   - *a PVC in the default render, under the local profile only, or with the gateway on only;*
   - *an `nfs` `Deployment` at local plus gateway only;*
   - *a `StatefulSet assayd-nats-sidecar-cache`, which the old check admitted;*
-  - *a PVC wrapped in a `kind: List`;*
+  - *a PVC wrapped in a `kind: List`, or in the `items` of a `kind: ConfigMap`;*
+  - *a PVC in a file under the chart's `crds/`;*
   - *a `tier: plus` that renders;*
   - *a gateway row without `gateway.servingUrl`;*
   - *an `openobserve-standalone` entry that is not rendered.*
 
   *Dropping a matrix row passes on today's chart, which renders nothing stateful on any row. With a PVC rendered only at local plus gateway, dropping that row passes too. That is the gap part 2 states.*
+
+  *`TestCRDsDirectoriesAreRead` plants a chart with `crds/` files at two depths, a non-manifest, an unpacked subchart and a packaged one holding a nested subchart. Each of these fails it: reading nothing, not reading packaged or unpacked subcharts, reading `crds/` one level deep only, reading non-manifest files, and keying a subchart without its `charts/` segment. `TestHelmTemplateParsesStandardOutputOnly` runs a fake `helm` that writes a warning to standard error; restoring `CombinedOutput`, or dropping standard error from the error, fails it. In `TestCorePodBudget`, a nine-replica `Deployment` in a `ConfigMap`'s `items` now fails the budget.*
 
   *What the test does not see, beyond part 2's gap, is stated in the test's comment:*
   - *a pod template in a kind outside D4(a)'s seven, such as a `ReplicationController`;*
