@@ -303,6 +303,7 @@ While it is not yet served, `Ready` is `False`, reason `AuthEnforcementPending`.
 | `GovernanceSkipped` | `False` | `AuthVerifiedOnOneReplica` | One probe proves one gateway replica, and no replica count is declared. |
 | `Registered` | `True` | `CardValidated` | The operator fetched and validated the card. |
 | `CardUnsigned` | `True` | `NoSigningConfigured` | Nothing verifies card signatures yet. Raised on a managed Agent once its card has been fetched — **not** on an Agent that never became ready, and never on an external one, which returns before any card handling. Absence of this condition is not evidence that a card was checked. |
+| `ImageSignatureUnverified` | `True` | `SignatureVerificationNotBuilt` | assayd verifies no image signature, and does not detect an admission verifier you installed outside it (a policy-controller you run yourself, or a Kyverno `verifyImages` rule), so this reads `True` even if one exists. A digest fixes which bytes the reference names, not who built them. Set from each exit that builds a pass's conditions, external Agents included; a pass that fails with a bare error writes no status, so an Agent stuck there carries none. It changes no phase and does not affect `Ready`, and nothing clears it (design 02 A78). |
 
 ### 5.4 Write two keys
 

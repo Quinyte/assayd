@@ -105,6 +105,15 @@ var ownedTypes = map[assaydv1alpha1.ConditionType]bool{
 	// could not write, or an -auth transaction past its deadline. Its absence
 	// means neither.
 	assaydv1alpha1.CondPolicyApplyIncomplete: true,
+	// Design 02 A78: the operator is its only writer, and assessImageSignature
+	// asserts it on every exit. Abnormal-true and NOT sticky, like
+	// SandboxDowngraded, so an exit that forgot to assert it would CLEAR it on
+	// that pass. The envtest cases in imagesignature_test.go drive each
+	// function that builds a condition set, and the ordinary path's earliest
+	// exit and a later one; the unreconcilable unit test drives the last, and
+	// TestEveryConditionSetBuilderAssessesTheImageSignature fails on a new
+	// builder that does not call it.
+	assaydv1alpha1.CondImageSignatureUnverified: true,
 }
 
 // stickyTypes are owned conditions that must stay in the list once set, flipped

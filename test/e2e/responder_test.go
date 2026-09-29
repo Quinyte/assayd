@@ -386,14 +386,24 @@ func TestTheOperatorRegistersTheCardItFetched(t *testing.T) {
 		t.Error("the card is recorded as signed and nothing in this repository signs one")
 	}
 
-	var registered, unsigned *metav1.Condition
+	var registered, unsigned, image *metav1.Condition
 	for i := range live.Status.Conditions {
 		switch live.Status.Conditions[i].Type {
 		case string(assaydv1alpha1.CondRegistered):
 			registered = &live.Status.Conditions[i]
 		case string(assaydv1alpha1.CondCardUnsigned):
 			unsigned = &live.Status.Conditions[i]
+		case string(assaydv1alpha1.CondImageSignatureUnverified):
+			image = &live.Status.Conditions[i]
 		}
+	}
+	// Design 02 A78: the image half of the same absence, on an Agent the
+	// harness deployed from a registry digest.
+	if image == nil || image.Status != metav1.ConditionTrue ||
+		image.Reason != controller.ReasonSignatureVerificationNotBuilt ||
+		!strings.Contains(image.Message, "is pinned by a sha256 digest") {
+		t.Errorf("ImageSignatureUnverified is %+v, want True/SignatureVerificationNotBuilt, saying "+
+			"the digest pins the image — nothing in this cluster verifies an image signature", image)
 	}
 	if registered == nil || registered.Status != metav1.ConditionTrue {
 		t.Errorf("Registered is %+v, want True after a valid card was fetched", registered)

@@ -100,10 +100,10 @@ type AgentRuntime struct {
 	//
 	// The rule this comment used to make — "must be cosign-signed; admission
 	// rejects unsigned images" — was FALSE and shipped verbatim in the generated
-	// CRD. Nothing verifies a signature: CEL cannot, and the chart ships no
-	// admission policy. That arrives with the Sigstore policy-controller binding
-	// design 07 A2 chose. Digest-pinning is what will make it meaningful, because
-	// a signature is verified against a digest.
+	// CRD. Nothing in assayd verifies a signature: CEL cannot, and the chart
+	// ships no admission policy. That arrives with the Sigstore
+	// policy-controller binding design 07 A2 chose. Digest-pinning is what will
+	// make it meaningful, because a signature is verified against a digest.
 	//
 	// Unconditional, with no local-profile relaxation: one schema applies
 	// cluster-wide and CEL has no profile in its evaluation context, so an
@@ -535,6 +535,13 @@ const (
 	CondGovernanceSkipped        = ConditionType("GovernanceSkipped")
 	CondEnvSourceUnresolved      = ConditionType("EnvSourceUnresolved")     // A20
 	CondRevisionMaterialChanged  = ConditionType("RevisionMaterialChanged") // A20/A23
+	// CondImageSignatureUnverified is set True, reason
+	// SignatureVerificationNotBuilt, from each exit that builds a pass's
+	// conditions: assayd verifies no image signature and does not detect an
+	// admission verifier installed outside it, and the message says whether a
+	// sha256 digest pins spec.runtime.image. It is an announcement, not an incident, and touches
+	// neither Ready nor Degraded (design 02 A78, the human's decision of
+	// 2026-09-29; design 07 A2).
 	CondImageSignatureUnverified = ConditionType("ImageSignatureUnverified")
 	// CondEnvSourceProtectionUnavailable is NO LONGER RAISED. It announced the
 	// env-source bypass while A20, A35 and A42 were design; A42's run namespace

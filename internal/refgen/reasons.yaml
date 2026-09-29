@@ -1004,6 +1004,31 @@ reasons:
       because every route write bumps the generation and the Gateway's report
       lags it.
 
+  - reason: SignatureVerificationNotBuilt
+    state: >-
+      Always. assayd verifies no image signature: the Sigstore
+      policy-controller binding design 07 A2 chose is not built, and CEL cannot
+      check a signature. assayd also does not detect an admission verifier
+      installed outside it, such as a policy-controller a namespace opted into
+      or a Kyverno `verifyImages` rule, so one may exist and this still reads
+      `True` (design 07 A2's "absent or unverifiable").
+    operator: >-
+      Sets `ImageSignatureUnverified=True` from each exit that builds a pass's
+      conditions: a runtime Agent's, an external Agent's, an unresolved env
+      source's, and a workload-less Agent's. A teardown pass leaves it as it
+      stood, and a pass that returns a bare error writes no status: a workload
+      apply refused with anything but `Invalid` is one, so an Agent whose every
+      pass ends there carries no conditions at all. The message says whether a sha256 digest pins `spec.runtime.image`, read from
+      the spec rather than assumed from the CRD rule, because an install whose
+      CRD predates that rule admits a tag. It changes no phase and does not
+      touch `Ready` or `Degraded`. Nothing clears it, and for an external Agent
+      nothing designed would.
+    traffic: not-withdrawn
+    note: >-
+      The standing record that image signature verification is not built
+      (design 02 A78, the human's decision of 2026-09-29). It is set on healthy
+      Agents, not only on failing ones.
+
   - reason: TeardownWaiting
     state: >-
       The Agent is being deleted with the gateway enabled, and the serving route

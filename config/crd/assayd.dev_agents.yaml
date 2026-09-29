@@ -863,10 +863,10 @@ spec:
 
                       The rule this comment used to make — "must be cosign-signed; admission
                       rejects unsigned images" — was FALSE and shipped verbatim in the generated
-                      CRD. Nothing verifies a signature: CEL cannot, and the chart ships no
-                      admission policy. That arrives with the Sigstore policy-controller binding
-                      design 07 A2 chose. Digest-pinning is what will make it meaningful, because
-                      a signature is verified against a digest.
+                      CRD. Nothing in assayd verifies a signature: CEL cannot, and the chart
+                      ships no admission policy. That arrives with the Sigstore
+                      policy-controller binding design 07 A2 chose. Digest-pinning is what will
+                      make it meaningful, because a signature is verified against a digest.
 
                       Unconditional, with no local-profile relaxation: one schema applies
                       cluster-wide and CEL has no profile in its evaluation context, so an
