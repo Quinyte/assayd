@@ -1,98 +1,139 @@
-# ADR-0035: NFR-2's stateful-dependency allowlist names two substrates and one sink, matched exactly, over every object that can hold state
+# ADR-0035 (proposed): what NFR-2's stateful-dependency allowlist admits, how it matches, and how an entry is added
 
-- **Status**: **proposed** · 2026-09-29 · **not decided.** The human asked for this draft on 2026-09-29. It goes to an independent critique first, and then to the human, who decides D1–D6 below. Until the human decides, nothing here binds anything: `TestStatefulDependencyAllowlist` and NFR-2's text stay as they are, and every "Recommended" below is the author's.
-- **Refines, if the human takes it**: ADR-0002 rule 2 ("Postgres + NATS are the only stateful deps"). It does not supersede ADR-0002, whose other five rules are untouched, and ADR-0002's text is not edited.
+- **Status**: **proposed** · 2026-09-29 · **not decided.** The human asked for this draft on 2026-09-29, to be critiqued independently and then brought to them. The first critique returned REVISE, with 2 BLOCKER, 7 MAJOR and 6 MINOR findings ([`reviews/0035-critique-r1.md`](../designs/reviews/0035-critique-r1.md)). This revision, r1, answers that critique and is due for a second one. The human decides D1–D7 below. Every "Recommended" is the author's. Until the human decides, `TestStatefulDependencyAllowlist` and NFR-2's text stay as they are.
+- **If the human takes D1(a)**: it is an **exception to** ADR-0002 rule 2 ("Postgres + NATS are the only stateful deps"), not a refinement of it. ADR-0002's text is not edited.
 
 ## Context
 
-NFR-2 (`docs/requirements.md`) was written as *"Postgres and NATS JetStream are the only stateful dependencies, ever"*. `TestStatefulDependencyAllowlist` (`test/chart/chart_test.go`) enforces something else, and weaker:
+NFR-2 (`docs/requirements.md`) says *"Postgres and NATS JetStream are the only stateful dependencies, ever"*. `TestStatefulDependencyAllowlist` (`test/chart/chart_test.go`) enforces something weaker:
 
-- **Three entries, not two.** `postgres` and `nats` are "substrate (rule 2)". `openobserve` is "observability sink, not substrate". That third entry comes from design 07 §2 and design 10 §2, neither of which the human has approved. ADR-0022 records that a stateful allowlist "with reasons" is CI-enforced, and that OpenObserve is a "sink never record". It does not name the entries, and it does not say how a third stateful dependency squares with ADR-0002 rule 2.
-- **A substring match.** `matchesAllowlist` uses `strings.Contains`, so `nats` admits `nats-sidecar-cache`, and `postgres` admits `not-postgres-redis`.
-- **Two kinds only.** It reads rendered `StatefulSet`s and `PersistentVolumeClaim`s. A `Deployment` that mounts a PVC or a `hostPath` is not read.
-- **Postgres would be invisible to it.** Design 07 §3 chooses CloudNativePG (CNPG) for Postgres. CNPG does not use `StatefulSet`s. Its operator creates Pods and PVCs itself from a `postgresql.cnpg.io/v1` `Cluster` object (CNPG docs, "Storage" and "Custom Pod Controller", read 2026-09-29 through Context7). So a chart that installs Postgres the way design 07 says renders neither kind this test reads. The `postgres` entry would never match anything, and neither would any other storage an operator CR claims.
-- **One render only.** The test renders the chart's defaults. A stateful object behind `profile: local`, `gateway.enabled` or any other value is never rendered, so never read.
-- **Vacuous today.** The chart renders zero `StatefulSet`s and zero PVCs, so the check has never refused anything.
+- It allows **three** names: `postgres`, `nats` and `openobserve`. It files OpenObserve as "observability sink, not substrate", which comes from design 07 §2 and design 10 §2. The human has approved neither design. ADR-0022 records that an allowlist "with reasons" is CI-enforced, but it names no entries.
+- It matches by **substring**, so `nats` admits `nats-sidecar-cache`.
+- It reads only `StatefulSet`s and `PersistentVolumeClaim`s, and only in the **default render**.
+- It **passes vacuously**, because the chart renders neither kind today.
 
-What the corpus already says, found by grepping `docs/designs` and `docs/decisions`:
+Two upstream facts make the requirement false even before anything more is built:
 
-| Dependency | Class the corpus gives it | Where |
+- **CloudNativePG (CNPG), design 07's Postgres, renders no `StatefulSet`.** Its operator creates Pods and PVCs from a `postgresql.cnpg.io` `Cluster` (CNPG docs, via Context7). The current test would never see Postgres.
+- **SPIRE, which is core tier (design 07 §3), holds state that is not Postgres.** Rendered on 2026-09-29 with release name `assayd` and `dataStore.sql.databaseType=postgres`, spire 0.30.2 produces `StatefulSet assayd-server` with PVC template `spire-data`. Its `KeyManager` is `disk`, the chart default, with `keys_path: /run/spire/data/keys.json`, so the CA signing keys live on that PVC. The chart's own values describe `persistence.type`'s `emptyDir` as "testing or nested child only".
+
+What the corpus and the upstream charts say, found by grepping `docs/designs` and `docs/decisions` and by rendering the charts:
+
+| State | Where it lives | Source |
 |---|---|---|
-| Postgres | substrate | ADR-0002 rule 2; ADR-0004 (DBOS, workflow state); design 06 (Zitadel on it); design 07 §2 (SPIRE's datastore on it, "one less PVC"); designs 16, 20, 21 |
-| NATS JetStream | substrate | ADR-0002 rule 2; ADR-0004 (events, KV, object store, receipts); designs 04, 05, 21 |
-| OpenObserve | sink, not substrate | design 07 §2; design 10 §2 and D1 ("sink, never system-of-record"); ADR-0022's Observability line ("OpenObserve = sink never record") |
-| FalkorDB, one per managed graph | per-graph workload state, not substrate | ADR-0018 ("doctrine rule 2 governs the platform substrate, not per-graph workload state"); designs 01 §2, 13 §2 |
-| "object store" | not stated | designs 16 §2 and 27 §2 name one; ADR-0004 gives JetStream an object store; `architecture.html` puts OpenObserve "on object storage". None says whether it is JetStream's or an external S3-compatible service. |
+| Durable workflows, eval results, audit index, Zitadel, SPIRE registrations | Postgres | ADR-0002 rule 2; ADR-0004; designs 06, 16, 20, 21; design 07 §2 |
+| Events, KV directory, receipts, **object store** | NATS JetStream | ADR-0004; `architecture.md`'s substrate line and table; designs 04 (receipt bodies at `obj://`), 05, 14, 17 |
+| SPIRE CA signing keys | a PVC on `StatefulSet assayd-server` at chart defaults | spire 0.30.2 render. **Design 07 §2's "one less PVC" is false at these defaults**: moving the datastore to Postgres leaves the key PVC in place. |
+| Interior agent spans, component logs | OpenObserve **only** | design 10 §3 |
+| One FalkorDB per managed graph; a BYO endpoint mode adds none | per-graph workload state | ADR-0018; designs 01 §2, 13 §2 |
+| Per-Agent persistent scratchpad | an agent-sandbox `Sandbox`, whose controller creates PVCs from `volumeClaimTemplates` | design 02 §3.2; agent-sandbox docs, via Context7 |
+| Candidates for **external** storage | 6-year archive of receipts and bodies; OpenObserve's HA chart (`ZO_S3_PROVIDER: s3` at 1.0.2 defaults); CNPG backups (the `cnpg/cluster` chart ships them disabled, with method `barmanObjectStore` when enabled) | ADR-0014; design 27 §4; chart renders and Context7 |
+| CRs; design 02 §2's run-namespace `ConfigMap`, which is "not reconstructable by the operator" | the API server | design 02 §2 |
 
-No design specifies bring-your-own (BYO) Postgres or NATS. The only BYO arm in the corpus is `idp: byo` (design 07 §3).
+## D1 — The classes, and the entries
 
-## Decision (proposed — each item is the human's)
+The classes are defined by **authority**, not by uniqueness.
 
-**D1 — the entries and their classes.**
+- A **substrate** is a store the platform reads to take a decision or to answer an audit question.
+- A **sink** is a store nothing takes a decision or an audit answer from. Losing it loses graphs, never audit (design 10 §2). A sink can hold data found nowhere else, as OpenObserve does for interior spans.
+- The **API server** is neither. It is Kubernetes itself, a given of NFR-3, and outside NFR-2.
 
-- **(a) Recommended.** Three entries in two classes.
-  - **Substrate**: Postgres and NATS JetStream. Substrate is where the platform keeps its record: state that nothing else can reconstruct.
-  - **Sink**: OpenObserve. A sink holds only copies or derivations of state recorded elsewhere. Losing it loses no record. A decision the platform takes from sink data must fail to "no decision" when the sink is gone, and say so on a condition (NFR-8). It must never fail to a different decision.
-  - NFR-2's wording becomes "Postgres and NATS JetStream are the only stateful **substrate**. OpenObserve is the only stateful **sink**. Nothing else in the chart holds state."
-- (b) Two entries. OpenObserve leaves the allowlist, so it must be external or must run without durable storage.
-- (c) One flat list with no classes. This is cheaper, and it drops the distinction that stops a "sink" from quietly becoming a record.
+The options:
 
-The sink rule is already under strain, and deciding (a) makes that visible. Design 20 auto-rolls-back on SLO burn computed from design 10's signals, which are derived "at the tap/OpenObserve". Nobody has checked whether that rollback fails to "no decision" when OpenObserve is down. Design 10 §7 says only that the platform's blindness "is visible via CR conditions".
+- **(a) Recommended.** Postgres and NATS JetStream are the substrate. OpenObserve is the one sink, bound to the chart **`openobserve-standalone`**. At 1.0.1 that chart renders one `StatefulSet assayd-openobserve-standalone` on local disk. The HA chart, `openobserve` 1.0.2, also renders its own CNPG `Cluster`, its own `StatefulSet assayd-nats`, four more `StatefulSet`s and an S3 store: a second Postgres, a second NATS, and an external service. NFR-2 would then read: "Postgres and NATS JetStream are the only stateful substrate. OpenObserve is the only stateful sink."
+- (b) Postgres and NATS only. OpenObserve leaves the chart. If it becomes external, D6(a) still needs an entry for it, so (b) with D6(a) means OpenObserve is either run with no durable storage or not run at all.
+- (c) One flat list with no classes. This is cheaper. It drops the rule that keeps a sink from quietly becoming a record.
 
-**D2 — matching.**
+**What (a) puts in question.** Design 20 auto-rolls-back on SLO burn computed from design 10's signals, and those are derived "at the tap/OpenObserve". Under (a) that is a decision taken from a sink. Design 20 would have to take its signal from somewhere else, or OpenObserve would be substrate.
 
-- **(a) Recommended.** Match exactly. Each entry names every object it admits as `(apiVersion/kind, name)`, as rendered with the test's fixed release name, `assayd`. For example: `StatefulSet assayd-nats`. Anything not named is refused. Rendered names carry the release name, so the list is exact for the render the test makes, and it changes when a subchart's naming changes, which is the point.
-- (b) Match exactly on the `app.kubernetes.io/name` label. This survives renames, but it trusts every upstream chart to set that label, and to set it truthfully.
-- (c) Keep the substring match. Rejected: it admits `nats-sidecar-cache`.
+**What (a) makes false**, and what must be corrected if the human takes it:
 
-**D3 — what counts as stateful in a render.**
+- `architecture.md` §01 rule 2 and `architecture.html`'s "Two stateful deps, ever";
+- AGENTS.md's doctrine line "Postgres+NATS only";
+- design 07 §2, for `stateful-allowlist.yaml` and "one less PVC";
+- NFR-2.
 
-- **(a) Recommended.** An object counts if it is any of these:
-  - a `StatefulSet`, whether or not it has `volumeClaimTemplates`;
-  - a `PersistentVolumeClaim`;
-  - a pod-bearing workload (`Deployment`, `DaemonSet`, `ReplicaSet`, `Job`, `CronJob`, `Pod`) whose pod spec has a `persistentVolumeClaim`, `ephemeral` or `hostPath` volume. An `ephemeral` volume creates a PVC, and `hostPath` writes to the node;
-  - an object of a **storage-claiming kind**: a kind whose controller creates PVCs for it. The list starts with one kind, `postgresql.cnpg.io/v1` `Cluster`, and the change that adds a subchart with such a kind adds that kind to the list.
-- `emptyDir`, including `medium: Memory`, does **not** count. It dies with the pod.
-- (b) Keep `StatefulSet` and `PersistentVolumeClaim` only. This leaves CNPG's Postgres invisible, and a `Deployment` with a PVC unread.
+ADR-0002 is not edited. This ADR records the exception.
 
-The part of (a) that nothing can enforce, stated: a storage-claiming kind that nobody adds to the list is not caught. A render cannot know what another controller will create.
+## D2 — SPIRE's CA keys
 
-**D4 — state the operator creates per custom resource.** A chart render cannot see it. ADR-0018 already decided one case: a managed graph's FalkorDB is per-graph workload state, outside rule 2. The question is how far that reaches.
+- **(a) Recommended.** An entry, class substrate: SVIDs are verified against these keys. This is the upstream-recommended `pvc` persistence, and it is honest about the state.
+- (b) The memory key manager with `emptyDir`. The CA rotates on every server restart. Upstream labels this "testing or nested child only". Under D4(a) it does not count as stateful.
+- (c) A KMS key manager. The chart offers `awsKMS`, among others. The key then lives in an external, cloud-specific service, so D6 applies, and it conflicts with NFR-3's "no managed-identity assumptions in core".
 
-- (a) Generalize ADR-0018. Anything the operator creates for a custom resource is workload state, outside NFR-2. This is simple, and it opens a hole: a per-Agent cache with a PVC would need no entry.
-- **(b) Recommended.** Keep ADR-0018's exemption to what it names, the per-graph backends of designs 01 and 13. Any other storage the operator creates needs an entry under D6. The change that first makes the operator create a PVC, a `StatefulSet` or a `hostPath` volume adds an envtest that fails on an unlisted one, because the chart test cannot see it.
+Whichever option is taken, the chart's SPIRE values must be set to match it. Left at upstream defaults, the first real work of NFR-2's check is to refuse `assayd-server`, under today's test and under D4(a).
 
-Today the operator creates none of these. Grepping `internal/`, `api/`, `cmd/` and `charts/` for `PersistentVolumeClaim`, `volumeClaimTemplates`, `hostPath` and `emptyDir` finds nothing.
+## D3 — Matching
 
-**D5 — bring-your-own and external services.**
+- **(a) Recommended.** Match an object exactly on Helm's `# Source:` path, plus its kind and name, rendered with release name `assayd`. An example is `openobserve-standalone/templates/openobserve-statefulset.yaml`, `StatefulSet`, `assayd-openobserve-standalone`. Helm writes the path itself, so the key names the subchart without trusting any label. That keeps the platform's `StatefulSet assayd-nats` apart from the one the OpenObserve HA chart renders under the same name, which `helm template` accepts, exiting 0.
+- (b) Match on kind and name only. This cannot tell the two `assayd-nats` apart.
+- (c) Match on the `app.kubernetes.io/name` label. This trusts every upstream chart to set that label, and to set it truthfully.
+- (d) Match by substring, as today. Not recommended, because it admits `nats-sidecar-cache`.
 
-- **(a) Recommended.** An external instance fills an entry's **role**. A BYO Postgres counts as the Postgres entry. When BYO is selected, the chart must not render its own. An external service of a type that no entry names is a stateful dependency and needs its own entry. An S3-compatible object store that the platform requires is an example.
-- (b) External services are outside NFR-2, because they add no pods. Rejected: then "only Postgres and NATS" can be met by requiring an external S3.
+## D4 — What counts as stateful in a render
 
-Under (a), a chart render cannot see an external dependency. Enforcing it is review discipline, as NFR-1's written-justification half already is, and this ADR says so. D5 also makes one open question binding: whether designs 16 and 27's "object store" is JetStream's or an external service. If it is external, it needs an entry before either design is built.
+- **(a) Recommended. Deny by default.** A rendered object counts as stateful if it is any of these:
+  - a pod template with a volume outside this set: `configMap`, `secret`, `projected`, `downwardAPI`, `emptyDir`, `image`, and `csi` with driver `csi.spiffe.io`. The set of pod-bearing kinds is `Pod`, `Deployment`, `ReplicaSet`, `StatefulSet`, `DaemonSet`, `Job` and `CronJob`. Anything outside the set counts, including `persistentVolumeClaim`, `ephemeral`, `hostPath`, `nfs`, `iscsi`, `cephfs`, `rbd`, the cloud-disk sources, and inline `csi` with any other driver;
+  - a `StatefulSet` with `volumeClaimTemplates`. A `StatefulSet` is counted by its storage, not by its kind;
+  - a `PersistentVolumeClaim` or `PersistentVolume`;
+  - an object of a **storage-claiming kind**: `postgresql.cnpg.io` `Cluster`, `agents.x-k8s.io` `Sandbox`, and `extensions.agents.x-k8s.io` `SandboxTemplate`.
 
-**D6 — how an entry is added.**
+  **Exempt `hostPath` mounts are listed exactly**, by source path, kind, name and volume name. The first are SPIRE's: at 0.30.2, one on the agent `DaemonSet` for its socket, and four kubelet mounts on the `spiffe-csi-driver` `DaemonSet`. They carry sockets, not records.
+- (b) Keep `StatefulSet` and `PersistentVolumeClaim` only. This leaves CNPG's Postgres invisible.
 
-- **(a) Recommended.** The change that introduces a stateful object does all three of these:
-  1. adds the object to the allowlist, with its class and a reason;
-  2. adds a numbered amendment to this ADR, naming the design that calls for the object;
-  3. gets the human's decision, recorded in that amendment. A new **substrate** entry also amends ADR-0002 rule 2's reading, so it needs the human in any case.
+**What (a) cannot enforce:** it does not catch a storage-claiming kind nobody has listed. A render cannot know what another controller will create.
 
-  The test enforces the link: every allowlist entry cites an `ADR-0035` amendment heading, and the test fails if that heading is not in this file. That is the same mechanism `test/docs/approval_parts_test.go` uses to pin the human's approvals.
-- (b) Design 07 §2's rule: editing the allowlist in the same PR is enough, and a reviewer judges the reason. This is lighter, and it is today's rule. No test sees whether a human decided.
+## D5 — State the operator creates per custom resource
 
-**Not the human's.** Where the allowlist lives is the author's call. Design 07 §2 names a `stateful-allowlist.yaml`, which does not exist. The test keeps a Go map today. The test change below keeps it in the Go test, beside the check, so that one place changes. Design 07's file is the alternative, and changing to it costs nothing.
+A chart render cannot see this state. Two cases are designed:
+
+- ADR-0018's per-graph FalkorDB;
+- design 02 §3.2's per-Agent sandbox scratchpad.
+
+The options:
+
+- (a) Generalize: anything the operator creates for a CR is workload state, outside NFR-2. This opens a hole: a per-Agent cache would need no entry.
+- (b) Only ADR-0018's exemption. The scratchpad then needs an entry under D7.
+- **(c) Recommended.** Name both cases as workload state outside NFR-2. Any other operator-created storage needs an entry.
+
+**Enforced from this PR, whatever the human decides:** `test/chart/operator_storage_test.go`.
+
+- `TestTheOperatorsRoleGrantsNoStorage` fails when the rendered operator role can create, update or patch a PVC, a PV, a `StatefulSet`, a CNPG `Cluster`, a `Sandbox` or a `SandboxTemplate`. Wildcards count. So the change that binds agent-sandbox for the scratchpad fails it.
+- `TestTheOperatorGivesItsPodsNoVolumes` fails on any volume in the operator's non-test Go. Today there are none.
+- Each has a positive control. Three mutations each failed the named test:
+  - granting `persistentvolumeclaims` in `charts/assayd/files/operator-rules.yaml`;
+  - planting a `Volumes:` field in `internal/controller`;
+  - making the grant matcher return nothing.
+- **What it cannot see:** storage that another controller creates from an object the operator may already write.
+
+## D6 — Bring-your-own and external services
+
+- **(a) Recommended.** Scope NFR-2 to services the platform writes its own records to.
+  - A BYO instance fills an entry's role: a BYO Postgres counts as the Postgres entry, and the chart then renders none.
+  - An external store of another type that the platform writes to needs an entry. The candidates now are the 6-year archive, OpenObserve HA's S3 (not needed under D1(a)), and CNPG backups.
+  - **Excluded by name**: design 11's Connector targets (`system: s3 | postgres | …`), which are the user's systems that the platform reads, and design 13's BYO graph endpoint, which is ADR-0018's workload state.
+  - A render cannot see an external service, so only review enforces this, as it does NFR-1's written-justification half.
+- (b) External services are outside NFR-2. Not recommended, because requiring an external S3 would then satisfy "only Postgres and NATS".
+
+## D7 — How an entry is added
+
+- **(a) Recommended.** The change that introduces a stateful object does three things:
+  1. adds it to the allowlist, with its class and reason;
+  2. adds a numbered `## Amendment N` to this ADR, naming the design that calls for it;
+  3. records the human's decision in that amendment.
+
+  A test requires each entry to cite an existing heading of this file (`D1`–`D7`, or `Amendment N`). That enforces **where** a decision is recorded, not **that** one was made. Whether a human decided is still review's job.
+- (b) Design 07 §2's rule: editing the allowlist in the same PR is enough, and a reviewer judges the reason. This is lighter, and nothing pins the reason to a record.
+
+**Not the human's.** Where the allowlist lives is the author's call. The test change below keeps it in the Go test, beside the check. Design 07's `stateful-allowlist.yaml` is the alternative.
 
 ## Consequences
 
-- **Nothing changes until the human decides.** This PR does not change `TestStatefulDependencyAllowlist`. NFR-2 cites this ADR as proposed only.
-- **The test change, contingent on D1(a), D2(a), D3(a), D4(b) and D6(a), and not implemented.** It is one test change in `test/chart/chart_test.go`, with a mutation for each clause:
-  1. Replace `matchesAllowlist`'s `strings.Contains` with equality on `(apiVersion/kind, name)`. A fixture renders a planted `StatefulSet assayd-nats-sidecar-cache`, and the exact check refuses it. Mutation: restore `Contains`, and the fixture passes, so the mutation is caught.
-  2. Read every kind D3(a) lists, including pod specs' `volumes` and the storage-claiming kind list. Mutations: a planted `Deployment` mounting a PVC, a planted `hostPath` volume, and a planted CNPG `Cluster` must each fail the test. A planted `emptyDir` must pass it.
-  3. Render every profile and every chart value that changes what renders (`profile: local`, `gateway.enabled=true`), and take the union of the renders. `tier: plus` fails to render today (`TestUnimplementedTierIsRefusedNotIgnored`), and that stays out until it renders. Mutation: a stateful object rendered only under `profile: local` must fail the test.
-  4. Each entry carries its role, its class, its reason, the objects it admits, and a reference into this file. The three entries D1 decides cite `D1`. Every later entry cites its amendment's heading. A new check reads this file and fails on a reference with no matching heading. Mutation: cite a missing amendment.
-  5. Report vacuity, and do not hide it. The test logs how many stateful objects it read in each render. It also asserts the positive: every object the allowlist names is actually rendered. So an entry whose subchart was removed, or renamed, fails the test instead of standing unused. While the chart renders no substrate, the three entries admit no object yet, and the log says the check read nothing.
-- **With the test change, the check can see Postgres under CNPG.** Without it, NFR-2's "it will start doing real work the first time the chart deploys its own substrate" is false for Postgres.
-- **D1(a) puts design 20's rollback on notice.** Design 20 must show that its rollback fails to "no decision" when OpenObserve is down, or that it does not read sink data.
-- **D5(a) blocks designs 16 and 27** from shipping an external object store until one of two things happens: it gets an entry, or it is shown to be JetStream's.
-- **Revisit** when the chart first renders a subchart. That is when the vacuous pass ends and D2(a)'s exact names can be written down.
+- **Until the human decides, only D5's two tests change anything.** `TestStatefulDependencyAllowlist` and NFR-2 stand as they are. NFR-2 cites this ADR as proposed.
+- **The test change, contingent on D1(a), D3(a), D4(a) and D7(a), and not implemented.** It is one change to `test/chart/chart_test.go`, with five parts:
+  1. **The matcher and the classifier are tested on fixtures**: a fixture allowlist, fixture documents, and a positive control that must be admitted. A planted `StatefulSet assayd-nats-sidecar-cache`, `Deployment` with an `nfs` volume, `PersistentVolume` and CNPG `Cluster` must each be refused. A planted `emptyDir` must pass, and so must an exempt SPIRE socket. Mutations: restoring `strings.Contains`, or making the matcher refuse everything, each fail a fixture row.
+  2. **The render matrix** is the cross product of `-f values-local.yaml` or not, and `gateway.enabled=true` with a `gateway.servingUrl` or not. Without the URL, `templates/operator.yaml` calls `fail`. `tier: plus` is attempted, and only its known refusal is accepted. **What it cannot see:** a toggle nobody adds to the matrix.
+  3. **Each entry** carries its class, its reason, its keys under D3(a), and a heading reference checked against this file.
+  4. **Every named object must be rendered**, so a renamed subchart cannot leave an entry standing unused. The count of stateful objects read is logged. It prints only under `-v`, because `make chart` runs without it, so the fixtures, not the log, are what show that the check is not vacuous.
+  5. **D2 and D6 add entries** (SPIRE's key PVC, and any external store) in whatever form the human picks.
+- **Revisit** when the chart first renders a subchart. That is when the vacuous pass ends.
