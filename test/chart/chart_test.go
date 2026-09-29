@@ -11,9 +11,11 @@
 package chart
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -25,18 +27,53 @@ const chartPath = "../../charts/assayd"
 // render runs `helm template` and returns the documents it produced.
 func render(t *testing.T, extraArgs ...string) []map[string]any {
 	t.Helper()
+	var docs []map[string]any
+	for _, d := range renderSourced(t, extraArgs...) {
+		docs = append(docs, d.doc)
+	}
+	return docs
+}
+
+// sourcedDoc is one rendered document with the template Helm says produced
+// it: the `# Source:` line, such as `assayd/templates/operator.yaml`, or
+// `assayd/charts/nats/templates/statefulset.yaml` for a subchart's.
+type sourcedDoc struct {
+	source string
+	doc    map[string]any
+}
+
+// renderSourced runs `helm template` and fails the test if it refuses.
+func renderSourced(t *testing.T, extraArgs ...string) []sourcedDoc {
+	t.Helper()
+	out, err := helmTemplate(t, extraArgs...)
+	if err != nil {
+		t.Fatalf("helm template failed: %v\n%s", err, out)
+	}
+	return parseRendered(t, out)
+}
+
+// helmTemplate runs `helm template` with release name assayd and returns its
+// combined output, whether or not it refused.
+func helmTemplate(t *testing.T, extraArgs ...string) (string, error) {
+	t.Helper()
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Fatalf("helm is required to test the chart, and a skipped chart test is an " +
 			"untested deployment: install helm")
 	}
 	args := append([]string{"template", "assayd", chartPath}, extraArgs...)
 	out, err := exec.Command("helm", args...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("helm template failed: %v\n%s", err, out)
-	}
+	return string(out), err
+}
 
-	var docs []map[string]any
-	for _, chunk := range strings.Split(string(out), "\n---") {
+// parseRendered splits a render into documents, keeping each one's `# Source:`.
+// Helm writes its own Source line first, so the first one is taken: a
+// template that writes a second cannot claim another template's path. A
+// `kind: List`, or any `…List` with items, is replaced by its items, each with
+// the List's Source, because `helm install` creates every item in it.
+func parseRendered(t *testing.T, out string) []sourcedDoc {
+	t.Helper()
+	var docs []sourcedDoc
+	for _, chunk := range strings.Split(out, "\n---") {
 		if strings.TrimSpace(chunk) == "" {
 			continue
 		}
@@ -44,11 +81,33 @@ func render(t *testing.T, extraArgs ...string) []map[string]any {
 		if err := yaml.Unmarshal([]byte(chunk), &doc); err != nil {
 			t.Fatalf("parse rendered doc: %v\n%s", err, chunk)
 		}
-		if len(doc) > 0 {
-			docs = append(docs, doc)
+		if len(doc) == 0 {
+			continue
 		}
+		source := ""
+		for _, line := range strings.Split(chunk, "\n") {
+			if rest, ok := strings.CutPrefix(line, "# Source: "); ok {
+				source = strings.TrimSpace(rest)
+				break
+			}
+		}
+		docs = append(docs, flattenLists(sourcedDoc{source: source, doc: doc})...)
 	}
 	return docs
+}
+
+func flattenLists(d sourcedDoc) []sourcedDoc {
+	items, ok := d.doc["items"].([]any)
+	if !ok || !strings.HasSuffix(toStr(d.doc["kind"]), "List") {
+		return []sourcedDoc{d}
+	}
+	var out []sourcedDoc
+	for _, it := range items {
+		if m := dig2(it); len(m) > 0 {
+			out = append(out, flattenLists(sourcedDoc{source: d.source, doc: m})...)
+		}
+	}
+	return out
 }
 
 func kindsOf(docs []map[string]any, kind string) []map[string]any {
@@ -94,32 +153,523 @@ func TestCorePodBudget(t *testing.T) {
 	t.Logf("core pod count: %d/%d — %v", total, budget, breakdown)
 }
 
-// Rule 2: Postgres and NATS are the only substrate. Anything else that wants a
-// disk has to be named in the allowlist, in the same change that introduces it.
+// Rule 2, as ADR-0035 decided it: Postgres and NATS JetStream are the only
+// stateful substrate, OpenObserve the only stateful sink, and SPIRE's CA
+// signing keys the only stateful key material. The test is the one the ADR's
+// Consequences specify, in five parts:
+//
+//  1. an entry matches one object exactly, on Helm's `# Source:` path, its kind
+//     and its name (D3(a)), and what counts as stateful is decided deny by
+//     default (D4(a)); both are tested on fixtures, below, with a positive
+//     control, because the chart renders nothing stateful today;
+//  2. the chart is rendered across renderMatrix and the objects are read as
+//     one union; tier: plus is attempted and only its known refusal accepted;
+//  3. every entry carries its class, its reason, its key and the ADR-0035
+//     heading that records the human's decision (D7(a));
+//  4. every entry and every hostPath exemption must match an object in the
+//     union, so a renamed subchart cannot leave one standing unused;
+//  5. entries arrive with the subcharts: SPIRE's key PVC as key material
+//     (D2(a)), Postgres and NATS as substrate and openobserve-standalone as the
+//     sink (D1(a)). None is rendered yet, so none is listed yet.
+//
+// What it cannot see (rule 7): a storage-claiming kind nobody listed in
+// storageClaimingKinds, since a render cannot know what another controller
+// will create (D4); a pod template in a kind outside D4(a)'s seven, such as a
+// ReplicationController; an object a template renders only when
+// `.Capabilities` or `lookup` says the cluster has something, because
+// `helm template` renders against no cluster and no --api-versions is passed;
+// an object rendered only on an upgrade, through `.Release.IsUpgrade` or
+// `.Release.Revision`, because `helm template` renders a first install;
+// storage the operator creates at run time, which operator_storage_test.go
+// covers (D5); an external service (D6, review only); and a values toggle
+// nobody added to renderMatrix.
 func TestStatefulDependencyAllowlist(t *testing.T) {
-	allowed := map[string]string{
-		"postgres":    "substrate (rule 2)",
-		"nats":        "substrate (rule 2)",
-		"openobserve": "observability sink, not substrate",
+	headings := adrHeadings(t)
+	var union []sourcedDoc
+	for _, row := range renderMatrix {
+		docs := renderSourced(t, row.args...)
+		if len(docs) == 0 {
+			t.Fatalf("the %s render produced no documents, so this test would pass by reading nothing", row.name)
+		}
+		union = append(union, docs...)
+
+		// tier: plus refuses today. Once it renders, this fails: the change
+		// that makes it render must add it to renderMatrix and settle
+		// ADR-0035 Context's three open plus-tier rows (Phoenix, OpenFGA's
+		// datastore, Argo's storage).
+		plus := append(append([]string{}, row.args...), "--set", "tier=plus")
+		if out, err := helmTemplate(t, plus...); err == nil {
+			t.Errorf("tier: plus now renders on the %s row. Add it to renderMatrix, so its stateful "+
+				"objects are read, and settle ADR-0035 Context's open plus-tier rows in the same change.", row.name)
+		} else if !strings.Contains(out, plusRefusal) {
+			t.Errorf("tier: plus failed on the %s row, and not with its known refusal (%q), so what "+
+				"it would render is unread:\n%s", row.name, plusRefusal, out)
+		}
 	}
 
-	docs := render(t)
-	for _, kind := range []string{"StatefulSet"} {
-		for _, d := range kindsOf(docs, kind) {
-			name := nameOf(d)
-			if !matchesAllowlist(name, allowed) {
-				t.Errorf("%s %q is stateful and not on the allowlist. Rule 2 makes Postgres "+
-					"and NATS the only substrate; anything else that holds state must be "+
-					"justified in the change that adds it.", kind, name)
+	problems, stateful := checkStatefulAllowlist(union, statefulAllowlist, hostPathExempt, headings)
+	for _, p := range problems {
+		t.Error(p)
+	}
+	// Printed only under -v, and `make chart` runs without it: the fixture
+	// test, not this line, is what shows the check is not vacuous.
+	t.Logf("read %d documents from %d renders; %d distinct stateful objects", len(union), len(renderMatrix), stateful)
+}
+
+// renderMatrix is ADR-0035's render matrix: the local profile or not, crossed
+// with the gateway on or off. gateway.enabled=true needs gateway.servingUrl,
+// or templates/operator.yaml fails the render.
+var renderMatrix = []struct {
+	name string
+	args []string
+}{
+	{"prod", nil},
+	{"local", []string{"-f", filepath.Join(chartPath, "values-local.yaml")}},
+	{"prod+gateway", []string{"--set", "gateway.enabled=true", "--set", "gateway.servingUrl=http://gw.example:8080"}},
+	{"local+gateway", []string{"-f", filepath.Join(chartPath, "values-local.yaml"),
+		"--set", "gateway.enabled=true", "--set", "gateway.servingUrl=http://gw.example:8080"}},
+}
+
+// plusRefusal is the start of the message templates/_helpers.tpl fails with.
+const plusRefusal = "tier: plus is not implemented"
+
+// statefulClass is an entry's class, defined by authority (ADR-0035 D1(a),
+// D2(a)): a substrate is read to take a decision or answer an audit question,
+// a sink never is, and key material signs and is never read to decide.
+type statefulClass string
+
+const (
+	substrate   statefulClass = "substrate"
+	sink        statefulClass = "sink"
+	keyMaterial statefulClass = "key material"
+)
+
+// objectKey names one rendered object exactly (ADR-0035 D3(a)). The source is
+// Helm's own `# Source:` path, so a subchart's carries its `assayd/charts/…`
+// prefix, which is what tells the platform's `StatefulSet assayd-nats` from
+// the one OpenObserve's HA chart would render under the same name.
+type objectKey struct{ source, kind, name string }
+
+func (k objectKey) String() string { return fmt.Sprintf("%s %q (%s)", k.kind, k.name, k.source) }
+
+// statefulEntry admits one stateful object. decision is the heading of
+// ADR-0035 that records the human's decision: "D1" to "D7", or "Amendment N".
+// The test checks the heading exists; that a human decided is review's job.
+type statefulEntry struct {
+	key      objectKey
+	class    statefulClass
+	reason   string
+	decision string
+}
+
+// statefulAllowlist is empty because the chart renders no subchart yet. A
+// change that introduces a stateful object adds it here with its class and
+// reason, and adds a numbered `## Amendment N` to ADR-0035 recording the
+// human's decision (D7(a)).
+var statefulAllowlist = []statefulEntry{}
+
+// hostPathExemption exempts one hostPath volume exactly: the object that
+// mounts it, the volume's name and its host path (ADR-0035 D4(a)). The first
+// are SPIRE's socket mounts, which arrive with the SPIRE subchart; they carry
+// sockets, not records.
+type hostPathExemption struct {
+	key      objectKey
+	volume   string
+	path     string
+	reason   string
+	decision string
+}
+
+var hostPathExempt = []hostPathExemption{}
+
+// podBearingKinds are the kinds whose pod template D4(a) reads.
+var podBearingKinds = map[string]bool{
+	"Pod": true, "Deployment": true, "ReplicaSet": true, "StatefulSet": true,
+	"DaemonSet": true, "Job": true, "CronJob": true,
+}
+
+// harmlessVolumes are the only volume sources D4(a) does not count. Every
+// other source counts, including any it has never heard of.
+var harmlessVolumes = map[string]bool{
+	"configMap": true, "secret": true, "projected": true, "downwardAPI": true,
+	"emptyDir": true, "image": true,
+}
+
+// spiffeCSIDriver is the one inline csi driver D4(a) does not count.
+const spiffeCSIDriver = "csi.spiffe.io"
+
+// storageClaimingKinds are "group/Kind" pairs whose controller creates
+// storage from the object (ADR-0035 D4(a)).
+var storageClaimingKinds = map[string]string{
+	"postgresql.cnpg.io/Cluster":                 "CNPG creates Pods and PVCs from a Cluster",
+	"agents.x-k8s.io/Sandbox":                    "agent-sandbox creates PVCs from its volumeClaimTemplates",
+	"extensions.agents.x-k8s.io/SandboxTemplate": "a Sandbox made from it claims storage",
+}
+
+// statefulness returns why a rendered object counts as stateful under
+// ADR-0035 D4(a), one reason per cause, or nothing. A hostPath volume that an
+// exemption matches is not a cause, and marks that exemption used.
+func statefulness(d sourcedDoc, exempt []hostPathExemption, used map[int]bool) []string {
+	kind := toStr(d.doc["kind"])
+	group, _, found := strings.Cut(toStr(d.doc["apiVersion"]), "/")
+	if !found {
+		group = "" // the core group: apiVersion "v1"
+	}
+	key := objectKey{d.source, kind, nameOf(d.doc)}
+
+	var reasons []string
+	switch kind {
+	case "PersistentVolumeClaim", "PersistentVolume":
+		reasons = append(reasons, "it is a "+kind)
+	}
+	if why, ok := storageClaimingKinds[group+"/"+kind]; ok {
+		reasons = append(reasons, "it is a storage-claiming kind: "+why)
+	}
+	if kind == "StatefulSet" && len(toList(dig(d.doc, "spec")["volumeClaimTemplates"])) > 0 {
+		reasons = append(reasons, "it has volumeClaimTemplates")
+	}
+	if !podBearingKinds[kind] {
+		return reasons
+	}
+
+	var spec map[string]any
+	switch kind {
+	case "Pod":
+		spec = dig(d.doc, "spec")
+	case "CronJob":
+		spec = dig(d.doc, "spec", "jobTemplate", "spec", "template", "spec")
+	default:
+		spec = dig(d.doc, "spec", "template", "spec")
+	}
+	for _, v := range toList(spec["volumes"]) {
+		vol := dig2(v)
+		name := toStr(vol["name"])
+		var sources []string
+		for k := range vol {
+			if k != "name" {
+				sources = append(sources, k)
 			}
 		}
+		if len(sources) != 1 {
+			reasons = append(reasons, fmt.Sprintf("volume %q has %d sources, and only one known "+
+				"harmless source is not counted", name, len(sources)))
+			continue
+		}
+		src := sources[0]
+		switch {
+		case harmlessVolumes[src]:
+		case src == "csi" && toStr(dig(vol, "csi")["driver"]) == spiffeCSIDriver:
+		case src == "hostPath" && exemptHostPath(key, name, toStr(dig(vol, "hostPath")["path"]), exempt, used):
+		default:
+			reasons = append(reasons, fmt.Sprintf("volume %q has source %s", name, src))
+		}
+	}
+	return reasons
+}
+
+func exemptHostPath(key objectKey, volume, path string, exempt []hostPathExemption, used map[int]bool) bool {
+	for i, e := range exempt {
+		if e.key == key && e.volume == volume && e.path == path {
+			used[i] = true
+			return true
+		}
+	}
+	return false
+}
+
+// admitted reports whether an entry names this object exactly.
+func admitted(key objectKey, allow []statefulEntry) bool {
+	for _, e := range allow {
+		if e.key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// checkStatefulAllowlist reads the union of rendered documents and returns
+// every problem, and the number of distinct stateful objects it read. An
+// object rendered by more than one row of the matrix is one object.
+func checkStatefulAllowlist(docs []sourcedDoc, allow []statefulEntry, exempt []hostPathExemption,
+	headings map[string]bool) (problems []string, stateful int) {
+	for _, e := range allow {
+		if e.key.source == "" || e.key.kind == "" || e.key.name == "" {
+			problems = append(problems, fmt.Sprintf("allowlist entry %s does not name its object by "+
+				"source, kind and name (ADR-0035 D3(a))", e.key))
+		}
+		if e.class != substrate && e.class != sink && e.class != keyMaterial {
+			problems = append(problems, fmt.Sprintf("allowlist entry %s has class %q; ADR-0035 D1(a) "+
+				"and D2(a) define substrate, sink and key material", e.key, e.class))
+		}
+		if strings.TrimSpace(e.reason) == "" {
+			problems = append(problems, fmt.Sprintf("allowlist entry %s gives no reason", e.key))
+		}
+		if !headings[e.decision] {
+			problems = append(problems, fmt.Sprintf("allowlist entry %s cites %q, which is not a heading "+
+				"of ADR-0035: an entry needs a `## Amendment N` recording the human's decision (D7(a))",
+				e.key, e.decision))
+		}
+	}
+	for _, e := range exempt {
+		if strings.TrimSpace(e.reason) == "" || !headings[e.decision] {
+			problems = append(problems, fmt.Sprintf("hostPath exemption %s volume %q needs a reason and "+
+				"an ADR-0035 heading; it cites %q", e.key, e.volume, e.decision))
+		}
 	}
 
-	// A PersistentVolumeClaim is the same question wearing a different kind.
-	for _, d := range kindsOf(docs, "PersistentVolumeClaim") {
-		if !matchesAllowlist(nameOf(d), allowed) {
-			t.Errorf("PersistentVolumeClaim %q is not on the stateful allowlist", nameOf(d))
+	used := map[int]bool{}
+	seen := map[objectKey]bool{}
+	for _, d := range docs {
+		key := objectKey{d.source, toStr(d.doc["kind"]), nameOf(d.doc)}
+		if key.source == "" {
+			problems = append(problems, fmt.Sprintf("%s has no `# Source:` line, so no entry can name it", key))
 		}
+		reasons := statefulness(d, exempt, used)
+		if len(reasons) == 0 || seen[key] {
+			continue
+		}
+		seen[key] = true
+		stateful++
+		if !admitted(key, allow) {
+			problems = append(problems, fmt.Sprintf("%s is stateful (%s) and not on the allowlist. "+
+				"NFR-2 admits only Postgres and NATS JetStream as substrate, OpenObserve as the sink and "+
+				"SPIRE's CA keys as key material: classify it, add a `## Amendment N` to ADR-0035 recording "+
+				"the human's decision, and add the entry citing it.", key, strings.Join(reasons, "; ")))
+		}
+	}
+	for _, e := range allow {
+		if !seen[e.key] {
+			problems = append(problems, fmt.Sprintf("allowlist entry %s matches no stateful object in any "+
+				"render; remove it, or correct its key", e.key))
+		}
+	}
+	for i, e := range exempt {
+		if !used[i] {
+			problems = append(problems, fmt.Sprintf("hostPath exemption %s volume %q path %q matches no "+
+				"rendered volume; remove it, or correct it", e.key, e.volume, e.path))
+		}
+	}
+	return problems, stateful
+}
+
+const adr0035 = "../../docs/decisions/0035-nfr2-stateful-dependency-allowlist.md"
+
+// adrHeadingRE finds the headings an entry may cite: `## D1 — …` to
+// `## D7 — …`, and any `## Amendment N` added later.
+var adrHeadingRE = regexp.MustCompile(`(?m)^## (D[0-9]+|Amendment [0-9]+)\b`)
+
+func adrHeadings(t *testing.T) map[string]bool {
+	t.Helper()
+	src, err := os.ReadFile(adr0035)
+	if err != nil {
+		t.Fatalf("read ADR-0035, whose headings the allowlist cites: %v", err)
+	}
+	out := map[string]bool{}
+	for _, m := range adrHeadingRE.FindAllStringSubmatch(string(src), -1) {
+		out[m[1]] = true
+	}
+	for _, want := range []string{"D1", "D2", "D3", "D4", "D5", "D6", "D7"} {
+		if !out[want] {
+			t.Fatalf("ADR-0035 has no `## %s` heading, so the heading check reads the wrong file or "+
+				"the wrong pattern: %v", want, out)
+		}
+	}
+	return out
+}
+
+// The fixtures for TestStatefulDependencyAllowlist. The chart renders nothing
+// stateful today, so a matcher and a classifier tested only against the real
+// render could refuse nothing, or everything, and pass. Each row is a planted
+// document with the verdict ADR-0035 requires; the first is the positive
+// control, an exact entry that must be admitted.
+func TestStatefulAllowlistOnFixtures(t *testing.T) {
+	const natsSrc = "assayd/charts/nats/templates/statefulset.yaml"
+	const spireAgentSrc = "assayd/charts/spire/charts/spire-agent/templates/daemonset.yaml"
+	const podTemplate = "  template:\n    spec:\n      containers: [{name: c, image: i}]\n      volumes:\n"
+	vct := "  volumeClaimTemplates:\n  - metadata: {name: data}\n    spec: {accessModes: [ReadWriteOnce]}\n"
+
+	rows := []struct {
+		why          string
+		source, body string
+		stateful     bool // counts under D4(a)
+		refused      bool // and is not admitted
+	}{
+		{"positive control: the exact entry is admitted", natsSrc,
+			"apiVersion: apps/v1\nkind: StatefulSet\nmetadata: {name: assayd-nats}\nspec:\n" + vct, true, false},
+		{"a name that merely contains an entry's is refused (D3(a), not a substring)", natsSrc,
+			"apiVersion: apps/v1\nkind: StatefulSet\nmetadata: {name: assayd-nats-sidecar-cache}\nspec:\n" + vct, true, true},
+		{"the same kind and name from another subchart is refused (the Source path is the key)",
+			"assayd/charts/openobserve/charts/nats/templates/statefulset.yaml",
+			"apiVersion: apps/v1\nkind: StatefulSet\nmetadata: {name: assayd-nats}\nspec:\n" + vct, true, true},
+		{"an nfs volume counts", "assayd/templates/nfs.yaml",
+			"apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: nfs}\nspec:\n" + podTemplate +
+				"      - {name: d, nfs: {server: s, path: /x}}\n", true, true},
+		{"a PersistentVolume counts", "assayd/templates/pv.yaml",
+			"apiVersion: v1\nkind: PersistentVolume\nmetadata: {name: pv}\nspec: {capacity: {storage: 1Gi}}\n", true, true},
+		{"a PersistentVolumeClaim counts", "assayd/templates/pvc.yaml",
+			"apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata: {name: pvc}\nspec: {}\n", true, true},
+		{"a CNPG Cluster counts, though it renders no StatefulSet", "assayd/charts/cluster/templates/cluster.yaml",
+			"apiVersion: postgresql.cnpg.io/v1\nkind: Cluster\nmetadata: {name: assayd-postgres}\nspec: {instances: 1}\n", true, true},
+		{"an agent-sandbox Sandbox counts", "assayd/templates/sandbox.yaml",
+			"apiVersion: agents.x-k8s.io/v1alpha1\nkind: Sandbox\nmetadata: {name: sb}\nspec: {}\n", true, true},
+		{"an agent-sandbox SandboxTemplate counts", "assayd/templates/sandboxtemplate.yaml",
+			"apiVersion: extensions.agents.x-k8s.io/v1alpha1\nkind: SandboxTemplate\nmetadata: {name: sbt}\nspec: {}\n", true, true},
+		{"a CronJob's PVC volume counts", "assayd/templates/cronjob.yaml",
+			"apiVersion: batch/v1\nkind: CronJob\nmetadata: {name: cj}\nspec:\n  schedule: '* * * * *'\n  jobTemplate:\n    spec:\n" +
+				"      template:\n        spec:\n          containers: [{name: c, image: i}]\n          volumes:\n" +
+				"          - {name: d, persistentVolumeClaim: {claimName: x}}\n", true, true},
+		{"a Pod's ephemeral volume counts", "assayd/templates/pod.yaml",
+			"apiVersion: v1\nkind: Pod\nmetadata: {name: p}\nspec:\n  containers: [{name: c, image: i}]\n  volumes:\n" +
+				"  - {name: d, ephemeral: {volumeClaimTemplate: {spec: {}}}}\n", true, true},
+		{"an inline csi volume with another driver counts", "assayd/templates/csi.yaml",
+			"apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: csi}\nspec:\n" + podTemplate +
+				"      - {name: d, csi: {driver: ebs.csi.aws.com}}\n", true, true},
+		{"a volume source nobody listed counts (deny by default)", "assayd/templates/unknown.yaml",
+			"apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: unknown}\nspec:\n" + podTemplate +
+				"      - {name: d, futureDisk: {size: 1Gi}}\n", true, true},
+		{"a hostPath nobody exempted counts", "assayd/templates/host.yaml",
+			"apiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: host}\nspec:\n" + podTemplate +
+				"      - {name: spire-agent-socket-dir, hostPath: {path: /run/spire/agent-sockets}}\n", true, true},
+		{"an exempt object's hostPath at another path counts", spireAgentSrc,
+			"apiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: assayd-agent-moved}\nspec:\n" + podTemplate +
+				"      - {name: spire-agent-socket-dir, hostPath: {path: /var/lib/spire}}\n", true, true},
+		{"an entry admits its kind only: a PVC with the entry's source and name is refused", natsSrc,
+			"apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata: {name: assayd-nats}\nspec: {}\n", true, true},
+		{"an exemption admits its Source only", "assayd/charts/other/templates/daemonset.yaml",
+			"apiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: assayd-agent}\nspec:\n" + podTemplate +
+				"      - {name: spire-agent-socket-dir, hostPath: {path: /run/spire/agent-sockets}}\n", true, true},
+		{"an exemption admits its kind only", spireAgentSrc,
+			"apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: assayd-agent}\nspec:\n" + podTemplate +
+				"      - {name: spire-agent-socket-dir, hostPath: {path: /run/spire/agent-sockets}}\n", true, true},
+		{"an exemption admits its name only", spireAgentSrc,
+			"apiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: assayd-agent-2}\nspec:\n" + podTemplate +
+				"      - {name: spire-agent-socket-dir, hostPath: {path: /run/spire/agent-sockets}}\n", true, true},
+		{"an exemption admits its volume name only", spireAgentSrc,
+			"apiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: assayd-agent-vol}\nspec:\n" + podTemplate +
+				"      - {name: other-dir, hostPath: {path: /run/spire/agent-sockets}}\n", true, true},
+		{"a Job's hostPath volume counts", "assayd/templates/job.yaml",
+			"apiVersion: batch/v1\nkind: Job\nmetadata: {name: job}\nspec:\n" + podTemplate +
+				"      - {name: d, hostPath: {path: /var/data}}\n", true, true},
+		{"a ReplicaSet's nfs volume counts", "assayd/templates/rs.yaml",
+			"apiVersion: apps/v1\nkind: ReplicaSet\nmetadata: {name: rs}\nspec:\n" + podTemplate +
+				"      - {name: d, nfs: {server: s, path: /x}}\n", true, true},
+		{"a StatefulSet with no claim templates is counted by its pod volumes", "assayd/templates/sts-host.yaml",
+			"apiVersion: apps/v1\nkind: StatefulSet\nmetadata: {name: sts-host}\nspec:\n" + podTemplate +
+				"      - {name: d, hostPath: {path: /var/data}}\n", true, true},
+		{"a volume with no source counts", "assayd/templates/nosource.yaml",
+			"apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: nosource}\nspec:\n" + podTemplate +
+				"      - {name: d}\n", true, true},
+		{"a volume with two sources counts, though one is harmless", "assayd/templates/twosources.yaml",
+			"apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: twosources}\nspec:\n" + podTemplate +
+				"      - {name: d, emptyDir: {}, hostPath: {path: /var/data}}\n", true, true},
+		{"a PVC inside a List counts, since helm install creates every item", "assayd/templates/list.yaml",
+			"apiVersion: v1\nkind: List\nitems:\n- apiVersion: v1\n  kind: PersistentVolumeClaim\n  metadata: {name: listed}\n  spec: {}\n", true, true},
+		{"a PVC inside a typed PersistentVolumeClaimList counts", "assayd/templates/pvclist.yaml",
+			"apiVersion: v1\nkind: PersistentVolumeClaimList\nitems:\n- apiVersion: v1\n  kind: PersistentVolumeClaim\n" +
+				"  metadata: {name: typed-listed}\n  spec: {}\n", true, true},
+		{"a PVC inside a List inside a List counts", "assayd/templates/nested.yaml",
+			"apiVersion: v1\nkind: List\nitems:\n- apiVersion: v1\n  kind: List\n  items:\n  - apiVersion: v1\n" +
+				"    kind: PersistentVolumeClaim\n    metadata: {name: nested}\n    spec: {}\n", true, true},
+		{"a template's own Source line cannot claim an entry's path", "assayd/templates/claims-nats.yaml",
+			"# Source: " + natsSrc + "\napiVersion: apps/v1\nkind: StatefulSet\nmetadata: {name: assayd-nats}\nspec:\n" + vct, true, true},
+		{"every harmless volume source, and csi.spiffe.io, passes", "assayd/templates/harmless.yaml",
+			"apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: harmless}\nspec:\n" + podTemplate +
+				"      - {name: a, emptyDir: {}}\n      - {name: b, configMap: {name: x}}\n      - {name: c, secret: {secretName: x}}\n" +
+				"      - {name: d, projected: {sources: []}}\n      - {name: e, downwardAPI: {items: []}}\n" +
+				"      - {name: f, image: {reference: r}}\n      - {name: g, csi: {driver: csi.spiffe.io, readOnly: true}}\n", false, false},
+		{"a StatefulSet is counted by its storage, not its kind", "assayd/templates/sts.yaml",
+			"apiVersion: apps/v1\nkind: StatefulSet\nmetadata: {name: scratch}\nspec:\n" + podTemplate +
+				"      - {name: a, emptyDir: {}}\n", false, false},
+		{"SPIRE's exempt socket mount passes", spireAgentSrc,
+			"apiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: assayd-agent}\nspec:\n" + podTemplate +
+				"      - {name: spire-agent-socket-dir, hostPath: {path: /run/spire/agent-sockets}}\n", false, false},
+		{"an object with no storage passes", "assayd/templates/cm.yaml",
+			"apiVersion: v1\nkind: ConfigMap\nmetadata: {name: cm}\ndata: {a: b}\n", false, false},
+	}
+
+	var rendered strings.Builder
+	for _, r := range rows {
+		rendered.WriteString("---\n# Source: " + r.source + "\n" + r.body)
+	}
+	docs := parseRendered(t, rendered.String())
+	if len(docs) != len(rows) {
+		t.Fatalf("parsed %d fixture documents from %d rows", len(docs), len(rows))
+	}
+
+	natsKey := objectKey{natsSrc, "StatefulSet", "assayd-nats"}
+	allow := []statefulEntry{
+		{natsKey, substrate, "the platform's NATS JetStream", "D1"},
+		{objectKey{"assayd/charts/gone/templates/statefulset.yaml", "StatefulSet", "assayd-gone"}, sink, "renamed away", "D1"},
+		{objectKey{"assayd/charts/x/templates/a.yaml", "StatefulSet", "undecided"}, substrate, "no amendment", "Amendment 99"},
+		{objectKey{"assayd/charts/x/templates/b.yaml", "StatefulSet", "cache"}, "cache", "", "D1"},
+		{objectKey{"", "StatefulSet", "sourceless"}, substrate, "no source", "D1"},
+	}
+	exempt := []hostPathExemption{
+		{objectKey{spireAgentSrc, "DaemonSet", "assayd-agent"}, "spire-agent-socket-dir", "/run/spire/agent-sockets",
+			"the Workload API socket, not a record", "D4"},
+		{objectKey{spireAgentSrc, "DaemonSet", "assayd-agent-moved"}, "spire-agent-socket-dir", "/run/spire/agent-sockets",
+			"exempt at its socket path only", "D4"},
+		{objectKey{spireAgentSrc, "DaemonSet", "assayd-agent-vol"}, "spire-agent-socket-dir", "/run/spire/agent-sockets",
+			"exempt for its volume name only", "D4"},
+		{objectKey{"assayd/charts/x/templates/c.yaml", "DaemonSet", "no-reason"}, "v", "/p", "", "D4"},
+		{objectKey{"assayd/charts/x/templates/d.yaml", "DaemonSet", "undecided"}, "v", "/p", "a reason", "Amendment 99"},
+	}
+	problems, stateful := checkStatefulAllowlist(docs, allow, exempt, adrHeadings(t))
+
+	wantStateful := 0
+	for i, r := range rows {
+		key := objectKey{r.source, toStr(docs[i].doc["kind"]), nameOf(docs[i].doc)}
+		if got := len(statefulness(docs[i], exempt, map[int]bool{})) > 0; got != r.stateful {
+			t.Errorf("%s: %s counted stateful=%v, want %v", r.why, key, got, r.stateful)
+		}
+		if r.stateful {
+			wantStateful++
+		}
+		refused := false
+		for _, p := range problems {
+			refused = refused || strings.HasPrefix(p, key.String()+" is stateful")
+		}
+		if refused != r.refused {
+			t.Errorf("%s: %s refused=%v, want %v\nproblems:\n%s", r.why, key, refused, r.refused,
+				strings.Join(problems, "\n"))
+		}
+	}
+	if stateful != wantStateful {
+		t.Errorf("counted %d stateful objects, want %d", stateful, wantStateful)
+	}
+
+	// Part 3 and part 4: each malformed or unused entry is reported, and the
+	// positive control's entry, which cites D1 and matched, is not.
+	for _, want := range []string{
+		`StatefulSet "assayd-gone" (assayd/charts/gone/templates/statefulset.yaml) matches no stateful object`,
+		`cites "Amendment 99", which is not a heading of ADR-0035`,
+		`has class "cache"`,
+		`allowlist entry StatefulSet "sourceless" () does not name its object by source, kind and name`,
+		`StatefulSet "cache" (assayd/charts/x/templates/b.yaml) gives no reason`,
+		`hostPath exemption DaemonSet "assayd-agent-moved" (` + spireAgentSrc + `) volume "spire-agent-socket-dir" path "/run/spire/agent-sockets" matches no rendered volume`,
+		`hostPath exemption DaemonSet "assayd-agent-vol" (` + spireAgentSrc + `) volume "spire-agent-socket-dir" path "/run/spire/agent-sockets" matches no rendered volume`,
+		`hostPath exemption DaemonSet "no-reason" (assayd/charts/x/templates/c.yaml) volume "v" needs a reason and an ADR-0035 heading`,
+		`hostPath exemption DaemonSet "undecided" (assayd/charts/x/templates/d.yaml) volume "v" needs a reason and an ADR-0035 heading`,
+	} {
+		found := false
+		for _, p := range problems {
+			found = found || strings.Contains(p, want)
+		}
+		if !found {
+			t.Errorf("no problem reports %q:\n%s", want, strings.Join(problems, "\n"))
+		}
+	}
+	for _, p := range problems {
+		matchedExemption := strings.Contains(p, `DaemonSet "assayd-agent" (`) && strings.Contains(p, "matches no rendered volume")
+		if strings.Contains(p, natsKey.String()) || matchedExemption {
+			t.Errorf("a well-formed entry or exemption that matched was reported: %s", p)
+		}
+	}
+
+	// A document without a `# Source:` line cannot be named by any entry.
+	if p, _ := checkStatefulAllowlist(parseRendered(t, "---\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"),
+		nil, nil, adrHeadings(t)); len(p) != 1 || !strings.Contains(p[0], "no `# Source:` line") {
+		t.Errorf("a document with no Source line was not reported: %v", p)
 	}
 }
 
@@ -296,15 +846,6 @@ func toStrings(v any) []string {
 		out = append(out, toStr(x))
 	}
 	return out
-}
-
-func matchesAllowlist(name string, allowed map[string]string) bool {
-	for k := range allowed {
-		if strings.Contains(name, k) {
-			return true
-		}
-	}
-	return false
 }
 
 // The chart's copy of the operator rules must match what controller-gen
