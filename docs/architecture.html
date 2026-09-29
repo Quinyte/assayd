@@ -434,7 +434,7 @@
   </div>
   <div class="rules">
     <div class="rule"><span class="rn">RULE 1</span><h3>Bind, don't build</h3><p>CRDs + operators + a CLI. Zero proprietary protocols, zero bundled agent framework, zero bundled UI.</p></div>
-    <div class="rule"><span class="rn">RULE 2</span><h3>Two stateful deps, ever</h3><p>Postgres + NATS. Durability, eval results, audit, KV, object store, queues — all in those two. No Kafka, no Redis, no Temporal cluster.</p></div>
+    <div class="rule"><span class="rn">RULE 2</span><h3>Two stateful substrates, one sink, one set of keys</h3><p>Postgres + NATS are the only stateful substrate: durability, eval results, audit, KV, object store, queues — all in those two. No Kafka, no Redis, no Temporal cluster. OpenObserve is the only stateful sink — nothing takes a decision or an audit answer from it — and SPIRE's CA signing keys are the only stateful key material (ADR-0035, decided by the human on 2026-09-29). <em>Until 2026-09-29 this rule read “Two stateful deps, ever”, which was false: the allowlist already admitted OpenObserve, and SPIRE's default chart keeps its CA keys on a PVC.</em></p></div>
     <div class="rule"><span class="rn">RULE 3</span><h3>Library over server</h3><p>If a capability can run as a library inside an existing pod (DBOS, DeepEval, OTel SDK), it never becomes a service.</p></div>
     <div class="rule"><span class="rn">RULE 4</span><h3>The reconcile loop is the product</h3><p>Versioning = CR generations + GitOps. Self-healing = conditions + controllers. assayd adds <em>semantic</em> health to machinery Kubernetes already has.</p></div>
     <div class="rule"><span class="rn">RULE 5</span><h3>Weight budget is a spec</h3><p>Core control plane ≤ 8 pods — arithmetic, enforced by <code>TestCorePodBudget</code> (§17). One <code>helm install</code> on any conformant cluster. <strong>Two distros are a CI target, not four</strong>: <code>hack/e2e.sh</code> accepts <code>DISTRO=k3d</code> and <code>DISTRO=kind</code> and exits non-zero on anything else, and CI runs both on every merge. NFR-3 also names <strong>minikube and k3s</strong>; nothing runs them, so they are intended and untested. This rule used to list all four as though they were the CI target, not a courtesy. Every added pod needs a written justification.</p></div>
@@ -466,7 +466,7 @@
       <g font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="10.5" letter-spacing="1.5" fill="var(--ink-faint)">
         <text x="24" y="36">CONTROL PLANE — GITOPS</text>
         <text x="24" y="222">DATA PLANE — EVERY HOP CROSSES THE GATEWAY</text>
-        <text x="24" y="518">SUBSTRATE — THE ONLY STATEFUL DEPENDENCIES</text>
+        <text x="24" y="518">SUBSTRATE — WHERE EVERY RECORD LIVES</text>
       </g>
       <line x1="24" y1="200" x2="916" y2="200" stroke="var(--line)" stroke-dasharray="2 5"/>
       <line x1="24" y1="496" x2="916" y2="496" stroke="var(--line)" stroke-dasharray="2 5"/>
@@ -1762,7 +1762,7 @@ score <span class="k">0.91 ✓</span>  (gate: 0.85)
       <tr><td>Domain concept</td><td>None — DevOps tools</td><td>"Knowledge base" service</td><td>None</td><td><b>Versioned KG contract, ontology-first</b></td></tr>
       <tr><td>Eval gating</td><td>—</td><td>—</td><td>—</td><td><b>Eval-as-admission + session replay</b></td></tr>
       <tr><td>Drift / self-healing</td><td>—</td><td>Partial (failure recovery)</td><td>Retries / circuit breakers</td><td><b>Semantic conditions + controllers</b></td></tr>
-      <tr><td>Footprint</td><td>Moderate</td><td>Heavy — 16GB/4-core dev setup</td><td>Dapr runtime + framework</td><td><b>≤ 8 pods, Postgres + NATS only</b></td></tr>
+      <tr><td>Footprint</td><td>Moderate</td><td>Heavy — 16GB/4-core dev setup</td><td>Dapr runtime + framework</td><td><b>≤ 8 pods, Postgres + NATS the only substrate</b></td></tr>
       <tr><td>UI stance</td><td>UI early</td><td>UI-led</td><td>n/a</td><td>CLI + security first, UI later</td></tr>
     </tbody>
   </table></div>

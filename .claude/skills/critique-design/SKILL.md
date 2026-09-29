@@ -26,7 +26,7 @@ Run things. Read the generated artifacts, not the prose about them. If a rule is
 - **Fail-open windows.** Ordering where a route, policy, or grant exists before its guard does.
 - **Determinism.** Any identifier, hash, or dedup key that depends on something not knowable at the time it is computed.
 - **Silence.** A degraded path that does not raise a condition (NFR-8).
-- **Doctrine.** Six rules: bind don't build · Postgres+NATS only · library over server · the reconcile loop is the product · ≤8 core pods · tiered install.
+- **Doctrine.** Six rules: bind don't build · Postgres+NATS the only substrate, OpenObserve the only sink, SPIRE's CA keys the only key material (ADR-0035) · library over server · the reconcile loop is the product · ≤8 core pods · tiered install.
 - **Readability.** The `write-spec` rules. A spec a newcomer cannot follow is a defect, not a style preference.
 
 ## Output

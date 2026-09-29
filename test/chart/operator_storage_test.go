@@ -13,7 +13,7 @@ import (
 )
 
 // A chart render cannot see what the operator creates at run time, so NFR-2's
-// allowlist test cannot either. ADR-0035 (proposed) D5 asks for a check that
+// allowlist test cannot either. ADR-0035 D5, decided by the human on 2026-09-29, asks for a check that
 // fails on the first change that makes the operator create storage, instead of
 // a promise that such a change will add one. The two checks below are that.
 // Either failing means: classify the storage under ADR-0035 D5, record the

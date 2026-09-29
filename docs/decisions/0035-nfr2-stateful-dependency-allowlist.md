@@ -1,7 +1,7 @@
-# ADR-0035 (proposed): what NFR-2's stateful-dependency allowlist admits, how it matches, and how an entry is added
+# ADR-0035: NFR-2 has two substrates, one sink and one set of keys; the allowlist matches exactly, counts storage by deny-by-default, and grows only by amendment
 
-- **Status**: **proposed** · 2026-09-29 · **not decided.** The human asked for this draft on 2026-09-29, to be critiqued independently and then brought to them. The first critique returned REVISE, with 2 BLOCKER, 7 MAJOR and 6 MINOR findings ([`reviews/0035-critique-r1.md`](../designs/reviews/0035-critique-r1.md)). Revision r1 answered it. The second critique returned REVISE, with 0 BLOCKER, 4 MAJOR and 5 MINOR findings, and closed all fifteen of round 1's ([`reviews/0035-critique-r2.md`](../designs/reviews/0035-critique-r2.md)). Revision r2 answered it. **The third critique returned PASS**, with 0 BLOCKER, 0 MAJOR and 2 MINOR findings, both in the test code ([`reviews/0035-critique-r3.md`](../designs/reviews/0035-critique-r3.md)). Revision r3 fixes both. A PASS is evidence about the text. It is not a decision: D1–D7 are with the human. The human decides D1–D7 below. Every "Recommended" is the author's. Until the human decides, `TestStatefulDependencyAllowlist` and NFR-2's text stay as they are.
-- **If the human takes D1(a)**: it is an **exception to** ADR-0002 rule 2 ("Postgres + NATS are the only stateful deps"), not a refinement of it. ADR-0002's text is not edited.
+- **Status**: **accepted** · 2026-09-29 · **decided by the human on 2026-09-29**, through three questions put to them by the coordinating session, on the third critique's PASS ([`reviews/0035-critique-r3.md`](../designs/reviews/0035-critique-r3.md): 0 BLOCKER, 0 MAJOR, 2 MINOR, both fixed in revision r3). The human took every recommended option: D1(a), D2(a), D3(a), D4(a), D5(c), D6(a) and D7(a). Each heading below quotes the answer. The options not taken are kept as provenance. History: the first critique returned REVISE, 2 BLOCKER, 7 MAJOR, 6 MINOR ([`reviews/0035-critique-r1.md`](../designs/reviews/0035-critique-r1.md)); the second REVISE, 0 BLOCKER, 4 MAJOR, 5 MINOR ([`reviews/0035-critique-r2.md`](../designs/reviews/0035-critique-r2.md)). **The allowlist test the decisions call for is not built yet**: `TestStatefulDependencyAllowlist` still enforces the old substring check, and its replacement is owed in a follow-up PR (Consequences).
+- **D1(a) is an exception to ADR-0002 rule 2** ("Postgres + NATS are the only stateful deps"), not a refinement of it. ADR-0002's Decision is not edited; its Amendment 1 points here.
 
 ## Context
 
@@ -33,11 +33,13 @@ What the corpus and the upstream charts say, found by grepping `docs/designs` an
 | **Open, plus tier**: Argo Workflows' artifact repository and workflow archive | not stated anywhere in the corpus | ADR-0004 names Argo, not its storage |
 | CRs; design 02 §2's run-namespace `ConfigMap`, which is "not reconstructable by the operator" | the API server | design 02 §2 |
 
-## D1 — The classes, and the entries
+## D1 — The classes, and the entries — DECIDED: (a)
+
+**Decided by the human on 2026-09-29: (a).** Their answer: "(a) Classes by authority (Recommended)". The other options below are kept as provenance; they were not taken.
 
 The classes are defined by **authority**, not by uniqueness.
 
-- A **decision** is a write the platform makes to a platform object: a promotion, a rollback, an admission verdict, or a condition on a CR. **Paging is not a decision**, because an alert asks a human to act. This is a choice the human may reverse, and the list below shows what the reversal would cost.
+- A **decision** is a write the platform makes to a platform object: a promotion, a rollback, an admission verdict, or a condition on a CR. **Paging is not a decision**, because an alert asks a human to act. The human took this with D1(a); the list below shows what counting paging would have cost.
 - A **substrate** is a store the platform reads to take a decision, or to answer an audit question.
 - A **sink** is a store nothing takes a decision or an audit answer from. Losing it loses graphs and pages, never audit (design 10 §2). A sink can hold data found nowhere else, as OpenObserve does for interior spans.
 - **Key material** is a store whose contents sign, and are never read to decide. It is a class only if D2(a) is taken.
@@ -59,9 +61,9 @@ The options:
 | Budget, perf and swarm panels; ADR-0028 backstop visibility | display | out |
 | Loop governance (design 22 §7) | `loop_depth` p95, for a human tuning `maxHops` | out |
 
-So under (a), design 20 and whatever "rollout observe" becomes must take their signal from a substrate, or OpenObserve is substrate. If the human counts paging as a decision, every shipped alert rule is in question too.
+So under (a), design 20 and whatever "rollout observe" becomes must take their signal from a substrate, or OpenObserve is substrate. **With (a) decided, both are now in question and owed**: design 20's rollback and `Degraded` condition, and "rollout observe", must each be re-specified before they are built. Paging stays outside "decision", so the shipped alert rules are not in question.
 
-**What (a) makes false**, and what must be corrected if the human takes it:
+**What (a) made false**, corrected on 2026-09-29 with the decision:
 
 - `architecture.md` §01 rule 2 and `architecture.html`'s "Two stateful deps, ever";
 - AGENTS.md's doctrine line "Postgres+NATS only";
@@ -70,7 +72,9 @@ So under (a), design 20 and whatever "rollout observe" becomes must take their s
 
 ADR-0002 is not edited. This ADR records the exception.
 
-## D2 — SPIRE's CA keys
+## D2 — SPIRE's CA keys — DECIDED: (a)
+
+**Decided by the human on 2026-09-29: (a).** Their answer: "(a) Key-material entry (Recommended)". The other options below are kept as provenance; they were not taken.
 
 The keys do not fit D1's substrate: SVIDs are verified against the trust bundle, which is in the datastore (Postgres), not against the key file. What SPIRE does when the key file is lost is not measured here.
 
@@ -81,14 +85,18 @@ The keys do not fit D1's substrate: SVIDs are verified against the trust bundle,
 
 Whichever option is taken, the chart's SPIRE values must be set to match it. Left at their defaults, the first real work of NFR-2's check is to refuse `assayd-server`, under today's test and under D4(a).
 
-## D3 — Matching
+## D3 — Matching — DECIDED: (a)
+
+**Decided by the human on 2026-09-29: (a).** Their answer: "Exact match + deny-by-default (Recommended)", asked together with D4. The other options below are kept as provenance; they were not taken.
 
 - **(a) Recommended.** Match an object exactly on Helm's `# Source:` path, plus its kind and name, rendered with release name `assayd`. An example is `assayd/charts/openobserve-standalone/templates/openobserve-statefulset.yaml`, `StatefulSet`, `assayd-openobserve-standalone`: in the umbrella chart Helm writes the `assayd/charts/` prefix, and that prefix is what separates `assayd/charts/nats/…` from `assayd/charts/openobserve/charts/nats/…`. Helm writes the path itself, so the key names the subchart without trusting any label. That keeps the platform's `StatefulSet assayd-nats` apart from the one the OpenObserve HA chart renders under the same name, which `helm template` accepts, exiting 0.
 - (b) Match on kind and name only. This cannot tell the two `assayd-nats` apart.
 - (c) Match on the `app.kubernetes.io/name` label. This trusts every upstream chart to set that label, and to set it truthfully.
 - (d) Match by substring, as today. Not recommended, because it admits `nats-sidecar-cache`.
 
-## D4 — What counts as stateful in a render
+## D4 — What counts as stateful in a render — DECIDED: (a)
+
+**Decided by the human on 2026-09-29: (a).** Their answer: "Exact match + deny-by-default (Recommended)", asked together with D3. The other options below are kept as provenance; they were not taken.
 
 - **(a) Recommended. Deny by default.** A rendered object counts as stateful if it is any of these:
   - a pod template with a volume outside this set: `configMap`, `secret`, `projected`, `downwardAPI`, `emptyDir`, `image`, and `csi` with driver `csi.spiffe.io`. The set of pod-bearing kinds is `Pod`, `Deployment`, `ReplicaSet`, `StatefulSet`, `DaemonSet`, `Job` and `CronJob`. Anything outside the set counts, including `persistentVolumeClaim`, `ephemeral`, `hostPath`, `nfs`, `iscsi`, `cephfs`, `rbd`, the cloud-disk sources, and inline `csi` with any other driver;
@@ -101,7 +109,9 @@ Whichever option is taken, the chart's SPIRE values must be set to match it. Lef
 
 **What (a) cannot enforce:** it does not catch a storage-claiming kind nobody has listed. A render cannot know what another controller will create.
 
-## D5 — State the operator creates per custom resource
+## D5 — State the operator creates per custom resource — DECIDED: (c)
+
+**Decided by the human on 2026-09-29: (c).** Their answer: "Take all three (Recommended)", asked together with D6 and D7. The other options below are kept as provenance; they were not taken.
 
 A chart render cannot see this state. Two cases are designed:
 
@@ -114,7 +124,7 @@ The options:
 - (b) Only ADR-0018's exemption. The scratchpad then needs an entry under D7.
 - **(c) Recommended.** Name both cases as workload state outside NFR-2. Any other operator-created storage needs an entry.
 
-**Enforced from this PR, whatever the human decides:** `test/chart/operator_storage_test.go`.
+**Enforced from this PR:** `test/chart/operator_storage_test.go`.
 
 - `TestTheOperatorsRoleGrantsNoStorage` fails when the rendered operator role can create, update or patch a PVC, a PV, a `StatefulSet`, a CNPG `Cluster`, a `Sandbox` or a `SandboxTemplate`. Wildcards count. A grant the human has decided goes in `grantExempt`, keyed by role and kind. Binding the scratchpad under D5(c) will need one. An exemption that matches nothing fails the test.
 - `TestTheOperatorGivesItsPodsNoVolumes` scans every non-test file under `internal/`, `cmd/`, `api/` and, if it exists, `pkg/`. That includes embedded YAML but not `testdata/`. It fails on text that gives a pod a volume: a typed `Volumes:` or `corev1.Volume`, any `…VolumeSource`, an unstructured `"volumes"` or `"hostPath"` key, a YAML `volumes:` key, or a PVC. The scan is case-insensitive. It skips `//` comments and `/* … */` blocks, tracked across lines, so a line starting with `*` is skipped only inside a block, and a pointer dereference such as `*dst = corev1.PodSpec{Volumes: …}` is read. A short variable declaration, `volumes := …`, does not match. **The scan does match inside string literals**, on purpose, because that is where a JSON or YAML pod overlay lives; a string that merely mentions `hostPath` fails it too. `volumeExempt` exempts by file and exact line content, so it covers every identical line in that file and never the whole file. An exemption that matches nothing fails.
@@ -130,7 +140,9 @@ The options:
   - a volume assembled at run time, whether read from a CR, a `ConfigMap` or the network, or built from strings that split its key;
   - code outside the four roots.
 
-## D6 — Bring-your-own and external services
+## D6 — Bring-your-own and external services — DECIDED: (a)
+
+**Decided by the human on 2026-09-29: (a).** Their answer: "Take all three (Recommended)", asked together with D5 and D7. The other options below are kept as provenance; they were not taken.
 
 - **(a) Recommended.** Scope NFR-2 to services the platform writes its own records to.
   - A BYO instance fills an entry's role: a BYO Postgres counts as the Postgres entry, and the chart then renders none.
@@ -139,7 +151,9 @@ The options:
   - A render cannot see an external service, so only review enforces this, as it does NFR-1's written-justification half.
 - (b) External services are outside NFR-2. Not recommended, because requiring an external S3 would then satisfy "only Postgres and NATS".
 
-## D7 — How an entry is added
+## D7 — How an entry is added — DECIDED: (a)
+
+**Decided by the human on 2026-09-29: (a).** Their answer: "Take all three (Recommended)", asked together with D5 and D6. The other options below are kept as provenance; they were not taken.
 
 - **(a) Recommended.** The change that introduces a stateful object does three things:
   1. adds it to the allowlist, with its class and reason;
@@ -153,12 +167,12 @@ The options:
 
 ## Consequences
 
-- **Until the human decides, only D5's two tests change anything.** `TestStatefulDependencyAllowlist` and NFR-2 stand as they are. NFR-2 cites this ADR as proposed.
-- **The test change, contingent on D1(a), D3(a), D4(a) and D7(a), and not implemented.** It is one change to `test/chart/chart_test.go`, with five parts:
+- **What changed with the decision.** NFR-2; §01 rule 2 in `architecture.md` and `architecture.html`, their comparison-table "Postgres+NATS only" and the HTML diagram's "the only stateful dependencies" label; AGENTS.md's doctrine line and the same line in `.claude/skills/critique-design/SKILL.md` (CLAUDE.md does not carry it); and design 07 §2, by a note that leaves its bullet standing. ADR-0002 carries Amendment 1, and its Decision is not edited. D5's two tests (`test/chart/operator_storage_test.go`) are already enforced.
+- **The allowlist test change is decided and OWED, in a follow-up PR.** `TestStatefulDependencyAllowlist` is unchanged in this PR and still enforces the old three-entry substring check, which D3(a) and D4(a) replace. It passes vacuously today, so nothing the chart renders is wrongly admitted in the meantime. The change is one rewrite of `test/chart/chart_test.go`, with five parts:
   1. **The matcher and the classifier are tested on fixtures**: a fixture allowlist, fixture documents, and a positive control that must be admitted. A planted `StatefulSet assayd-nats-sidecar-cache`, `Deployment` with an `nfs` volume, `PersistentVolume` and CNPG `Cluster` must each be refused. A planted `emptyDir` must pass, and so must an exempt SPIRE socket. Mutations: restoring `strings.Contains`, or making the matcher refuse everything, each fail a fixture row.
   2. **The render matrix** is the cross product of `-f values-local.yaml` or not, and `gateway.enabled=true` with a `gateway.servingUrl` or not. Without the URL, `templates/operator.yaml` calls `fail`. `tier: plus` is attempted, and only its known refusal is accepted. Once plus renders, that row fails the test. The change that makes plus render must then add plus to the matrix, and must settle the three open plus-tier rows in Context. **What it cannot see:** a toggle nobody adds to the matrix.
   3. **Each entry** carries its class, its reason, its keys under D3(a), and a heading reference checked against this file.
   4. **Every named object must be rendered**, so a renamed subchart cannot leave an entry standing unused. The count of stateful objects read is logged. It prints only under `-v`, because `make chart` runs without it, so the fixtures, not the log, are what show that the check is not vacuous.
-  5. **D2 and D6 add entries** (SPIRE's key PVC, and any external store) in whatever form the human picks.
-- **Once the human decides**, this record is compressed to the options taken and their reasons. It is this long only because it carries options.
+  5. **D2(a) and D6(a) add entries**: SPIRE's key PVC as key material when the SPIRE subchart lands, and any external store the platform writes its records to.
+- **Still open, and owed**: design 20's rollback and "rollout observe" (D1); what SPIRE does when its key file is lost (D2); and Context's three plus-tier rows, Phoenix, OpenFGA's datastore and Argo's storage, which the change that makes plus render must settle.
 - **Revisit** when the chart first renders a subchart. That is when the vacuous pass ends.

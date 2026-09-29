@@ -38,7 +38,7 @@ Everything else in v0.1 survived critique. The full decision record is indexed i
 Every design decision passes six rules. This is the product: competitors ship platforms; assayd ships a control plane.
 
 1. **Bind, don't build.** CRDs + operators + a CLI. Zero proprietary protocols, zero bundled agent framework, zero bundled UI.
-2. **Two stateful deps, ever.** Postgres + NATS. Durability, eval results, audit, KV, object store, queues — all in those two. No Kafka, no Redis, no Temporal cluster.
+2. **Two stateful substrates, one sink, one set of keys.** Postgres + NATS are the only stateful substrate: durability, eval results, audit, KV, object store, queues — all in those two. No Kafka, no Redis, no Temporal cluster. OpenObserve is the only stateful sink — nothing takes a decision or an audit answer from it — and SPIRE's CA signing keys are the only stateful key material (ADR-0035, decided by the human on 2026-09-29). *Until 2026-09-29 this rule read "Two stateful deps, ever", which was false: the allowlist already admitted OpenObserve, and SPIRE's default chart keeps its CA keys on a PVC.*
 3. **Library over server.** If a capability can run as a library inside an existing pod (DBOS, DeepEval, OTel SDK), it never becomes a service.
 4. **The reconcile loop is the product.** Versioning = CR generations + GitOps. Self-healing = conditions + controllers. assayd adds *semantic* health to machinery Kubernetes already has.
 5. **Weight budget is a spec.** Core control plane ≤ 8 pods — arithmetic, enforced by `TestCorePodBudget` (§17). One `helm install` on any conformant cluster. **Two distros are a CI target, not four**: `hack/e2e.sh` accepts `DISTRO=k3d` and `DISTRO=kind` and exits non-zero on anything else, and `.github/workflows/ci.yml` runs both on every merge. NFR-3 also names **minikube and k3s**; nothing runs them, so they are intended and untested. An earlier version of this rule listed all four as though they were the CI target.
@@ -427,7 +427,7 @@ Two loops, separated: the **inner loop** (user-owned scaffold) and the **governa
 | Domain | none (ops tools) | knowledge-base service | none | **versioned KG contract, ontology-first** |
 | Eval gating | — | — | — | **eval-as-admission + session replay** |
 | Drift/self-heal | — | partial | retries | **semantic conditions + controllers** |
-| Footprint | moderate | heavy (16GB/4c dev) | Dapr runtime | **≤8 pods, Postgres+NATS only** |
+| Footprint | moderate | heavy (16GB/4c dev) | Dapr runtime | **≤8 pods, Postgres+NATS the only substrate** |
 | UI stance | UI early | UI-led | n/a | CLI + security first |
 
 kagent answers "how do I run an agent on k8s"; assayd answers "how do I run an agent I can trust with my business" — and kagent agents can register on assayd (they speak A2A). **Checked against the tag, 2026-09-05**: kagent v0.10.0 (released 2026-09-04) carries a `BYO` arm on its `AgentSpec` — "a user-provided container image … expects it to serve the agent over the A2A protocol on port 8080" — so framework neutrality and BYO A2A containers are **shared capability, not a moat**. kagent is a prospective integration target, not a straw man. Whatever assayd is for has to survive that sentence. Palantir AIP validates ontology-first at $-scale; assayd is its open, lightweight, k8s-native expression. Eval-gated rollout is 2026 best-practice *as SaaS + scripts*.

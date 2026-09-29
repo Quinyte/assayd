@@ -43,7 +43,7 @@ These are not style preferences. Each one is here because it was violated and so
 
 ## Doctrine and charter — these gate every change
 
-- **Lightweight doctrine** (architecture §01): bind don't build · Postgres+NATS only · library over server · the reconcile loop is the product · ≤8 core pods (CI-enforced) · tiered install.
+- **Lightweight doctrine** (architecture §01): bind don't build · Postgres+NATS the only substrate, OpenObserve the only sink, SPIRE's CA keys the only key material (ADR-0035) · library over server · the reconcile loop is the product · ≤8 core pods (CI-enforced) · tiered install.
 - **Pattern charter** (architecture §15): name the plane (slow=engine / fast=technique) and the socket. Five primitives only — Agent(A2A), Tool(MCP), Event(CloudEvents), Resource(CRD), Artifact(OCI). A sixth primitive or an engine change needs an RFC.
 - **`docs/architecture.md` is canonical**; `docs/decisions/` holds the ADRs. Do not relitigate an ADR casually — propose a superseding one.
 - **Code that diverges from an approved design is drift**, whatever it does. Amend the design first, as a numbered amendment, in the same change.
