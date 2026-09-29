@@ -351,9 +351,13 @@ var rules = []rule{
 		why:     "a revision NAME is 40 bits and a chosen collision costs about a second; the digest decides (A37, A50, design 16 A2)",
 	},
 	{
-		name:    "verifier-undecided",
-		banned:  regexp.MustCompile(`(?i)Sigstore[^.]{0,40}or[^.]{0,10}Kyverno|Kyverno[^.]{0,40}or[^.]{0,10}Sigstore`),
-		allowed: regexp.MustCompile(`(?i)not a design|earlier|supersedes|superseded[ -]by|superseding|the superseded note|chose|decided`),
+		name:   "verifier-undecided",
+		banned: regexp.MustCompile(`(?i)Sigstore[^.]{0,40}or[^.]{0,10}Kyverno|Kyverno[^.]{0,40}or[^.]{0,10}Sigstore`),
+		// "outside it" and its siblings rescue a sentence that names both
+		// controllers as verifiers assayd does NOT detect (design 02 A78), which
+		// is a statement about someone else's install, not a binding. Pinned
+		// both ways by TestTheVerifierRuleSparesWhatAssaydDoesNotDetect.
+		allowed: regexp.MustCompile(`(?i)not a design|earlier|supersedes|superseded[ -]by|superseding|the superseded note|chose|decided|outside (it|assayd)|beside (it|assayd)|does not detect`),
 		why:     "design 07 A2 chose Sigstore policy-controller; \"or Kyverno\" names two controllers, not a contract",
 	},
 	{
@@ -1640,6 +1644,25 @@ func TestEveryRuleIsPinnedByAnIndependentFixture(t *testing.T) {
 		if _, ok := ruleFixtures[r.name]; !ok {
 			t.Errorf("rule %q has no independent fixture; add one so its deletion is detectable", r.name)
 		}
+	}
+}
+
+// TestTheVerifierRuleSparesWhatAssaydDoesNotDetect pins verifier-undecided's
+// narrow rescue both ways. Design 02 A78 names both controllers as verifiers an
+// administrator may run OUTSIDE assayd, which the operator does not detect:
+// that must pass, and must pass on its words, not on the dot in a namespace
+// label that happens to break the pattern, so the fixture is A78's sentence
+// with that label clause removed. A sentence proposing either controller as
+// assayd's binding must still fail.
+func TestTheVerifierRuleSparesWhatAssaydDoesNotDetect(t *testing.T) {
+	spared := "a verifier can exist outside assayd — an administrator's Sigstore policy-controller, " +
+		"or a Kyverno `verifyImages` rule — and the operator detects neither."
+	if caught(t, "verifier-undecided", spared) {
+		t.Errorf("verifier-undecided catches a sentence naming verifiers outside assayd:\n    %s", spared)
+	}
+	proposed := "ship a Sigstore policy-controller or a Kyverno verifyImages binding"
+	if !caught(t, "verifier-undecided", proposed) {
+		t.Errorf("verifier-undecided no longer catches an undecided binding:\n    %s", proposed)
 	}
 }
 

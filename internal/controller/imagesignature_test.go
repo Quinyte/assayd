@@ -108,6 +108,13 @@ func TestImageSignatureUnverifiedClearsOnAPassThatDoesNotAssertIt(t *testing.T) 
 // It scans this package's non-test source, so a new function calling
 // newConditionSet without assessImageSignature fails here, before any
 // fixture has been written for it (design 02 A78).
+//
+// Its limits: it sees DIRECT calls by name only, so a builder reached through
+// a method value (f := newConditionSet) or a &conditionSet{} literal bypasses
+// it; and it checks PRESENCE, not placement — a call placed after an early
+// return passes here. Placement is pinned by the envtest cases in
+// test/envtest/imagesignature_test.go, which drive the ordinary path's
+// earliest exit and a later one.
 func TestEveryConditionSetBuilderAssessesTheImageSignature(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
