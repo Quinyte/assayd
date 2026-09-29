@@ -450,6 +450,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	r.assessSandbox(&agent, conds)
 	r.assessTaskState(&agent, status, conds)
 	r.assessGovernance(conds, status)
+	assessImageSignature(&agent, conds)
 	// Design 03 A75: the last pass's hold and W1, which only the -auth step
 	// derives, so that a pass returning before it does not clear them.
 	r.seedStoredAbove(&agent, status, conds)
@@ -1189,6 +1190,7 @@ func (r *AgentReconciler) reportUnreconcilable(ctx context.Context, agent *assay
 	// path, it would otherwise be CLEARED here — so an Agent that went degraded
 	// would silently lose the record of which tier it runs in.
 	r.assessGovernance(conds, status)
+	assessImageSignature(agent, conds)
 	conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "NoWorkloadSpecified",
 		"neither spec.runtime nor spec.external is set, so there is nothing to reconcile; "+
 			"set exactly one of them")
@@ -1211,6 +1213,7 @@ func (r *AgentReconciler) reconcileExternal(ctx context.Context, agent *assaydv1
 	// happen to run here. An external agent is the case where an ungoverned tier
 	// matters most: nothing about it is in this cluster except the record.
 	r.assessGovernance(conds, status)
+	assessImageSignature(agent, conds)
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation
 	return ctrl.Result{}, r.writeStatus(ctx, agent, status)
@@ -1656,6 +1659,7 @@ func (r *AgentReconciler) reportUnresolvedSources(ctx context.Context, agent *as
 	r.assessSandbox(agent, conds)
 	r.assessTaskState(agent, status, conds)
 	r.assessGovernance(conds, status)
+	assessImageSignature(agent, conds)
 
 	names := make([]string, 0, len(unresolved))
 	for _, u := range unresolved {

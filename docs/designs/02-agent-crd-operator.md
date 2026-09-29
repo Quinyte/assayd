@@ -448,7 +448,7 @@ Idempotent. Writes are `Create`/`Update` under **optimistic concurrency**, not s
 
 | Guarantee | What actually happens today |
 |---|---|
-| Image signature verification | **Nothing verifies a signature.** CEL cannot express it and the chart ships no image policy; it arrives with the Sigstore policy-controller binding design 07 A2 chose and A3 gives an enforcement contract. Digest pinning is what will make that verification meaningful, because a signature is verified *against* a digest |
+| Image signature verification | **Nothing verifies a signature.** CEL cannot express it and the chart ships no image policy; it arrives with the Sigstore policy-controller binding design 07 A2 chose and A3 gives an enforcement contract. Digest pinning is what will make that verification meaningful, because a signature is verified *against* a digest. **The absence is announced, and nothing else about it is built**: every Agent carries `ImageSignatureUnverified=True`, reason `SignatureVerificationNotBuilt`, which touches neither `Ready` nor `Degraded` and which nothing clears (A78). No preflight, no namespace opt-in check and no compliance-profile install failure exists |
 | `usdPerDay`'s decimal grammar | Not on the schema: any string is accepted and flows into the projection and design 03's pricing compile |
 | `expose: public` requires an approval label | **Withdrawn** — the body no longer states it. Recorded here because it was claimed for several rounds: nothing reads such a label, and `visibility` is an enum with a default and no further rule |
 | Tool names unique across Connector facets and `MCPServer` | Enforced nowhere. The rule and the `MCPServer` kind are **owed to design 11 §11**, which records the gap; ADR-0027 has retracted its enforcement claim. A collision is currently possible, and the discriminator-free binding assumes it is not |
@@ -1144,3 +1144,33 @@ A29 (2026-08-29, from `reviews/03-codex-review-r5.md` MAJOR 5, 6, 7) — **three
   | Delete the present-tense branch of the provenance message | `TestARefusalDoesNotRetractTheGatewayReport/the provenance exit` — **SURVIVED** until round 6 found it: only the negative assertion existed, and it passes without the branch |
 
   **Run on k3d.** `make e2e`: 26 PASS, 0 FAIL, and the only SKIPs are the sentinel and the declared-off test. `make test`, `make verify` and `make race` pass.
+- **A78 (2026-09-29, the human's decision in the coordinating session) — `ImageSignatureUnverified` is set, on every Agent.** §3.1 declared the condition and design 07 A2 said "at core, every Agent carries `ImageSignatureUnverified` — the platform states plainly that digests are pinned and signatures are not checked". Nothing set it: the only references in the tree were its declaration and its vocabulary entry, so an Agent read exactly as it would if its image had been verified, which is NFR-8's silent degradation. The human was offered three answers and chose **"Always announce it"**, whose option read: *"Set ImageSignatureUnverified=True on every Agent, saying no signature check runs. That is the truth, and it stops an Agent from looking signed. Small PR, with a test. It is noisy on every Agent until verification is built."* Design 02 owns the condition's semantics, because §3.1 declares it and this operator writes it; design 07 A2 owns the verifier it announces the absence of.
+
+  **What is built, exactly.** `assessImageSignature` (`internal/controller/imagesignature.go`) asserts `ImageSignatureUnverified=True`, reason **`SignatureVerificationNotBuilt`**, from every exit that builds a pass's conditions: the ordinary runtime path (beside the other assessors, before anything can return early), `reconcileExternal`, `reportUnresolvedSources` and `reportUnreconcilable`. A teardown pass and the pass that only adds the finalizer write no conditions and leave it as it stood. The message has three leads and one tail:
+  - a runtime Agent whose `spec.runtime.image` ends in `@sha256:` and 64 lowercase hex says it **is pinned by a sha256 digest**, so the digest says which image runs and not who built it;
+  - a runtime Agent whose image does not says it **is not pinned** and quotes it. That is read from the spec, not assumed from the CEL rule: `helm upgrade` never updates `crds/`, so an install whose CRD predates the digest rule admits a tag, and validation ratcheting keeps an Agent stored before the rule updatable;
+  - an external Agent says assayd runs no image for it, so no digest is pinned here and no signature is checked; an Agent with neither says it names no image.
+
+  The tail says nothing in the install verifies an image signature because the policy-controller binding design 07 A2 chose is not built, that the condition is set on every Agent and **nothing clears it yet**, and that it changes no phase and does not affect `Ready` or `Degraded`. The reason is registered in `internal/refgen/reasons.yaml` with `traffic: not-withdrawn`.
+
+  **How it interacts with readiness, and why it cannot churn.** It is an announcement, not an incident: nothing derives `Ready`, `Degraded` or the phase from it — no code reads conditions generically to decide readiness — so a served Agent stays `Ready=True`, `Available`. It is classified **owned and not sticky**, like `SandboxDowngraded`: the operator is its only writer, so a pass that does not assert it clears it, which is why every exit asserts it and why a later change can retract it by no longer asserting it. Its status is constant, so `merge` keeps its `LastTransitionTime` on every pass, a status-writing pass included, and a converged Agent issues no write. `refuseAdopt`'s wholesale assignment is of `status.auth`, not of conditions, so it does not reach this; the refused-`Adopt` case is pinned anyway.
+
+  **What is not built**, and is not implied by this: design 07 A2's preflight (the version range, the Ready webhook, the namespace opt-in and the enforce-mode `ClusterImagePolicy`), the compliance-profile install failure, and any signature verification at all. There is one reason and it does not branch, because nothing here can tell those absences apart: every one of them is "not built". What would clear the condition is that verifier, built and checked element by element in the namespace an Agent's workload runs in; nothing does yet. It is noisy on every Agent until then, which the human accepted.
+
+  **Tests, and what each mutation killed.** envtest `test/envtest/imagesignature_test.go`: a fresh Agent carries it before and after its workload is available, with `Ready=True/Available`, phase `Ready` and no `Degraded=True`; five passes over a converged Agent issue no write, and a status-writing spec edit a second later leaves its `LastTransitionTime` where it was while its `observedGeneration` follows the edit; an external Agent carries the external wording and keeps `Ready=False/ExternalRegistrationUnimplemented`; an unresolved env source carries it; a served API-key Agent and a refused `Adopt` carry it. Unit: the four message leads, the tag-with-trailing-bytes case, the owned-not-sticky classification through `merge`, and the unreconcilable exit. e2e: `TestTheOperatorRegistersTheCardItFetched`'s Agent, deployed from a registry digest, carries it with the pinned wording. Every mutation was restored from a sha256-verified copy:
+
+  | Mutation | Killed by |
+  |---|---|
+  | Drop the call on the main `Reconcile` path | the fresh-Agent, no-churn and both gateway cases |
+  | Drop it from `reconcileExternal` | the external case |
+  | Drop it from `reportUnresolvedSources` | the unresolved-source case |
+  | Drop it from `reportUnreconcilable` | `TestUnreconcilableAgentDegradesRatherThanPanicking` |
+  | Remove it from `ownedTypes` | `TestImageSignatureUnverifiedClearsOnAPassThatDoesNotAssertIt` |
+  | Add it to `stickyTypes` | the same |
+  | Status `False` | every case |
+  | Treat every runtime image as pinned | the tag and trailing-bytes unit cases |
+  | Drop the `$` anchor from the digest regexp | the trailing-bytes unit case |
+  | Append the time to the message | the no-churn case |
+  | Set `Ready=False` beside it | the external case — **SURVIVED** until that case asserted `Ready`: on the runtime path the later readiness logic overwrites anything the assessor sets |
+  | Set `Degraded=True` beside it | the fresh-Agent case |
+  | Give an external Agent the pinned wording | the external unit and envtest cases |

@@ -5,8 +5,10 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -84,6 +86,14 @@ func TestUnreconcilableAgentDegradesRatherThanPanicking(t *testing.T) {
 	if !found {
 		t.Errorf("no Degraded/NoWorkloadSpecified condition; an error loop with an empty "+
 			"status says nothing to whoever has to fix it. Got: %+v", got.Status.Conditions)
+	}
+	// Design 02 A78 puts ImageSignatureUnverified on EVERY Agent, and this exit
+	// builds its own condition set.
+	if c := meta.FindStatusCondition(got.Status.Conditions,
+		string(assaydv1alpha1.CondImageSignatureUnverified)); c == nil ||
+		c.Status != metav1.ConditionTrue || c.Reason != ReasonSignatureVerificationNotBuilt ||
+		!strings.Contains(c.Message, "names no image") {
+		t.Errorf("an unreconcilable Agent does not announce that no image signature is checked: %+v", c)
 	}
 }
 
