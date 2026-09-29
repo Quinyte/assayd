@@ -9,7 +9,7 @@ What this component owns; what it explicitly does not.
 ## 2. Doctrine & charter gates (mandatory)
 - Plane: slow (engine) / fast (technique) — justify if slow.
 - Socket: provider slot / gateway filter / CRD+controller / template+skill.
-- Pods added: N (justify if >0). Stateful deps touched: none beyond Postgres/NATS?
+- Pods added: N (justify if >0). Stateful deps touched: name each one's ADR-0035 class (substrate, sink or key material), or the ADR-0035 D7 amendment that adds its entry?
 - Primitives used: Agent/Tool/Event/Resource/Artifact only?
 
 ## 3. Interfaces

@@ -1,6 +1,6 @@
 # ADR-0035: NFR-2 has two substrates, one sink and one set of keys; the allowlist matches exactly, counts storage by deny-by-default, and grows only by amendment
 
-- **Status**: **accepted** · 2026-09-29 · **decided by the human on 2026-09-29**, through three questions put to them by the coordinating session, on the third critique's PASS ([`reviews/0035-critique-r3.md`](../designs/reviews/0035-critique-r3.md): 0 BLOCKER, 0 MAJOR, 2 MINOR, both fixed in revision r3). The human took every recommended option: D1(a), D2(a), D3(a), D4(a), D5(c), D6(a) and D7(a). Each heading below quotes the answer. The options not taken are kept as provenance. History: the first critique returned REVISE, 2 BLOCKER, 7 MAJOR, 6 MINOR ([`reviews/0035-critique-r1.md`](../designs/reviews/0035-critique-r1.md)); the second REVISE, 0 BLOCKER, 4 MAJOR, 5 MINOR ([`reviews/0035-critique-r2.md`](../designs/reviews/0035-critique-r2.md)). **The allowlist test the decisions call for is not built yet**: `TestStatefulDependencyAllowlist` still enforces the old substring check, and its replacement is owed in a follow-up PR (Consequences).
+- **Status**: **accepted** · 2026-09-29 · **decided by the human on 2026-09-29**, through four questions put to them by the coordinating session (D1; D2; D3 and D4 together; D5, D6 and D7 together), on the third critique's PASS ([`reviews/0035-critique-r3.md`](../designs/reviews/0035-critique-r3.md): 0 BLOCKER, 0 MAJOR, 2 MINOR, both fixed in revision r3). The human took every recommended option: D1(a), D2(a), D3(a), D4(a), D5(c), D6(a) and D7(a). Each heading below quotes the answer. The options not taken are kept as provenance. History: the first critique returned REVISE, 2 BLOCKER, 7 MAJOR, 6 MINOR ([`reviews/0035-critique-r1.md`](../designs/reviews/0035-critique-r1.md)); the second REVISE, 0 BLOCKER, 4 MAJOR, 5 MINOR ([`reviews/0035-critique-r2.md`](../designs/reviews/0035-critique-r2.md)). **The allowlist test the decisions call for is not built yet**: `TestStatefulDependencyAllowlist` still enforces the old substring check, and its replacement is owed in a follow-up PR (Consequences).
 - **D1(a) is an exception to ADR-0002 rule 2** ("Postgres + NATS are the only stateful deps"), not a refinement of it. ADR-0002's Decision is not edited; its Amendment 1 points here.
 
 ## Context
@@ -39,10 +39,10 @@ What the corpus and the upstream charts say, found by grepping `docs/designs` an
 
 The classes are defined by **authority**, not by uniqueness.
 
-- A **decision** is a write the platform makes to a platform object: a promotion, a rollback, an admission verdict, or a condition on a CR. **Paging is not a decision**, because an alert asks a human to act. The human took this with D1(a); the list below shows what counting paging would have cost.
+- A **decision** is a write the platform makes to a platform object: a promotion, a rollback, an admission verdict, or a condition on a CR. **Paging is not a decision**, because an alert asks a human to act. The exclusion was put to the human in the text of the option they chose: D1(a)'s description read, in part, "Paging is not a decision." The list below shows what counting paging would have cost.
 - A **substrate** is a store the platform reads to take a decision, or to answer an audit question.
 - A **sink** is a store nothing takes a decision or an audit answer from. Losing it loses graphs and pages, never audit (design 10 §2). A sink can hold data found nowhere else, as OpenObserve does for interior spans.
-- **Key material** is a store whose contents sign, and are never read to decide. It is a class only if D2(a) is taken.
+- **Key material** is a store whose contents sign, and are never read to decide. It is a class because D2(a) was taken.
 - The **API server** is none of these. It is Kubernetes itself, a given of NFR-3, and outside NFR-2.
 
 The options:
@@ -65,7 +65,9 @@ So under (a), design 20 and whatever "rollout observe" becomes must take their s
 
 **What (a) made false**, corrected on 2026-09-29 with the decision:
 
-- `architecture.md` §01 rule 2 and `architecture.html`'s "Two stateful deps, ever";
+- `architecture.md` §01 rule 2 and `architecture.html`'s "Two stateful deps, ever", and the HTML overview's "The substrate is the two stateful dependencies";
+- the `07-what-runs` plate's footer in `docs/diagrams/prompts.md`, annotated;
+- `docs/designs/TEMPLATE.md`'s stateful-deps prompt, and `docs/web/information-architecture.md` row 15, annotated;
 - AGENTS.md's doctrine line "Postgres+NATS only";
 - design 07 §2, for `stateful-allowlist.yaml` and "one less PVC";
 - NFR-2.
@@ -83,7 +85,7 @@ The keys do not fit D1's substrate: SVIDs are verified against the trust bundle,
 - (c) A KMS key manager. The chart offers `awsKMS`, among others. The key then lives in an external, cloud-specific service, so D6 applies, and it conflicts with NFR-3's "no managed-identity assumptions in core".
 - **Not an option**: filing the keys as substrate. That would make D1(a)'s "only stateful substrate" false on arrival.
 
-Whichever option is taken, the chart's SPIRE values must be set to match it. Left at their defaults, the first real work of NFR-2's check is to refuse `assayd-server`, under today's test and under D4(a).
+D2(a) was taken, so the chart's SPIRE values must keep `keyManager.disk` and `pvc` persistence, and the allowlist must admit that PVC as key material. Without that entry, the first real work of NFR-2's check is to refuse `assayd-server`, under today's test and under D4(a).
 
 ## D3 — Matching — DECIDED: (a)
 
@@ -174,5 +176,6 @@ The options:
   3. **Each entry** carries its class, its reason, its keys under D3(a), and a heading reference checked against this file.
   4. **Every named object must be rendered**, so a renamed subchart cannot leave an entry standing unused. The count of stateful objects read is logged. It prints only under `-v`, because `make chart` runs without it, so the fixtures, not the log, are what show that the check is not vacuous.
   5. **D2(a) and D6(a) add entries**: SPIRE's key PVC as key material when the SPIRE subchart lands, and any external store the platform writes its records to.
+- **Owed by the follow-up test PR, beyond the rewrite**: `codeOf` in `operator_storage_test.go` resets raw-string state on every line, so a `/*` inside a multi-line backtick string opens a block that blinds the scan to the lines after it (the record check's probe P8 survived). The follow-up must carry raw-string state across lines, or state the gap in the test and here.
 - **Still open, and owed**: design 20's rollback and "rollout observe" (D1); what SPIRE does when its key file is lost (D2); and Context's three plus-tier rows, Phoenix, OpenFGA's datastore and Argo's storage, which the change that makes plus render must settle.
 - **Revisit** when the chart first renders a subchart. That is when the vacuous pass ends.

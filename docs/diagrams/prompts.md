@@ -59,7 +59,7 @@ Workflow→Agent `steps` · Model→EvalSuite `gates`. Gold beat: Agent.
 Three chip-tray bands. CORE (gold-tint wash, "8 pods"): **gold `agent-operator` chip** captioned
 "the only assayd code", then agentgateway · SPIRE · Zitadel · NATS · Postgres · OpenObserve.
 PLUS: workflow-operator · workflow-runtime · OpenFGA · model-operator · Argo.
-ENTERPRISE: tenant-operator · compliance packs. Footer: "two stateful dependencies: Postgres and NATS".
+ENTERPRISE: tenant-operator · compliance packs. Footer: "two stateful dependencies: Postgres and NATS". *Superseded by ADR-0035 (2026-09-29): Postgres and NATS are the only stateful substrate, OpenObserve the only sink, SPIRE's CA keys the only key material. A regenerated plate should say so.*
 Gold beat: agent-operator.
 
 ## 08 — Agent rollout lifecycle (16:9)
