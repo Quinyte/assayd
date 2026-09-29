@@ -561,7 +561,7 @@ An earlier revision of this document listed 22 claims in the corpus as false or 
 | # | Old finding | Now |
 |---|---|---|
 | 14 | "Each requirement is testable; NFRs are release gates" | **Fixed in the document's opening.** Both halves withdrawn, with the grep result stated: a standalone `FR-` id returns **zero** matches across `api/ internal/ cmd/ test/ config/ charts/ hack/`, and every apparent hit is a substring of `NFR-`. |
-| 15 | NFR-2's "only stateful dependencies, **ever**" | **Fixed in NFR-2's row** — the enforced rule is named as an allowlist of three, with `openobserve` recorded in the test as "observability sink, not substrate". |
+| 15 | NFR-2's "only stateful dependencies, **ever**" | **Fixed in NFR-2's row** — the enforced rule is named as an allowlist of three, with `openobserve` recorded in the test as "observability sink, not substrate". *(2026-09-29: NFR-2 now carries ADR-0035's decided wording — Postgres and NATS the only substrate, OpenObserve the only sink, SPIRE's CA keys the only key material — and the test rewrite is owed.)* |
 | 16 | NFR-3's "full e2e on k3d + kind" | **Fixed in NFR-3's row** — "**Two distros are exercised, and only one of them fully.**" |
 | 17 | NFR-7's installable `plus` | **Fixed in NFR-7's row** — "**`plus` does not render at all today**, so this requirement is unmet". |
 
