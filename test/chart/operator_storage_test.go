@@ -4,6 +4,8 @@
 package chart
 
 import (
+	"go/scanner"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -169,49 +171,59 @@ var volumeToken = regexp.MustCompile(`(?i)\bvolumes"?\s*:(?:[^=]|$)|"volumes"|\.
 // operator gives its pods no volume at all.
 var volumeExempt = map[string]string{}
 
-// codeOf returns the part of a line that is not a comment. In Go it drops
-// `//` comments and `/* … */` comments, tracking a block across lines in
-// *inBlock, and it tracks string literals so that `//` or `/*` inside one is
-// kept. A line that begins with `*` is code unless a block is open: `*dst = …`
-// is a pointer dereference, not a comment. In any other file a line that
-// begins with `#` is dropped.
-func codeOf(line string, goFile bool, inBlock *bool) string {
-	trimmed := strings.TrimSpace(line)
+// withoutComments returns a file's text with its comments blanked. A Go file
+// is read by go/scanner, the lexer go/parser uses, so a `//`
+// or `/*` inside any string, rune or multi-line raw string is kept, and a
+// block comment that spans lines is blanked on every one of them. Newlines
+// are kept, so line numbers hold. In any other file, a line that begins with
+// `#` is blanked.
+//
+// A hand-written lexer stood here until ADR-0035's follow-up. It reset its
+// raw-string state on every line, so a `/*` inside a multi-line raw string
+// opened a block that hid every line after it, and a rune literal holding a
+// backtick or a quote, or a string ending in an escaped backslash, did the
+// same (the record check's probe P8, and the follow-up's review).
+func withoutComments(src []byte, goFile bool) string {
+	out := []byte(string(src))
 	if !goFile {
-		if strings.HasPrefix(trimmed, "#") {
-			return ""
-		}
-		return trimmed
-	}
-	var out strings.Builder
-	inString, inRaw := false, false
-	for i := 0; i < len(trimmed); i++ {
-		c := trimmed[i]
-		next := byte(0)
-		if i+1 < len(trimmed) {
-			next = trimmed[i+1]
-		}
-		switch {
-		case *inBlock:
-			if c == '*' && next == '/' {
-				*inBlock = false
-				i++
+		lines := strings.Split(string(out), "\n")
+		for i, l := range lines {
+			if strings.HasPrefix(strings.TrimSpace(l), "#") {
+				lines[i] = ""
 			}
-			continue
-		case c == '`' && !inString:
-			inRaw = !inRaw
-		case c == '"' && !inRaw && (i == 0 || trimmed[i-1] != '\\'):
-			inString = !inString
-		case c == '/' && next == '/' && !inString && !inRaw:
-			return strings.TrimSpace(out.String())
-		case c == '/' && next == '*' && !inString && !inRaw:
-			*inBlock = true
-			i++
+		}
+		return strings.Join(lines, "\n")
+	}
+	fset := token.NewFileSet()
+	file := fset.AddFile("", fset.Base(), len(src))
+	var sc scanner.Scanner
+	// Errors are ignored: a file the scanner cannot lex is still read, and at
+	// worst a comment in it is read as code, which over-reads.
+	sc.Init(file, src, func(token.Position, string) {}, scanner.ScanComments)
+	for {
+		pos, tok, _ := sc.Scan()
+		if tok == token.EOF {
+			break
+		}
+		if tok != token.COMMENT {
 			continue
 		}
-		out.WriteByte(c)
+		start := file.Offset(pos)
+		end := len(src)
+		if strings.HasPrefix(string(src[start:]), "//") {
+			if n := strings.IndexByte(string(src[start:]), '\n'); n >= 0 {
+				end = start + n
+			}
+		} else if n := strings.Index(string(src[start+2:]), "*/"); n >= 0 {
+			end = start + 2 + n + 2
+		}
+		for k := start; k < end; k++ {
+			if out[k] != '\n' {
+				out[k] = ' '
+			}
+		}
 	}
-	return strings.TrimSpace(out.String())
+	return string(out)
 }
 
 // volumeUses scans every regular file under the roots, except _test.go files
@@ -240,9 +252,8 @@ func volumeUses(t *testing.T, exempt map[string]string, roots ...string) []strin
 				return err
 			}
 			rel := filepath.ToSlash(path)
-			inBlock := false
-			for i, line := range strings.Split(string(src), "\n") {
-				code := codeOf(line, strings.HasSuffix(path, ".go"), &inBlock)
+			for i, line := range strings.Split(withoutComments(src, strings.HasSuffix(path, ".go")), "\n") {
+				code := strings.TrimSpace(line)
 				if code == "" || !volumeToken.MatchString(code) {
 					continue
 				}
@@ -311,10 +322,28 @@ func TestVolumeUsesFindsAPlantedVolume(t *testing.T) {
 	write("deref.go", "package x\nfunc f(dst, src *corev1.PodSpec) {\n\t*dst = corev1.PodSpec{Volumes: src.Volumes}\n}\n")
 	write("block.go", "package x\n/*\n * a PersistentVolumeClaim is not created here,\n * nor a hostPath.\n */\nvar z = 1 /* nor volumes: here */\n")
 	write("shortvar.go", "package x\nfunc g() int { volumes := 3; return volumes }\n")
+	// A `/*` inside a multi-line raw string is string content. Read as a block
+	// it would hide the volume two lines below it, and no `*/` ever closes it.
+	write("rawstring.go", "package x\nconst doc = `\n/* inside a raw string\n`\nvar after = corev1.Volume{Name: \"after\"}\n")
+	// The review's three shapes that hid a line from a hand-written lexer: a
+	// rune holding a backtick, a string ending in an escaped backslash, and a
+	// rune holding a quote, each before a multi-line raw string holding `/*`.
+	write("runetick.go", "package x\nvar r = '`'\nconst doc = `\n/*\n`\nvar after = corev1.Volume{Name: \"after\"}\n")
+	write("escslash.go", "package x\nvar q = \"\\\\\"; const doc = `\n/*\n`\nvar after = corev1.Volume{Name: \"after\"}\n")
+	write("runequote.go", "package x\nvar r = '\"'; const doc = `\n/*\n`\nvar after = corev1.Volume{Name: \"after\"}\n")
+	// A `//` on a line inside a raw string is string content, and so is the
+	// pod overlay after it.
+	write("rawslashes.go", "package x\nconst j = `\n// \"volumes\": []\n`\n")
+	// Blanking stops where a comment ends and keeps its newlines: a volume
+	// after a `//` line, after a multi-line block, and after a `*/` on its own
+	// line is found, at its own line number.
+	write("ends.go", "package x\n// a header\nvar a = corev1.Volume{Name: \"a\"}\n/*\nblock\n*/\n"+
+		"var b = corev1.Volume{Name: \"b\"}\n/* inline */ var c = corev1.Volume{Name: \"c\"}\n")
 
 	got := volumeUses(t, nil, dir)
-	if len(got) != 7 {
-		t.Errorf("found %d hits, want 7 (typed, unstructured, decoded, embedded, two.go twice, deref):\n%s",
+	if len(got) != 15 {
+		t.Errorf("found %d hits, want 15 (typed, unstructured, decoded, embedded, two.go twice, deref, "+
+			"rawstring, runetick, escslash, runequote, rawslashes, ends.go three times):\n%s",
 			len(got), strings.Join(got, "\n"))
 	}
 	for _, h := range got {
@@ -330,6 +359,16 @@ func TestVolumeUsesFindsAPlantedVolume(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("a pointer dereference that sets Volumes was dropped as a comment: %v", got)
+	}
+	for _, want := range []string{"rawstring.go:5:", "runetick.go:6:", "escslash.go:5:", "runequote.go:5:", "rawslashes.go:3:",
+		"ends.go:3:", "ends.go:7:", "ends.go:8:"} {
+		hit := false
+		for _, h := range got {
+			hit = hit || strings.Contains(h, "/"+want)
+		}
+		if !hit {
+			t.Errorf("%s was not found: a string or rune was read as opening a comment and hid it: %v", want, got)
+		}
 	}
 
 	exempt := map[string]string{filepath.ToSlash(filepath.Join(dir, "two.go")) + `|var a = corev1.Volume{Name: "cm"}`: "D5"}
