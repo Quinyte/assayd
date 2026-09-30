@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -377,7 +378,7 @@ func TestStatefulDependencyAllowlist(t *testing.T) {
 		t.Fatal("the union holds no CustomResourceDefinition from assayd/crds/, so crds/ was not read")
 	}
 
-	problems, stateful := checkStatefulAllowlist(union, statefulAllowlist, hostPathExempt, headings)
+	problems, stateful := checkStatefulAllowlist(union, statefulAllowlist, hostPathExempt, entryAmendments, headings)
 	for _, p := range problems {
 		t.Error(p)
 	}
@@ -566,7 +567,7 @@ func admitted(key objectKey, allow []statefulEntry) bool {
 // checkStatefulAllowlist reads the union of rendered documents and returns
 // every problem, and the number of distinct stateful objects it read. An
 // object rendered by more than one row of the matrix is one object.
-func checkStatefulAllowlist(docs []sourcedDoc, allow []statefulEntry, exempt []hostPathExemption,
+func checkStatefulAllowlist(docs []sourcedDoc, allow []statefulEntry, exempt []hostPathExemption, entryAmends map[string]bool,
 	headings map[string]bool) (problems []string, stateful int) {
 	for _, e := range allow {
 		if e.key.source == "" || e.key.kind == "" || e.key.name == "" {
@@ -580,20 +581,20 @@ func checkStatefulAllowlist(docs []sourcedDoc, allow []statefulEntry, exempt []h
 		if strings.TrimSpace(e.reason) == "" {
 			problems = append(problems, fmt.Sprintf("allowlist entry %s gives no reason", e.key))
 		}
-		if !citable(e.decision, entryDecisions, headings) {
+		if !citable(e.decision, entryDecisions, headings, entryAmends) {
 			problems = append(problems, fmt.Sprintf("allowlist entry %s cites %q: an entry may cite only "+
-				"D1, D2 or an existing `## Amendment N` of ADR-0035 recording the human's decision, and "+
-				"not a rule-only amendment such as Amendment 1 (ADR-0035 Amendment 1)", e.key, e.decision))
+				"D1, D2 or a `## Amendment N` of ADR-0035 that entryAmendments classifies as deciding an "+
+				"entry; a rule-only or unclassified amendment is not citable (ADR-0035 Amendment 1)", e.key, e.decision))
 		}
 	}
 	for _, e := range exempt {
 		if strings.TrimSpace(e.reason) == "" {
 			problems = append(problems, fmt.Sprintf("hostPath exemption %s volume %q gives no reason", e.key, e.volume))
 		}
-		if !citable(e.decision, exemptionDecisions, headings) {
+		if !citable(e.decision, exemptionDecisions, headings, entryAmends) {
 			problems = append(problems, fmt.Sprintf("hostPath exemption %s volume %q cites %q: an exemption "+
-				"may cite only D4 or an existing `## Amendment N` of ADR-0035, and not a rule-only amendment "+
-				"such as Amendment 1 (ADR-0035 Amendment 1)",
+				"may cite only D4 or a `## Amendment N` of ADR-0035 that entryAmendments classifies as "+
+				"deciding an entry; a rule-only or unclassified amendment is not citable (ADR-0035 Amendment 1)",
 				e.key, e.volume, e.decision))
 		}
 	}
@@ -634,21 +635,73 @@ func checkStatefulAllowlist(docs []sourcedDoc, allow []statefulEntry, exempt []h
 }
 
 // entryDecisions and exemptionDecisions are the D-headings ADR-0035
-// Amendment 1 lets an entry and an exemption cite. An existing "Amendment N"
-// is citable too, unless it is in ruleOnlyAmendments: an amendment that
-// changes a rule decides no entry, and citing it would let any dependency
-// pass with no decision, reopening the hole Amendment 1 closed.
+// Amendment 1 lets an entry and an exemption cite. Every `## Amendment N` of
+// ADR-0035 is classified in exactly one of ruleOnlyAmendments, for an
+// amendment that changes a rule and decides no entry, and entryAmendments,
+// for one that decides an entry or an exemption. Only an amendment in
+// entryAmendments is citable, so a new amendment is not citable until someone
+// classifies it: the step fails closed. TestEveryADR0035AmendmentIsClassified
+// fails on an amendment in neither set, or in both.
 var (
 	entryDecisions     = map[string]bool{"D1": true, "D2": true}
 	exemptionDecisions = map[string]bool{"D4": true}
 	ruleOnlyAmendments = map[string]bool{"Amendment 1": true}
+	entryAmendments    = map[string]bool{}
 )
 
-func citable(decision string, allowed, headings map[string]bool) bool {
-	if !headings[decision] || ruleOnlyAmendments[decision] {
-		return false
+func citable(decision string, allowed, headings, entryAmends map[string]bool) bool {
+	return headings[decision] && (allowed[decision] || entryAmends[decision])
+}
+
+// amendmentClassification returns a problem for each `## Amendment N` heading
+// in neither set or in both, and for each classified amendment that names no
+// heading.
+func amendmentClassification(headings, ruleOnly, entry map[string]bool) []string {
+	var problems []string
+	for h := range headings {
+		if !strings.HasPrefix(h, "Amendment ") {
+			continue
+		}
+		switch {
+		case ruleOnly[h] && entry[h]:
+			problems = append(problems, fmt.Sprintf("%s of ADR-0035 is in both ruleOnlyAmendments and "+
+				"entryAmendments: classify %s as rule-only or entry-deciding in test/chart/chart_test.go", h, h))
+		case !ruleOnly[h] && !entry[h]:
+			problems = append(problems, fmt.Sprintf("%s of ADR-0035 is unclassified: classify %s as "+
+				"rule-only or entry-deciding in test/chart/chart_test.go", h, h))
+		}
 	}
-	return allowed[decision] || strings.HasPrefix(decision, "Amendment ")
+	for _, set := range []map[string]bool{ruleOnly, entry} {
+		for a := range set {
+			if !headings[a] {
+				problems = append(problems, fmt.Sprintf("%s is classified in test/chart/chart_test.go but is "+
+					"not a heading of ADR-0035: remove it", a))
+			}
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+func TestEveryADR0035AmendmentIsClassified(t *testing.T) {
+	for _, p := range amendmentClassification(adrHeadings(t), ruleOnlyAmendments, entryAmendments) {
+		t.Error(p)
+	}
+}
+
+func TestAmendmentClassificationOnFixtures(t *testing.T) {
+	headings := map[string]bool{"D1": true, "Amendment 1": true, "Amendment 2": true, "Amendment 3": true, "Amendment 4": true}
+	ruleOnly := map[string]bool{"Amendment 1": true, "Amendment 4": true}
+	entry := map[string]bool{"Amendment 2": true, "Amendment 4": true, "Amendment 9": true}
+	got := amendmentClassification(headings, ruleOnly, entry)
+	want := []string{
+		"Amendment 3 of ADR-0035 is unclassified: classify Amendment 3 as rule-only or entry-deciding in test/chart/chart_test.go",
+		"Amendment 4 of ADR-0035 is in both ruleOnlyAmendments and entryAmendments: classify Amendment 4 as rule-only or entry-deciding in test/chart/chart_test.go",
+		"Amendment 9 is classified in test/chart/chart_test.go but is not a heading of ADR-0035: remove it",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("classification problems:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
 }
 
 const adr0035 = "../../docs/decisions/0035-nfr2-stateful-dependency-allowlist.md"
@@ -803,6 +856,8 @@ func TestStatefulAllowlistOnFixtures(t *testing.T) {
 		{natsKey, substrate, "the platform's NATS JetStream", "D1"},
 		{objectKey{"assayd/charts/gone/templates/statefulset.yaml", "StatefulSet", "assayd-gone"}, sink, "renamed away", "Amendment 2"},
 		{objectKey{"assayd/charts/x/templates/h.yaml", "StatefulSet", "rule-cited"}, substrate, "Amendment 1 is a rule", "Amendment 1"},
+		{objectKey{"assayd/charts/x/templates/j.yaml", "StatefulSet", "unclassified-cited"}, substrate, "nobody classified it", "Amendment 3"},
+		{objectKey{"assayd/charts/x/templates/k.yaml", "StatefulSet", "headingless-cited"}, substrate, "classified, never written", "Amendment 5"},
 		{objectKey{"assayd/charts/x/templates/e.yaml", "StatefulSet", "matching-cited"}, substrate, "D3 decided matching, not an entry", "D3"},
 		{objectKey{"assayd/charts/x/templates/a.yaml", "StatefulSet", "undecided"}, substrate, "no amendment", "Amendment 99"},
 		{objectKey{"assayd/charts/x/templates/b.yaml", "StatefulSet", "cache"}, "cache", "", "D1"},
@@ -821,11 +876,16 @@ func TestStatefulAllowlistOnFixtures(t *testing.T) {
 		{objectKey{"assayd/charts/x/templates/g.yaml", "DaemonSet", "amended"}, "v", "/p", "an amendment", "Amendment 2"},
 		{objectKey{"assayd/charts/x/templates/i.yaml", "DaemonSet", "rule-cited"}, "v", "/p", "Amendment 1 is a rule", "Amendment 1"},
 	}
-	// Amendment 2 does not exist in ADR-0035; it stands for a future amendment
-	// that decides an entry, so the fixture does not depend on one being written.
+	// Amendments 2 and 3 do not exist in ADR-0035. Amendment 2 stands for a
+	// future amendment classified as deciding an entry; Amendment 3 for one
+	// nobody has classified yet, which must not be citable.
 	headings := adrHeadings(t)
 	headings["Amendment 2"] = true
-	problems, stateful := checkStatefulAllowlist(docs, allow, exempt, headings)
+	headings["Amendment 3"] = true
+	// Amendment 5 is classified but has no heading, as a stale classification
+	// would be; citing it must still be refused.
+	fixtureEntryAmendments := map[string]bool{"Amendment 2": true, "Amendment 5": true}
+	problems, stateful := checkStatefulAllowlist(docs, allow, exempt, fixtureEntryAmendments, headings)
 
 	wantStateful := 0
 	for i, r := range rows {
@@ -856,6 +916,8 @@ func TestStatefulAllowlistOnFixtures(t *testing.T) {
 		`allowlist entry StatefulSet "undecided" (assayd/charts/x/templates/a.yaml) cites "Amendment 99": an entry may cite only`,
 		`allowlist entry StatefulSet "matching-cited" (assayd/charts/x/templates/e.yaml) cites "D3": an entry may cite only`,
 		`allowlist entry StatefulSet "rule-cited" (assayd/charts/x/templates/h.yaml) cites "Amendment 1": an entry may cite only`,
+		`allowlist entry StatefulSet "unclassified-cited" (assayd/charts/x/templates/j.yaml) cites "Amendment 3": an entry may cite only`,
+		`allowlist entry StatefulSet "headingless-cited" (assayd/charts/x/templates/k.yaml) cites "Amendment 5": an entry may cite only`,
 		`hostPath exemption DaemonSet "rule-cited" (assayd/charts/x/templates/i.yaml) volume "v" cites "Amendment 1": an exemption may cite only`,
 		`has class "cache"`,
 		`allowlist entry StatefulSet "sourceless" () does not name its object by source, kind and name`,
@@ -887,7 +949,7 @@ func TestStatefulAllowlistOnFixtures(t *testing.T) {
 
 	// A document without a `# Source:` line cannot be named by any entry.
 	if p, _ := checkStatefulAllowlist(parseRendered(t, "---\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"),
-		nil, nil, adrHeadings(t)); len(p) != 1 || !strings.Contains(p[0], "no `# Source:` line") {
+		nil, nil, nil, adrHeadings(t)); len(p) != 1 || !strings.Contains(p[0], "no `# Source:` line") {
 		t.Errorf("a document with no Source line was not reported: %v", p)
 	}
 }
@@ -987,7 +1049,7 @@ func TestCRDsDirectoriesAreRead(t *testing.T) {
 			len(docs), len(want), got)
 	}
 
-	problems, stateful := checkStatefulAllowlist(docs, nil, nil, adrHeadings(t))
+	problems, stateful := checkStatefulAllowlist(docs, nil, nil, nil, adrHeadings(t))
 	if stateful != 5 || len(problems) != 5 {
 		t.Errorf("want the five stateful objects under crds/ refused, got %d stateful and problems:\n%s",
 			stateful, strings.Join(problems, "\n"))
