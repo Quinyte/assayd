@@ -168,6 +168,18 @@ func crdDocs(t *testing.T, dir string) []sourcedDoc {
 	return crdDocsOf(t, files, filepath.Base(dir))
 }
 
+// shippedCRDs is crdDocs for this chart, which ships the Agent CRD in crds/,
+// so an empty result means the reader is broken and every test that relies on
+// it would pass by reading nothing.
+func shippedCRDs(t *testing.T) []sourcedDoc {
+	t.Helper()
+	docs := crdDocs(t, chartPath)
+	if len(docs) == 0 {
+		t.Fatal("read no document under the chart's crds/, which ships the Agent CRD: the reader is broken")
+	}
+	return docs
+}
+
 // crdDocsOf reads crds/ from one chart's files, keyed by path relative to the
 // chart, and recurses into charts/.
 func crdDocsOf(t *testing.T, files map[string][]byte, prefix string) []sourcedDoc {
@@ -257,8 +269,13 @@ func TestCorePodBudget(t *testing.T) {
 	// `helm install` also creates what is under crds/, in the chart and its
 	// subcharts, and `helm template` does not print it, so it is counted too.
 	docs := render(t)
-	for _, d := range crdDocs(t, chartPath) {
+	for _, d := range shippedCRDs(t) {
 		docs = append(docs, d.doc)
+	}
+	// `helm template` prints no CRD, so a CRD here is what shows crds/ was
+	// read: without it, a Deployment under crds/ would go uncounted.
+	if len(kindsOf(docs, "CustomResourceDefinition")) == 0 {
+		t.Fatal("the budget read no CustomResourceDefinition, so it did not read crds/, where the Agent CRD ships")
 	}
 
 	total := 0
@@ -345,11 +362,7 @@ func TestStatefulDependencyAllowlist(t *testing.T) {
 
 	// crds/ is values-independent, so it is read once. The CRDs there today are
 	// CustomResourceDefinitions, which hold no storage.
-	crds := crdDocs(t, chartPath)
-	if len(crds) == 0 {
-		t.Fatal("read no document under the chart's crds/, which ships the Agent CRD: the reader is broken")
-	}
-	union = append(union, crds...)
+	union = append(union, shippedCRDs(t)...)
 
 	problems, stateful := checkStatefulAllowlist(union, statefulAllowlist, hostPathExempt, headings)
 	for _, p := range problems {
