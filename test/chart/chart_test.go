@@ -146,7 +146,11 @@ func flattenLists(d sourcedDoc) []sourcedDoc {
 // `.tgz`, not by the name in its Chart.yaml. `helm package` writes the chart
 // under its own name, so the two agree for anything Helm packaged; a tarball
 // built by hand with another top directory would get another key, and an
-// entry written for Helm's name would not match it.
+// entry written for Helm's name would not match it. Likewise an unpacked
+// subchart is keyed by its directory name, not by a dependency alias; every
+// subchart is read whether or not a condition disables it, and `.helmignore`
+// is not applied, both of which over-read; and a symlinked directory is not
+// followed but read as a file, which fails the test outright.
 func crdDocs(t *testing.T, dir string) []sourcedDoc {
 	t.Helper()
 	files := map[string][]byte{}
@@ -363,6 +367,15 @@ func TestStatefulDependencyAllowlist(t *testing.T) {
 	// crds/ is values-independent, so it is read once. The CRDs there today are
 	// CustomResourceDefinitions, which hold no storage.
 	union = append(union, shippedCRDs(t)...)
+	// `helm template` prints no CRD, so the chart's own CRD in the union is
+	// what shows crds/ was read.
+	readCRDs := false
+	for _, d := range union {
+		readCRDs = readCRDs || (toStr(d.doc["kind"]) == "CustomResourceDefinition" && strings.HasPrefix(d.source, "assayd/crds/"))
+	}
+	if !readCRDs {
+		t.Fatal("the union holds no CustomResourceDefinition from assayd/crds/, so crds/ was not read")
+	}
 
 	problems, stateful := checkStatefulAllowlist(union, statefulAllowlist, hostPathExempt, headings)
 	for _, p := range problems {
@@ -569,8 +582,8 @@ func checkStatefulAllowlist(docs []sourcedDoc, allow []statefulEntry, exempt []h
 		}
 		if !citable(e.decision, entryDecisions, headings) {
 			problems = append(problems, fmt.Sprintf("allowlist entry %s cites %q: an entry may cite only "+
-				"D1, D2 or an existing `## Amendment N` of ADR-0035 recording the human's decision "+
-				"(ADR-0035 Amendment 1)", e.key, e.decision))
+				"D1, D2 or an existing `## Amendment N` of ADR-0035 recording the human's decision, and "+
+				"not a rule-only amendment such as Amendment 1 (ADR-0035 Amendment 1)", e.key, e.decision))
 		}
 	}
 	for _, e := range exempt {
@@ -579,7 +592,8 @@ func checkStatefulAllowlist(docs []sourcedDoc, allow []statefulEntry, exempt []h
 		}
 		if !citable(e.decision, exemptionDecisions, headings) {
 			problems = append(problems, fmt.Sprintf("hostPath exemption %s volume %q cites %q: an exemption "+
-				"may cite only D4 or an existing `## Amendment N` of ADR-0035 (ADR-0035 Amendment 1)",
+				"may cite only D4 or an existing `## Amendment N` of ADR-0035, and not a rule-only amendment "+
+				"such as Amendment 1 (ADR-0035 Amendment 1)",
 				e.key, e.volume, e.decision))
 		}
 	}
@@ -620,15 +634,21 @@ func checkStatefulAllowlist(docs []sourcedDoc, allow []statefulEntry, exempt []h
 }
 
 // entryDecisions and exemptionDecisions are the D-headings ADR-0035
-// Amendment 1 lets an entry and an exemption cite; an existing
-// "Amendment N" is always citable.
+// Amendment 1 lets an entry and an exemption cite. An existing "Amendment N"
+// is citable too, unless it is in ruleOnlyAmendments: an amendment that
+// changes a rule decides no entry, and citing it would let any dependency
+// pass with no decision, reopening the hole Amendment 1 closed.
 var (
 	entryDecisions     = map[string]bool{"D1": true, "D2": true}
 	exemptionDecisions = map[string]bool{"D4": true}
+	ruleOnlyAmendments = map[string]bool{"Amendment 1": true}
 )
 
 func citable(decision string, allowed, headings map[string]bool) bool {
-	return headings[decision] && (allowed[decision] || strings.HasPrefix(decision, "Amendment "))
+	if !headings[decision] || ruleOnlyAmendments[decision] {
+		return false
+	}
+	return allowed[decision] || strings.HasPrefix(decision, "Amendment ")
 }
 
 const adr0035 = "../../docs/decisions/0035-nfr2-stateful-dependency-allowlist.md"
@@ -781,7 +801,8 @@ func TestStatefulAllowlistOnFixtures(t *testing.T) {
 	natsKey := objectKey{natsSrc, "StatefulSet", "assayd-nats"}
 	allow := []statefulEntry{
 		{natsKey, substrate, "the platform's NATS JetStream", "D1"},
-		{objectKey{"assayd/charts/gone/templates/statefulset.yaml", "StatefulSet", "assayd-gone"}, sink, "renamed away", "Amendment 1"},
+		{objectKey{"assayd/charts/gone/templates/statefulset.yaml", "StatefulSet", "assayd-gone"}, sink, "renamed away", "Amendment 2"},
+		{objectKey{"assayd/charts/x/templates/h.yaml", "StatefulSet", "rule-cited"}, substrate, "Amendment 1 is a rule", "Amendment 1"},
 		{objectKey{"assayd/charts/x/templates/e.yaml", "StatefulSet", "matching-cited"}, substrate, "D3 decided matching, not an entry", "D3"},
 		{objectKey{"assayd/charts/x/templates/a.yaml", "StatefulSet", "undecided"}, substrate, "no amendment", "Amendment 99"},
 		{objectKey{"assayd/charts/x/templates/b.yaml", "StatefulSet", "cache"}, "cache", "", "D1"},
@@ -797,9 +818,14 @@ func TestStatefulAllowlistOnFixtures(t *testing.T) {
 		{objectKey{"assayd/charts/x/templates/c.yaml", "DaemonSet", "no-reason"}, "v", "/p", "", "D4"},
 		{objectKey{"assayd/charts/x/templates/d.yaml", "DaemonSet", "undecided"}, "v", "/p", "a reason", "Amendment 99"},
 		{objectKey{"assayd/charts/x/templates/f.yaml", "DaemonSet", "classes-cited"}, "v", "/p", "D1 decided classes", "D1"},
-		{objectKey{"assayd/charts/x/templates/g.yaml", "DaemonSet", "amended"}, "v", "/p", "an amendment", "Amendment 1"},
+		{objectKey{"assayd/charts/x/templates/g.yaml", "DaemonSet", "amended"}, "v", "/p", "an amendment", "Amendment 2"},
+		{objectKey{"assayd/charts/x/templates/i.yaml", "DaemonSet", "rule-cited"}, "v", "/p", "Amendment 1 is a rule", "Amendment 1"},
 	}
-	problems, stateful := checkStatefulAllowlist(docs, allow, exempt, adrHeadings(t))
+	// Amendment 2 does not exist in ADR-0035; it stands for a future amendment
+	// that decides an entry, so the fixture does not depend on one being written.
+	headings := adrHeadings(t)
+	headings["Amendment 2"] = true
+	problems, stateful := checkStatefulAllowlist(docs, allow, exempt, headings)
 
 	wantStateful := 0
 	for i, r := range rows {
@@ -829,6 +855,8 @@ func TestStatefulAllowlistOnFixtures(t *testing.T) {
 		`StatefulSet "assayd-gone" (assayd/charts/gone/templates/statefulset.yaml) matches no stateful object`,
 		`allowlist entry StatefulSet "undecided" (assayd/charts/x/templates/a.yaml) cites "Amendment 99": an entry may cite only`,
 		`allowlist entry StatefulSet "matching-cited" (assayd/charts/x/templates/e.yaml) cites "D3": an entry may cite only`,
+		`allowlist entry StatefulSet "rule-cited" (assayd/charts/x/templates/h.yaml) cites "Amendment 1": an entry may cite only`,
+		`hostPath exemption DaemonSet "rule-cited" (assayd/charts/x/templates/i.yaml) volume "v" cites "Amendment 1": an exemption may cite only`,
 		`has class "cache"`,
 		`allowlist entry StatefulSet "sourceless" () does not name its object by source, kind and name`,
 		`StatefulSet "cache" (assayd/charts/x/templates/b.yaml) gives no reason`,
@@ -848,8 +876,8 @@ func TestStatefulAllowlistOnFixtures(t *testing.T) {
 	}
 	for _, p := range problems {
 		// An existing "Amendment N" is citable by an entry and an exemption alike.
-		if strings.Contains(p, `cites "Amendment 1"`) {
-			t.Errorf("an entry or exemption citing the existing Amendment 1 was refused its citation: %s", p)
+		if strings.Contains(p, `cites "Amendment 2"`) {
+			t.Errorf("an entry or exemption citing an existing amendment that decides it was refused: %s", p)
 		}
 		matchedExemption := strings.Contains(p, `DaemonSet "assayd-agent" (`) && strings.Contains(p, "matches no rendered volume")
 		if strings.Contains(p, natsKey.String()) || matchedExemption {

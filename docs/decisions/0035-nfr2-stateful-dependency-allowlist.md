@@ -237,8 +237,9 @@ The options:
 
 - an allowlist entry may cite only `D1` or `D2`, which name the entries they decided (Postgres, NATS JetStream and OpenObserve under D1(a); SPIRE's CA key PVC under D2(a)), or an existing `## Amendment N`;
 - a `hostPath` exemption may cite only `D4`, which decided SPIRE's socket mounts, or an existing `## Amendment N`;
-- so any other stateful dependency, or any other exemption, needs an amendment here that records the human's decision.
+- so any other stateful dependency, or any other exemption, needs an amendment here that records the human's decision;
+- this amendment is itself **not citable**: it changes a rule and decides no entry, and an entry citing it would pass with no decision, reopening the hole it closes. The test holds a list of such rule-only amendments, which today is Amendment 1 alone; a later amendment that changes only a rule joins it.
 
 D7(a)'s three steps are unchanged. The test still enforces **where** a decision is recorded, not **that** one was made.
 
-**Enforced by** `TestStatefulAllowlistOnFixtures` in `test/chart/chart_test.go`. It holds an entry citing `D3` and an exemption citing `D1`, and requires both to be refused. It also holds an entry and an exemption citing `Amendment 1`, and requires neither citation to be refused. Mutations, each restored from a sha256-verified backup, fail it: letting an entry cite any heading; letting an exemption cite any heading; and refusing every `Amendment N`.
+**Enforced by** `TestStatefulAllowlistOnFixtures` in `test/chart/chart_test.go`. It holds an entry citing `D3` and an exemption citing `D1`, and requires both to be refused. It also holds an entry and an exemption citing `Amendment 1`, and requires both to be refused, since this amendment is rule-only. And it holds an entry and an exemption citing `Amendment 2`, a heading the fixture adds for a future amendment that decides an entry, and requires neither citation to be refused. Mutations, each restored from a sha256-verified backup, fail it: letting an entry cite any heading; letting an exemption cite any heading; letting a rule-only amendment be cited, by either or both; skipping the check that the heading exists; widening the entry set to `D3` or the exemption set to `D1`; and refusing every `Amendment N`.
