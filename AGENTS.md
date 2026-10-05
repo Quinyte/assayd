@@ -48,6 +48,16 @@ These are not style preferences. Each one is here because it was violated and so
 - **`docs/architecture.md` is canonical**; `docs/decisions/` holds the ADRs. Do not relitigate an ADR casually — propose a superseding one.
 - **Code that diverges from an approved design is drift**, whatever it does. Amend the design first, as a numbered amendment, in the same change.
 
+## The work ledger
+
+**Open work is tracked as GitHub issues in this repo, on the org Project "assayd delivery" (`Quinyte` project 3).** These rules are kept by convention: no check enforces them. A new session, of any model, starts there: `gh project item-list 3 --owner Quinyte` and `gh issue list --label needs-human-decision`.
+
+- **Every PR names its issue** (`Closes #N`, or `Refs #N` when it does not finish it). Work with no issue gets one before it starts; a typo fix may say `No issue` instead.
+- **An issue points at the document that owns the item** — a design section, an ADR, a review record — and does not restate it. Where the two disagree, the document wins and the issue is the one to fix.
+- **An owed item recorded in a design, ADR or review gets an issue in the same change**, labelled `follow-up`.
+- **`needs-human-decision` marks what only the human can unblock.** No agent removes it; the human's answer is recorded in the owning document first.
+- **Issues are public.** A `security-gap` issue names the gap and links the design; it never carries reproduction steps.
+
 ## Commands
 
 ```bash
