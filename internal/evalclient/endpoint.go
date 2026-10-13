@@ -15,7 +15,9 @@ const ReasonBindingUnsupported = "EvalBindingUnsupported"
 
 // Interface is one entry of an A2A 1.0 card's supportedInterfaces[], as far
 // as the eval reads it. The tags are the card's protojson names, so a card
-// body decodes straight into it.
+// body decodes straight into it — through encoding/json, which matches keys
+// case-insensitively and keeps the last of a duplicate, so a card with both
+// "tenant" and "TENANT" is read by the last of them.
 type Interface struct {
 	URL             string `json:"url"`
 	ProtocolBinding string `json:"protocolBinding"`
@@ -50,7 +52,7 @@ func (e *BindingError) Reason() string { return ReasonBindingUnsupported }
 // one judged: a refused entry is not passed over for a later one.
 //
 // An entry that names a tenant is refused too, which design 16 §1.1 does not
-// list (#105). A2A requires a client to send an interface's tenant with every
+// list: #108 asks the human whether to keep this refusal or send the tenant. A2A requires a client to send an interface's tenant with every
 // request, and the eval's SendMessageRequest carries none, so sending would
 // either be refused by an honest agent — failing the candidate, finally, for
 // the eval's own omission — or be routed to some other tenant, whose answers
@@ -80,7 +82,8 @@ func EndpointPath(interfaces []Interface) (string, error) {
 			return "", &BindingError{msg: fmt.Sprintf(
 				"the candidate's card declares HTTP+JSON 1.0 at supportedInterfaces[%d] with a tenant, "+
 					"which A2A requires on every request to that interface. The eval sends no tenant, so "+
-					"it cannot call this interface; declare one without a tenant first", i)}
+					"it cannot call this interface. Serve a card whose first HTTP+JSON 1.0 interface names no "+
+					"tenant", i)}
 		}
 		return strings.TrimSuffix(u.Path, "/") + "/message:send", nil
 	}

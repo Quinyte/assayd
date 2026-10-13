@@ -194,7 +194,9 @@ func noDuplicateKeys(raw []byte) bool {
 	for {
 		tok, err := dec.Token()
 		if errors.Is(err, io.EOF) {
-			return true
+			// The tokenizer reports a document cut off after an opening
+			// delimiter as a plain end, so an open container is checked here.
+			return len(stack) == 0
 		}
 		if err != nil {
 			// Unreachable while raw is valid JSON, which score checks first.

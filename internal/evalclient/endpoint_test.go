@@ -5,6 +5,7 @@ package evalclient
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +45,9 @@ func TestEndpointJoin(t *testing.T) {
 // another binding or version are passed over.
 func TestEndpointTakesTheFirstHTTPJSON10Entry(t *testing.T) {
 	got, err := EndpointPath([]Interface{
-		{URL: "http://x/rpc", ProtocolBinding: "JSONRPC", ProtocolVersion: "1.0"},
+		// A tenant on an interface the eval never calls refuses nothing.
+		{URL: "http://x/rpc", ProtocolBinding: "JSONRPC", ProtocolVersion: "1.0", Tenant: "t"},
+		{URL: "http://x/old", ProtocolBinding: "HTTP+JSON", ProtocolVersion: "0.3", Tenant: "t"},
 		{URL: "http://x/old", ProtocolBinding: "HTTP+JSON", ProtocolVersion: "0.3"},
 		httpJSON("http://x/first"),
 		httpJSON("http://x/second"),
@@ -138,4 +141,34 @@ func hostOf(t *testing.T, raw string) string {
 		t.Fatalf("parse %q: %v", raw, err)
 	}
 	return u.Host
+}
+
+// A tenanted first entry is refused, not passed over for the untenanted one
+// after it, and the refusal names the tenant as its cause (#108).
+func TestATenantedEntryIsRefusedNotSkipped(t *testing.T) {
+	_, err := EndpointPath([]Interface{
+		{URL: "http://x/a2a", ProtocolBinding: "HTTP+JSON", ProtocolVersion: "1.0", Tenant: "t"},
+		httpJSON("http://x/plain"),
+	})
+	var be *BindingError
+	if !errors.As(err, &be) || !strings.Contains(be.Error(), "with a tenant") {
+		t.Errorf("EndpointPath = %v; want a refusal naming the tenant", err)
+	}
+}
+
+// A card in protojson's own field names decodes into Interface, tenant
+// included: the tags are what make every rule above fire on a real card.
+func TestACardDecodesIntoInterfaces(t *testing.T) {
+	var card struct {
+		SupportedInterfaces []Interface `json:"supportedInterfaces"`
+	}
+	body := `{"name":"a","supportedInterfaces":[` +
+		`{"url":"http://x/a2a/","protocolBinding":"HTTP+JSON","protocolVersion":"1.0","tenant":"t"}]}`
+	if err := json.Unmarshal([]byte(body), &card); err != nil {
+		t.Fatal(err)
+	}
+	want := []Interface{{URL: "http://x/a2a/", ProtocolBinding: "HTTP+JSON", ProtocolVersion: "1.0", Tenant: "t"}}
+	if len(card.SupportedInterfaces) != 1 || card.SupportedInterfaces[0] != want[0] {
+		t.Errorf("decoded %+v, want %+v", card.SupportedInterfaces, want)
+	}
 }
