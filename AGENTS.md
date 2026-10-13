@@ -68,7 +68,7 @@ make e2e           # k3d: create, build, load, helm install, test
 DISTRO=kind make e2e
 ```
 
-**Test layers, and what each can honestly claim.** unit (`api/`, `internal/`) asserts against the *generated* artifact, never a fixture in the test file. envtest (`test/envtest/`) runs a real API server but **no kubelet**, so every availability assertion there is against a status the test itself wrote. e2e (`test/e2e/`) is the only layer that can claim a pod actually runs.
+**Test layers, and what each can honestly claim.** unit (`api/`, `internal/`, `cmd/`) asserts against the *generated* artifact, never a fixture in the test file. envtest (`test/envtest/`) runs a real API server but **no kubelet**, so every availability assertion there is against a status the test itself wrote. e2e (`test/e2e/`) is the only layer that can claim a pod actually runs.
 
 **On Colima, raise `fs.inotify.max_user_instances` before debugging a broken local cluster** — see `docs/supply-chain.md`. The default starves k3s and presents as something else entirely.
 

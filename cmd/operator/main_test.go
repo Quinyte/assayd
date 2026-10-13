@@ -4,6 +4,9 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"testing"
 	"time"
 )
@@ -25,5 +28,45 @@ func TestManagerWaitsForReconcilesInFlightOnShutdown(t *testing.T) {
 		t.Errorf("GracefulShutdownTimeout is %v; it must be at least %v so a case in flight at "+
 			"shutdown, bounded at 20 s, can finish and record what the candidate answered "+
 			"(design 16 A7)", got, floor)
+	}
+}
+
+// T39's other half. The test above reads managerOptions, and it proves nothing
+// about the binary if run() builds its manager from anything else: replacing
+// the call with ctrl.Options{Scheme: scheme} compiles and leaves it green. So
+// the source is held to exactly one ctrl.NewManager call, whose options
+// argument is a call to managerOptions.
+func TestTheManagerIsBuiltFromManagerOptions(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+	var calls []*ast.CallExpr
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "NewManager" {
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "ctrl" {
+				calls = append(calls, call)
+			}
+		}
+		return true
+	})
+	if len(calls) != 1 {
+		t.Fatalf("main.go has %d ctrl.NewManager calls; want exactly one, built from managerOptions", len(calls))
+	}
+	if len(calls[0].Args) != 2 {
+		t.Fatalf("ctrl.NewManager is called with %d arguments; want (cfg, managerOptions(...))", len(calls[0].Args))
+	}
+	opts, ok := calls[0].Args[1].(*ast.CallExpr)
+	if !ok {
+		t.Fatal("ctrl.NewManager's options are not a call to managerOptions, so the shutdown bound " +
+			"the test above pins is not the one the binary runs with (design 16 A7)")
+	}
+	if fn, ok := opts.Fun.(*ast.Ident); !ok || fn.Name != "managerOptions" {
+		t.Fatal("ctrl.NewManager's options are built by something other than managerOptions, so the " +
+			"shutdown bound the test above pins is not the one the binary runs with (design 16 A7)")
 	}
 }
