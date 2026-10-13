@@ -39,7 +39,10 @@ func Generate(root, out string) error {
 }
 
 // unrenderedCRDs are the CRDs config/crd holds that the reference does not
-// render, each with the reason crd-agent.md gives for leaving it out.
+// render, keyed by file, each with the kind crd-agent.md names it by. The
+// page's prose says why each is left out;
+// TestThePageNamesEveryUnrenderedCRD holds the prose to this map, so an entry
+// added here without a sentence there fails the unit tests.
 //
 // The EvalSuite CRD is generated so that envtest installs it and its admission
 // rules are tested, but the chart does not ship it until the eval controller

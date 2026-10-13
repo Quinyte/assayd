@@ -42,8 +42,9 @@ type EvalSuiteSpec struct {
 // The upper bounds on cases and on metrics are schema MaxItems and not CEL
 // because the API server needs them to estimate the cost of the rules on each
 // item: without them the lists are unbounded and the CRD is refused as over the
-// CEL cost budget (measured: the threshold rules alone exceed it 2.9x over an
-// unbounded metrics list). A CEL rule repeating a MaxItems bound could never be
+// CEL cost budget. Measured on envtest's API server 1.36.2, with the
+// threshold's MaxLength=16 and metrics left unbounded, the threshold's format
+// rule exceeds it by 6.7x and its greater-than-zero rule by 3.1x. A CEL rule repeating a MaxItems bound could never be
 // the one that refuses, so there is none. The lower bound on cases is CEL so
 // that its refusal can say why.
 

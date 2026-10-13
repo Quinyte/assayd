@@ -175,5 +175,10 @@ verify: ## what CI runs — generation must be reproducible
 cluster-up: ## k3d cluster matching the local profile
 	k3d cluster list | grep -q '^$(CLUSTER) ' || k3d cluster create $(CLUSTER) --agents 1 --wait
 cluster-down: ; -k3d cluster delete $(CLUSTER)
-install-crds: manifests ## apply CRDs to the current context
-	kubectl apply -f config/crd
+# Only the Agent CRD, as the chart installs. config/crd also holds the EvalSuite
+# CRD, which ships in the chart only with the eval controller (design 16 §1.1
+# build step 6); installed without it, a gated Agent would hold with
+# GateControllerUnimplemented where a chart install reports
+# GatesSkipped/EvalSuiteCRDAbsent. Apply the whole directory again in step 6.
+install-crds: manifests ## apply the Agent CRD to the current context
+	kubectl apply -f config/crd/assayd.dev_agents.yaml

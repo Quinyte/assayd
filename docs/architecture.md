@@ -62,7 +62,7 @@ Identity: SPIRE issues SVIDs to agent pods and the gateway; the platform IdP (Zi
 
 ## 03 · The API surface
 
-> **Designed, not shipped.** One CRD exists today: `Agent` (`config/crd/assayd.dev_agents.yaml`). The rest of this section is the target surface.
+> **Designed, not shipped.** One CRD ships in the chart today: `Agent` (`config/crd/assayd.dev_agents.yaml`). An `EvalSuite` CRD is generated into `config/crd/` but is not shipped until design 16 §1.1's build step 6. The rest of this section is the target surface.
 
 | CRD | Declares | Reconciled by |
 |---|---|---|
@@ -131,7 +131,7 @@ spec:
 
 ## 04 · The KnowledgeGraph contract — the differentiator
 
-> **Designed, not shipped.** No `KnowledgeGraph` CRD exists; `Agent` is the only CRD (§03).
+> **Designed, not shipped.** No `KnowledgeGraph` CRD exists; `Agent` is the only CRD the chart ships (§03).
 
 **The domain is data, not code.** New vertical = new `KnowledgeGraph` CR, everything else reused.
 

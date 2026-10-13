@@ -55,3 +55,34 @@ func TestTheReferenceAccountsForEveryGeneratedCRD(t *testing.T) {
 		}
 	}
 }
+
+// The page's scope paragraph is prose, and unrenderedCRDs is the list it must
+// agree with: every kind named in the map appears in that paragraph, and the
+// number of CRDs it says `make manifests` produces is the map's size plus the
+// rendered Agent CRD. It reads the committed page, which `make verify` holds
+// to a fresh generation.
+func TestThePageNamesEveryUnrenderedCRD(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(repoRoot, "docs", "reference", "crd-agent.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(b)
+	start := strings.Index(page, "is the whole API surface the chart ships today.")
+	end := strings.Index(page, "**Defaults are applied")
+	if start < 0 || end < start {
+		t.Fatal("crd-agent.md has no scope paragraph to check: the page and this test have parted company")
+	}
+	scope := page[start:end]
+
+	for file, kind := range unrenderedCRDs {
+		if !strings.Contains(scope, "`"+kind+"`") {
+			t.Errorf("unrenderedCRDs names %s (%s), and the page's scope paragraph does not mention it", kind, file)
+		}
+	}
+	words := map[int]string{1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
+	want := words[len(unrenderedCRDs)+1]
+	if want == "" || !strings.Contains(scope, "produces "+want+" CRDs") && !strings.Contains(scope, "produces "+want+"\nCRDs") {
+		t.Errorf("config/crd holds %d CRDs by unrenderedCRDs, and the page's scope paragraph does not say "+
+			"`make manifests` produces %q of them", len(unrenderedCRDs)+1, want)
+	}
+}
