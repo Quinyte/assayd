@@ -20,6 +20,9 @@ type Interface struct {
 	URL             string `json:"url"`
 	ProtocolBinding string `json:"protocolBinding"`
 	ProtocolVersion string `json:"protocolVersion"`
+	// Tenant, when set, MUST be sent with every request to the interface
+	// (a2a.proto at v1.0.1, AgentInterface.tenant). The eval sends none.
+	Tenant string `json:"tenant"`
 }
 
 // BindingError is a card the eval cannot send a case to. Its Reason is
@@ -45,6 +48,14 @@ func (e *BindingError) Reason() string { return ReasonBindingUnsupported }
 // A URL that does not parse, or that carries a query or a fragment, is
 // refused, as is a card with no such entry. The first matching entry is the
 // one judged: a refused entry is not passed over for a later one.
+//
+// An entry that names a tenant is refused too, which design 16 §1.1 does not
+// list (#105). A2A requires a client to send an interface's tenant with every
+// request, and the eval's SendMessageRequest carries none, so sending would
+// either be refused by an honest agent — failing the candidate, finally, for
+// the eval's own omission — or be routed to some other tenant, whose answers
+// the verdict would then certify. A refusal holds the candidate instead, as
+// the other refusals do, and the reason says why.
 func EndpointPath(interfaces []Interface) (string, error) {
 	for i, in := range interfaces {
 		if in.ProtocolBinding != "HTTP+JSON" || in.ProtocolVersion != "1.0" {
@@ -64,6 +75,12 @@ func EndpointPath(interfaces []Interface) (string, error) {
 				"the candidate's card declares HTTP+JSON 1.0 at supportedInterfaces[%d] with a query or a "+
 					"fragment in its url. The eval sends each case to the URL's path alone, so it cannot "+
 					"honour either; serve the interface at a URL with neither", i)}
+		}
+		if in.Tenant != "" {
+			return "", &BindingError{msg: fmt.Sprintf(
+				"the candidate's card declares HTTP+JSON 1.0 at supportedInterfaces[%d] with a tenant, "+
+					"which A2A requires on every request to that interface. The eval sends no tenant, so "+
+					"it cannot call this interface; declare one without a tenant first", i)}
 		}
 		return strings.TrimSuffix(u.Path, "/") + "/message:send", nil
 	}

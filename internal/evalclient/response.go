@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
@@ -29,6 +30,11 @@ const taskCompleted = "TASK_STATE_COMPLETED"
 // the body is ProtocolError, and so is a member on the path of the wrong JSON
 // type, and a text part beside another member of its oneof.
 //
+// The body must be valid UTF-8. Within a string, encoding/json reads an
+// escaped lone surrogate (\ud800) as U+FFFD where protojson refuses it, so
+// such a text is scored as if it held U+FFFD. A part with no text is checked
+// only for being an object; its other members are not read.
+//
 // The rest of the body is not validated. A key the client does not read is
 // ignored, as a reader of a newer minor version must, and so is the value of
 // a field off the answer path: a task whose status.timestamp is not a
@@ -38,7 +44,7 @@ const taskCompleted = "TASK_STATE_COMPLETED"
 func score(raw []byte, expect assaydv1alpha1.EvalExpect) Outcome {
 	protocolError := Outcome{Reason: ReasonProtocolError}
 	top, ok := object(raw)
-	if !ok || !noDuplicateKeys(raw) {
+	if !ok || !utf8.Valid(raw) || !noDuplicateKeys(raw) {
 		return protocolError
 	}
 	// SendMessageResponse is a oneof: exactly one of task and message.
