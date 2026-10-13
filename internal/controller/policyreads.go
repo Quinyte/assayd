@@ -20,20 +20,26 @@ type gatewayPolicyReads struct {
 	// Client is the manager's cached client: servingRouteLabels' Get.
 	client.Client
 	// uncached is the uncached reader the live Gateway get and policy lists
-	// use. Never nil: whoever builds a gatewayPolicyReads resolves it, as
-	// (*AgentReconciler).reader does.
+	// use. In envtest the client itself is uncached and this may be nil, which
+	// reader resolves to the client.
 	uncached client.Reader
 	// Gateway is the assayd Gateway (design 03 §3.1).
 	Gateway GatewayConfig
 }
 
-// reader is the uncached reader, under the name the moved bodies call.
+// reader is the uncached reader for the live lists the protocol requires,
+// under the name the moved bodies call: uncached, or the client when uncached
+// is nil. (*AgentReconciler).reader resolves through it, so the fallback is
+// written once.
 func (r gatewayPolicyReads) reader() client.Reader {
-	return r.uncached
+	if r.uncached != nil {
+		return r.uncached
+	}
+	return r.Client
 }
 
 // policyReads is the Agent reconciler's gatewayPolicyReads: its client, its
 // uncached reader and its Gateway.
 func (r *AgentReconciler) policyReads() gatewayPolicyReads {
-	return gatewayPolicyReads{Client: r.Client, uncached: r.reader(), Gateway: r.Gateway}
+	return gatewayPolicyReads{Client: r.Client, uncached: r.Reader, Gateway: r.Gateway}
 }

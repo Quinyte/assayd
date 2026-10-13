@@ -846,3 +846,43 @@ func TestAForeignTrafficPolicyIsReportedAndNeverDeleted(t *testing.T) {
 		}
 	})
 }
+
+// §3.2's ForeignTrafficPolicy, matched by selector before any route exists:
+// "the labels matched are the stored route's, or the provenance labels while
+// no route exists" (design 03 A72). A traffic policy whose only target is a
+// targetSelectors entry matching this Agent's assayd.dev/agent-uid is
+// reported on a pass that finds no <agent>-serving, which only the provenance
+// labels servingRouteLabels returns for a missing route can match.
+func TestAForeignSelectorPolicyIsReportedBeforeTheRouteExists(t *testing.T) {
+	ns := newNamespace(t)
+	a := mustCreateAgent(t, ns, "foreignsel", nil)
+	r, _ := createReconciler()
+	// Two passes make the run namespace; with no revision available yet, no
+	// route is written.
+	reconcileOnce(t, r, a)
+	reconcileOnce(t, r, a)
+	p := authPolicyFor(t, liveAgent(t, a))
+	p.SetName("byselector")
+	p.SetLabels(nil)
+	unstructured.RemoveNestedField(p.Object, "spec", "targetRefs")
+	if err := unstructured.SetNestedSlice(p.Object, []any{map[string]any{"group": gatewayv1.GroupName,
+		"kind": "HTTPRoute", "matchLabels": map[string]any{compiler.LabelAgentUID: string(liveAgent(t, a).UID)}}},
+		"spec", "targetSelectors"); err != nil {
+		t.Fatal(err)
+	}
+	if err := k8s.Create(context.Background(), p); err != nil {
+		t.Fatalf("plant the foreign policy: %v", err)
+	}
+	if servingRoute(t, ns, "foreignsel") != nil {
+		t.Fatal("the fixture needs a pass with no route, and a route exists")
+	}
+	reconcileOnce(t, r, a)
+	if servingRoute(t, ns, "foreignsel") != nil {
+		t.Fatal("the pass under test wrote a route, so it did not read the provenance labels alone")
+	}
+	c := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "ForeignTrafficPolicy")
+	if c != nil && !strings.Contains(c.Message, "byselector") {
+		t.Errorf("the condition does not name the foreign policy: %s", c.Message)
+	}
+	condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionTrue, "ForeignTrafficPolicy")
+}
