@@ -32,16 +32,17 @@ reasons:
   - reason: ActiveRevisionNotEvaluated
     state: >-
       The Agent declares a gate, the EvalSuite CRD is installed, and the
-      revision being served is the desired one, but `status.eval` records
-      no `Passed` verdict for its digest: it took traffic while no gate
-      was enforced on it, typically because the gate was added after it
-      began serving.
+      revision being served is the desired one, but `status.eval` records no
+      `Passed` verdict for its digest. A gate added after the revision began
+      serving is one cause; a revert to a revision whose own `Passed` record a
+      later candidate's record has replaced is another, and the reason does not
+      tell them apart.
     operator: >-
-      Sets `GatesPassed=False` with this reason in the promotion branch
-      and changes nothing else: the revision keeps serving, phase `Ready`.
-      Declaring a gate mints no revision, because `gates` is policy
-      surface, so the revision serving is not evaluated; the message says
-      the next revision is.
+      Sets `GatesPassed=False` with this reason in the promotion branch and
+      changes nothing else: the revision keeps serving, phase `Ready`. The
+      message says what `status.eval` records instead, and that the revision
+      serving is not re-evaluated, because `gates` is policy surface; the next
+      revision the spec mints is held for its gate.
     traffic: not-withdrawn
 
   - reason: ActiveRevisionServiceUnaddressable
@@ -584,10 +585,10 @@ reasons:
       promotion hold: its `-auth` input does not compile. The I1 branch
       comes before the gate branch.
     operator: >-
-      Sets `GatesPassed=False` with this reason in the I1 branch, beside
-      that branch's own `Progressing=True/AuthInputUncompilable`, phase
-      `Held` and `Ready=True/Available`. The edit that fixes `-auth` mints
-      a new revision, which is the one evaluated.
+      Sets `GatesPassed=False` with this reason in the I1 branch, beside that
+      branch's own `Progressing=True/AuthInputUncompilable`, phase `Held` and
+      `Ready=True/Available`. The edit that fixes `-auth` mints a new revision,
+      which is held for its own gate instead.
     traffic: not-withdrawn
     note: >-
       I1 applies only to a served Agent, so an earlier revision always serves
@@ -919,11 +920,11 @@ reasons:
     traffic: not-withdrawn
     note: >-
       On an Agent that had `GatesPassed`, because its gate was removed, it also
-      sets `GatesPassed=False` with this reason, naming the revision this pass
-      converges, so a sticky `EvalFailed` does not stay beside a revision it no
-      longer describes. Where `status.eval` records a `Failed` or `Running`
-      verdict for that revision, both messages name the verdict and its digests
-      (design 16 Q9).
+      sets `GatesPassed=False` with this reason, so a sticky `EvalFailed` does
+      not stay beside a revision it no longer describes, and the promotion
+      branch names the revision then serving. Where `status.eval` records a
+      `Failed` or `Running` verdict for the revision the pass converges, both
+      messages name the verdict and its digests (design 16 Q9).
 
   - reason: NoRolloutInFlight
     state: >-

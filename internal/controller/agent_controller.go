@@ -970,7 +970,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			conds.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, ReasonEvalHeldForAuth,
 				fmt.Sprintf("revision %s is held by the -auth promotion hold, which comes before its "+
 					"eval gate: %s. Its eval does not run while the hold stands, and the edit that "+
-					"fixes -auth mints a new revision, which is evaluated instead", desired, authHold))
+					"fixes -auth mints a new revision, which is held for its own gate instead", desired, authHold))
 		}
 
 	case !gate.satisfied && status.ActiveRevisionDigest != desiredDigest:
@@ -1028,8 +1028,15 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			fmt.Sprintf("revision %s is the active revision", desired))
 		conds.set(assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", desired))
-		if gating == gateEnforced {
+		switch {
+		case gating == gateEnforced:
 			assessPromotedGate(conds, status.Eval, desired, desiredDigest)
+		case gating == gateNone && findCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGatesPassed)) != nil:
+			// A removed gate's GatesPassed, naming the revision now serving
+			// (Q9, A5); assessGates set it without one.
+			conds.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "NoGatesDeclared",
+				fmt.Sprintf("spec.gates was removed; revision %s (digest %s) is serving with no gate "+
+					"declared", desired, desiredDigest)+removedGateNote(status.Eval, desired, desiredDigest))
 		}
 	}
 
@@ -2035,12 +2042,11 @@ func (r *AgentReconciler) assessGates(agent *assaydv1alpha1.Agent, mode gateMode
 		// flips instead, naming the revision this pass converges (Q9, A5). An
 		// Agent that never had it does not get it.
 		if findCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGatesPassed)) != nil {
-			msg := "spec.gates was removed, so this Agent's revisions are not eval-gated"
-			if desired != "" {
-				msg = fmt.Sprintf("spec.gates was removed, so revision %s (digest %s) is not eval-gated: "+
-					"it serves once it is available, with no verdict required", desired, desiredDigest)
-			}
-			c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "NoGatesDeclared", msg+removed)
+			// The revision is named by the promotion branch, once the pass
+			// knows which one serves; a pin, or a hold before it, can keep
+			// the spec's revision from serving.
+			c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "NoGatesDeclared",
+				"spec.gates was removed, so no revision of this Agent is eval-gated"+removed)
 		}
 	case gateUnwired:
 		// Gates ARE declared and we cannot tell whether the CRD is present. Hold,
@@ -2069,9 +2075,9 @@ func removedGateNote(e *assaydv1alpha1.EvalStatus, desired, desiredDigest string
 
 // assessPromotedGate sets GatesPassed in the promotion branch of a gated
 // Agent. EvalPassed is asserted only when status.eval records Passed for the
-// revision being promoted, never merely because this branch ran; a revision
-// serving with no such verdict took traffic while no gate was enforced on it,
-// and is not re-evaluated, because gates are policy surface (design 16 §1.1).
+// revision being promoted, never merely because this branch ran. A revision
+// serving with no such verdict is not re-evaluated, because gates are policy
+// surface (design 16 §1.1).
 func assessPromotedGate(c *conditionSet, e *assaydv1alpha1.EvalStatus, desired, desiredDigest string) {
 	if e != nil && e.Verdict == assaydv1alpha1.EvalVerdictPassed && e.RevisionDigest == desiredDigest {
 		c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, ReasonEvalPassed,
@@ -2079,11 +2085,19 @@ func assessPromotedGate(c *conditionSet, e *assaydv1alpha1.EvalStatus, desired, 
 				desired, desiredDigest, e.Suite, e.SuiteDigest, e.Score))
 		return
 	}
+	// Say what status.eval records, not why: a gate added after the revision
+	// began serving is one cause, and a revert to a revision whose own Passed
+	// record a later candidate's run replaced is another.
+	recorded := "status.eval records no verdict"
+	if e != nil && e.RevisionDigest != "" {
+		recorded = fmt.Sprintf("status.eval records %s for revision %s (digest %s) against suite %s "+
+			"(digest %s), not a Passed verdict for this one", cmp.Or(string(e.Verdict), "no verdict"),
+			e.Revision, e.RevisionDigest, e.Suite, e.SuiteDigest)
+	}
 	c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, ReasonActiveRevisionNotEvaluated,
-		fmt.Sprintf("revision %s (digest %s) is serving and status.eval records no Passed verdict for "+
-			"it: it took traffic while no gate was enforced on it, and a gate declared or enforced "+
-			"since does not re-evaluate it, because gates are policy surface. The next revision this "+
-			"spec mints is evaluated before it takes traffic", desired, desiredDigest))
+		fmt.Sprintf("revision %s (digest %s) is serving, and %s. A gate does not re-evaluate the "+
+			"revision serving, because gates are policy surface; the next revision this spec mints is "+
+			"held for its gate before it takes traffic", desired, desiredDigest, recorded))
 }
 
 // assessSandbox reports the §3.2 downgrade. The agent-sandbox CRD is not bound

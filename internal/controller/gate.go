@@ -210,8 +210,8 @@ func decideGate(in gateInput) gateDecision {
 			return gateDecision{reason: ReasonEvalFailed, readyReason: ReasonEvalFailed,
 				message: fmt.Sprintf(
 					"%s failed: score %s against threshold %s; failed cases: %s. It holds at zero traffic "+
-						"and is not evaluated again for this pair; an edit to the suite or to the spec "+
-						"re-opens it", pair, e.Score, threshold(in.suite), failedCases(e.Cases))}
+						"and is not evaluated again for this pair: an edit to the suite gives a new pair, "+
+						"and an edit to the spec supersedes it with a new revision", pair, e.Score, threshold(in.suite), failedCases(e.Cases))}
 		}
 	}
 	if e != nil && pairFailed(e.Failed, in.desiredDigest, in.suiteDigest) {

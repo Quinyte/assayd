@@ -365,7 +365,7 @@ func TestRemovingTheGatePromotesAFailedCandidateAndSaysSo(t *testing.T) {
 	if c := gatesPassed(t, a); c.Status != metav1.ConditionFalse || c.Reason != "NoGatesDeclared" {
 		t.Errorf("GatesPassed is %s/%s after the gate was removed; want False/NoGatesDeclared, not "+
 			"a sticky verdict about a gate that no longer exists", c.Status, c.Reason)
-	} else if !strings.Contains(c.Message, rev) {
+	} else if !strings.Contains(c.Message, "revision "+rev+" (digest "+digest+") is serving with no gate declared") {
 		t.Errorf("GatesPassed's removal message does not name the revision now serving: %s", c.Message)
 	}
 }
@@ -378,6 +378,15 @@ func TestAGateAddedOverAServingRevisionSaysItWasNotEvaluated(t *testing.T) {
 	mustCreateSuite(t, ns, "smoke")
 	a, r := servedUngated(t, ns, "lategate")
 	active := a.Status.ActiveRevisionDigest
+	if c := condition(a, assaydv1alpha1.CondGatesPassed); c != nil {
+		t.Fatalf("an Agent that never declared a gate carries GatesPassed: %+v", c)
+	}
+	// A Passed record for another revision's digest, as a later candidate's
+	// run would leave: it says nothing of the revision serving.
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: "otherrev", RevisionDigest: "sha256:other",
+			SuiteDigest: "x", Verdict: assaydv1alpha1.EvalVerdictPassed, Score: "1/1"}
+	})
 	mustEdit(t, a, func(a *assaydv1alpha1.Agent) {
 		a.Spec.Gates = []assaydv1alpha1.GateRef{{EvalSuiteRef: "smoke"}}
 	})
@@ -391,8 +400,11 @@ func TestAGateAddedOverAServingRevisionSaysItWasNotEvaluated(t *testing.T) {
 		t.Errorf("GatesPassed is %s/%s; want False/ActiveRevisionNotEvaluated — status.eval "+
 			"records no Passed verdict for the revision serving", c.Status, c.Reason)
 	}
-	if !strings.Contains(c.Message, got.Status.ActiveRevision) {
-		t.Errorf("ActiveRevisionNotEvaluated does not name the serving revision: %s", c.Message)
+	for _, want := range []string{got.Status.ActiveRevision, "sha256:other"} {
+		if !strings.Contains(c.Message, want) {
+			t.Errorf("ActiveRevisionNotEvaluated does not name %q (the serving revision, and what "+
+				"status.eval records instead): %s", want, c.Message)
+		}
 	}
 
 	// The next revision is evaluated. While it is still coming up, the
@@ -622,4 +634,35 @@ func TestAGatedCandidateWaitsForARecordedCreate(t *testing.T) {
 		t.Errorf("EvalWaitingForAuth does not name the transaction's kind and stage (%s): %s",
 			tx.Stage, c.Message)
 	}
+}
+
+// Where no earlier revision serves, Ready=False carries the gate's own cause
+// for the three rows that name one, and AwaitingGates for the rest (design 16
+// §1.1's table).
+func TestANeverServedGatedAgentsReadyNamesTheGatesCause(t *testing.T) {
+	ns := newNamespace(t)
+	sd := mustCreateSuite(t, ns, "smoke")
+	a := mustCreateAgent(t, ns, "firstgated", func(a *assaydv1alpha1.Agent) {
+		a.Spec.Gates = []assaydv1alpha1.GateRef{{EvalSuiteRef: "smoke"}}
+	})
+	r := newReconciler(true)
+	rev, digest := revision.MustHash(a.Spec), revision.MustDigest(a.Spec)
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("firstgated", rev), 1)
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) { putCard(st, rev, digest, time.Now()) })
+	reconcileOnce(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AwaitingGates")
+	condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateControllerUnimplemented")
+
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: rev, RevisionDigest: digest,
+			SuiteDigest: sd, Verdict: assaydv1alpha1.EvalVerdictFailed, Score: "0/1"}
+	})
+	reconcileOnce(t, r, a)
+	got := liveAgent(t, a)
+	if got.Status.ActiveRevision != "" || got.Status.Phase != assaydv1alpha1.PhaseHeld {
+		t.Fatalf("a failed first revision: active %q, phase %s; want none promoted, Held",
+			got.Status.ActiveRevision, got.Status.Phase)
+	}
+	condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "EvalFailed")
 }

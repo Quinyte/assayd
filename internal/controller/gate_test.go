@@ -361,3 +361,26 @@ func TestTheSchemaCheckCachesItsAnswerAndKeepsItOnAFailedRead(t *testing.T) {
 		t.Fatalf("after the TTL the CRD was not read again (%d reads)", f.reads)
 	}
 }
+
+// Q9 (a): removing the gate names a Failed or Running verdict it overrides
+// for the revision this pass converges, and nothing else.
+func TestRemovingTheGateNamesTheVerdictItOverrides(t *testing.T) {
+	for verdict, named := range map[assaydv1alpha1.EvalVerdict]bool{
+		assaydv1alpha1.EvalVerdictFailed: true, assaydv1alpha1.EvalVerdictRunning: true,
+		assaydv1alpha1.EvalVerdictPassed: false, "": false,
+	} {
+		e := &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: gRev, RevisionDigest: gDigest,
+			SuiteDigest: gSuite, Verdict: verdict}
+		note := removedGateNote(e, gRev, gDigest)
+		if got := note != ""; got != named {
+			t.Errorf("verdict %q: named = %v, want %v (%q)", verdict, got, named, note)
+		}
+		if named && (!strings.Contains(note, string(verdict)) || !strings.Contains(note, gDigest) ||
+			!strings.Contains(note, gSuite)) {
+			t.Errorf("verdict %q: the note does not name the verdict and its digests: %s", verdict, note)
+		}
+		if note := removedGateNote(e, gRev, "sha256:another"); note != "" {
+			t.Errorf("verdict %q recorded for another revision is named: %s", verdict, note)
+		}
+	}
+}
