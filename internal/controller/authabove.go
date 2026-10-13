@@ -196,7 +196,7 @@ func (g gatewayAuth) servedNote(gw GatewayConfig, mode string) string {
 // read does not stop the list: every policy that targets it is then read as
 // on a capturing listener, whatever its sectionName or selector, so that a
 // policy that would widen a served route is still found (W1).
-func (r *AgentReconciler) gatewayAuthPolicies(ctx context.Context, host string) gatewayAuth {
+func (r gatewayPolicyReads) gatewayAuthPolicies(ctx context.Context, host string) gatewayAuth {
 	gw := r.Gateway
 	var out gatewayAuth
 	var g gatewayv1.Gateway
