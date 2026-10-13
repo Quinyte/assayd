@@ -2,7 +2,7 @@
 
 **Taken 2026-10-12, against `main` at `a831ee8`**, for issue #82 (ADR-0030 build step 4). It reads design 16 §1.1 — the first slice, the only part of design 16 the human has approved (2026-09-14, ADR-0024 Amendment 1) — as amended through A19, whose one question the human answered on 2026-09-17, option (a). Nothing else in design 16 is inventoried, because nothing else may be built.
 
-**Rows updated as build steps merge, 2026-10-14.** Only the rows named here have been re-taken since `a831ee8`; every other row, and the Summary, still describe `a831ee8`. Step 1 (PR #103, merged as `be9f0d5`) built T3, T9, T60 and T65. Step 2 (PR #104) built T38 and T39 and the two "operator process" items they test. Step 4 (PR #106) moved the two Gateway-policy reads onto a shared receiver.
+**Rows updated as build steps merge, 2026-10-14.** Only the rows named here have been re-taken since `a831ee8`; every other row, and the Summary, still describe `a831ee8`. Step 1 (PR #103, merged as `be9f0d5`) built T3, T9, T60 and T65. Step 2 (PR #104) built T38 and T39 and the two "operator process" items they test. Step 4 (PR #106) moved the two Gateway-policy reads onto a shared receiver. Step 5 built the Agent reconciler's gate branch, rows T12, T14, T25, T29, T55 and T63, and the rows of "The Agent reconciler" table that say so.
 
 Each item is **BUILT**, **PARTLY BUILT** or **NOT BUILT**, with the evidence: a `file:line`, a test name, or the search that found nothing. A search for absence was run over `api/`, `internal/`, `cmd/`, `charts/`, `test/` and `hack/`. Rows are grouped by where the work lands, not in §1.1's order; each names the §1.1 passage it comes from.
 
@@ -62,14 +62,14 @@ Each item is **BUILT**, **PARTLY BUILT** or **NOT BUILT**, with the evidence: a 
 
 | Item | Status | Evidence |
 |---|---|---|
-| The gate branch answering from the four promotion conditions (verdict `Passed`; `revisionDigest` equals the desired digest; `suiteDigest` equals the suite read this pass; a card recorded for the desired digest) | NOT BUILT | `gatesSatisfied` returns `len(agent.Spec.Gates) == 0` once the CRD is installed (`internal/controller/agent_controller.go:1981-1986`) |
-| Retiring `GateControllerUnimplemented` | NOT BUILT | `internal/controller/agent_controller.go:2016`; asserted by `TestDeclaredGatesHoldWhenNoGateControllerExists` (`test/envtest/reconciler_test.go:284`), which must be rewritten with it |
-| The suite read uncached through the API reader, giving `EvalSuiteNotFound` and `EvalSuiteUnreadable` | NOT BUILT | no EvalSuite read anywhere |
-| The `GatesPassed` reasons set in the rollout switch: `EvalRunning`, `EvalFailed`, `EvalPassed`, `EvalPaused`, `EvalHeldForAuth`, `EvalWaitingForAuth`, `EvalAwaitingCard`, `EvalBindingUnsupported`, `EvalPairAlreadyFailed`, `EvalRecordNotKept`, `EvalRecordUnverifiable`, `EvalSuiteNotFound`, `EvalSuiteUnreadable`, `ActiveRevisionNotEvaluated` | NOT BUILT | `grep -rn` for each reason over `internal` finds none; `EvalWaitingForAuth` appears only in a comment of `test/envtest/service_test.go:1867` |
-| `EvalWaitingForAuth`'s message: transaction kind, stage, deadline passed; clause 5's `blocked.message`; the "not yet evaluated" text when `blockedFor` does not match; and, for the missing-policy wedge, R's name from the route's single `backendRef` and the exits, under "When it names the exits"' three clauses | NOT BUILT | — |
-| `blocked` applied only while `blockedFor` matches on all three parts | NOT BUILT | — |
-| `GatesPassed=False/NoGatesDeclared` when a gate is removed from an Agent that had `GatesPassed`; `GatesSkipped=True/NoGatesDeclared`'s message naming an overridden `Failed` or `Running` verdict (Q9 (a)) | NOT BUILT | `assessGates` sets `GatesSkipped` only (`internal/controller/agent_controller.go:2003-2005`) |
-| The Agent CRD schema check: `apiextensions.k8s.io/v1` in the operator's scheme, the CRD read uncached behind a TTL cache, each of the eight fields checked under `status.eval`, `cases` items' `claim` included | NOT BUILT | the scheme registers client-go, assayd and Gateway API only (`cmd/operator/main.go:42-49`) |
+| The gate branch answering from the four promotion conditions (verdict `Passed`; `revisionDigest` equals the desired digest; `suiteDigest` equals the suite read this pass; a card recorded for the desired digest) | BUILT (step 5) | `decideGate` (`internal/controller/gate.go`), called from the rollout switch through `gateFor`; `TestEachPromotionConditionHoldsTheCandidateAlone` (`internal/controller/gate_test.go`), T12 and T14 below. A pinned revision on a gated Agent goes through the same four conditions until step 8 gives the branch its pin input |
+| Retiring `GateControllerUnimplemented` | NOT BUILT, by decision (step 6) | step 5 kept it, moved from `assessGates` into the gate branch, for a candidate with its suite and card and no final verdict, `Running` included, so no pass reports `EvalRunning` with nothing running (`internal/controller/gate.go`); pinned by `TestAGatedCandidateWithNoVerdictHoldsWithNoRunClaimed` (`test/envtest/gate_test.go`). `TestDeclaredGatesHoldWhenNoGateControllerExists` still passes unchanged, now held by `EvalSuiteNotFound`, since its suite does not exist |
+| The suite read uncached through the API reader, giving `EvalSuiteNotFound` and `EvalSuiteUnreadable` | BUILT (step 5) | `gateFor` reads by `get` through `r.reader()` on every pass of a gated Agent with a candidate (not on a pass whose desired revision is the active one, where no condition reads it); T25 below |
+| The `GatesPassed` reasons set in the rollout switch: `EvalRunning`, `EvalFailed`, `EvalPassed`, `EvalPaused`, `EvalHeldForAuth`, `EvalWaitingForAuth`, `EvalAwaitingCard`, `EvalBindingUnsupported`, `EvalPairAlreadyFailed`, `EvalRecordNotKept`, `EvalRecordUnverifiable`, `EvalSuiteNotFound`, `EvalSuiteUnreadable`, `ActiveRevisionNotEvaluated` | PARTLY BUILT (step 5) | all but `EvalRunning` and `EvalPaused`, which describe a run and come with the eval controller (step 6); each has its `reasons.yaml` entry. The precedence is `decideGate`'s comment, pinned row by row by `TestTheGateBranchsReasonsTakeTheirPrecedence` and `TestAPassedVerdictOutranksWhatARunWouldWaitFor` (`internal/controller/gate_test.go`); `EvalHeldForAuth` by `TestAGatedCandidateUnderTheI1HoldSaysItIsHeldForAuth`, `EvalWaitingForAuth` by `TestAGatedCandidateWaitsForARecordedCreate` (`test/envtest/gate_test.go`) |
+| `EvalWaitingForAuth`'s message: transaction kind, stage, deadline passed; clause 5's `blocked.message`; the "not yet evaluated" text when `blockedFor` does not match; and, for the missing-policy wedge, R's name from the route's single `backendRef` and the exits, under "When it names the exits"' three clauses | PARTLY BUILT (step 5) | kind, stage and the passed deadline, and `blocked.message` while `blockedFor` matches (`TestEvalWaitingForAuthNamesAPassedDeadline`, `TestBlockedAppliesOnlyWhileBlockedForMatches`). The exempt state's "not yet evaluated" text and the wedge's exits are step 7's; until then every recorded `Create` or `Lock` holds with the generic text, which is fail-closed |
+| `blocked` applied only while `blockedFor` matches on all three parts | BUILT (step 5) | `blockedForMatches` (`internal/controller/gate.go`); `TestBlockedAppliesOnlyWhileBlockedForMatches`. Nothing writes `blocked` until step 6 |
+| `GatesPassed=False/NoGatesDeclared` when a gate is removed from an Agent that had `GatesPassed`; `GatesSkipped=True/NoGatesDeclared`'s message naming an overridden `Failed` or `Running` verdict (Q9 (a)) | BUILT (step 5) | `assessGates` and `removedGateNote` (`internal/controller/agent_controller.go`); T29 and T63 below |
+| The Agent CRD schema check: `apiextensions.k8s.io/v1` in the operator's scheme, the CRD read uncached behind a TTL cache, each of the eight fields checked under `status.eval`, `cases` items' `claim` included | BUILT (step 5) | `evalRecordMissingFrom` and `evalRecordMissing` (`internal/controller/gate.go`), 30 s TTL, the last answer standing on a failed read; the scheme in `cmd/operator/main.go`, pinned by `TestTheSchemeKnowsTheCustomResourceDefinition`. `TestTheSchemaCheckReadsTheGeneratedAgentCRD` and `TestTheSchemaCheckCachesItsAnswerAndKeepsItOnAFailedRead` (`internal/controller/gate_test.go`); T55 below. It reads the CRD on a pass with a candidate only, not on every pass of a gated Agent |
 | The pin rule on a gated Agent (Q5 (a)): refuse the current candidate's digest, and a digest in `failed[]` with the current suite digest; admit when no suite digest is current; refusal through the unresolvable-pin path as `PinnedRevisionNotEligible`; an admitted pin promotes with `GatesBypassed=True/PinnedRollback`; ungated Agents unchanged | NOT BUILT | `resolveReleasePin` checks selection only (`internal/controller/release.go:75-110`); the refusal path sets `Degraded=True/ReleasePinUnresolvable` (`release.go:110-123`); the gate branch has no pin input (`agent_controller.go:941`), so a pinned rollback on a gated Agent holds with no exit today, as §1.1 says |
 | `authHoldsPromotion`'s comment that a pin "selects a revision that already served" corrected | NOT BUILT | `internal/controller/agent_controller.go:1139-1143` |
 
@@ -128,9 +128,9 @@ At `a831ee8` none of the 69 rows of "Tests the slice owes" was built; a `grep` f
 | T9 | unit | the echo refusal | 1 — BUILT: `TestEvalSuiteRefusesACaseItsOwnMessageSatisfies` (`api/v1alpha1/evalsuite_schema_test.go`, over `api/v1alpha1/evalsuite_types.go`) |
 | T10 | envtest | a second revision holds `EvalRunning`, promotes only on `Passed` | 6 |
 | T11 | envtest | a failing case holds with `EvalFailed`; no re-send | 6 |
-| T12 | envtest | the collision pair does not promote | 5 |
+| T12 | envtest | the collision pair does not promote | 5 — BUILT: `TestTheCollisionPairsVerdictDoesNotPromoteTheOtherMember` (`test/envtest/gate_test.go`) |
 | T13 | envtest | a stale suite digest promotes nothing and a new run starts | 6 |
-| T14 | envtest | the card cleared after the last case: `EvalAwaitingCard` | 5 |
+| T14 | envtest | the card cleared after the last case: `EvalAwaitingCard` | 5 — BUILT: `TestACandidateWhoseCardIsClearedAfterItPassedDoesNotPromote` |
 | T15 | envtest | finality, and the held first case of the re-run | 6 |
 | T16 | envtest | the `failed[]` cap | 6 |
 | T17 | envtest | a spec edit abandons the run | 6 |
@@ -141,11 +141,11 @@ At `a831ee8` none of the 69 rows of "Tests the slice owes" was built; a `grep` f
 | T22 | envtest | a restart after two of three cases sends only the third | 6 |
 | T23 | envtest | the card precondition, digest match, `EvalBindingUnsupported` | 6 |
 | T24 | envtest | the two causes of `EvalAwaitingCard` | 6 |
-| T25 | envtest | `EvalSuiteNotFound` and `EvalSuiteUnreadable` | 5 |
+| T25 | envtest | `EvalSuiteNotFound` and `EvalSuiteUnreadable` | 5 — BUILT: `TestASuiteThatIsMissingOrUnreadableHoldsTheCandidate` |
 | T26 | envtest | a suite edit under a held candidate, via the requeue field | 6 |
 | T27 | envtest | the CRD installed after the manager starts | 6 |
 | T28 | envtest | pins on a gated Agent, and on an ungated one | 8 |
-| T29 | envtest | removing `spec.gates` promotes a failed candidate, and says so | 5 |
+| T29 | envtest | removing `spec.gates` promotes a failed candidate, and says so | 5 — BUILT: `TestRemovingTheGatePromotesAFailedCandidateAndSaysSo` |
 | T30 | envtest | starvation: a J2 `Lock` finishes beside two sleeping tenants | 7 |
 | T31 | envtest | two writers never lose an outcome | 6 |
 | T32 | unit | a stale reader: case k sent once | 6 |
@@ -171,7 +171,7 @@ At `a831ee8` none of the 69 rows of "Tests the slice owes" was built; a `grep` f
 | T52 | envtest | `cardDigest` records the run-start card | 6 |
 | T53 | envtest | a pin while the suite is missing, and with the CRD absent | 8 |
 | T54 | envtest | the read-back on a CRD without the new fields: 3 to 6 fetches in 10 s | 6 |
-| T55 | envtest | the schema check, `blockedFor` included, and `EvalRecordUnverifiable` | 5 |
+| T55 | envtest | the schema check, `blockedFor` included, and `EvalRecordUnverifiable` | 5 — BUILT: `TestAnAgentCRDThatWouldPruneTheEvalRecordIsNamed` |
 | T56 | envtest | `blocked` carries `EvalBindingUnsupported` and `EvalAwaitingCard` | 6 |
 | T57 | envtest | an exempt `Lock` with an unusable binding: no write loop | 7 |
 | T58 | envtest | a stale hold clears when the `Lock` is abandoned | 7 |
@@ -179,7 +179,7 @@ At `a831ee8` none of the 69 rows of "Tests the slice owes" was built; a `grep` f
 | T60 | envtest | the CRD installs at 4096/512; the echo rule with its guards | 1 — BUILT: `TestTheGeneratedEvalSuiteCRDInstallsAndRefusesAnEcho` (`test/envtest/evalsuite_admission_test.go`, over `config/crd/assayd.dev_evalsuites.yaml`) |
 | T61 | envtest | Q6 (c) with impersonation | 9 |
 | T62 | e2e | Q6 (c) on k3s v1.33.6 | 9 |
-| T63 | envtest | `ActiveRevisionNotEvaluated`; `NoGatesDeclared` on removal | 5 |
+| T63 | envtest | `ActiveRevisionNotEvaluated`; `NoGatesDeclared` on removal | 5 — BUILT: `TestAGateAddedOverAServingRevisionSaysItWasNotEvaluated`; the removal half in T29's test |
 | T64 | envtest | generation lag: the old candidate is sent nothing | 6 |
 | T65 | envtest | admission refuses each malformed suite and a second gate, one rule per case | 1 — BUILT: `TestAdmissionRefusesEachMalformedSuiteAndASecondGate` (`test/envtest/evalsuite_admission_test.go`, over `api/v1alpha1/evalsuite_types.go`) |
 | T66 | envtest | J2 on a gated Agent: zero hits until the `Lock` is `Served` | 7 |

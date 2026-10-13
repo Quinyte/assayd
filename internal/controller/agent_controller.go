@@ -184,6 +184,10 @@ type AgentReconciler struct {
 	// page loop and the cap can be pinned.
 	NackPageSize int
 	NackMaxPages int
+	// EvalRecordCheckTTL is how long the gate branch reuses its check that the
+	// installed Agent CRD keeps the eval record. Zero means
+	// DefaultEvalRecordCheckTTL.
+	EvalRecordCheckTTL time.Duration
 
 	installMu  sync.Mutex
 	installUID string
@@ -199,6 +203,8 @@ type AgentReconciler struct {
 	// is bounded by the Agents currently claiming one, and an Agent whose keys
 	// are restored and then lost again logs again.
 	keySourcePruneLogged sync.Map
+	// evalRecord caches the schema check's last answer (design 16 §1.1 step 11).
+	evalRecord evalRecordCheck
 }
 
 // NewAgentReconciler builds a reconciler with its dependencies stated, so that
@@ -289,7 +295,6 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 // +kubebuilder:rbac:groups=assayd.dev,resources=agents/finalizers,verbs=update
 // The gate branch reads a gated Agent's EvalSuite uncached, one get by name
 // (design 16 §1.1); it never lists or watches suites, and never writes one.
-// Nothing reads a suite yet: the grant ships with the type.
 // +kubebuilder:rbac:groups=assayd.dev,resources=evalsuites,verbs=get
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // HTTPRoutes, in the run namespace, attaching to the assayd Gateway.
@@ -450,7 +455,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// terminal collision state below used to retract SandboxDowngraded,
 	// GatesSkipped and SandboxDowngraded on an agent that is more
 	// degraded, not less.
-	r.assessGates(&agent, conds)
+	gating := r.gateModeOf(&agent)
+	r.assessGates(&agent, gating, conds, desired, desiredDigest)
 	r.assessSandbox(&agent, conds)
 	r.assessTaskState(&agent, status, conds)
 	r.assessGovernance(conds, status)
@@ -870,6 +876,21 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		cardRequeue = cardRequeueAfter(status, desiredDigest)
 	}
 
+	// The gate is decided for a candidate only: `gates` is policy surface, so
+	// the revision already serving is never re-evaluated (design 16 §1.1,
+	// "Promotion"). It is decided before the switch, from the status the card
+	// step has just written, so a card a failed re-read cleared in this pass
+	// already reads cleared to the fourth promotion condition.
+	gate := gateDecision{satisfied: true}
+	switch {
+	case status.ActiveRevisionDigest == desiredDigest:
+	case gating == gateUnwired:
+		// assessGates said GateDetectionUnwired; hold, and say nothing more.
+		gate = gateDecision{}
+	case gating == gateEnforced:
+		gate = r.gateFor(ctx, &agent, status, desired, desiredDigest)
+	}
+
 	switch {
 	case !ready && status.ActiveRevision != "" && status.ActiveRevisionDigest != desiredDigest &&
 		r.revisionAvailable(ctx, &agent, runNS, status.ActiveRevision, status.ActiveRevisionDigest):
@@ -890,6 +911,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		conds.set(assaydv1alpha1.CondProgressing, metav1.ConditionTrue, "CandidateNotAvailable",
 			fmt.Sprintf("revision %s is rolling out; %s continues to serve",
 				desired, status.ActiveRevision))
+		gate.report(conds)
 
 	case !ready:
 		// Either nothing has ever served, or — the case the guard above exists for
@@ -928,6 +950,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		status.Phase = assaydv1alpha1.PhasePending
 		conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "WorkloadNotAvailable",
 			fmt.Sprintf("revision %s has no available replicas yet", desired))
+		gate.report(conds)
 
 	case authHold != "" && status.ActiveRevision != "" && status.ActiveRevisionDigest != desiredDigest:
 		// Design 03 §3.3.1, I1: "a revision whose projection carries an -auth
@@ -941,8 +964,16 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			fmt.Sprintf("revision %s is available and held at zero traffic: %s", desired, authHold))
 		conds.set(assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", status.ActiveRevision))
+		// The I1 hold comes before the gate, so a gated candidate under it is
+		// held here and no case is sent while it stands (design 16 §1.1).
+		if gating == gateEnforced {
+			conds.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, ReasonEvalHeldForAuth,
+				fmt.Sprintf("revision %s is held by the -auth promotion hold, which comes before its "+
+					"eval gate: %s. Its eval does not run while the hold stands, and the edit that "+
+					"fixes -auth mints a new revision, which is held for its own gate instead", desired, authHold))
+		}
 
-	case !r.gatesSatisfied(&agent) && status.ActiveRevisionDigest != desiredDigest:
+	case !gate.satisfied && status.ActiveRevisionDigest != desiredDigest:
 		// Gates are required and have not passed: hold the candidate at zero
 		// traffic (§3.3).
 		//
@@ -960,13 +991,19 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// Progressing must be asserted here too: it is sticky, so a branch that
 		// stays silent leaves the previous reason in place — and "CandidateNotAvailable"
 		// is false once the candidate is available and merely held.
-		conds.set(assaydv1alpha1.CondProgressing, metav1.ConditionTrue, "AwaitingGates",
+		conds.set(assaydv1alpha1.CondProgressing, metav1.ConditionTrue, reasonAwaitingGates,
 			fmt.Sprintf("revision %s is available and held at zero traffic pending its eval gates", desired))
+		// An unwired reconciler's decision carries no reason, and
+		// GateDetectionUnwired stands.
+		gate.report(conds)
 		if status.ActiveRevision != "" {
 			conds.set(assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available",
 				fmt.Sprintf("revision %s is serving", status.ActiveRevision))
+		} else if gate.reason != "" {
+			conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, gate.readyReason,
+				fmt.Sprintf("no earlier revision is serving, and %s", gate.message))
 		} else {
-			conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, "AwaitingGates",
+			conds.set(assaydv1alpha1.CondReady, metav1.ConditionFalse, reasonAwaitingGates,
 				fmt.Sprintf("revision %s is held at zero traffic pending its eval gates, "+
 					"and no earlier revision is serving", desired))
 		}
@@ -991,6 +1028,16 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			fmt.Sprintf("revision %s is the active revision", desired))
 		conds.set(assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", desired))
+		switch {
+		case gating == gateEnforced:
+			assessPromotedGate(conds, status.Eval, desired, desiredDigest)
+		case gating == gateNone && findCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGatesPassed)) != nil:
+			// A removed gate's GatesPassed, naming the revision now serving
+			// (Q9, A5); assessGates set it without one.
+			conds.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "NoGatesDeclared",
+				fmt.Sprintf("spec.gates was removed; revision %s (digest %s) is serving with no gate "+
+					"declared", desired, desiredDigest)+removedGateNote(status.Eval, desired, desiredDigest))
+		}
 	}
 
 	// The ACTIVE revision's Service is READ here — never converged, never
@@ -1659,7 +1706,7 @@ func (r *AgentReconciler) reportUnresolvedSources(ctx context.Context, agent *as
 	unresolved []revision.SourceRef, cause error) error {
 	status := agent.Status.DeepCopy()
 	conds := newConditionSet(agent.Generation)
-	r.assessGates(agent, conds)
+	r.assessGates(agent, r.gateModeOf(agent), conds, "", "")
 	r.assessSandbox(agent, conds)
 	r.assessTaskState(agent, status, conds)
 	r.assessGovernance(conds, status)
@@ -1974,53 +2021,83 @@ func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *assaydv1
 	return d.Status.AvailableReplicas > 0, nil
 }
 
-// gatesSatisfied reports whether this agent may take traffic.
-//
-// There is deliberately no separate branch for the unwired case: evalSuiteInstalled
-// reports true when the hook is unset, which lands here as "assume the CRD is
-// present", and an agent with declared gates then holds. A second nil-check
-// would read as load-bearing while never changing an outcome — and defensive
-// code no test can pin is worse than none, because it invites the next reader to
-// trust it.
-func (r *AgentReconciler) gatesSatisfied(agent *assaydv1alpha1.Agent) bool {
-	if !r.evalSuiteInstalled() {
-		return true
-	}
-	return len(agent.Spec.Gates) == 0
-}
-
-// evalSuiteInstalled defaults to TRUE when unset, so an unwired reconciler holds
-// rather than promoting ungated. See the field comment.
-func (r *AgentReconciler) evalSuiteInstalled() bool {
-	if r.EvalSuiteInstalled == nil {
-		return true
-	}
-	return r.EvalSuiteInstalled()
-}
-
-func (r *AgentReconciler) assessGates(agent *assaydv1alpha1.Agent, c *conditionSet) {
-	switch {
+// assessGates sets the gate reasons that can be decided before the card fetch,
+// the I1 hold and the verdict are known (design 16 §1.1, "Where each reason
+// is set"). Every other GatesPassed reason is set inside the rollout switch,
+// in the branch the pass takes. desired and desiredDigest name the revision
+// this pass converges, or are empty on a path that minted none.
+func (r *AgentReconciler) assessGates(agent *assaydv1alpha1.Agent, mode gateMode, c *conditionSet,
+	desired, desiredDigest string) {
+	switch mode {
 	// The no-gates case comes FIRST, and deliberately. With nothing declared to
 	// gate, detection cannot change the outcome — the agent promotes either way —
 	// so reporting "holding rather than promoting ungated" on an agent that just
 	// promoted would be loud and wrong, which is exactly what NFR-8 forbids.
-	case len(agent.Spec.Gates) == 0:
+	case gateNone:
+		removed := removedGateNote(agent.Status.Eval, desired, desiredDigest)
 		c.set(assaydv1alpha1.CondGatesSkipped, metav1.ConditionTrue, "NoGatesDeclared",
-			"no spec.gates are declared, so this rollout is not eval-gated")
-	case r.EvalSuiteInstalled == nil:
+			"no spec.gates are declared, so this rollout is not eval-gated"+removed)
+		// GatesPassed is sticky, so on an Agent whose gate was removed it would
+		// keep EvalFailed, say, beside a revision it no longer describes. It
+		// flips instead, naming the revision this pass converges (Q9, A5). An
+		// Agent that never had it does not get it.
+		if findCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGatesPassed)) != nil {
+			// The revision is named by the promotion branch, once the pass
+			// knows which one serves; a pin, or a hold before it, can keep
+			// the spec's revision from serving.
+			c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "NoGatesDeclared",
+				"spec.gates was removed, so no revision of this Agent is eval-gated"+removed)
+		}
+	case gateUnwired:
 		// Gates ARE declared and we cannot tell whether the CRD is present. Hold,
 		// and say exactly that.
 		c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateDetectionUnwired",
 			"the operator was built without EvalSuite detection, so it cannot tell whether "+
 				"this rollout should be eval-gated; holding rather than promoting ungated")
-	case !r.evalSuiteInstalled():
+	case gateCRDAbsent:
 		c.set(assaydv1alpha1.CondGatesSkipped, metav1.ConditionTrue, "EvalSuiteCRDAbsent",
 			"the EvalSuite CRD is not installed, so this rollout is NOT eval-gated (design 02 §3.3, core tier)")
-	default:
-		c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateControllerUnimplemented",
-			"spec.gates are declared but the gate controller (design 16) is not implemented; "+
-				"the revision holds at zero traffic rather than promoting ungated")
 	}
+}
+
+// removedGateNote names a Failed or Running verdict status.eval records for
+// the revision this pass converges, which removing the gate overrides
+// (design 16 Q9 (a)), or is empty.
+func removedGateNote(e *assaydv1alpha1.EvalStatus, desired, desiredDigest string) string {
+	if desiredDigest == "" || e == nil || e.RevisionDigest != desiredDigest ||
+		(e.Verdict != assaydv1alpha1.EvalVerdictFailed && e.Verdict != assaydv1alpha1.EvalVerdictRunning) {
+		return ""
+	}
+	return fmt.Sprintf(". status.eval records verdict %s for revision %s (digest %s) against suite %s "+
+		"(digest %s); with no gate declared that verdict does not hold it, and it takes traffic once "+
+		"it is available (design 16 Q9)", e.Verdict, desired, desiredDigest, e.Suite, e.SuiteDigest)
+}
+
+// assessPromotedGate sets GatesPassed in the promotion branch of a gated
+// Agent. EvalPassed is asserted only when status.eval records Passed for the
+// revision being promoted, never merely because this branch ran. A revision
+// serving with no such verdict is not re-evaluated, because gates are policy
+// surface (design 16 §1.1).
+func assessPromotedGate(c *conditionSet, e *assaydv1alpha1.EvalStatus, desired, desiredDigest string) {
+	if e != nil && e.Verdict == assaydv1alpha1.EvalVerdictPassed && e.RevisionDigest == desiredDigest {
+		c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, ReasonEvalPassed,
+			fmt.Sprintf("revision %s (digest %s) passed suite %s (digest %s), score %s",
+				desired, desiredDigest, e.Suite, e.SuiteDigest, e.Score))
+		return
+	}
+	// Say what status.eval records, not why: a gate added after the revision
+	// began serving is one cause, and a revert to a revision whose own Passed
+	// record a later candidate's run replaced is another.
+	recorded := "status.eval records no verdict"
+	if e != nil && e.RevisionDigest != "" {
+		recorded = fmt.Sprintf("status.eval records %s for revision %s (digest %s) against suite %s "+
+			"(digest %s), not a Passed verdict for this one", cmp.Or(string(e.Verdict), "no verdict"),
+			e.Revision, e.RevisionDigest, e.Suite, e.SuiteDigest)
+	}
+	c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, ReasonActiveRevisionNotEvaluated,
+		fmt.Sprintf("revision %s (digest %s) is serving, and %s. A gate does not re-evaluate the "+
+			"revision serving, because gates are policy surface; the next revision this spec mints is "+
+			"held for its gate before it takes traffic", desired, desiredDigest, recorded))
 }
 
 // assessSandbox reports the §3.2 downgrade. The agent-sandbox CRD is not bound
