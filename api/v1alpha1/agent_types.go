@@ -73,8 +73,11 @@ type AgentSpec struct {
 	Loop *LoopSpec `json:"loop,omitempty"`
 
 	// Gates must pass before a candidate revision receives traffic (ADR-0006).
-	// At least one is required in prod, iff the EvalSuite CRD is installed;
-	// otherwise rollouts proceed with a loud GatesSkipped condition.
+	// At most one gate is accepted (design 16 §1.1, Q4 (a)). Nothing requires a
+	// gate, in prod or anywhere: design 02 §5's admission binding for that is
+	// unbuilt. With no EvalSuite CRD installed, declared gates are skipped and
+	// the rollout proceeds with a loud GatesSkipped condition.
+	// +kubebuilder:validation:XValidation:rule="self.size() <= 1",message="spec.gates holds at most one gate in this release (design 16 §1.1): a candidate is evaluated against one EvalSuite. Keep one evalSuiteRef, and move the other suite's cases into it."
 	// +optional
 	Gates []GateRef `json:"gates,omitempty"`
 
@@ -426,7 +429,9 @@ type ReleaseSpec struct {
 	TargetRevisionDigest string `json:"targetRevisionDigest,omitempty"`
 }
 
+// GateRef names the EvalSuite a candidate revision must pass.
 type GateRef struct {
+	// EvalSuiteRef is the name of an EvalSuite in the Agent's own namespace.
 	// +kubebuilder:validation:MinLength=1
 	EvalSuiteRef string `json:"evalSuiteRef"`
 }
@@ -777,6 +782,98 @@ type EvalStatus struct {
 	RevisionDigest string `json:"revisionDigest,omitempty"`
 	// +optional
 	At *metav1.Time `json:"at,omitempty"`
+
+	// The fields below are design 16 §1.1's record of a run, owed to design
+	// 02. Only the eval controller writes them, and it does not exist yet: no
+	// code in this release sets any of them.
+
+	// SuiteDigest is the suite digest the run used: SHA-256 of the canonical
+	// JSON of the EvalSuite's spec.
+	// +optional
+	SuiteDigest string `json:"suiteDigest,omitempty"`
+	// EndpointPath is the path, taken from the candidate's card at run start,
+	// that each case is sent to.
+	// +optional
+	EndpointPath string `json:"endpointPath,omitempty"`
+	// CardDigest is the digest of the card EndpointPath was taken from.
+	// +optional
+	CardDigest string `json:"cardDigest,omitempty"`
+	// Blocked is the one reason, if any, why no case can be sent that only
+	// the eval controller observes. It applies only while BlockedFor matches
+	// the current state.
+	// +optional
+	Blocked *EvalBlocked `json:"blocked,omitempty"`
+	// BlockedFor is the pair, and the Lock deadline, Blocked was computed for.
+	// Absent or unmatched reads as not evaluated.
+	// +optional
+	BlockedFor *EvalBlockedFor `json:"blockedFor,omitempty"`
+	// Verdict is the run's state for the recorded pair.
+	// +optional
+	Verdict EvalVerdict `json:"verdict,omitempty"`
+	// Cases holds at most one entry per suite id, sorted by id, for the pair
+	// this record names.
+	// +kubebuilder:validation:MaxItems=20
+	// +optional
+	Cases []EvalCaseRecord `json:"cases,omitempty"`
+	// Failed records pairs whose run failed, so that neither an automatic
+	// re-run nor an edit-free one evaluates them again. At most 10; the
+	// oldest is evicted.
+	// +kubebuilder:validation:MaxItems=10
+	// +optional
+	Failed []EvalPair `json:"failed,omitempty"`
+}
+
+// EvalVerdict is a run's state.
+// +kubebuilder:validation:Enum=Running;Passed;Failed
+type EvalVerdict string
+
+const (
+	EvalVerdictRunning EvalVerdict = "Running"
+	EvalVerdictPassed  EvalVerdict = "Passed"
+	EvalVerdictFailed  EvalVerdict = "Failed"
+)
+
+// EvalBlocked is a reason no case can be sent, with its message.
+type EvalBlocked struct {
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// EvalBlockedFor is what EvalBlocked was computed for.
+type EvalBlockedFor struct {
+	// +optional
+	RevisionDigest string `json:"revisionDigest,omitempty"`
+	// +optional
+	SuiteDigest string `json:"suiteDigest,omitempty"`
+	// LockDeadline is the deadline of the Lock recorded in status.auth when
+	// Blocked was computed, if one was.
+	// +optional
+	LockDeadline *metav1.Time `json:"lockDeadline,omitempty"`
+}
+
+// EvalCaseRecord is one case's entry in a run: id, outcome, reason and the
+// claim nonce, never the answer text.
+type EvalCaseRecord struct {
+	// ID is the suite case's id.
+	ID string `json:"id"`
+	// Outcome is Sending between a claim and its record; otherwise the case's
+	// outcome.
+	// +optional
+	Outcome string `json:"outcome,omitempty"`
+	// Reason names why a case failed.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// Claim is the nonce of the send that claimed the case.
+	// +optional
+	Claim string `json:"claim,omitempty"`
+}
+
+// EvalPair is a revision digest and the suite digest it was evaluated against.
+type EvalPair struct {
+	RevisionDigest string `json:"revisionDigest"`
+	SuiteDigest    string `json:"suiteDigest"`
 }
 
 type BudgetStatus struct {

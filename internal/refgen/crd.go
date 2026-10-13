@@ -86,11 +86,16 @@ func renderCRD(root, out string) error {
 		"Every field of the Agent custom resource: type, required, default, CEL validation and doc text."))
 	sb.WriteString(generatedNotice())
 	sb.WriteString(fmt.Sprintf(`
-This page is the schema of the only custom resource assayd installs.
+This page is the schema of the only custom resource the assayd chart installs.
 
-**`+"`Agent`"+` is the whole API surface today.** `+"`make manifests`"+` produces exactly one CRD, from
-`+"`api/v1alpha1/agent_types.go`"+`, and the chart ships that one file. The generator checks this
-before writing the page and refuses to write it if a second CRD appears, so the sentence cannot
+**`+"`Agent`"+` is the whole API surface the chart ships today.** `+"`make manifests`"+` produces two CRDs:
+this one, from `+"`api/v1alpha1/agent_types.go`"+`, and `+"`EvalSuite`"+`, from
+`+"`api/v1alpha1/evalsuite_types.go`"+`. The chart ships the Agent CRD alone. The EvalSuite CRD is
+generated into `+"`config/crd/`"+` so that the operator's tests install it and exercise its admission
+rules, but it is not in `+"`charts/assayd/crds/`"+`, no cluster installed from the chart serves it,
+and this page does not render it: nothing in this release runs a suite. It ships with the eval
+controller, in design 16 §1.1's build step 6. The generator checks the set of generated CRDs
+before writing the page and refuses to write it if any other appears, so the sentence cannot
 outlive the fact. (`+"`AgentList`"+` carries the same root marker and is the list type of this CRD, not
 a second one.) Documentation elsewhere that counts several assayd CRDs is describing designs, not
 this build.

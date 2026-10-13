@@ -287,6 +287,10 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 // +kubebuilder:rbac:groups=assayd.dev,resources=agents,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=assayd.dev,resources=agents/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=assayd.dev,resources=agents/finalizers,verbs=update
+// The gate branch reads a gated Agent's EvalSuite uncached, one get by name
+// (design 16 §1.1); it never lists or watches suites, and never writes one.
+// Nothing reads a suite yet: the grant ships with the type.
+// +kubebuilder:rbac:groups=assayd.dev,resources=evalsuites,verbs=get
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // HTTPRoutes, in the run namespace, attaching to the assayd Gateway.
 //

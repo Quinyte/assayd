@@ -62,7 +62,7 @@ Identity: SPIRE issues SVIDs to agent pods and the gateway; the platform IdP (Zi
 
 ## 03 · The API surface
 
-> **Designed, not shipped.** One CRD exists today: `Agent` (`config/crd/assayd.dev_agents.yaml`). The rest of this section is the target surface.
+> **Designed, not shipped.** One CRD ships in the chart today: `Agent` (`config/crd/assayd.dev_agents.yaml`). An `EvalSuite` CRD is generated into `config/crd/` but is not shipped until design 16 §1.1's build step 6. The rest of this section is the target surface.
 
 | CRD | Declares | Reconciled by |
 |---|---|---|
@@ -131,7 +131,7 @@ spec:
 
 ## 04 · The KnowledgeGraph contract — the differentiator
 
-> **Designed, not shipped.** No `KnowledgeGraph` CRD exists; `Agent` is the only CRD (§03).
+> **Designed, not shipped.** No `KnowledgeGraph` CRD exists; `Agent` is the only CRD the chart ships (§03).
 
 **The domain is data, not code.** New vertical = new `KnowledgeGraph` CR, everything else reused.
 
@@ -241,7 +241,7 @@ Most HIPAA technical safeguards are emergent: per-action attribution (on-behalf-
 
 ## 08 · Evals — semantic admission
 
-> **Designed, not shipped.** No `EvalSuite` CRD and no gate controller exist. Today a revision with declared gates holds at zero traffic indefinitely — `GatesPassed=False`, reason `GateControllerUnimplemented` — never promoted ungated, and never promoted at all.
+> **Designed, not shipped.** The chart installs no `EvalSuite` CRD, and no gate controller exists: the `EvalSuite` type and its admission rules are built and generated into `config/crd/`, but nothing runs a suite. Today a revision with declared gates holds at zero traffic indefinitely — `GatesPassed=False`, reason `GateControllerUnimplemented` — never promoted ungated, and never promoted at all.
 
 Agents and models **earn traffic**. Rollout: new version → HELD (no traffic) → Eval Job (DeepEval/Inspect) fed by the ontology-derived golden set + replayed production sessions → gate (score ≥ threshold) → pass: gateway-weighted canary → 100%; fail: rollback with the report in CR status + PR. Production traffic continuously becomes regression data.
 
