@@ -96,6 +96,12 @@ rules:
   - patch
   - update
 - apiGroups:
+  - assayd.dev
+  resources:
+  - evalsuites
+  verbs:
+  - get
+- apiGroups:
   - coordination.k8s.io
   resources:
   - leases

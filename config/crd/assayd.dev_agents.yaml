@@ -240,17 +240,28 @@ spec:
               gates:
                 description: |-
                   Gates must pass before a candidate revision receives traffic (ADR-0006).
-                  At least one is required in prod, iff the EvalSuite CRD is installed;
-                  otherwise rollouts proceed with a loud GatesSkipped condition.
+                  At most one gate is accepted (design 16 §1.1, Q4 (a)). Nothing requires a
+                  gate, in prod or anywhere: design 02 §5's admission binding for that is
+                  unbuilt. With no EvalSuite CRD installed, declared gates are skipped and
+                  the rollout proceeds with a loud GatesSkipped condition.
                 items:
+                  description: GateRef names the EvalSuite a candidate revision must
+                    pass.
                   properties:
                     evalSuiteRef:
+                      description: EvalSuiteRef is the name of an EvalSuite in the
+                        Agent's own namespace.
                       minLength: 1
                       type: string
                   required:
                   - evalSuiteRef
                   type: object
                 type: array
+                x-kubernetes-validations:
+                - message: 'spec.gates holds at most one gate in this release (design
+                    16 §1.1): a candidate is evaluated against one EvalSuite. Keep
+                    one evalSuiteRef, and move the other suite''s cases into it.'
+                  rule: self.size() <= 1
               knowledge:
                 description: |-
                   Knowledge binds pinned KnowledgeGraph versions. Scope is injected by the
@@ -1405,6 +1416,90 @@ spec:
                   at:
                     format: date-time
                     type: string
+                  blocked:
+                    description: |-
+                      Blocked is the one reason, if any, why no case can be sent that only
+                      the eval controller observes. It applies only while BlockedFor matches
+                      the current state.
+                    properties:
+                      message:
+                        type: string
+                      reason:
+                        type: string
+                    type: object
+                  blockedFor:
+                    description: |-
+                      BlockedFor is the pair, and the Lock deadline, Blocked was computed for.
+                      Absent or unmatched reads as not evaluated.
+                    properties:
+                      lockDeadline:
+                        description: |-
+                          LockDeadline is the deadline of the Lock recorded in status.auth when
+                          Blocked was computed, if one was.
+                        format: date-time
+                        type: string
+                      revisionDigest:
+                        type: string
+                      suiteDigest:
+                        type: string
+                    type: object
+                  cardDigest:
+                    description: CardDigest is the digest of the card EndpointPath
+                      was taken from.
+                    type: string
+                  cases:
+                    description: |-
+                      Cases holds at most one entry per suite id, sorted by id, for the pair
+                      this record names.
+                    items:
+                      description: |-
+                        EvalCaseRecord is one case's entry in a run. Only id, outcome and reason
+                        are recorded, never the answer text.
+                      properties:
+                        claim:
+                          description: Claim is the nonce of the send that claimed
+                            the case.
+                          type: string
+                        id:
+                          description: ID is the suite case's id.
+                          type: string
+                        outcome:
+                          description: |-
+                            Outcome is Sending between a claim and its record; otherwise the case's
+                            outcome.
+                          type: string
+                        reason:
+                          description: Reason names why a case failed.
+                          type: string
+                      required:
+                      - id
+                      type: object
+                    maxItems: 20
+                    type: array
+                  endpointPath:
+                    description: |-
+                      EndpointPath is the path, taken from the candidate's card at run start,
+                      that each case is sent to.
+                    type: string
+                  failed:
+                    description: |-
+                      Failed records pairs whose run failed, so that neither an automatic
+                      re-run nor an edit-free one evaluates them again. At most 10; the
+                      oldest is evicted.
+                    items:
+                      description: EvalPair is a revision digest and the suite digest
+                        it was evaluated against.
+                      properties:
+                        revisionDigest:
+                          type: string
+                        suiteDigest:
+                          type: string
+                      required:
+                      - revisionDigest
+                      - suiteDigest
+                      type: object
+                    maxItems: 10
+                    type: array
                   revision:
                     description: Revision names what was gated, so a stale score is
                       recognisable as stale.
@@ -1423,6 +1518,18 @@ spec:
                       Eval printer column.
                     type: string
                   suite:
+                    type: string
+                  suiteDigest:
+                    description: |-
+                      SuiteDigest is the suite digest the run used: SHA-256 of the canonical
+                      JSON of the EvalSuite's spec.
+                    type: string
+                  verdict:
+                    description: Verdict is the run's state for the recorded pair.
+                    enum:
+                    - Running
+                    - Passed
+                    - Failed
                     type: string
                 type: object
               observedGeneration:

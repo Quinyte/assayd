@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	yaml "go.yaml.in/yaml/v3"
@@ -25,7 +26,7 @@ func Generate(root, out string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
-	if err := checkSingleCRD(root); err != nil {
+	if err := checkCRDs(root); err != nil {
 		return err
 	}
 	if err := renderCRD(root, out); err != nil {
@@ -37,13 +38,26 @@ func Generate(root, out string) error {
 	return renderConditions(root, out)
 }
 
-// checkSingleCRD holds the claim crd-agent.md makes about its own scope.
+// unrenderedCRDs are the CRDs config/crd holds that the reference does not
+// render, each with the reason crd-agent.md gives for leaving it out.
 //
-// The page says Agent is the whole API surface. AGENTS.md rule 7 says never to
-// state a bound the code does not enforce — so the generator enforces it: add a
-// second CRD and generation fails here, naming the file, rather than publishing
-// a page that describes one of two.
-func checkSingleCRD(root string) error {
+// The EvalSuite CRD is generated so that envtest installs it and its admission
+// rules are tested, but the chart does not ship it until the eval controller
+// does (design 16 §1.1 build step 6), so no cluster installed from the chart
+// serves it. Step 6 renders it and removes it from this map.
+var unrenderedCRDs = map[string]string{
+	"assayd.dev_evalsuites.yaml": "EvalSuite",
+}
+
+// checkCRDs holds the claim crd-agent.md makes about its own scope.
+//
+// The page says Agent is the whole API surface the chart ships, and names each
+// other generated CRD as generated and not shipped. AGENTS.md rule 7 says never
+// to state a bound the code does not enforce — so the generator enforces it:
+// a CRD in config/crd that is neither rendered nor named in unrenderedCRDs, or
+// a named one that is no longer generated, fails generation here, naming the
+// file, rather than publishing a page that miscounts.
+func checkCRDs(root string) error {
 	dir := filepath.Join(root, "config", "crd")
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -55,10 +69,17 @@ func checkSingleCRD(root string) error {
 			yamls = append(yamls, e.Name())
 		}
 	}
-	if len(yamls) != 1 || yamls[0] != filepath.Base(CRDSource) {
-		return fmt.Errorf("docs/reference/crd-agent.md states that Agent is the whole API surface, "+
-			"but config/crd holds %d CRD file(s): %s. Extend the generator to render them all, "+
-			"and correct that sentence", len(yamls), strings.Join(yamls, ", "))
+	want := []string{filepath.Base(CRDSource)}
+	for f := range unrenderedCRDs {
+		want = append(want, f)
+	}
+	sort.Strings(want)
+	sort.Strings(yamls)
+	if strings.Join(yamls, ",") != strings.Join(want, ",") {
+		return fmt.Errorf("docs/reference/crd-agent.md states that config/crd holds exactly %s, "+
+			"but it holds %d CRD file(s): %s. Render the new CRD, or name it in unrenderedCRDs "+
+			"with the reason, and correct that sentence", strings.Join(want, " and "),
+			len(yamls), strings.Join(yamls, ", "))
 	}
 	return nil
 }

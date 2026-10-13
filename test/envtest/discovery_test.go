@@ -43,7 +43,7 @@ func TestEvalSuiteDetectorSeesTheCRDAppear(t *testing.T) {
 	if err := k8s.Create(ctx, crd); err != nil {
 		t.Fatalf("install CRD: %v", err)
 	}
-	t.Cleanup(func() { ensureEvalSuiteAbsent(t) })
+	t.Cleanup(func() { restoreGeneratedEvalSuiteCRD(t) })
 
 	// The detector must notice within its refresh window. A cached absent that
 	// never expires would keep every agent promoting ungated after the gate
@@ -115,7 +115,7 @@ func TestEvalSuiteDetectorFindsTheCRDAtAnyVersion(t *testing.T) {
 	if err := k8s.Create(ctx, crd); err != nil && !apierrors.IsAlreadyExists(err) {
 		t.Fatalf("install CRD: %v", err)
 	}
-	t.Cleanup(func() { ensureEvalSuiteAbsent(t) })
+	t.Cleanup(func() { restoreGeneratedEvalSuiteCRD(t) })
 
 	d, err := controller.NewEvalSuiteDetector(cfg, 50*time.Millisecond)
 	if err != nil {
@@ -132,6 +132,16 @@ func TestEvalSuiteDetectorFindsTheCRDAtAnyVersion(t *testing.T) {
 	t.Error("the detector did not find EvalSuite served at v1beta1. Version-pinned " +
 		"detection fails OPEN on an API bump: every gated agent promotes ungated while " +
 		"the condition claims the CRD is absent.")
+}
+
+// restoreGeneratedEvalSuiteCRD puts back the CRD envtest installed from
+// config/crd, which a detector test replaced with a hand-built one of the same
+// name. Leaving it absent made every later test that needs the generated
+// schema depend on running before this one.
+func restoreGeneratedEvalSuiteCRD(t *testing.T) {
+	t.Helper()
+	ensureEvalSuiteAbsent(t)
+	installGeneratedEvalSuiteCRD(t)
 }
 
 // ensureEvalSuiteAbsent deletes the EvalSuite CRD and waits for discovery to
