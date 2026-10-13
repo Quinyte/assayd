@@ -26,6 +26,7 @@ func TestEndpointJoin(t *testing.T) {
 		"http://card.example/":      "/message:send",
 		"http://card.example/a2a":   "/a2a/message:send",
 		"http://card.example/a2a/":  "/a2a/message:send",
+		"http://card.example/a2a//": "/a2a//message:send",
 		"https://card.example:8443": "/message:send",
 	} {
 		got, err := EndpointPath([]Interface{httpJSON(in)})
@@ -62,15 +63,18 @@ func TestEndpointTakesTheFirstHTTPJSON10Entry(t *testing.T) {
 // names its preferred interface first and a later entry is not what the agent
 // asked to be called on.
 func TestEndpointRefusals(t *testing.T) {
+	// Every URL names the marker host, so a message that quoted any part of a
+	// card's interfaces would carry it.
+	const m = "marker.invalid"
 	for name, ifaces := range map[string][]Interface{
-		"query":                {httpJSON("http://x/a2a?tenant=t")},
-		"empty query":          {httpJSON("http://x/a2a?")},
-		"fragment":             {httpJSON("http://x/a2a#frag")},
-		"empty fragment":       {httpJSON("http://x/a2a#")},
-		"unparseable":          {httpJSON("http://x/%zz")},
+		"query":                {httpJSON("http://" + m + "/a2a?tenant=t")},
+		"empty query":          {httpJSON("http://" + m + "/a2a?")},
+		"fragment":             {httpJSON("http://" + m + "/a2a#frag")},
+		"empty fragment":       {httpJSON("http://" + m + "/a2a#")},
+		"unparseable":          {httpJSON("http://" + m + "/%zz")},
 		"no entries":           nil,
-		"no HTTP+JSON 1.0":     {{URL: "http://x/", ProtocolBinding: "JSONRPC", ProtocolVersion: "1.0"}},
-		"refused, not skipped": {httpJSON("http://x/a?q=1"), httpJSON("http://x/b")},
+		"no HTTP+JSON 1.0":     {{URL: "http://" + m + "/", ProtocolBinding: "JSONRPC", ProtocolVersion: "1.0"}},
+		"refused, not skipped": {httpJSON("http://" + m + "/a?q=1"), httpJSON("http://" + m + "/b")},
 	} {
 		got, err := EndpointPath(ifaces)
 		var be *BindingError
@@ -81,7 +85,7 @@ func TestEndpointRefusals(t *testing.T) {
 		if be.Reason() != ReasonBindingUnsupported || ReasonBindingUnsupported != "EvalBindingUnsupported" {
 			t.Errorf("%s: reason %q, want EvalBindingUnsupported", name, be.Reason())
 		}
-		if strings.Contains(be.Error(), "x/a") {
+		if strings.Contains(be.Error(), "marker") {
 			t.Errorf("%s: the message quotes the card's URL, an address the agent chose: %q", name, be.Error())
 		}
 	}

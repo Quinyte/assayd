@@ -5,6 +5,8 @@ package evalsuite
 
 import (
 	"math/big"
+	"os"
+	"strings"
 	"testing"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
@@ -49,7 +51,8 @@ func TestThresholdRuleAtItsBoundary(t *testing.T) {
 // passed ≥ t × total, and the threshold read with strconv.ParseFloat) agree
 // with the exact answer at every point. The integer rule is kept because it
 // is correct by construction rather than by a property of float64 at these
-// sizes, which a wider domain would not keep.
+// sizes, which a wider domain would not keep. #105 carries the row's correction
+// to design 16's next amendment.
 func TestThresholdRuleIsExact(t *testing.T) {
 	for total := 1; total <= 20; total++ {
 		for passed := 0; passed <= total; passed++ {
@@ -101,5 +104,19 @@ func TestThresholdRefusesWhatAdmissionRefuses(t *testing.T) {
 func TestThresholdRuleFailsAnEmptyRun(t *testing.T) {
 	if Passes(0, 0, 1) {
 		t.Error("0 of 0 passed; a run with no cases would pass every revision")
+	}
+}
+
+// Threshold repeats admission's format rule. If the two drifted, a threshold
+// admission accepts could be refused here, holding every candidate, or one it
+// refuses read as a number. So the pattern is held to the generated CRD's.
+func TestThresholdFormIsAdmissions(t *testing.T) {
+	b, err := os.ReadFile("../../config/crd/assayd.dev_evalsuites.yaml")
+	if err != nil {
+		t.Fatalf("read the generated EvalSuite CRD: %v", err)
+	}
+	want := "rule: self.matches('" + thresholdForm.String() + "')"
+	if !strings.Contains(string(b), want) {
+		t.Errorf("the generated EvalSuite CRD has no rule %q; Threshold's pattern and admission's have drifted", want)
 	}
 }

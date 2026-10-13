@@ -16,6 +16,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -118,9 +119,16 @@ func New() *Client {
 // never retries: a case is sent at most once (design 16 §1.1 step 10), and the
 // claim that guarantees it is the caller's.
 //
-// The request is bounded by the case's timeout, derived from ctx. If ctx
-// itself is cancelled first, the outcome is Interrupted, never Unreachable,
-// which names only a refusal or a timeout that was observed.
+// The request is bounded by the case's timeout, derived from ctx. If ctx is
+// cancelled first, the outcome is Interrupted, never Unreachable. A deadline
+// on ctx that passes first is a timeout like the case's own, Unreachable: the
+// eval controller may bound the send by caseTimeoutSeconds itself.
+//
+// Unreachable is every failure before a status line was read: a refused or
+// reset connection, an address that does not resolve, an answer that is not
+// HTTP, or the timeout. Design 16 §1.1 step 6 names a refused connection and
+// a timeout; the other transport failures are not in its table, and are read
+// as the candidate not being reached rather than as its protocol fault.
 func (c *Client) Send(ctx context.Context, cs Case) Outcome {
 	timeout := time.Duration(cs.TimeoutSeconds) * time.Second
 	if cs.TimeoutSeconds <= 0 {
@@ -169,47 +177,10 @@ func (c *Client) Send(ctx context.Context, cs Case) Outcome {
 // failed is the outcome of a request that ended without a full answer:
 // Interrupted when the caller cancelled, otherwise the observed reason.
 func failed(ctx context.Context, observed Reason) Outcome {
-	if ctx.Err() != nil {
+	if errors.Is(ctx.Err(), context.Canceled) {
 		return Outcome{Reason: ReasonInterrupted}
 	}
 	return Outcome{Reason: observed}
-}
-
-// score is step 6's table for a 200 whose body was read whole.
-func score(raw []byte, expect assaydv1alpha1.EvalExpect) Outcome {
-	// encoding/json matches object keys case-insensitively and lets a later
-	// duplicate key win, so a body that differs from protojson only in key
-	// case is read as a SendMessageResponse. Every other shape that does not
-	// decode is ProtocolError.
-	var r sendMessageResponse
-	if err := json.Unmarshal(raw, &r); err != nil {
-		return Outcome{Reason: ReasonProtocolError}
-	}
-	// SendMessageResponse is a oneof: exactly one of task and message.
-	var parts []responsePart
-	switch {
-	case r.Task != nil && r.Message == nil:
-		if r.Task.Status.State != "TASK_STATE_COMPLETED" {
-			return Outcome{Reason: ReasonTaskNotCompleted}
-		}
-		for _, a := range r.Task.Artifacts {
-			parts = append(parts, a.Parts...)
-		}
-	case r.Message != nil && r.Task == nil:
-		parts = r.Message.Parts
-	default:
-		return Outcome{Reason: ReasonProtocolError}
-	}
-	var texts []string
-	for _, p := range parts {
-		if p.Text != nil {
-			texts = append(texts, *p.Text)
-		}
-	}
-	if satisfies(strings.Join(texts, " "), expect) {
-		return Outcome{Passed: true}
-	}
-	return Outcome{Reason: ReasonMismatch}
 }
 
 // satisfies compares case-sensitively, with no normalization. Admission
@@ -230,9 +201,9 @@ func newMessageID() string {
 	return "eval-" + hex.EncodeToString(b[:])
 }
 
-// The SendMessage request and response, as protojson renders a2a.proto at
-// v1.0.1 (docs/research/a2a-v1.0-card-and-transport-2026-09.md §2). The
-// request declares only what is sent: no contextId, so every case opens a
+// The SendMessage request, as protojson renders a2a.proto at v1.0.1
+// (docs/research/a2a-v1.0-card-and-transport-2026-09.md §2). It declares only
+// what is sent: no contextId, so every case opens a
 // fresh context, and no configuration, so the call blocks until the task is
 // terminal or interrupted — the protocol's default, which step 6's scoring
 // depends on.
@@ -248,28 +219,4 @@ type requestMessage struct {
 
 type requestPart struct {
 	Text string `json:"text"`
-}
-
-type sendMessageResponse struct {
-	Task    *responseTask    `json:"task"`
-	Message *responseMessage `json:"message"`
-}
-
-type responseTask struct {
-	Status struct {
-		State string `json:"state"`
-	} `json:"status"`
-	Artifacts []struct {
-		Parts []responsePart `json:"parts"`
-	} `json:"artifacts"`
-}
-
-type responseMessage struct {
-	Parts []responsePart `json:"parts"`
-}
-
-// responsePart is a oneof over text, raw, url and data; only a text part
-// contributes to the answer, and a text part may be empty.
-type responsePart struct {
-	Text *string `json:"text"`
 }
