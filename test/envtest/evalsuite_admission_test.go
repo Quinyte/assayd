@@ -273,6 +273,60 @@ func TestAdmissionRefusesEachMalformedSuiteAndASecondGate(t *testing.T) {
 			refusedByRule(t, k8s.Create(ctx, s), msgThreshFormat)
 		}
 	})
+	t.Run("a threshold with four decimal places names the fix", func(t *testing.T) {
+		// Not a bare "too long": the threshold's length bound sits above any
+		// plausible over-precise input, so the format rule's message is what
+		// the author reads.
+		s := suite(ns, "fourplaces", ok)
+		s.Spec.Metrics = []assaydv1alpha1.EvalMetric{{Name: "task_completion", Threshold: "0.6666"}}
+		refusedByRule(t, k8s.Create(ctx, s), msgThreshFormat)
+	})
+	// The schema bounds §1.1's rules table lists. They carry the API server's
+	// own messages, not CEL's, and the case timeout's cap matters most: the
+	// claim, send and record bounds of a case must fit inside the operator's
+	// shutdown grace.
+	t.Run("the schema bounds", func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			mutate func(*assaydv1alpha1.EvalSuite)
+			msg    string
+		}{
+			{"a timeout below 1 (0 itself is omitted and defaulted)", func(s *assaydv1alpha1.EvalSuite) { s.Spec.CaseTimeoutSeconds = -1 }, "should be greater than or equal to 1"},
+			{"a timeout of 11", func(s *assaydv1alpha1.EvalSuite) { s.Spec.CaseTimeoutSeconds = 11 }, "should be less than or equal to 10"},
+			{"21 cases", func(s *assaydv1alpha1.EvalSuite) {
+				s.Spec.Dataset.Cases = nil
+				for i := 0; i < 21; i++ {
+					s.Spec.Dataset.Cases = append(s.Spec.Dataset.Cases,
+						evalCase("c"+string(rune('a'+i)), "What is 2 + 2?", "4", ""))
+				}
+			}, "must have at most 20 items"},
+			{"a 4097-character message", func(s *assaydv1alpha1.EvalSuite) {
+				s.Spec.Dataset.Cases[0].Message = strings.Repeat("m", 4097)
+			}, "may not be more than 4096"},
+			{"a 513-character contains", func(s *assaydv1alpha1.EvalSuite) {
+				s.Spec.Dataset.Cases[0].Expect.Contains = strings.Repeat("e", 513)
+			}, "may not be more than 512"},
+			{"a 513-character equals", func(s *assaydv1alpha1.EvalSuite) {
+				s.Spec.Dataset.Cases[0].Expect = assaydv1alpha1.EvalExpect{Equals: strings.Repeat("e", 513)}
+			}, "may not be more than 512"},
+			{"a 64-character id", func(s *assaydv1alpha1.EvalSuite) {
+				s.Spec.Dataset.Cases[0].ID = strings.Repeat("a", 64)
+			}, "may not be more than 63"},
+		} {
+			s := suite(ns, "bounds", ok)
+			tc.mutate(s)
+			err := k8s.Create(ctx, s)
+			if err == nil || !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), tc.msg) {
+				t.Errorf("%s: want refused with %q, got %v", tc.name, tc.msg, err)
+			}
+		}
+		// And each bound admits its edge.
+		edge := suite(ns, "bounds-edge", evalCase(strings.Repeat("a", 63), strings.Repeat("m", 4096), strings.Repeat("e", 512), ""))
+		edge.Spec.CaseTimeoutSeconds = 1
+		if err := k8s.Create(ctx, edge); err != nil {
+			t.Errorf("a suite at every edge was refused: %v", err)
+		}
+	})
 	t.Run("thresholds at the edges are admitted", func(t *testing.T) {
 		for i, good := range []string{"1", "1.0", "1.000", "0.001", "0.66", "0.5"} {
 			s := suite(ns, "goodthresh-"+string(rune('a'+i)), ok)

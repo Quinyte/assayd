@@ -107,7 +107,12 @@ type EvalMetric struct {
 	// than 0 and at most 1, with at most three decimal places. It is a string
 	// because a float field cannot be compared exactly; the operator compares
 	// in integer thousandths.
-	// +kubebuilder:validation:MaxLength=5
+	//
+	// MaxLength is a cost bound for the CEL rules, set above any plausible
+	// over-precise input so that "0.6666" reaches the format rule's message
+	// rather than a bare "too long": the API server skips CEL once a length
+	// bound fails.
+	// +kubebuilder:validation:MaxLength=16
 	// +kubebuilder:validation:XValidation:rule="self.matches('^(0([.][0-9]{1,3})?|1([.]0{1,3})?)$')",message="spec.metrics[].threshold must be a decimal string from 0 to 1 with at most three decimal places, such as 0.66 or 1."
 	// +kubebuilder:validation:XValidation:rule="!self.matches('^0([.]0{1,3})?$')",message="spec.metrics[].threshold must be greater than 0: a threshold of 0 would pass every revision."
 	Threshold string `json:"threshold"`

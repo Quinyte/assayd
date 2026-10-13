@@ -53,11 +53,22 @@ func Digest(spec assaydv1alpha1.EvalSuiteSpec) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// canonicalJSON renders v with every object's keys sorted. encoding/json
-// writes a struct's fields in declaration order, so v is decoded into generic
-// maps, whose keys it writes sorted, and encoded again. Numbers survive as
-// written (UseNumber), and HTML characters are not escaped, so the bytes are
-// the plain JSON of the value.
+// canonicalJSON renders v in the suite digest's canonical form, which is a
+// compatibility contract: status.eval.failed[] is keyed on the digest, so a
+// change to any rule below reopens every failed pair on upgrade.
+//
+//   - JSON (RFC 8259), UTF-8, with no insignificant whitespace;
+//   - every object's keys sorted bytewise;
+//   - integers written as decimal digits;
+//   - strings escaped as encoding/json escapes them with HTML escaping off:
+//     `"` and `\` backslash-escaped; \n, \r and \t as those escapes; every
+//     other control character as \u00XX; U+2028 and U+2029 as \u2028 and
+//     \u2029; everything else, `<`, `>`, `&` and non-ASCII included, raw.
+//
+// encoding/json writes a struct's fields in declaration order, so v is decoded
+// into generic maps, whose keys it writes sorted, and encoded again; numbers
+// survive as written (UseNumber). TestSuiteDigestIsPinned and
+// TestSuiteDigestPinsItsEscaping hold the form against an independent encoder.
 func canonicalJSON(v any) ([]byte, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {

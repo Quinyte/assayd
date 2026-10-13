@@ -241,7 +241,7 @@ Most HIPAA technical safeguards are emergent: per-action attribution (on-behalf-
 
 ## 08 · Evals — semantic admission
 
-> **Designed, not shipped.** No `EvalSuite` CRD and no gate controller exist. Today a revision with declared gates holds at zero traffic indefinitely — `GatesPassed=False`, reason `GateControllerUnimplemented` — never promoted ungated, and never promoted at all.
+> **Designed, not shipped.** The chart installs no `EvalSuite` CRD, and no gate controller exists: the `EvalSuite` type and its admission rules are built and generated into `config/crd/`, but nothing runs a suite. Today a revision with declared gates holds at zero traffic indefinitely — `GatesPassed=False`, reason `GateControllerUnimplemented` — never promoted ungated, and never promoted at all.
 
 Agents and models **earn traffic**. Rollout: new version → HELD (no traffic) → Eval Job (DeepEval/Inspect) fed by the ontology-derived golden set + replayed production sessions → gate (score ≥ threshold) → pass: gateway-weighted canary → 100%; fail: rollback with the report in CR status + PR. Production traffic continuously becomes regression data.
 

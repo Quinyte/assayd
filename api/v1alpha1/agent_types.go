@@ -853,8 +853,8 @@ type EvalBlockedFor struct {
 	LockDeadline *metav1.Time `json:"lockDeadline,omitempty"`
 }
 
-// EvalCaseRecord is one case's entry in a run. Only id, outcome and reason
-// are recorded, never the answer text.
+// EvalCaseRecord is one case's entry in a run: id, outcome, reason and the
+// claim nonce, never the answer text.
 type EvalCaseRecord struct {
 	// ID is the suite case's id.
 	ID string `json:"id"`

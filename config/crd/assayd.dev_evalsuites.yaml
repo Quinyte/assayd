@@ -153,7 +153,12 @@ spec:
                         than 0 and at most 1, with at most three decimal places. It is a string
                         because a float field cannot be compared exactly; the operator compares
                         in integer thousandths.
-                      maxLength: 5
+
+                        MaxLength is a cost bound for the CEL rules, set above any plausible
+                        over-precise input so that "0.6666" reaches the format rule's message
+                        rather than a bare "too long": the API server skips CEL once a length
+                        bound fails.
+                      maxLength: 16
                       type: string
                       x-kubernetes-validations:
                       - message: spec.metrics[].threshold must be a decimal string

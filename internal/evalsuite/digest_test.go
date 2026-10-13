@@ -51,24 +51,14 @@ caseTimeoutSeconds: 10
 // by each of a case's message, its expectation, the threshold and the timeout.
 // A reorder must not change it, because a run's record is kept by id and the
 // pair (revision digest, suite digest) is what a verdict is bound to.
+//
+// Key order is not exercised here: a spec decoded into the Go type has no key
+// order left to vary. TestSuiteDigestIsPinned holds it, because a digest whose
+// keys were not sorted would not match the independently computed golden.
 func TestSuiteDigestIsStableAndSensitive(t *testing.T) {
 	want := digest(t, spec(t, base))
 
 	stable := map[string]string{
-		"keys written in another order": `
-caseTimeoutSeconds: 10
-metrics:
-  - {threshold: "0.66", name: task_completion}
-dataset:
-  cases:
-    - expect: {contains: "500"}
-      message: "What is the deductible on policy P-1042?"
-      id: deductible-lookup
-    - expect: {contains: "cannot help with travel"}
-      id: refuses-travel
-      message: "Book me a flight to Lisbon."
-    - {message: "status", expect: {equals: "ok"}, id: health}
-`,
 		"cases in another order": `
 dataset:
   cases:
@@ -141,6 +131,26 @@ func TestSuiteDigestIsPinned(t *testing.T) {
 	const golden = "3f304ca25896938de0b4f50589b0e60c7fb538b9744a81040c2c163eda769fd9"
 	if got := digest(t, spec(t, base)); got != golden {
 		t.Errorf("the suite digest of design 16 §1.1's realistic suite is %s, pinned %s", got, golden)
+	}
+}
+
+// The canonical form is pinned for characters encoders disagree on, too: HTML
+// characters are written raw, non-ASCII is written as UTF-8, a control
+// character as \u00XX, and U+2028 and U+2029 escaped. Python's json.dumps does
+// not escape U+2028 by itself, so the independent computation escapes it
+// explicitly — the point being that the rule is stated and held, so a change
+// to it cannot reopen every failed pair silently.
+func TestSuiteDigestPinsItsEscaping(t *testing.T) {
+	s := spec(t, base)
+	s.Dataset.Cases[0].Message = "caf\u00e9 <b>&</b> one\u2028two\u2029three\u0001\tend"
+	s.Dataset.Cases[0].Expect.Contains = "\u00fcber & <ok>"
+	// Computed as TestSuiteDigestIsPinned's golden, with
+	// .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029") applied to
+	// the encoded text before hashing.
+	const golden = "af3f31e6ca73f2ce064aacd7e6bda34caff445b2366055797aea84f403d8dfae"
+	if got := digest(t, s); got != golden {
+		t.Errorf("the suite digest of a suite with HTML, non-ASCII, line-separator and control "+
+			"characters is %s, pinned %s", got, golden)
 	}
 }
 

@@ -3265,8 +3265,8 @@ Blocked was computed, if one was.<br/>
 
 
 
-EvalCaseRecord is one case's entry in a run. Only id, outcome and reason
-are recorded, never the answer text.
+EvalCaseRecord is one case's entry in a run: id, outcome, reason and the
+claim nonce, never the answer text.
 
 <div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status.eval.cases[index]. Scroll or use the arrow keys to pan.">
 <table>

@@ -1453,8 +1453,8 @@ spec:
                       this record names.
                     items:
                       description: |-
-                        EvalCaseRecord is one case's entry in a run. Only id, outcome and reason
-                        are recorded, never the answer text.
+                        EvalCaseRecord is one case's entry in a run: id, outcome, reason and the
+                        claim nonce, never the answer text.
                       properties:
                         claim:
                           description: Claim is the nonce of the send that claimed
