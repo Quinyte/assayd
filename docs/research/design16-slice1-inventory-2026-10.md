@@ -2,6 +2,8 @@
 
 **Taken 2026-10-12, against `main` at `a831ee8`**, for issue #82 (ADR-0030 build step 4). It reads design 16 §1.1 — the first slice, the only part of design 16 the human has approved (2026-09-14, ADR-0024 Amendment 1) — as amended through A19, whose one question the human answered on 2026-09-17, option (a). Nothing else in design 16 is inventoried, because nothing else may be built.
 
+**Rows updated as build steps merge, 2026-10-14.** Only the rows named here have been re-taken since `a831ee8`; every other row, and the Summary, still describe `a831ee8`. Step 1 (PR #103, merged as `be9f0d5`) built T3, T9, T60 and T65. Step 2 (PR #104) built T38 and T39 and the two "operator process" items they test.
+
 Each item is **BUILT**, **PARTLY BUILT** or **NOT BUILT**, with the evidence: a `file:line`, a test name, or the search that found nothing. A search for absence was run over `api/`, `internal/`, `cmd/`, `charts/`, `test/` and `hack/`. Rows are grouped by where the work lands, not in §1.1's order; each names the §1.1 passage it comes from.
 
 ## Summary
@@ -94,8 +96,8 @@ Each item is **BUILT**, **PARTLY BUILT** or **NOT BUILT**, with the evidence: a 
 
 | Item | Status | Evidence |
 |---|---|---|
-| `GracefulShutdownTimeout` set explicitly to 30 s, with a unit test that it is at least 25 s | NOT BUILT | `ctrl.Options` at `cmd/operator/main.go:153-165` sets no `GracefulShutdownTimeout` |
-| A chart test that keeps `terminationGracePeriodSeconds` at 25 s or more | NOT BUILT | the value is 30 (`charts/assayd/templates/operator.yaml:55`); `grep -rn terminationGrace test/` finds nothing |
+| `GracefulShutdownTimeout` set explicitly to 30 s, with a unit test that it is at least 25 s | BUILT (step 2, PR #104) | `managerOptions` in `cmd/operator/main.go` sets it from `gracefulShutdownTimeout`; `TestManagerWaitsForReconcilesInFlightOnShutdown` and `TestTheManagerIsBuiltFromManagerOptions` (`cmd/operator/main_test.go`) |
+| A chart test that keeps `terminationGracePeriodSeconds` at 25 s or more | BUILT (step 2, PR #104) | the value is 30 (`charts/assayd/templates/operator.yaml:55`); `TestOperatorGracePeriodLetsACaseInFlightFinish` (`test/chart/shutdown_test.go`) |
 | RBAC: `get` on `evalsuites`, and nothing more | NOT BUILT | no `evalsuites` marker among `internal/controller/agent_controller.go:287-362` |
 | The Q6 (c) admission policy: a `ValidatingAdmissionPolicy` admitting an EvalSuite create or update only from a principal the `authorizer` says may `update` `agents` in that namespace, `failurePolicy: Fail`, a `Deny` binding | NOT BUILT | `charts/assayd/templates/admission.yaml` carries `assayd-namespace-labels`, `assayd-gateway-routes`, `assayd-gateway-policies` and `assayd-api-keys` only |
 | The e2e harness applying the EvalSuite CRD | PARTLY BUILT | the harness applies everything in `charts/assayd/crds/` (`hack/e2e.sh:552-558`), so it is built the day the CRD lands there |
@@ -107,7 +109,7 @@ Each item is **BUILT**, **PARTLY BUILT** or **NOT BUILT**, with the evidence: a 
 
 ## The tests §1.1 owes
 
-None of the 69 rows of "Tests the slice owes" is built; a `grep` for each row's subject in `test/` and `internal/` finds nothing. The table numbers the rows in §1.1's order and says which build step below each belongs to. Three rows have a precursor:
+At `a831ee8` none of the 69 rows of "Tests the slice owes" was built; a `grep` for each row's subject in `test/` and `internal/` finds nothing. The table numbers the rows in §1.1's order and says which build step below each belongs to; a row built since then says so in its Step cell. Three rows have a precursor:
 
 - **T27** (the CRD installed after the manager starts): `TestEvalSuiteDetectorSeesTheCRDAppear` proves the detector, not a manager with a gated Agent.
 - **T63** (a gate added over a serving revision): `TestAddingGatesToARunningAgentDoesNotHoldIt` proves the no-hold half, not `ActiveRevisionNotEvaluated`.
@@ -117,13 +119,13 @@ None of the 69 rows of "Tests the slice owes" is built; a `grep` for each row's 
 |---|---|---|---|
 | T1 | unit | the outcome table, one case per row | 3 |
 | T2 | unit | the threshold boundary, `"0.666"` and `"0.667"` | 3 |
-| T3 | unit | the suite digest's stability and sensitivity | 1 |
+| T3 | unit | the suite digest's stability and sensitivity | 1 — BUILT: `TestSuiteDigestIsStableAndSensitive` (`internal/evalsuite/digest_test.go`, over `internal/evalsuite/digest.go`) |
 | T4 | unit | the request's header, role, `messageId`, no `contextId`, no `configuration` | 3 |
 | T5 | unit | the endpoint join, and the card host never dialled | 3 |
 | T6 | unit | a `307` is `ProtocolError` and is not followed | 3 |
 | T7 | unit | a timeout is `Unreachable` within the bound | 3 |
 | T8 | unit | the 1 MiB cap | 3 |
-| T9 | unit | the echo refusal | 1 |
+| T9 | unit | the echo refusal | 1 — BUILT: `TestEvalSuiteRefusesACaseItsOwnMessageSatisfies` (`api/v1alpha1/evalsuite_schema_test.go`, over `api/v1alpha1/evalsuite_types.go`) |
 | T10 | envtest | a second revision holds `EvalRunning`, promotes only on `Passed` | 6 |
 | T11 | envtest | a failing case holds with `EvalFailed`; no re-send | 6 |
 | T12 | envtest | the collision pair does not promote | 5 |
@@ -152,8 +154,8 @@ None of the 69 rows of "Tests the slice owes" is built; a `grep` for each row's 
 | T35 | envtest | graceful shutdown, with the hook before `ctx.Err()` | 6 |
 | T36 | envtest | a handover: the record drops on `Interrupted` | 6 |
 | T37 | unit | an ambiguous claim sends nothing | 6 |
-| T38 | chart | `terminationGracePeriodSeconds` ≥ 25 | 2 |
-| T39 | unit | `GracefulShutdownTimeout` ≥ 25 s | 2 |
+| T38 | chart | `terminationGracePeriodSeconds` ≥ 25 | 2 — BUILT: `TestOperatorGracePeriodLetsACaseInFlightFinish` (`test/chart/shutdown_test.go`) |
+| T39 | unit | `GracefulShutdownTimeout` ≥ 25 s | 2 — BUILT: `TestManagerWaitsForReconcilesInFlightOnShutdown`, with `TestTheManagerIsBuiltFromManagerOptions` holding `run()` to `managerOptions` (`cmd/operator/main_test.go`) |
 | T40 | unit | the requeue field's zero-value resolution | 6 |
 | T41 | envtest | a refused `Adopt` evaluates and promotes | 7 |
 | T42 | envtest | a J2 `Lock` that can finish only through a promotion | 7 |
@@ -174,12 +176,12 @@ None of the 69 rows of "Tests the slice owes" is built; a `grep` for each row's 
 | T57 | envtest | an exempt `Lock` with an unusable binding: no write loop | 7 |
 | T58 | envtest | a stale hold clears when the `Lock` is abandoned | 7 |
 | T59 | envtest | a suite reordered mid-run | 6 |
-| T60 | envtest | the CRD installs at 4096/512; the echo rule with its guards | 1 |
+| T60 | envtest | the CRD installs at 4096/512; the echo rule with its guards | 1 — BUILT: `TestTheGeneratedEvalSuiteCRDInstallsAndRefusesAnEcho` (`test/envtest/evalsuite_admission_test.go`, over `config/crd/assayd.dev_evalsuites.yaml`) |
 | T61 | envtest | Q6 (c) with impersonation | 9 |
 | T62 | e2e | Q6 (c) on k3s v1.33.6 | 9 |
 | T63 | envtest | `ActiveRevisionNotEvaluated`; `NoGatesDeclared` on removal | 5 |
 | T64 | envtest | generation lag: the old candidate is sent nothing | 6 |
-| T65 | envtest | admission refuses each malformed suite and a second gate, one rule per case | 1 |
+| T65 | envtest | admission refuses each malformed suite and a second gate, one rule per case | 1 — BUILT: `TestAdmissionRefusesEachMalformedSuiteAndASecondGate` (`test/envtest/evalsuite_admission_test.go`, over `api/v1alpha1/evalsuite_types.go`) |
 | T66 | envtest | J2 on a gated Agent: zero hits until the `Lock` is `Served` | 7 |
 | T67 | envtest | a missing-policy `Lock` recorded when a `Passed` candidate promotes | 7 |
 | T68 | e2e | `TestARevisionIsEvaluatedBeforeItTakesTraffic` | 10 |

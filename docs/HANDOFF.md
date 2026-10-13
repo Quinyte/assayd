@@ -199,7 +199,7 @@ versions of one graph, and the seal firing after the canary begins.
 
 ```
 make test      # 7 layers — the pre-commit gate; ran before every commit
-make race      # internal/... api/...
+make race      # internal/... api/... cmd/...
 make verify    # generation reproducible AND committed (fails on ANY uncommitted file)
 make e2e                  # REAL k3d cluster — creates assayd-local
 make conformance-cluster  # REAL k3d cluster — creates assayd-conformance
