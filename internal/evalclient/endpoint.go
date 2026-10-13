@@ -52,12 +52,13 @@ func (e *BindingError) Reason() string { return ReasonBindingUnsupported }
 // one judged: a refused entry is not passed over for a later one.
 //
 // An entry that names a tenant is refused too, which design 16 §1.1 does not
-// list: #108 asks the human whether to keep this refusal or send the tenant. A2A requires a client to send an interface's tenant with every
-// request, and the eval's SendMessageRequest carries none, so sending would
-// either be refused by an honest agent — failing the candidate, finally, for
-// the eval's own omission — or be routed to some other tenant, whose answers
-// the verdict would then certify. A refusal holds the candidate instead, as
-// the other refusals do, and the reason says why.
+// list: #108 asks the human whether to keep this refusal or send the tenant.
+// A2A requires a client to send an interface's tenant with every request, and
+// the eval's SendMessageRequest carries none, so sending would either be
+// refused by an honest agent — failing the candidate, finally, for the eval's
+// own omission — or be routed to some other tenant, whose answers the verdict
+// would then certify. A refusal holds the candidate instead, as the other
+// refusals do, and the reason says why.
 func EndpointPath(interfaces []Interface) (string, error) {
 	for i, in := range interfaces {
 		if in.ProtocolBinding != "HTTP+JSON" || in.ProtocolVersion != "1.0" {

@@ -157,7 +157,10 @@ func TestATenantedEntryIsRefusedNotSkipped(t *testing.T) {
 }
 
 // A card in protojson's own field names decodes into Interface, tenant
-// included: the tags are what make every rule above fire on a real card.
+// included, so the rules above see on a real card what the tests give them.
+// The eval controller must decode its card into Interface, or test its own
+// decoder with a tenanted card: internal/controller's card type has no tenant
+// field, and an Interface built from it would make the tenant refusal dead.
 func TestACardDecodesIntoInterfaces(t *testing.T) {
 	var card struct {
 		SupportedInterfaces []Interface `json:"supportedInterfaces"`
