@@ -153,8 +153,6 @@ func TestOutcomeTable(t *testing.T) {
 			fail(ReasonProtocolError)},
 		{"a part that is text and a null data", 200, `{"message":{"parts":[{"text":"500","data":null}]}}`,
 			contains("500"), fail(ReasonProtocolError)},
-		// A field the client does not read is ignored, as a newer minor
-		// version's reader must.
 		// The duplicate-key check tracks which strings are keys: a value that
 		// spells a sibling key, and a string repeated in an array, are not
 		// duplicate keys.
@@ -167,6 +165,8 @@ func TestOutcomeTable(t *testing.T) {
 			fail(ReasonProtocolError)},
 		{"a number too large for a float, in a field never read", 200,
 			`{"message":{"parts":[{"text":"500"}]},"extra":1e400}`, contains("500"), pass},
+		// A field the client does not read is ignored, as a newer minor
+		// version's reader must.
 		{"unknown fields", 200, `{"task":{"id":"t","kind":"task","status":{"state":"TASK_STATE_COMPLETED"},` +
 			`"artifacts":[{"artifactId":"a","extensions":[],"parts":[{"text":"500","metadata":{"k":"v"}}]}]},"extra":1}`,
 			contains("500"), pass},
@@ -500,3 +500,13 @@ func TestABodyThatBreaksOffIsAProtocolError(t *testing.T) {
 type errReader struct{}
 
 func (errReader) Read([]byte) (int, error) { return 0, fmt.Errorf("connection reset by peer") }
+
+// noDuplicateKeys is only ever given JSON that score has already parsed; on
+// anything it cannot tokenize it still says no.
+func TestNoDuplicateKeysRefusesWhatItCannotRead(t *testing.T) {
+	for _, in := range []string{"{", `{"a":}`, `{"a":1,}`} {
+		if noDuplicateKeys([]byte(in)) {
+			t.Errorf("noDuplicateKeys(%q) = true; malformed JSON must not pass", in)
+		}
+	}
+}
