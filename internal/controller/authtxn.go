@@ -413,7 +413,7 @@ func (r *AgentReconciler) reportAboveServed(ctx context.Context, agent *assaydv1
 	if !r.Gateway.Enabled || auth == nil || auth.Mode == "" || auth.Transaction != nil {
 		return
 	}
-	above := r.gatewayAuthPolicies(ctx, r.Gateway.Hostname(agent.Name, agent.Namespace))
+	above := r.policyReads().gatewayAuthPolicies(ctx, r.Gateway.Hostname(agent.Name, agent.Namespace))
 	if !above.stands() {
 		return
 	}
@@ -734,7 +734,7 @@ func (r *AgentReconciler) gatewayStep(ctx context.Context, agent *assaydv1alpha1
 	}
 	// Listed live, every pass: the watch cache holds only policies carrying
 	// assayd.dev/agent, and a foreign policy is exactly one it may not hold.
-	foreign, err := r.foreignTrafficPolicies(ctx, agent, runNS, name)
+	foreign, err := r.policyReads().foreignTrafficPolicies(ctx, agent, runNS, name)
 	if err != nil {
 		return out, err
 	}
@@ -1323,7 +1323,7 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 			// answers; and it is read again after a 401, and only that second
 			// read can let the 401 through.
 			host := r.Gateway.Hostname(agent.Name, agent.Namespace)
-			above = r.gatewayAuthPolicies(ctx, host)
+			above = r.policyReads().gatewayAuthPolicies(ctx, host)
 			held = above.stands()
 			out.aboveRead = true
 			if held {
@@ -1358,7 +1358,7 @@ func (r *AgentReconciler) runCreate(ctx context.Context, agent *assaydv1alpha1.A
 			// window nothing here measures.
 			got401 := perr == nil && answer.Code == 401
 			if got401 {
-				again := r.gatewayAuthPolicies(ctx, host)
+				again := r.policyReads().gatewayAuthPolicies(ctx, host)
 				if again.stands() || !held {
 					above = again
 				}
@@ -1902,7 +1902,7 @@ steps:
 			// A75: read on every ProbingAfter pass, and again after a 401 that
 			// would be credited, as Create reads it.
 			host := r.Gateway.Hostname(agent.Name, agent.Namespace)
-			above = r.gatewayAuthPolicies(ctx, host)
+			above = r.policyReads().gatewayAuthPolicies(ctx, host)
 			held = above.stands()
 			out.aboveRead = true
 			if held {
@@ -2015,7 +2015,7 @@ steps:
 				// they gate both attributions: the card digest, and an observed
 				// 200, whose transition may be the Gateway's rather than
 				// <agent>-auth's (A75).
-				again := r.gatewayAuthPolicies(ctx, host)
+				again := r.policyReads().gatewayAuthPolicies(ctx, host)
 				if again.stands() || !held {
 					above = again
 				}

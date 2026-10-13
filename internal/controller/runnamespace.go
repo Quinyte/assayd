@@ -845,10 +845,7 @@ func (r *AgentReconciler) releaseRunNamespaceIfLast(ctx context.Context, agent *
 // reader is the uncached reader for the live lists the protocol requires. In
 // envtest the client itself is uncached and Reader may be nil.
 func (r *AgentReconciler) reader() client.Reader {
-	if r.Reader != nil {
-		return r.Reader
-	}
-	return r.Client
+	return r.policyReads().reader()
 }
 
 // mirrorInto copies every ResourceQuota and LimitRange of the source namespace

@@ -34,7 +34,7 @@ import (
 // reported here. Measured on 1.5.0: for A74 case 7's shape
 // the route's authentication replaces the Gateway's, but authorization rules
 // merge across the two, so a Gateway-level Allow widens the route (§3.2, A75).
-func (r *AgentReconciler) foreignTrafficPolicies(ctx context.Context, agent *assaydv1alpha1.Agent,
+func (r gatewayPolicyReads) foreignTrafficPolicies(ctx context.Context, agent *assaydv1alpha1.Agent,
 	runNS, route string) ([]string, error) {
 	own, err := compiler.AuthPolicyName(agent.Name)
 	if err != nil {
@@ -79,7 +79,7 @@ const policyPageSize = 250
 // served lists nothing, as §3.2's foreign detection reads it; without, as
 // A75's read needs, it is an error like any other, because a list that cannot
 // be made holds there. `purpose` says what the list is for, in the error.
-func (r *AgentReconciler) listPolicies(ctx context.Context, ns, purpose string,
+func (r gatewayPolicyReads) listPolicies(ctx context.Context, ns, purpose string,
 	notServedIsEmpty bool) ([]unstructured.Unstructured, error) {
 	var items []unstructured.Unstructured
 	cont := ""
@@ -104,7 +104,7 @@ func (r *AgentReconciler) listPolicies(ctx context.Context, ns, purpose string,
 // servingRouteLabels are the labels a selector is matched against: the stored
 // route's, or, while it does not exist, the provenance labels every serving
 // route this operator writes carries.
-func (r *AgentReconciler) servingRouteLabels(ctx context.Context, agent *assaydv1alpha1.Agent,
+func (r gatewayPolicyReads) servingRouteLabels(ctx context.Context, agent *assaydv1alpha1.Agent,
 	runNS, route string) (map[string]string, error) {
 	var rt gatewayv1.HTTPRoute
 	switch err := r.Get(ctx, client.ObjectKey{Namespace: runNS, Name: route}, &rt); {
