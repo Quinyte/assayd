@@ -116,10 +116,48 @@ func TestOutcomeTable(t *testing.T) {
 			fail(ReasonProtocolError)},
 		{"a part that is not an object", 200, `{"message":{"parts":["500"]}}`, contains("500"), fail(ReasonProtocolError)},
 		{"text that is not a string", 200, `{"message":{"parts":[{"text":500}]}}`, contains("500"), fail(ReasonProtocolError)},
+		// 3 is TASK_STATE_COMPLETED by number, which a protojson parser
+		// accepts; A2A 1.0 §5.5 requires an enum to be written by its name.
 		{"a state that is not a string", 200, `{"task":{"status":{"state":3}}}`, contains("x"), fail(ReasonProtocolError)},
+		// Each member on the answer path, of the wrong JSON type.
+		{"a task that is not an object", 200, `{"task":1}`, contains("x"), fail(ReasonProtocolError)},
+		{"a message that is not an object", 200, `{"message":"500"}`, contains("500"), fail(ReasonProtocolError)},
+		{"a status that is not an object", 200, `{"task":{"status":"TASK_STATE_COMPLETED"}}`, contains("x"),
+			fail(ReasonProtocolError)},
+		{"artifacts that are not a list", 200, `{"task":{"status":{"state":"TASK_STATE_COMPLETED"},"artifacts":{}}}`,
+			contains("x"), fail(ReasonProtocolError)},
+		{"an artifact that is not an object", 200,
+			`{"task":{"status":{"state":"TASK_STATE_COMPLETED"},"artifacts":[1,{"parts":[{"text":"500"}]}]}}`,
+			contains("500"), fail(ReasonProtocolError)},
+		{"a null artifact", 200,
+			`{"task":{"status":{"state":"TASK_STATE_COMPLETED"},"artifacts":[null,{"parts":[{"text":"500"}]}]}}`,
+			contains("500"), fail(ReasonProtocolError)},
+		{"task parts that are not a list", 200,
+			`{"task":{"status":{"state":"TASK_STATE_COMPLETED"},"artifacts":[{"parts":{"text":"500"}}]}}`,
+			contains("500"), fail(ReasonProtocolError)},
+		{"message parts that are not a list", 200, `{"message":{"parts":{"text":"500"}}}`, contains("500"),
+			fail(ReasonProtocolError)},
+		// A null member is unset, as protojson reads it.
+		{"a null message beside a task", 200,
+			`{"task":{"status":{"state":"TASK_STATE_COMPLETED"},"artifacts":[{"parts":[{"text":"500"}]}]},"message":null}`,
+			contains("500"), pass},
+		{"null raw and url beside text", 200, `{"message":{"parts":[{"text":"500","raw":null,"url":null}]}}`,
+			contains("500"), pass},
+		{"a null text is no text part", 200, `{"message":{"parts":[{"text":null,"data":{}},{"text":"ok"}]}}`,
+			equals("ok"), pass},
+		// The oneof: text beside raw, url, or data — a data of null included,
+		// because data is a google.protobuf.Value and its null is a value.
+		{"a part that is text and raw", 200, `{"message":{"parts":[{"text":"500","raw":"AA=="}]}}`, contains("500"),
+			fail(ReasonProtocolError)},
+		{"a part that is text and url", 200, `{"message":{"parts":[{"text":"500","url":"u"}]}}`, contains("500"),
+			fail(ReasonProtocolError)},
+		{"a part that is text and a null data", 200, `{"message":{"parts":[{"text":"500","data":null}]}}`,
+			contains("500"), fail(ReasonProtocolError)},
 		// A field the client does not read is ignored, as a newer minor
 		// version's reader must.
-		{"unknown fields", 200, `{"task":{"id":"t","kind":"task","status":{"state":"TASK_STATE_COMPLETED","timestamp":"x"},` +
+		{"a number too large for a float, in a field never read", 200,
+			`{"message":{"parts":[{"text":"500"}]},"extra":1e400}`, contains("500"), pass},
+		{"unknown fields", 200, `{"task":{"id":"t","kind":"task","status":{"state":"TASK_STATE_COMPLETED"},` +
 			`"artifacts":[{"artifactId":"a","extensions":[],"parts":[{"text":"500","metadata":{"k":"v"}}]}]},"extra":1}`,
 			contains("500"), pass},
 		// Admission sets exactly one of contains and equals; an expectation
@@ -231,7 +269,7 @@ func TestTheDeadlineIsCaseTimeoutSeconds(t *testing.T) {
 		})}
 		c.Send(context.Background(), Case{Address: "127.0.0.1:1", Path: "/message:send", Message: "q",
 			Expect: contains("x"), TimeoutSeconds: in})
-		if left > want || left < want-time.Second {
+		if left > want || left < want-100*time.Millisecond {
 			t.Errorf("caseTimeoutSeconds %d: the request's deadline was %s away, want %s", in, left, want)
 		}
 	}
@@ -242,13 +280,17 @@ func TestTheDeadlineIsCaseTimeoutSeconds(t *testing.T) {
 // itself, and Interrupted would send its reader looking for an operator
 // restart that never happened.
 func TestACallerDeadlineIsUnreachable(t *testing.T) {
-	addr := blocker(t, false)
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	got := New().Send(ctx, Case{Address: addr, Path: "/message:send", Message: "q", Expect: contains("x"),
-		TimeoutSeconds: 5})
-	if got != fail(ReasonUnreachable) {
-		t.Errorf("outcome %+v, want Unreachable", got)
+	for name, header := range map[string]bool{"no answer": false, "a body that stalls": true} {
+		t.Run(name, func(t *testing.T) {
+			addr := blocker(t, header)
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			got := New().Send(ctx, Case{Address: addr, Path: "/message:send", Message: "q", Expect: contains("x"),
+				TimeoutSeconds: 5})
+			if got != fail(ReasonUnreachable) {
+				t.Errorf("outcome %+v, want Unreachable", got)
+			}
+		})
 	}
 }
 

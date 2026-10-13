@@ -63,18 +63,21 @@ func TestEndpointTakesTheFirstHTTPJSON10Entry(t *testing.T) {
 // names its preferred interface first and a later entry is not what the agent
 // asked to be called on.
 func TestEndpointRefusals(t *testing.T) {
-	// Every URL names the marker host, so a message that quoted any part of a
-	// card's interfaces would carry it.
+	// Every URL carries the marker in its host, path, query and fragment, and
+	// the passed-over entry in its binding, so a message that quoted any part
+	// of a card's interfaces would carry it.
 	const m = "marker.invalid"
+	const p = "/marker"
 	for name, ifaces := range map[string][]Interface{
-		"query":                {httpJSON("http://" + m + "/a2a?tenant=t")},
-		"empty query":          {httpJSON("http://" + m + "/a2a?")},
-		"fragment":             {httpJSON("http://" + m + "/a2a#frag")},
-		"empty fragment":       {httpJSON("http://" + m + "/a2a#")},
-		"unparseable":          {httpJSON("http://" + m + "/%zz")},
-		"no entries":           nil,
-		"no HTTP+JSON 1.0":     {{URL: "http://" + m + "/", ProtocolBinding: "JSONRPC", ProtocolVersion: "1.0"}},
-		"refused, not skipped": {httpJSON("http://" + m + "/a?q=1"), httpJSON("http://" + m + "/b")},
+		"query":            {httpJSON("http://" + m + p + "?marker=1")},
+		"empty query":      {httpJSON("http://" + m + p + "?")},
+		"fragment":         {httpJSON("http://" + m + p + "#marker")},
+		"empty fragment":   {httpJSON("http://" + m + p + "#")},
+		"unparseable":      {httpJSON("http://" + m + p + "/%zz?marker#marker")},
+		"no entries":       nil,
+		"no HTTP+JSON 1.0": {{URL: "http://" + m + p, ProtocolBinding: "marker", ProtocolVersion: "1.0"}},
+		"refused, not skipped": {httpJSON("http://" + m + p + "?marker=1#marker"),
+			httpJSON("http://" + m + "/b")},
 	} {
 		got, err := EndpointPath(ifaces)
 		var be *BindingError
