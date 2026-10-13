@@ -126,9 +126,10 @@ func New() *Client {
 // bound it tighter, because Unreachable says the candidate gave no answer
 // within caseTimeoutSeconds, and a shorter wait did not establish that (#105).
 //
-// Unreachable is every failure before a status line was read: a refused or
+// Unreachable is every failure before a status line was read — a refused or
 // reset connection, an address that does not resolve, an answer that is not
-// HTTP, or the timeout. Design 16 §1.1 step 6 names a refused connection and
+// HTTP — and the timeout, whether it passes before the status line or while a
+// 200's body is still arriving. Design 16 §1.1 step 6 names a refused connection and
 // a timeout; the other transport failures are not in its table, and are read
 // as the candidate not being reached rather than as its protocol fault.
 func (c *Client) Send(ctx context.Context, cs Case) Outcome {

@@ -76,6 +76,8 @@ func TestEndpointRefusals(t *testing.T) {
 		"unparseable":      {httpJSON("http://" + m + p + "/%zz?marker#marker")},
 		"no entries":       nil,
 		"no HTTP+JSON 1.0": {{URL: "http://" + m + p, ProtocolBinding: "marker", ProtocolVersion: "1.0"}},
+		"a tenant": {{URL: "http://" + m + p, ProtocolBinding: "HTTP+JSON", ProtocolVersion: "1.0",
+			Tenant: "marker"}},
 		"refused, not skipped": {httpJSON("http://" + m + p + "?marker=1#marker"),
 			httpJSON("http://" + m + "/b")},
 	} {

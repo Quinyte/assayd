@@ -155,6 +155,16 @@ func TestOutcomeTable(t *testing.T) {
 			contains("500"), fail(ReasonProtocolError)},
 		// A field the client does not read is ignored, as a newer minor
 		// version's reader must.
+		// The duplicate-key check tracks which strings are keys: a value that
+		// spells a sibling key, and a string repeated in an array, are not
+		// duplicate keys.
+		{"a value that spells a key", 200,
+			`{"task":{"id":"status","status":{"state":"TASK_STATE_COMPLETED"},"artifacts":[{"parts":[{"text":"text"}]}]}}`,
+			equals("text"), pass},
+		{"repeated strings in an array", 200,
+			`{"message":{"extensions":["a","b","a"],"parts":[{"text":"500"}]}}`, contains("500"), pass},
+		{"a body that is not UTF-8", 200, "{\"message\":{\"parts\":[{\"text\":\"500\xff\"}]}}", contains("500"),
+			fail(ReasonProtocolError)},
 		{"a number too large for a float, in a field never read", 200,
 			`{"message":{"parts":[{"text":"500"}]},"extra":1e400}`, contains("500"), pass},
 		{"unknown fields", 200, `{"task":{"id":"t","kind":"task","status":{"state":"TASK_STATE_COMPLETED"},` +
