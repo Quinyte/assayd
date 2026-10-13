@@ -40,6 +40,11 @@ import (
 
 var scheme = runtime.NewScheme()
 
+// gracefulShutdownTimeout is the manager's GracefulShutdownTimeout (design 16
+// §1.1, A7). A claim, a case and its record take at most 5 s + 10 s + 5 s =
+// 20 s, so 30 s lets the case in flight at a graceful stop finish and record.
+const gracefulShutdownTimeout = 30 * time.Second
+
 func init() {
 	utilruntimeMust(clientgoscheme.AddToScheme(scheme))
 	utilruntimeMust(assaydv1alpha1.AddToScheme(scheme))
@@ -132,37 +137,7 @@ func run() error {
 		return fmt.Errorf("load kubeconfig: %w", err)
 	}
 
-	// ConfigMaps and Secrets are read UNCACHED, and the reason is not performance.
-	//
-	// A cached client LISTs and WATCHes every object of a type it serves, cluster
-	// wide, the first time one is read — so resolving one Agent's env source
-	// would put a plaintext copy of every Secret in the cluster into this
-	// process's memory. For a feature whose whole argument is that a leaked copy
-	// of a Secret's bytes is a cost worth bounding, caching all of them is the
-	// larger version of the same mistake, and an OOM risk besides.
-	//
-	// It also removes a correctness trap: finalize lists material and releases
-	// the finalizer when it sees none. A cache that has not yet observed a copy
-	// created moments earlier makes that sweep a no-op, the Agent disappears, and
-	// nothing collects the copy afterwards because every remaining path keys on
-	// the UID of an Agent that no longer exists.
-	// Namespaces are uncached too: the run-namespace protocol compares a
-	// namespace's UID against its binding record on every reconcile, and a
-	// comparison against a cached object that a recreate has already replaced
-	// is no proof at all (design 02 A60/A61).
-	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Client: client.Options{Cache: &client.CacheOptions{
-			DisableFor: []client.Object{&corev1.ConfigMap{}, &corev1.Secret{}, &corev1.Namespace{}},
-		}},
-		Scheme:                 scheme,
-		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         leaderElect,
-		LeaderElectionID:       "agent-operator.assayd.dev",
-		// Release the lease on graceful shutdown so a rolling update does not wait
-		// out the full lease duration before the new pod can reconcile.
-		LeaderElectionReleaseOnCancel: true,
-	})
+	mgr, err := ctrl.NewManager(cfg, managerOptions(metricsAddr, probeAddr, leaderElect))
 	if err != nil {
 		return fmt.Errorf("build manager: %w", err)
 	}
@@ -245,6 +220,51 @@ func run() error {
 		return fmt.Errorf("manager exited: %w", err)
 	}
 	return nil
+}
+
+// managerOptions is the manager's configuration, split out of run so a unit
+// test can read what the binary actually passes (design 16 §1.1 T39).
+func managerOptions(metricsAddr, probeAddr string, leaderElect bool) ctrl.Options {
+	shutdown := gracefulShutdownTimeout
+	return ctrl.Options{
+		// ConfigMaps and Secrets are read UNCACHED, and the reason is not performance.
+		//
+		// A cached client LISTs and WATCHes every object of a type it serves, cluster
+		// wide, the first time one is read — so resolving one Agent's env source
+		// would put a plaintext copy of every Secret in the cluster into this
+		// process's memory. For a feature whose whole argument is that a leaked copy
+		// of a Secret's bytes is a cost worth bounding, caching all of them is the
+		// larger version of the same mistake, and an OOM risk besides.
+		//
+		// It also removes a correctness trap: finalize lists material and releases
+		// the finalizer when it sees none. A cache that has not yet observed a copy
+		// created moments earlier makes that sweep a no-op, the Agent disappears, and
+		// nothing collects the copy afterwards because every remaining path keys on
+		// the UID of an Agent that no longer exists.
+		// Namespaces are uncached too: the run-namespace protocol compares a
+		// namespace's UID against its binding record on every reconcile, and a
+		// comparison against a cached object that a recreate has already replaced
+		// is no proof at all (design 02 A60/A61).
+		Client: client.Options{Cache: &client.CacheOptions{
+			DisableFor: []client.Object{&corev1.ConfigMap{}, &corev1.Secret{}, &corev1.Namespace{}},
+		}},
+		Scheme:                 scheme,
+		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
+		HealthProbeBindAddress: probeAddr,
+		LeaderElection:         leaderElect,
+		LeaderElectionID:       "agent-operator.assayd.dev",
+		// Release the lease on graceful shutdown so a rolling update does not wait
+		// out the full lease duration before the new pod can reconcile.
+		LeaderElectionReleaseOnCancel: true,
+		// How long the manager waits, after cancelling the reconcile context,
+		// for reconciles in flight. Set explicitly although it equals
+		// controller-runtime's default: design 16 A7 bounds an eval case in
+		// flight at 20 s and needs that bound to rest on this line, not on a
+		// library default that could move unnoticed. The kubelet's bound on
+		// the same wait is the chart's terminationGracePeriodSeconds, which
+		// test/chart holds at 25 s or more (T38).
+		GracefulShutdownTimeout: &shutdown,
+	}
 }
 
 // saNamespace reads the namespace the kubelet projects for every Pod, or "".

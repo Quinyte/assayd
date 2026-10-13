@@ -109,13 +109,13 @@ print-crdoc-version: ## the pinned crdoc version, for CI to key a cache on
 fmt: ; go fmt ./...
 vet: ; go vet ./...
 unit: ## pure logic, no cluster
-	go test ./internal/... ./api/... -count=1
+	go test ./internal/... ./api/... ./cmd/... -count=1
 race: ## unit tests under the race detector (required evidence for review)
-	go test -race ./internal/... ./api/... -count=1
+	go test -race ./internal/... ./api/... ./cmd/... -count=1
 envtest: $(SETUP_ENVTEST) ## reconcile behaviour against a real API server
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S) -p path)" go test ./test/envtest/... -count=$(ENVTEST_COUNT) -timeout=$(ENVTEST_TIMEOUT)
 cover: ## coverage over changed packages
-	go test ./internal/... ./api/... -coverprofile=cover.out -count=1 && go tool cover -func=cover.out | tail -1
+	go test ./internal/... ./api/... ./cmd/... -coverprofile=cover.out -count=1 && go tool cover -func=cover.out | tail -1
 docs: ## a superseded guarantee must not survive in the text implementers build from
 	go test ./test/docs/... -count=1
 
