@@ -122,7 +122,9 @@ func New() *Client {
 // The request is bounded by the case's timeout, derived from ctx. If ctx is
 // cancelled first, the outcome is Interrupted, never Unreachable. A deadline
 // on ctx that passes first is a timeout like the case's own, Unreachable: the
-// eval controller may bound the send by caseTimeoutSeconds itself.
+// eval controller may bound the send by caseTimeoutSeconds itself. It must not
+// bound it tighter, because Unreachable says the candidate gave no answer
+// within caseTimeoutSeconds, and a shorter wait did not establish that (#105).
 //
 // Unreachable is every failure before a status line was read: a refused or
 // reset connection, an address that does not resolve, an answer that is not
