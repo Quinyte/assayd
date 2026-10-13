@@ -501,10 +501,12 @@ type errReader struct{}
 
 func (errReader) Read([]byte) (int, error) { return 0, fmt.Errorf("connection reset by peer") }
 
-// noDuplicateKeys is only ever given JSON that score has already parsed; on
-// anything it cannot tokenize it still says no.
+// noDuplicateKeys is only ever given JSON that score has already parsed. A
+// document cut off inside an object or an array, which the tokenizer reports
+// as a plain end, or one that does not tokenize, still reads as no. (An empty
+// document reads as yes: it has no keys, and score refuses it first.)
 func TestNoDuplicateKeysRefusesWhatItCannotRead(t *testing.T) {
-	for _, in := range []string{"{", `{"a":}`, `{"a":1,}`} {
+	for _, in := range []string{"{", "[", `{"a":[`, `{"a":1`, `{"a":{"b":1}`, `{"a":}`, `{"a":1,}`} {
 		if noDuplicateKeys([]byte(in)) {
 			t.Errorf("noDuplicateKeys(%q) = true; malformed JSON must not pass", in)
 		}
