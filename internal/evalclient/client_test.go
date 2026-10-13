@@ -103,6 +103,28 @@ func TestOutcomeTable(t *testing.T) {
 		{"an array", 200, `[` + completed + `]`, contains("500"), fail(ReasonProtocolError)},
 		{"trailing data", 200, completed + `{}`, contains("500"), fail(ReasonProtocolError)},
 		{"empty body", 200, ``, contains("500"), fail(ReasonProtocolError)},
+		// encoding/json's struct decoding would read each of these as a
+		// SendMessageResponse; protojson writes none of them.
+		{"keys in another case", 200, strings.ReplaceAll(completed, `"task"`, `"Task"`), contains("500"),
+			fail(ReasonProtocolError)},
+		{"a duplicate task key", 200,
+			`{"task":{"status":{"state":"TASK_STATE_FAILED"},"artifacts":[{"parts":[{"text":"500"}]}]},` +
+				`"task":{"status":{"state":"TASK_STATE_COMPLETED"}}}`, contains("500"), fail(ReasonProtocolError)},
+		{"a duplicate key deeper down", 200,
+			`{"message":{"parts":[{"text":"500","text":"600"}]}}`, contains("600"), fail(ReasonProtocolError)},
+		{"a part that is text and data", 200, `{"message":{"parts":[{"text":"500","data":{}}]}}`, contains("500"),
+			fail(ReasonProtocolError)},
+		{"a part that is not an object", 200, `{"message":{"parts":["500"]}}`, contains("500"), fail(ReasonProtocolError)},
+		{"text that is not a string", 200, `{"message":{"parts":[{"text":500}]}}`, contains("500"), fail(ReasonProtocolError)},
+		{"a state that is not a string", 200, `{"task":{"status":{"state":3}}}`, contains("x"), fail(ReasonProtocolError)},
+		// A field the client does not read is ignored, as a newer minor
+		// version's reader must.
+		{"unknown fields", 200, `{"task":{"id":"t","kind":"task","status":{"state":"TASK_STATE_COMPLETED","timestamp":"x"},` +
+			`"artifacts":[{"artifactId":"a","extensions":[],"parts":[{"text":"500","metadata":{"k":"v"}}]}]},"extra":1}`,
+			contains("500"), pass},
+		// Admission sets exactly one of contains and equals; an expectation
+		// with neither is satisfied by nothing.
+		{"an empty expectation", 200, completed, assaydv1alpha1.EvalExpect{}, fail(ReasonMismatch)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := send(t, stub(t, tc.code, tc.body), tc.expect); got != tc.want {
@@ -192,21 +214,41 @@ func TestACancelledSendIsInterrupted(t *testing.T) {
 	}
 }
 
-// A zero caseTimeoutSeconds — a suite read without the API server's default —
-// is the CRD's default, 10 s, not no deadline.
-func TestAZeroTimeoutIsTheDefault(t *testing.T) {
-	var left time.Duration
-	c := &Client{HTTP: doerFunc(func(r *http.Request) (*http.Response, error) {
-		d, ok := r.Context().Deadline()
-		if !ok {
-			return nil, fmt.Errorf("no deadline")
+// The request's deadline is caseTimeoutSeconds — not shorter, which would fail
+// every slow but honest candidate, and not longer — and a zero, a suite read
+// without the API server's default, is the CRD's default, 10 s.
+func TestTheDeadlineIsCaseTimeoutSeconds(t *testing.T) {
+	for in, want := range map[int32]time.Duration{0: 10 * time.Second, 1: time.Second, 3: 3 * time.Second,
+		10: 10 * time.Second} {
+		var left time.Duration
+		c := &Client{HTTP: doerFunc(func(r *http.Request) (*http.Response, error) {
+			d, ok := r.Context().Deadline()
+			if !ok {
+				return nil, fmt.Errorf("no deadline")
+			}
+			left = time.Until(d)
+			return nil, fmt.Errorf("stop")
+		})}
+		c.Send(context.Background(), Case{Address: "127.0.0.1:1", Path: "/message:send", Message: "q",
+			Expect: contains("x"), TimeoutSeconds: in})
+		if left > want || left < want-time.Second {
+			t.Errorf("caseTimeoutSeconds %d: the request's deadline was %s away, want %s", in, left, want)
 		}
-		left = time.Until(d)
-		return nil, fmt.Errorf("stop")
-	})}
-	c.Send(context.Background(), Case{Address: "127.0.0.1:1", Path: "/message:send", Message: "q", Expect: contains("x")})
-	if left < 9*time.Second || left > 10*time.Second {
-		t.Errorf("the request's deadline was %s away, want the default 10s", left)
+	}
+}
+
+// A deadline on the caller's context that passes first is a timeout, not an
+// interruption: the eval controller may bound the send by caseTimeoutSeconds
+// itself, and Interrupted would send its reader looking for an operator
+// restart that never happened.
+func TestACallerDeadlineIsUnreachable(t *testing.T) {
+	addr := blocker(t, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	got := New().Send(ctx, Case{Address: addr, Path: "/message:send", Message: "q", Expect: contains("x"),
+		TimeoutSeconds: 5})
+	if got != fail(ReasonUnreachable) {
+		t.Errorf("outcome %+v, want Unreachable", got)
 	}
 }
 
