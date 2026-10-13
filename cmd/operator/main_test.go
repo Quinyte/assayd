@@ -9,6 +9,8 @@ import (
 	"go/token"
 	"testing"
 	"time"
+
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 // T39 (design 16 §1.1, A7). The eval controller sends a case and records its
@@ -68,5 +70,17 @@ func TestTheManagerIsBuiltFromManagerOptions(t *testing.T) {
 	if fn, ok := opts.Fun.(*ast.Ident); !ok || fn.Name != "managerOptions" {
 		t.Fatal("ctrl.NewManager's options are built by something other than managerOptions, so the " +
 			"shutdown bound the test above pins is not the one the binary runs with (design 16 A7)")
+	}
+}
+
+// The gate branch reads the Agent CRD through the manager's uncached reader,
+// which resolves the kind through this scheme (design 16 §1.1 step 11). An
+// unregistered kind fails that read on every gated Agent, and each would hold
+// under EvalRecordUnverifiable for a cause in this binary, not the cluster.
+func TestTheSchemeKnowsTheCustomResourceDefinition(t *testing.T) {
+	gvk := apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition")
+	if !scheme.Recognizes(gvk) {
+		t.Fatalf("the operator's scheme does not register %s, so the gate branch's schema check "+
+			"cannot read the Agent CRD", gvk)
 	}
 }

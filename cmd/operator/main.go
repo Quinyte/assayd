@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
@@ -53,6 +54,12 @@ func init() {
 	// flag would make "the type is unknown" a second, later way for the disabled
 	// tier to fail.
 	utilruntimeMust(gatewayv1.Install(scheme))
+	// The gate branch reads the agents.assayd.dev CRD, uncached by a get, to
+	// check that it keeps status.eval's record (design 16 §1.1 step 11).
+	// Without the types in the scheme that read fails on every gated Agent,
+	// which then holds under EvalRecordUnverifiable for a cause that is not
+	// the cluster's.
+	utilruntimeMust(apiextensionsv1.AddToScheme(scheme))
 }
 
 func main() {
