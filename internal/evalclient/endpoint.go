@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 )
 
 // ReasonBindingUnsupported is the status.eval.blocked reason for a candidate
@@ -53,8 +51,13 @@ func (e *BindingError) Reason() string { return ReasonBindingUnsupported }
 // refused, as is a card with no such entry. The first matching entry is the
 // one judged: a refused entry is not passed over for a later one.
 //
+// So is a path the client would not send exactly as written: one with any
+// percent-escape, or with a byte outside letters, digits and
+// "-" "." "_" "~" "/" ":" "@" "$" "&" "+" "," ";" "=". §1.1 does not list this
+// refusal either (#105 item 8).
+//
 // An entry that names a tenant is refused too, which design 16 §1.1 does not
-// list: #108 asks the human whether to keep this refusal or send the tenant.
+// list; the human decided on 2026-10-18 to keep the refusal (#108).
 // A2A requires a client to send an interface's tenant with every request, and
 // the eval's SendMessageRequest carries none, so sending would either be
 // refused by an honest agent — failing the candidate, finally, for the eval's
@@ -81,35 +84,22 @@ func EndpointPath(interfaces []Interface) (string, error) {
 					"fragment in its url. The eval sends each case to the URL's path alone, so it cannot "+
 					"honour either; serve the interface at a URL with neither", i)}
 		}
-		// The path is checked as decoded first, so that every spelling of one
-		// byte gets one refusal: "%0a" and "%0A" alike are a control
-		// character, "%ff" and "%FF" alike are not UTF-8.
-		if !utf8.ValidString(u.Path) {
+		// The path is admitted only if the client will send it exactly as the
+		// card wrote it: no percent-escape anywhere in it (RawPath is empty,
+		// so Path is what was written), and every byte in pathAllowed, the
+		// bytes url.URL puts on the request line unescaped. Anything else —
+		// an escape, which Path decodes and the client re-encodes its own
+		// way; a byte the client escapes, such as "!", a space or any byte
+		// from 0x80 — would send the candidate a path its card does not
+		// declare, and fail it for good as a ProtocolError. Refused instead
+		// (#105 item 8). TestEveryByteIsSentAsWrittenOrRefused holds the set
+		// to what Send puts on the wire.
+		if u.RawPath != "" || !pathSendsAsWritten(u.Path) {
 			return "", &BindingError{msg: fmt.Sprintf(
 				"the candidate's card declares HTTP+JSON 1.0 at supportedInterfaces[%d] with a url whose "+
-					"path decodes to bytes that are not valid UTF-8, which status.eval cannot record as "+
-					"they are. Serve the interface at a path that decodes to UTF-8", i)}
-		}
-		if strings.ContainsFunc(u.Path, unicode.IsControl) {
-			return "", &BindingError{msg: fmt.Sprintf(
-				"the candidate's card declares HTTP+JSON 1.0 at supportedInterfaces[%d] with a url whose "+
-					"path decodes to a control character. Serve the interface at a path without one", i)}
-		}
-		// Then the path as written against the path the client puts on the
-		// wire, WirePath of the decoded path. They may differ only in what RFC
-		// 3986 §6.2.2 calls equivalent: the case of percent-encoded hex, and
-		// percent-encoded unreserved characters. Anything else — an escaped
-		// slash, "%2F", which the client sends as "/"; or "!", "*", "(", ")",
-		// which it sends as "%21", "%2A", "%28", "%29", not equivalent under §2.2
-		// — would send the candidate a path its card never declared, failed
-		// for good as a ProtocolError. Refused instead (#105 item 8).
-		if normalizePath(u.EscapedPath()) != normalizePath(WirePath(u.Path)) {
-			return "", &BindingError{msg: fmt.Sprintf(
-				"the candidate's card declares HTTP+JSON 1.0 at supportedInterfaces[%d] with a url whose "+
-					"path, as written, is not the path the eval client would send: the client re-encodes "+
-					"it, so the candidate would be sent a path its card does not declare. Write the path "+
-					"without percent-escapes of reserved characters, such as an escaped slash, and "+
-					"without characters the client re-encodes, such as \"!\", \"*\", \"(\" and \")\"", i)}
+					"path holds a character or an escape the eval client cannot send exactly as written. "+
+					"Write the path with only letters, digits, \"-\" \".\" \"_\" \"~\" \"/\" \":\" \"@\" "+
+					"\"$\" \"&\" \"+\" \",\" \";\" \"=\", and no percent-escapes", i)}
 		}
 		if in.Tenant != "" {
 			return "", &BindingError{msg: fmt.Sprintf(
@@ -125,51 +115,18 @@ func EndpointPath(interfaces []Interface) (string, error) {
 		"Declare one"}
 }
 
-// WirePath is the path, as the request line carries it, of a request Send
-// builds for a case whose Path is path: Send builds its URL from Path alone
-// (Case.target), and url.URL renders that with its default escaping.
-// TestWirePathIsWhatSendPutsOnTheWire holds the two together.
-func WirePath(path string) string {
-	return (&url.URL{Path: path}).EscapedPath()
-}
-
-// normalizePath is RFC 3986 §6.2.2's percent-encoding normalization: the hex
-// of every percent-encoding uppercased, and a percent-encoded unreserved
-// character (ALPHA / DIGIT / "-" / "." / "_" / "~") decoded. Two paths that
-// normalize alike name the same resource.
-func normalizePath(p string) string {
-	var b strings.Builder
+// pathSendsAsWritten reports whether every byte of p is one url.URL puts on
+// the request line as it is: ALPHA / DIGIT / "-" "." "_" "~" "/" ":" "@" "$"
+// "&" "+" "," ";" "=".
+func pathSendsAsWritten(p string) bool {
 	for i := 0; i < len(p); i++ {
-		if p[i] != '%' || i+2 >= len(p) || !isHex(p[i+1]) || !isHex(p[i+2]) {
-			b.WriteByte(p[i])
-			continue
+		c := p[i]
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case strings.IndexByte("-._~/:@$&+,;=", c) >= 0:
+		default:
+			return false
 		}
-		hex := strings.ToUpper(p[i+1 : i+3])
-		c := unhex(hex[0])<<4 | unhex(hex[1])
-		if isUnreserved(c) {
-			b.WriteByte(c)
-		} else {
-			b.WriteString("%" + hex)
-		}
-		i += 2
 	}
-	return b.String()
-}
-
-func isHex(c byte) bool {
-	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
-}
-
-func unhex(c byte) byte {
-	switch {
-	case '0' <= c && c <= '9':
-		return c - '0'
-	default:
-		return c - 'A' + 10
-	}
-}
-
-func isUnreserved(c byte) bool {
-	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' ||
-		c == '-' || c == '.' || c == '_' || c == '~'
+	return true
 }
