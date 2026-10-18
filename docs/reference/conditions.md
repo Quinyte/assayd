@@ -881,7 +881,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 - `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 10 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/gate_test.go`
+**Referenced by a test:** `internal/controller/gate_test.go`, `internal/evalclient/endpoint_test.go`
 
 **State:** `status.eval.blocked` records that the candidate's card has no usable `HTTP+JSON` 1.0 interface, and `status.eval.blockedFor` matches the current candidate, suite and `Lock`. Only the eval controller writes `blocked`, and it is not built in this release, so no code path here produces that record.
 
