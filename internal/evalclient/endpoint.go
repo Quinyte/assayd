@@ -79,6 +79,19 @@ func EndpointPath(interfaces []Interface) (string, error) {
 					"fragment in its url. The eval sends each case to the URL's path alone, so it cannot "+
 					"honour either; serve the interface at a URL with neither", i)}
 		}
+		// The path is sent as url.URL encodes Path, so a path the card wrote
+		// with an escape that Path does not keep — an escaped slash, "%2F" —
+		// would reach the candidate as a different path, "/a/b" for
+		// "/a%2Fb", which it never declared. RawPath is set exactly when the
+		// written escaping differs from Path's default one. Refused, as a
+		// path the eval cannot send as declared, rather than sent altered and
+		// failed for good (#105 item 8).
+		if u.RawPath != "" && u.RawPath != u.Path {
+			return "", &BindingError{msg: fmt.Sprintf(
+				"the candidate's card declares HTTP+JSON 1.0 at supportedInterfaces[%d] with a url whose "+
+					"path uses an escape the eval client cannot send as declared, such as an escaped "+
+					"slash. Serve the interface at a path written without one", i)}
+		}
 		if in.Tenant != "" {
 			return "", &BindingError{msg: fmt.Sprintf(
 				"the candidate's card declares HTTP+JSON 1.0 at supportedInterfaces[%d] with a tenant, "+

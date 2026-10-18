@@ -175,3 +175,20 @@ func TestACardDecodesIntoInterfaces(t *testing.T) {
 		t.Errorf("decoded %+v, want %+v", card.SupportedInterfaces, want)
 	}
 }
+
+// A path written with an escape url.URL's Path does not keep, an escaped
+// slash, cannot be sent as declared, and is refused rather than sent to
+// another path; an escape Path does keep, a space, is admitted.
+func TestAnEscapedSlashIsRefused(t *testing.T) {
+	_, err := EndpointPath([]Interface{{URL: "http://agent.example/a%2Fb/", ProtocolBinding: "HTTP+JSON",
+		ProtocolVersion: "1.0"}})
+	var be *BindingError
+	if !errors.As(err, &be) {
+		t.Errorf("an escaped slash: %v, want a *BindingError", err)
+	}
+	got, err := EndpointPath([]Interface{{URL: "http://agent.example/a%20b/", ProtocolBinding: "HTTP+JSON",
+		ProtocolVersion: "1.0"}})
+	if err != nil || got != "/a b/message:send" {
+		t.Errorf("an escaped space: %q, %v; want it admitted", got, err)
+	}
+}

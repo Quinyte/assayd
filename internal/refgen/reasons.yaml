@@ -547,7 +547,9 @@ reasons:
       writes it at run start for a card whose interfaces do not decode as A2A
       1.0 interfaces (a field of the wrong JSON type), or whose first
       `HTTP+JSON` 1.0 interface is missing, names a tenant, carries a query or
-      a fragment, or gives an endpoint path that is not valid UTF-8, is longer
+      a fragment, writes its path with an escape that cannot be sent as
+      declared (an escaped slash), or gives an endpoint path that is not valid
+      UTF-8, is longer
       than 1024 characters, lacks a leading `/`, or has a control character in
       it.
     operator: >-

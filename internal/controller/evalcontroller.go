@@ -550,6 +550,12 @@ func (r *EvalReconciler) runStartCard(ctx context.Context, run *evalRun, addr st
 		// refusal built from that type could never fire (#108).
 		SupportedInterfaces []evalclient.Interface `json:"supportedInterfaces"`
 	}
+	// A body that does not parse is a fetch that did not succeed, as §1.1
+	// step 2 lists it, "where no digest was compared": retried at
+	// CardRetryInterval, because nothing in Agent status changes to wake it.
+	if class == "" && !json.Valid(body) {
+		class = "the body is not JSON"
+	}
 	if class != "" {
 		// Nothing was compared, so the message names no mismatch (A15).
 		return "", "", &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalAwaitingCard, Message: fmt.Sprintf(

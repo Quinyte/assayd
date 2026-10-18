@@ -254,6 +254,9 @@ func TestEachWaitingPassReturnsItsInterval(t *testing.T) {
 		"a failed run-start fetch": {edit: func(_ *assaydv1alpha1.Agent, f *evalFixture) {
 			f.stub.refuse = true
 		}, want: CardRetryInterval},
+		// The recorded digest is this body's, so only a validity check made
+		// before the digest compare tells it from a card that decodes badly.
+		"a body that does not parse": {card: "not json", want: CardRetryInterval},
 		"a refusal that read a card": {card: strings.Replace(evalCard, "HTTP+JSON", "JSONRPC", 1),
 			want: CardDriftInterval},
 		"a final verdict": {edit: func(a *assaydv1alpha1.Agent, f *evalFixture) {
@@ -425,6 +428,10 @@ func TestARunStartRefusalIsWrittenToBlocked(t *testing.T) {
 		// a fetch to retry.
 		"a wrongly typed interface field": strings.Replace(evalCard, `"protocolVersion":"1.0"`,
 			`"protocolVersion":"1.0","tenant":5`, 1),
+		// An escaped slash: Path decodes it, so the case would go to /a/b/,
+		// a path the card never declared.
+		"an escaped slash": strings.Replace(evalCard, "http://agent.example/a2a/",
+			"http://agent.example/a%2Fb/", 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newEvalFixture(t, nil, echoCase("a", "one"))
@@ -651,21 +658,37 @@ func TestCasesStaySortedByID(t *testing.T) {
 	}
 }
 
-// A card body that is not JSON is a fetch that did not give the recorded card
-// (its digest cannot match, and the message says so), while a card that
-// matches and decodes badly is the card's own fault: the two are told apart.
-func TestABodyThatIsNotJSONIsNotABindingRefusal(t *testing.T) {
-	f := newEvalFixture(t, nil, echoCase("a", "one"))
-	f.stub.card = "not json"
-	res, err := f.pass(t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := f.agent(t).Status.Eval
-	if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalAwaitingCard ||
-		!strings.Contains(e.Blocked.Message, "has digest") || res.RequeueAfter != CardDriftInterval {
-		t.Errorf("a body that is not JSON: blocked %+v, requeue %v; want EvalAwaitingCard naming the "+
-			"mismatch", e, res.RequeueAfter)
+// A card body that does not parse is a run-start fetch that did not succeed,
+// "where no digest was compared" (§1.1 step 2): EvalAwaitingCard naming the
+// failure and no digest, retried at CardRetryInterval. A card that parses,
+// matches and decodes badly is the card's own fault instead
+// (EvalBindingUnsupported, in TestARunStartRefusalIsWrittenToBlocked). The
+// two are told apart whatever the recorded digest says.
+func TestABodyThatIsNotJSONIsAFailedFetch(t *testing.T) {
+	for name, recorded := range map[string]bool{"recorded digest is this body's": true,
+		"recorded digest is another card's": false} {
+		t.Run(name, func(t *testing.T) {
+			f := newEvalFixture(t, nil, echoCase("a", "one"))
+			f.stub.card = "not json"
+			if recorded {
+				a := f.agent(t)
+				a.Status.Cards[0].Digest = digestOfCard("not json")
+				if err := f.c.Status().Update(context.Background(), a); err != nil {
+					t.Fatal(err)
+				}
+			}
+			res, err := f.pass(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := f.agent(t).Status.Eval
+			if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalAwaitingCard ||
+				!strings.Contains(e.Blocked.Message, "did not succeed") ||
+				strings.Contains(e.Blocked.Message, "has digest") || res.RequeueAfter != CardRetryInterval {
+				t.Errorf("a body that is not JSON: blocked %+v, requeue %v; want EvalAwaitingCard, a "+
+					"failed fetch naming no digest, retried at CardRetryInterval", e, res.RequeueAfter)
+			}
+		})
 	}
 }
 
@@ -751,5 +774,60 @@ func TestTheAgentIsReadLiveNotFromTheCache(t *testing.T) {
 	}
 	if f.stub.count("two") != 1 || f.stub.count("one") != 1 {
 		t.Errorf("with a lagging cache the run sent %v; want b next, read live", f.stub.hits)
+	}
+}
+
+// The record's claim-stands check reads the nonce: a live record whose entry
+// carries another claim — a restart or a second claimant re-claimed the case
+// — is not overwritten by this send's outcome, even with the pair the same
+// and the outcome still Sending.
+func TestARecordIsDroppedWhenAnotherClaimHoldsTheCase(t *testing.T) {
+	swapped := false
+	funcs := &interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string,
+		obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+		raw, _ := patch.Data(obj)
+		if !swapped && strings.Contains(string(raw), `"Passed"`) && strings.Contains(string(raw), `"cases"`) {
+			swapped = true
+			var live assaydv1alpha1.Agent
+			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), &live); err != nil {
+				return err
+			}
+			for i := range live.Status.Eval.Cases {
+				if live.Status.Eval.Cases[i].ID == "a" {
+					live.Status.Eval.Cases[i].Claim = "another-claimant"
+				}
+			}
+			if err := c.Status().Update(ctx, &live); err != nil {
+				return err
+			}
+			return apierrors.NewConflict(evalAgentGR, obj.GetName(), errors.New("injected"))
+		}
+		return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+	}}
+	f := newEvalFixture(t, funcs, echoCase("a", "one"), echoCase("b", "two"))
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	if !swapped {
+		t.Fatal("setup: the record never met the re-claimed case")
+	}
+	c := caseRecord(f.agent(t).Status.Eval.Cases, "a")
+	if c == nil || c.Claim != "another-claimant" || c.Outcome != assaydv1alpha1.EvalCaseSending {
+		t.Errorf("a record overwrote a case another claim holds: %+v", c)
+	}
+}
+
+// EvalPaused counts the outcomes of the current pair's run only: a record of
+// another pair, Running with outcomes, is no run of this one.
+func TestPausedCountsOnlyTheCurrentPairsRun(t *testing.T) {
+	in := gateInput{desired: gRev, desiredDigest: gDigest, suiteDigest: gSuite, suite: twoCaseSuite(),
+		now: time.Now(), status: &assaydv1alpha1.AgentStatus{Eval: &assaydv1alpha1.EvalStatus{
+			RevisionDigest: "sha256:another", SuiteDigest: gSuite, Verdict: assaydv1alpha1.EvalVerdictRunning,
+			Cases: []assaydv1alpha1.EvalCaseRecord{{ID: "arithmetic", Outcome: assaydv1alpha1.EvalCasePassed}}}}}
+	withCard(in.status)
+	d := decideGate(in)
+	if d.reason != ReasonEvalPaused || !strings.Contains(d.message, "no run has started") ||
+		strings.Contains(d.message, "1 of its 2") {
+		t.Errorf("a paused candidate beside another pair's run: %s %s", d.reason, d.message)
 	}
 }
