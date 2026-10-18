@@ -82,7 +82,7 @@ Each item is **BUILT**, **PARTLY BUILT** or **NOT BUILT**, with the evidence: a 
 | Run start: replaces the previous pair's record; sets `verdict: Running`; clears `score`, `at`, `cases[]`; keeps `failed[]`, `blocked`, `blockedFor` (step 1) | NOT BUILT | — |
 | The run-start card fetch through the eval client, matched to `status.cards[]`, the `HTTP+JSON` 1.0 interface chosen and the path joined; `EvalAwaitingCard` with its two messages, `EvalBindingUnsupported` (step 2) | NOT BUILT | — |
 | The A2A client: to the candidate Service's ClusterIP and `spec.runtime.port`, no redirect, `Proxy: nil`, `A2A-Version: 1.0`, `ROLE_USER`, fresh `messageId`, no `contextId`, no `configuration`, 1 MiB cap, `caseTimeoutSeconds` deadline, an injection seam (steps 3–5) | BUILT (step 3, PR #109), not yet called | `internal/evalclient`: `New()` mirrors `directTransport` and `refuseRedirects` rather than sharing them, because the controller will import the package; the address and timeout are the caller's (step 6) |
-| The outcome table and the integer threshold rule (steps 6–7) | NOT BUILT | — |
+| The outcome table and the integer threshold rule (steps 6–7) | BUILT (step 3, PR #109), not yet called | `score` in `internal/evalclient/response.go` (the outcome table) and `Threshold`/`Passes` in `internal/evalsuite/threshold.go` (the rule); writing the verdict and `score` to `status.eval` stays step 6's |
 | `failed[]` and `EvalPairAlreadyFailed` (step 7, Q3 (a)) | NOT BUILT | — |
 | Pausing on an unavailable candidate, resuming by `id` (step 8) | NOT BUILT | — |
 | One case per pass, `RequeueAfter: 5s` backstop (step 9) | NOT BUILT | — |
