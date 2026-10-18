@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package evalsuite holds what the operator computes from an EvalSuite
-// (design 16 §1.1). Today that is the suite digest alone.
+// (design 16 §1.1): the suite digest, and the threshold and verdict rule.
 package evalsuite
 
 import (

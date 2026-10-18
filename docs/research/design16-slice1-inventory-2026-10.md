@@ -2,7 +2,7 @@
 
 **Taken 2026-10-12, against `main` at `a831ee8`**, for issue #82 (ADR-0030 build step 4). It reads design 16 §1.1 — the first slice, the only part of design 16 the human has approved (2026-09-14, ADR-0024 Amendment 1) — as amended through A19, whose one question the human answered on 2026-09-17, option (a). Nothing else in design 16 is inventoried, because nothing else may be built.
 
-**Rows updated as build steps merge, 2026-10-14.** Only the rows named here have been re-taken since `a831ee8`; every other row, and the Summary, still describe `a831ee8`. Step 1 (PR #103, merged as `be9f0d5`) built T3, T9, T60 and T65. Step 2 (PR #104) built T38 and T39 and the two "operator process" items they test. Step 4 (PR #106) moved the two Gateway-policy reads onto a shared receiver.
+**Rows updated as build steps merge, 2026-10-14.** Only the rows named here have been re-taken since `a831ee8`; every other row, and the Summary, still describe `a831ee8`. Step 1 (PR #103, merged as `be9f0d5`) built T3, T9, T60 and T65. Step 2 (PR #104) built T38 and T39 and the two "operator process" items they test. Step 4 (PR #106) moved the two Gateway-policy reads onto a shared receiver. **2026-10-18:** step 3 (PR #109) built T1, T2 and T4–T8, the A2A eval client in `internal/evalclient` and the threshold rule in `internal/evalsuite/threshold.go`; nothing calls the client until step 6. It also refuses an interface that names a tenant, which §1.1 does not list; the human decided to keep that refusal on 2026-10-18 (#108), and the amendment that records it is owed.
 
 Each item is **BUILT**, **PARTLY BUILT** or **NOT BUILT**, with the evidence: a `file:line`, a test name, or the search that found nothing. A search for absence was run over `api/`, `internal/`, `cmd/`, `charts/`, `test/` and `hack/`. Rows are grouped by where the work lands, not in §1.1's order; each names the §1.1 passage it comes from.
 
@@ -81,8 +81,8 @@ Each item is **BUILT**, **PARTLY BUILT** or **NOT BUILT**, with the evidence: a 
 | The shared send predicates, implemented once and called by both controllers, including `observedGeneration == generation` (eval controller only) | NOT BUILT | — |
 | Run start: replaces the previous pair's record; sets `verdict: Running`; clears `score`, `at`, `cases[]`; keeps `failed[]`, `blocked`, `blockedFor` (step 1) | NOT BUILT | — |
 | The run-start card fetch through the eval client, matched to `status.cards[]`, the `HTTP+JSON` 1.0 interface chosen and the path joined; `EvalAwaitingCard` with its two messages, `EvalBindingUnsupported` (step 2) | NOT BUILT | — |
-| The A2A client: to the candidate Service's ClusterIP and `spec.runtime.port`, no redirect, `Proxy: nil`, `A2A-Version: 1.0`, `ROLE_USER`, fresh `messageId`, no `contextId`, no `configuration`, 1 MiB cap, `caseTimeoutSeconds` deadline, an injection seam (steps 3–5) | NOT BUILT | the redirect-refusing transport it can reuse exists (`directTransport`, `refuseRedirects`, `internal/controller/card.go:265`) |
-| The outcome table and the integer threshold rule (steps 6–7) | NOT BUILT | — |
+| The A2A client: to the candidate Service's ClusterIP and `spec.runtime.port`, no redirect, `Proxy: nil`, `A2A-Version: 1.0`, `ROLE_USER`, fresh `messageId`, no `contextId`, no `configuration`, 1 MiB cap, `caseTimeoutSeconds` deadline, an injection seam (steps 3–5) | BUILT (step 3, PR #109), not yet called | `internal/evalclient`: `New()` mirrors `directTransport` and `refuseRedirects` rather than sharing them, because the controller will import the package; the address and timeout are the caller's (step 6) |
+| The outcome table and the integer threshold rule (steps 6–7) | BUILT (step 3, PR #109), not yet called | `score` in `internal/evalclient/response.go` (the outcome table) and `Threshold`/`Passes` in `internal/evalsuite/threshold.go` (the rule); writing the verdict and `score` to `status.eval` stays step 6's |
 | `failed[]` and `EvalPairAlreadyFailed` (step 7, Q3 (a)) | NOT BUILT | — |
 | Pausing on an unavailable candidate, resuming by `id` (step 8) | NOT BUILT | — |
 | One case per pass, `RequeueAfter: 5s` backstop (step 9) | NOT BUILT | — |
@@ -117,14 +117,14 @@ At `a831ee8` none of the 69 rows of "Tests the slice owes" was built; a `grep` f
 
 | # | Layer | Row | Step |
 |---|---|---|---|
-| T1 | unit | the outcome table, one case per row | 3 |
-| T2 | unit | the threshold boundary, `"0.666"` and `"0.667"` | 3 |
+| T1 | unit | the outcome table, one case per row | 3 — BUILT: `TestOutcomeTable`, with `TestARefusedConnectionIsUnreachable` and `TestACancelledSendIsInterrupted` (`internal/evalclient/client_test.go`, over `internal/evalclient/response.go` and `client.go`) |
+| T2 | unit | the threshold boundary, `"0.666"` and `"0.667"` | 3 — BUILT: `TestThresholdRuleAtItsBoundary` and `TestThresholdRuleIsExact` (`internal/evalsuite/threshold_test.go`, over `internal/evalsuite/threshold.go`) |
 | T3 | unit | the suite digest's stability and sensitivity | 1 — BUILT: `TestSuiteDigestIsStableAndSensitive` (`internal/evalsuite/digest_test.go`, over `internal/evalsuite/digest.go`) |
-| T4 | unit | the request's header, role, `messageId`, no `contextId`, no `configuration` | 3 |
-| T5 | unit | the endpoint join, and the card host never dialled | 3 |
-| T6 | unit | a `307` is `ProtocolError` and is not followed | 3 |
-| T7 | unit | a timeout is `Unreachable` within the bound | 3 |
-| T8 | unit | the 1 MiB cap | 3 |
+| T4 | unit | the request's header, role, `messageId`, no `contextId`, no `configuration` | 3 — BUILT: `TestTheRequest` (`internal/evalclient/client_test.go`) |
+| T5 | unit | the endpoint join, and the card host never dialled | 3 — BUILT: `TestEndpointJoin`, `TestEndpointRefusals` and `TestTheCardURLHostIsNeverDialled` (`internal/evalclient/endpoint_test.go`, over `internal/evalclient/endpoint.go`) |
+| T6 | unit | a `307` is `ProtocolError` and is not followed | 3 — BUILT: `TestARedirectIsNotFollowed` (`internal/evalclient/client_test.go`) |
+| T7 | unit | a timeout is `Unreachable` within the bound | 3 — BUILT: `TestATimeoutIsUnreachableWithinTheBound` and `TestTheDeadlineIsCaseTimeoutSeconds` (`internal/evalclient/client_test.go`) |
+| T8 | unit | the 1 MiB cap | 3 — BUILT: `TestTheBodyCap` (`internal/evalclient/client_test.go`) |
 | T9 | unit | the echo refusal | 1 — BUILT: `TestEvalSuiteRefusesACaseItsOwnMessageSatisfies` (`api/v1alpha1/evalsuite_schema_test.go`, over `api/v1alpha1/evalsuite_types.go`) |
 | T10 | envtest | a second revision holds `EvalRunning`, promotes only on `Passed` | 6 |
 | T11 | envtest | a failing case holds with `EvalFailed`; no re-send | 6 |
