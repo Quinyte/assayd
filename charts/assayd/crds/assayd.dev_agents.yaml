@@ -1465,8 +1465,12 @@ spec:
                           type: string
                         outcome:
                           description: |-
-                            Outcome is Sending between a claim and its record; otherwise the case's
-                            outcome.
+                            Outcome is Sending between a claim and its record; otherwise Passed or
+                            Failed.
+                          enum:
+                          - Sending
+                          - Passed
+                          - Failed
                           type: string
                         reason:
                           description: Reason names why a case failed.
@@ -1479,7 +1483,10 @@ spec:
                   endpointPath:
                     description: |-
                       EndpointPath is the path, taken from the candidate's card at run start,
-                      that each case is sent to.
+                      that each case is sent to. At most 1024 characters: the eval controller
+                      refuses a longer one at run start, under EvalBindingUnsupported, before
+                      it is written.
+                    maxLength: 1024
                     type: string
                   failed:
                     description: |-

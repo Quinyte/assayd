@@ -6,8 +6,7 @@
 // revision's Service, and scored by the outcome table of step 6.
 //
 // It is the client and nothing else. Who calls it, when, and what is recorded
-// is the eval controller's, which does not exist yet: nothing in the operator
-// calls this package in this release.
+// is the eval controller's (internal/controller/evalcontroller.go).
 package evalclient
 
 import (
@@ -19,8 +18,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,8 +62,7 @@ const (
 // and never the answer text.
 //
 // How the outcome is spelled in status.eval.cases[].outcome is the eval
-// controller's to decide; §1.1 writes it as pass and fail but does not fix a
-// stored spelling, and this package does not either.
+// controller's: Passed or Failed, beside Sending for a claim (#105).
 type Outcome struct {
 	Passed bool
 	Reason Reason
@@ -131,12 +132,12 @@ var directTransport = func() *http.Transport {
 // never retries: a case is sent at most once (design 16 §1.1 step 10), and the
 // claim that guarantees it is the caller's.
 //
-// It returns an error, and sends nothing, only when no request can be built
-// from cs — an Address or Path that does not make a URL. That is the caller's
-// fault and not the candidate's, so it is no outcome: recording one would
-// fail the candidate, and step 7's failed[] would make that final. Check
-// validates the same thing without sending, so the caller can refuse such a
-// case before it claims it.
+// It returns an error, and sends nothing, exactly when Check refuses cs: an
+// Address that is not an IP and a port from 1 to 65535, or a case no request
+// can be built for. That is the caller's fault and not the candidate's, so it
+// is no outcome: recording one would fail the candidate, and step 7's failed[]
+// would make that final. A caller that has had Check admit cs gets no error
+// from Send for it.
 //
 // The request is bounded by the case's timeout, derived from ctx. If ctx is
 // cancelled first, the outcome is Interrupted, never Unreachable. A deadline
@@ -155,6 +156,9 @@ func (c *Client) Send(ctx context.Context, cs Case) (Outcome, error) {
 	timeout := time.Duration(cs.TimeoutSeconds) * time.Second
 	if cs.TimeoutSeconds <= 0 {
 		timeout = evalsuite.DefaultCaseTimeoutSeconds * time.Second
+	}
+	if err := Check(cs); err != nil {
+		return Outcome{}, err
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -197,9 +201,26 @@ func (c *Client) Send(ctx context.Context, cs Case) (Outcome, error) {
 	return score(raw, cs.Expect), nil
 }
 
-// Check reports whether a request can be built for cs, without sending one.
-// Send fails on exactly the cases Check refuses.
+// Check reports whether cs can be sent, without sending it: its Address is an
+// IP address and a port from 1 to 65535, and a request can be built from it
+// and its Path. Send fails on exactly the cases Check refuses.
+//
+// It is the one validator of the address the operator derives (#105 item
+// 12). Anything else would dial somewhere the operator did not choose — an
+// empty host dials loopback, a missing port dials 80, a name resolves
+// through whatever DNS the operator's Pod has — or fail as Unreachable,
+// recording the operator's own fault against the candidate.
 func Check(cs Case) error {
+	host, p, err := net.SplitHostPort(cs.Address)
+	if err != nil {
+		return fmt.Errorf("candidate address %q: %w", cs.Address, err)
+	}
+	if _, err := netip.ParseAddr(host); err != nil {
+		return fmt.Errorf("candidate address %q: the host is not an IP address: %w", cs.Address, err)
+	}
+	if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("candidate address %q: the port is not one from 1 to 65535", cs.Address)
+	}
 	if _, err := http.NewRequest(http.MethodPost, cs.target(), nil); err != nil {
 		return fmt.Errorf("build the request for this case: %w", err)
 	}

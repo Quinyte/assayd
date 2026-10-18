@@ -890,7 +890,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// assessGates said GateDetectionUnwired; hold, and say nothing more.
 		gate = gateDecision{}
 	case gating == gateEnforced:
-		gate = r.gateFor(ctx, &agent, status, desired, desiredDigest)
+		gate = r.gateFor(ctx, &agent, status, desired, desiredDigest, ready)
 	}
 
 	switch {
@@ -1189,25 +1189,12 @@ func earliest(a, b time.Duration) time.Duration {
 	return a
 }
 
-// authHoldsPromotion says why a new revision may not be promoted, or "": a
-// served Agent whose current -auth input does not compile keeps its route on
-// the revision it names (design 03 §3.3.1, I1). A pinned rollback is not held:
-// it selects a revision that already served, and -auth follows the current
-// spec, never a revision (ADR-0034, F2).
+// authHoldsPromotion says why a new revision may not be promoted, or "": the
+// shared send predicate i1Hold (sendpredicates.go), on this reconciler's
+// Gateway and this pass's pin.
 func (r *AgentReconciler) authHoldsPromotion(status *assaydv1alpha1.AgentStatus, d authDesire,
 	pin *releasePin) string {
-	if !r.Gateway.Enabled || pin != nil || status.Auth == nil || d.compiles() {
-		return ""
-	}
-	// A served Agent only, a route re-create's included. A never-served
-	// Agent's Create whose target no longer matches is abandoned instead
-	// (design 03 §3.3.3), so it has no route for the revision to reach, and a
-	// refused Adopt's route keeps following promotion.
-	if status.Auth.Mode == "" {
-		return ""
-	}
-	return "its -auth input does not compile, and this Agent's route keeps the -auth it has or is " +
-		"being given (design 03 §3.3.1, I1). PolicyCompileFailed says what to change"
+	return i1Hold(r.Gateway, status, d, pin != nil)
 }
 
 // withholdReady applies design 03 §3.3.1's aggregation for the -auth step: a
@@ -2000,27 +1987,10 @@ func (r *AgentReconciler) deploymentFor(agent *assaydv1alpha1.Agent, runNS, rev 
 }
 
 // workloadAvailable reports whether a revision has at least one available
-// replica. Availability, not readiness of a single pod: a Deployment reporting
-// availableReplicas is the closest signal the operator has to "this revision can
-// serve" before the card fetch of §3.4 exists.
+// replica, through the manager's client. It is the shared send predicate
+// workloadAvailableIn (sendpredicates.go), which the eval controller calls too.
 func (r *AgentReconciler) workloadAvailable(ctx context.Context, agent *assaydv1alpha1.Agent, runNS, rev, digest string) (bool, error) {
-	var d appsv1.Deployment
-	key := types.NamespacedName{Namespace: runNS, Name: WorkloadName(agent.Name, rev)}
-	if err := r.Get(ctx, key, &d); err != nil {
-		if apierrors.IsNotFound(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("get workload %s: %w", key, err)
-	}
-	// Availability is necessary and not sufficient. This result authorizes
-	// PROMOTION, so it must also answer "available workload of WHICH revision?" —
-	// a same-named object created by anyone with deployments/create is Available
-	// too, and promoting on replicas alone made its status the operator's
-	// evidence. The digest stamp is the operator's own mark.
-	if d.Annotations[RevisionDigestAnnotation] != digest || d.Labels[LabelAgentUID] != string(agent.UID) {
-		return false, nil
-	}
-	return d.Status.AvailableReplicas > 0, nil
+	return workloadAvailableIn(ctx, r.Client, agent, runNS, rev, digest)
 }
 
 // assessGates sets the gate reasons that can be decided before the card fetch,

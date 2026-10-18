@@ -263,7 +263,7 @@ func verifyEveryRuleIsPublished(page, crdPath string) error {
 	}
 	if len(rules) == 0 {
 		return fmt.Errorf("no validation rules were found in %s at all; the CRD carries CEL and "+
-			"the extractor is not reading it", CRDSource)
+			"the extractor is not reading it", crdPath)
 	}
 	if err := verifyCensus(page, rules); err != nil {
 		return err

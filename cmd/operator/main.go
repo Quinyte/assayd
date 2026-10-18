@@ -197,6 +197,19 @@ func run() error {
 	if err := agents.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("register agent reconciler: %w", err)
 	}
+	// The eval controller (design 16 §1.1): a second controller in this
+	// manager, with its own work queue and two workers, so that a slow
+	// candidate delays only other evals and never another Agent's reconcile.
+	// It shares the Agent reconciler's EvalSuite detector and Gateway, and
+	// reads the Agent live through the manager's uncached reader.
+	evals, err := controller.NewEvalReconciler(mgr.GetClient(), mgr.GetAPIReader(),
+		func() bool { return detector.Installed() }, gateway)
+	if err != nil {
+		return fmt.Errorf("build eval controller: %w", err)
+	}
+	if err := evals.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("register eval controller: %w", err)
+	}
 
 	// Liveness is "the process is alive"; readiness must mean "this process is
 	// actually reconciling". healthz.Ping for readiness returns nil

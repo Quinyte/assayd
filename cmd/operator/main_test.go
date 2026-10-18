@@ -84,3 +84,61 @@ func TestTheSchemeKnowsTheCustomResourceDefinition(t *testing.T) {
 			"cannot read the Agent CRD", gvk)
 	}
 }
+
+// The eval controller is wired into the binary (design 16 §1.1): run() builds
+// it with NewEvalReconciler from the manager's uncached reader, and registers
+// it on the manager. A binary that built only the Agent reconciler would hold
+// every gated candidate at EvalRunning with nothing running — loud and wrong
+// — and every other test here would pass. So the source is held to one
+// NewEvalReconciler call whose reader is mgr.GetAPIReader(), and to a
+// SetupWithManager call on what it returned.
+func TestTheBinaryRunsTheEvalController(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+	var built []*ast.AssignStmt
+	setups := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			if len(n.Rhs) != 1 {
+				return true
+			}
+			if call, ok := n.Rhs[0].(*ast.CallExpr); ok {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "NewEvalReconciler" {
+					built = append(built, n)
+				}
+			}
+		case *ast.CallExpr:
+			if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "SetupWithManager" {
+				if id, ok := sel.X.(*ast.Ident); ok {
+					setups[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	if len(built) != 1 {
+		t.Fatalf("main.go calls NewEvalReconciler %d times; want exactly one", len(built))
+	}
+	call := built[0].Rhs[0].(*ast.CallExpr)
+	if len(call.Args) < 2 {
+		t.Fatalf("NewEvalReconciler is called with %d arguments", len(call.Args))
+	}
+	reader, ok := call.Args[1].(*ast.CallExpr)
+	if sel, isSel := func() (*ast.SelectorExpr, bool) {
+		if !ok {
+			return nil, false
+		}
+		s, ok := reader.Fun.(*ast.SelectorExpr)
+		return s, ok
+	}(); !isSel || sel.Sel.Name != "GetAPIReader" {
+		t.Error("the eval controller's reader is not mgr.GetAPIReader(): it must read the Agent " +
+			"uncached before every write (design 16 §1.1 step 10)")
+	}
+	id, ok := built[0].Lhs[0].(*ast.Ident)
+	if !ok || !setups[id.Name] {
+		t.Error("main.go builds the eval controller and never registers it with SetupWithManager")
+	}
+}

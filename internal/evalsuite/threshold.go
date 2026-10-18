@@ -58,3 +58,12 @@ func Passes(passed, total int, threshold int64) bool {
 	}
 	return int64(passed)*1000 >= threshold*int64(total)
 }
+
+// FormatThreshold renders a threshold in thousandths, as Threshold returns
+// it, in the one form every message uses: "0.660", "1.000". A message that
+// printed the threshold as written would be a second reading of the string
+// beside Threshold's, free to disagree with the one that decided the verdict;
+// rendering Threshold's own value leaves one.
+func FormatThreshold(thousandths int64) string {
+	return fmt.Sprintf("%d.%03d", thousandths/1000, thousandths%1000)
+}

@@ -43,13 +43,14 @@ func everyCause(now time.Time) gateInput {
 		recordErr:   errors.New("injected"),
 		missing:     []string{"blockedFor"},
 		suiteErr:    apierrors.NewNotFound(evalSuiteGR, "smoke"),
-		suite:       &assaydv1alpha1.EvalSuite{},
+		suite:       twoCaseSuite(),
 		suiteDigest: gSuite,
 		now:         now,
 		status: &assaydv1alpha1.AgentStatus{
 			Eval: &assaydv1alpha1.EvalStatus{RevisionDigest: gDigest, SuiteDigest: gSuite,
 				Verdict: assaydv1alpha1.EvalVerdictFailed, Score: "0/1",
-				Cases:   []assaydv1alpha1.EvalCaseRecord{{ID: "arithmetic", Outcome: "fail", Reason: "Mismatch"}},
+				Cases: []assaydv1alpha1.EvalCaseRecord{{ID: "arithmetic", Outcome: assaydv1alpha1.EvalCaseFailed,
+					Reason: "Mismatch"}},
 				Failed:  []assaydv1alpha1.EvalPair{{RevisionDigest: gDigest, SuiteDigest: gSuite}},
 				Blocked: &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalBindingUnsupported, Message: "no HTTP+JSON 1.0 interface"},
 				BlockedFor: &assaydv1alpha1.EvalBlockedFor{RevisionDigest: gDigest, SuiteDigest: gSuite,
@@ -58,6 +59,13 @@ func everyCause(now time.Time) gateInput {
 				Kind: TxLock, Stage: StageProbingAfter, Deadline: &deadline}},
 		},
 	}
+}
+
+// twoCaseSuite is a suite of two cases, so that N in a message is not the
+// number of anything else in the input.
+func twoCaseSuite() *assaydv1alpha1.EvalSuite {
+	return &assaydv1alpha1.EvalSuite{Spec: assaydv1alpha1.EvalSuiteSpec{Dataset: assaydv1alpha1.EvalDataset{
+		Cases: []assaydv1alpha1.EvalCase{{ID: "arithmetic"}, {ID: "greeting"}}}}}
 }
 
 func withCard(st *assaydv1alpha1.AgentStatus) {
@@ -92,18 +100,21 @@ func TestTheGateBranchsReasonsTakeTheirPrecedence(t *testing.T) {
 		in.status.Eval.Verdict = ""
 	})
 	step("no card for the candidate", ReasonEvalAwaitingCard, func(in *gateInput) { in.status.Eval.Failed = nil })
-	// Until build step 6 a recorded transaction names itself under
-	// GateControllerUnimplemented, never EvalWaitingForAuth: no eval
-	// controller exists to wait on it (the coordinator's decision).
-	step("a recorded Lock", ReasonGateControllerUnimplemented, func(in *gateInput) { withCard(in.status) })
-	if d := decideGate(in); !strings.Contains(d.message, "An -auth Lock is also recorded") {
-		t.Fatalf("a recorded Lock: GateControllerUnimplemented does not name it: %s", d.message)
+	// A recorded Create or Lock holds every new claim (step 6 waits on all of
+	// them; the J2/K2 exemption is build step 7's).
+	step("a recorded Lock", ReasonEvalWaitingForAuth, func(in *gateInput) { withCard(in.status) })
+	if d := decideGate(in); !strings.Contains(d.message, "an -auth Lock is recorded on this Agent, in stage "+
+		StageProbingAfter) {
+		t.Fatalf("a recorded Lock: EvalWaitingForAuth does not name its kind and stage: %s", d.message)
 	}
 	step("blocked, matched", ReasonEvalBindingUnsupported, func(in *gateInput) {
 		in.status.Auth = nil
 		in.status.Eval.BlockedFor.LockDeadline = nil
 	})
-	step("nothing at all", ReasonGateControllerUnimplemented, func(in *gateInput) { in.status.Eval.Blocked = nil })
+	step("no verdict, the candidate not available", ReasonEvalPaused, func(in *gateInput) {
+		in.status.Eval.Blocked = nil
+	})
+	step("no verdict, the candidate available", ReasonEvalRunning, func(in *gateInput) { in.available = true })
 }
 
 // A written verdict outranks every reason a run could be waiting for: a
@@ -130,7 +141,7 @@ func TestAPassedVerdictOutranksWhatARunWouldWaitFor(t *testing.T) {
 func TestEachPromotionConditionHoldsTheCandidateAlone(t *testing.T) {
 	passed := func() gateInput {
 		in := gateInput{desired: gRev, desiredDigest: gDigest, suiteName: "smoke", suiteDigest: gSuite,
-			suite: &assaydv1alpha1.EvalSuite{}, now: time.Now(),
+			suite: twoCaseSuite(), now: time.Now(), available: true,
 			status: &assaydv1alpha1.AgentStatus{Eval: &assaydv1alpha1.EvalStatus{
 				RevisionDigest: gDigest, SuiteDigest: gSuite, Verdict: assaydv1alpha1.EvalVerdictPassed}}}
 		withCard(in.status)
@@ -155,25 +166,25 @@ func TestEachPromotionConditionHoldsTheCandidateAlone(t *testing.T) {
 }
 
 // A refused Adopt is not a Create or a Lock, and does not hold the eval
-// (design 16 §1.1's table). Until build step 6 a recorded Create is named
-// under GateControllerUnimplemented, which claims no run, never as
-// EvalWaitingForAuth.
+// (design 16 §1.1's table); a recorded Create does, as EvalWaitingForAuth
+// naming it.
 func TestARefusedAdoptDoesNotHoldTheEval(t *testing.T) {
 	in := gateInput{desired: gRev, desiredDigest: gDigest, suiteDigest: gSuite, now: time.Now(),
+		suite: twoCaseSuite(), available: true,
 		status: &assaydv1alpha1.AgentStatus{Auth: &assaydv1alpha1.AuthStatus{Transaction: &assaydv1alpha1.AuthTransaction{
 			Kind: TxAdopt, Stage: StageRefused}}}}
 	withCard(in.status)
-	if d := decideGate(in); d.reason != ReasonGateControllerUnimplemented {
-		t.Errorf("beside a refused Adopt the reason is %q, want GateControllerUnimplemented", d.reason)
-	} else if strings.Contains(d.message, "also recorded") {
+	if d := decideGate(in); d.reason != ReasonEvalRunning {
+		t.Errorf("beside a refused Adopt the reason is %q, want EvalRunning", d.reason)
+	} else if strings.Contains(d.message, "recorded on this Agent") {
 		t.Errorf("a refused Adopt is named as a transaction that holds claims: %s", d.message)
 	}
 	in.status.Auth.Transaction = &assaydv1alpha1.AuthTransaction{Kind: TxCreate, Stage: StagePreparingRoute}
-	if d := decideGate(in); d.reason != ReasonGateControllerUnimplemented {
-		t.Errorf("beside a recorded Create the reason is %q, want GateControllerUnimplemented", d.reason)
-	} else if !strings.Contains(d.message, "An -auth Create is also recorded on this Agent, in stage "+
+	if d := decideGate(in); d.reason != ReasonEvalWaitingForAuth {
+		t.Errorf("beside a recorded Create the reason is %q, want EvalWaitingForAuth", d.reason)
+	} else if !strings.Contains(d.message, "an -auth Create is recorded on this Agent, in stage "+
 		StagePreparingRoute) {
-		t.Errorf("GateControllerUnimplemented does not name the Create and its stage: %s", d.message)
+		t.Errorf("EvalWaitingForAuth does not name the Create and its stage: %s", d.message)
 	} else if strings.Contains(d.message, "deadline") {
 		t.Errorf("the message names a deadline the transaction does not have: %s", d.message)
 	}
@@ -196,11 +207,13 @@ func TestARecordedTransactionNamesAPassedDeadline(t *testing.T) {
 	now := time.Now()
 	past, future := metav1.NewTime(now.Add(-time.Minute)), metav1.NewTime(now.Add(time.Minute))
 	in := gateInput{desired: gRev, desiredDigest: gDigest, suiteDigest: gSuite, now: now,
+		suite: twoCaseSuite(), available: true,
 		status: &assaydv1alpha1.AgentStatus{Auth: &assaydv1alpha1.AuthStatus{Transaction: &assaydv1alpha1.AuthTransaction{
 			Kind: TxLock, Stage: StageProbingAfter, Deadline: &past}}}}
 	withCard(in.status)
-	if d := decideGate(in); !strings.Contains(d.message, "deadline passed at "+past.UTC().Format(time.RFC3339)) {
-		t.Errorf("a Lock past its deadline: %s", d.message)
+	if d := decideGate(in); d.reason != ReasonEvalWaitingForAuth ||
+		!strings.Contains(d.message, "deadline passed at "+past.UTC().Format(time.RFC3339)) {
+		t.Errorf("a Lock past its deadline: %s %s", d.reason, d.message)
 	}
 	in.status.Auth.Transaction.Deadline = &future
 	if d := decideGate(in); strings.Contains(d.message, "deadline") {
@@ -243,6 +256,7 @@ func TestBlockedAppliesOnlyWhileBlockedForMatches(t *testing.T) {
 	// its message; an unknown one is not.
 	for _, reason := range []string{ReasonEvalBindingUnsupported, ReasonEvalAwaitingCard, ReasonEvalWaitingForAuth, "Invented"} {
 		in := gateInput{desired: gRev, desiredDigest: gDigest, suiteDigest: gSuite, now: time.Now(),
+			suite: twoCaseSuite(), available: true,
 			status: &assaydv1alpha1.AgentStatus{Eval: &assaydv1alpha1.EvalStatus{
 				Blocked:    &assaydv1alpha1.EvalBlocked{Reason: reason, Message: "the eval controller's words"},
 				BlockedFor: &assaydv1alpha1.EvalBlockedFor{RevisionDigest: gDigest, SuiteDigest: gSuite}}}}
@@ -250,7 +264,7 @@ func TestBlockedAppliesOnlyWhileBlockedForMatches(t *testing.T) {
 		d := decideGate(in)
 		want := reason
 		if reason == "Invented" {
-			want = ReasonGateControllerUnimplemented
+			want = ReasonEvalRunning
 		}
 		if d.reason != want {
 			t.Errorf("blocked %s: reason %q, want %q", reason, d.reason, want)
@@ -269,10 +283,13 @@ func TestEvalFailedNamesTheCasesTheScoreAndThePair(t *testing.T) {
 			Metrics: []assaydv1alpha1.EvalMetric{{Name: "task_completion", Threshold: "0.66"}}}},
 		status: &assaydv1alpha1.AgentStatus{Eval: &assaydv1alpha1.EvalStatus{RevisionDigest: gDigest,
 			SuiteDigest: gSuite, Verdict: assaydv1alpha1.EvalVerdictFailed, Score: "1/3",
-			Cases: []assaydv1alpha1.EvalCaseRecord{{ID: "a", Outcome: "pass"},
-				{ID: "b", Outcome: "fail", Reason: "Mismatch"}, {ID: "c", Outcome: "fail", Reason: "Unreachable"}}}}}
+			Cases: []assaydv1alpha1.EvalCaseRecord{{ID: "a", Outcome: assaydv1alpha1.EvalCasePassed},
+				{ID: "b", Outcome: assaydv1alpha1.EvalCaseFailed, Reason: "Mismatch"},
+				{ID: "c", Outcome: assaydv1alpha1.EvalCaseFailed, Reason: "Unreachable"}}}}}
 	d := decideGate(in)
-	for _, want := range []string{"b (Mismatch)", "c (Unreachable)", "1/3", "0.66", gDigest, gSuite} {
+	// The threshold is the verdict rule's own value, evalsuite.Threshold,
+	// rendered canonically: "0.66" as written reads "0.660".
+	for _, want := range []string{"b (Mismatch)", "c (Unreachable)", "1/3", "threshold 0.660", gDigest, gSuite} {
 		if !strings.Contains(d.message, want) {
 			t.Errorf("EvalFailed's message does not name %q: %s", want, d.message)
 		}
@@ -281,7 +298,7 @@ func TestEvalFailedNamesTheCasesTheScoreAndThePair(t *testing.T) {
 		t.Errorf("EvalFailed names a passing case: %s", d.message)
 	}
 	in.suite = &assaydv1alpha1.EvalSuite{}
-	if d := decideGate(in); !strings.Contains(d.message, "threshold 1") {
+	if d := decideGate(in); !strings.Contains(d.message, "threshold 1.000") {
 		t.Errorf("a suite with no metric has threshold 1, and the message says otherwise: %s", d.message)
 	}
 }

@@ -21,7 +21,7 @@ CLUSTER        ?= assayd-local
 # absent everywhere else.
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
 ENVTEST_VERSION          ?= release-0.24
-# crdoc renders the FIELD TABLES of docs/reference/crd-agent.md — names, types,
+# crdoc renders the FIELD TABLES of docs/reference/crd-*.md — names, types,
 # required, defaults, doc text and the nested-type sections. Pinned like the
 # rest: `make verify` compares the committed reference against a fresh one, so a
 # generator that floated would fail the gate for whoever picked up a new version
@@ -156,6 +156,7 @@ verify: ## what CI runs — generation must be reproducible
 # controller-gen twice for one check.
 	@$(MAKE) reference
 	@cp config/crd/assayd.dev_agents.yaml charts/assayd/crds/assayd.dev_agents.yaml
+	@cp config/crd/assayd.dev_evalsuites.yaml charts/assayd/crds/assayd.dev_evalsuites.yaml
 	@sed -n '/^rules:/,$$p' config/rbac/role.yaml > charts/assayd/files/operator-rules.yaml
 # go.mod is generated too, by a tool with an opinion. Nothing ran tidy, and
 # go.yaml.in/yaml/v3 sat marked `// indirect` while two files imported it
@@ -175,11 +176,7 @@ verify: ## what CI runs — generation must be reproducible
 cluster-up: ## k3d cluster matching the local profile
 	k3d cluster list | grep -q '^$(CLUSTER) ' || k3d cluster create $(CLUSTER) --agents 1 --wait
 cluster-down: ; -k3d cluster delete $(CLUSTER)
-# Only the Agent CRD, as the chart installs. config/crd also holds the EvalSuite
-# CRD, which ships in the chart only with the eval controller (design 16 §1.1
-# build step 6); installed without it, a gated Agent would hold (with
-# EvalSuiteNotFound while its suite does not exist) where a chart install
-# reports GatesSkipped/EvalSuiteCRDAbsent. Apply the whole directory again in
-# step 6.
-install-crds: manifests ## apply the Agent CRD to the current context
-	kubectl apply -f config/crd/assayd.dev_agents.yaml
+# Every CRD in config/crd, as the chart installs them: the Agent CRD and, since
+# the eval controller shipped (design 16 §1.1 build step 6), the EvalSuite CRD.
+install-crds: manifests ## apply the generated CRDs to the current context
+	kubectl apply -f config/crd/

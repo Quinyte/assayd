@@ -37,8 +37,9 @@ its binding: `assayd-namespace-labels`, `assayd-gateway-routes`,
 `assayd-gateway-policies` and `assayd-api-keys`. No webhook is registered, and
 no Service is rendered to serve one. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
 
-The chart ships one CustomResourceDefinition, `agents.assayd.dev`, and it is
-byte-identical to the one the operator is generated against. <ClaimClass claim="measured" test="TestChartShipsTheGeneratedCRD" />
+The chart ships two CustomResourceDefinitions, `agents.assayd.dev` and
+`evalsuites.assayd.dev`, and each is byte-identical to the one the operator is
+generated against. <ClaimClass claim="measured" test="TestChartShipsTheGeneratedCRD" />
 
 Beside those, the chart renders a Namespace, a ServiceAccount, a ClusterRole
 and its binding, and, at `prod`, a PodDisruptionBudget, and nothing else. None
@@ -86,7 +87,8 @@ runners. It fails the render, and the error says they are not built. <ClaimClass
 
 - [Chart values](/reference/helm-values.html) — every key in `values.yaml` and
   its default, generated from the chart.
-- [The Agent CRD](/reference/crd-agent.html) — every field of the one custom
-  resource the chart installs, generated from the CRD.
+- [The Agent CRD](/reference/crd-agent.html) and
+  [the EvalSuite CRD](/reference/crd-evalsuite.html) — every field of the two
+  custom resources the chart installs, generated from the CRDs.
 - [Conditions and reasons](/reference/conditions.html) — every condition the
   operator writes, generated from the code.
