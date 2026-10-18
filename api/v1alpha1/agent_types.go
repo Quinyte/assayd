@@ -784,15 +784,17 @@ type EvalStatus struct {
 	At *metav1.Time `json:"at,omitempty"`
 
 	// The fields below are design 16 §1.1's record of a run, owed to design
-	// 02. Only the eval controller writes them, and it does not exist yet: no
-	// code in this release sets any of them.
+	// 02. Only the operator's eval controller writes them, by merge patch.
 
 	// SuiteDigest is the suite digest the run used: SHA-256 of the canonical
 	// JSON of the EvalSuite's spec.
 	// +optional
 	SuiteDigest string `json:"suiteDigest,omitempty"`
 	// EndpointPath is the path, taken from the candidate's card at run start,
-	// that each case is sent to.
+	// that each case is sent to. At most 1024 characters: the eval controller
+	// refuses a longer one at run start, under EvalBindingUnsupported, before
+	// it is written.
+	// +kubebuilder:validation:MaxLength=1024
 	// +optional
 	EndpointPath string `json:"endpointPath,omitempty"`
 	// CardDigest is the digest of the card EndpointPath was taken from.
@@ -858,10 +860,10 @@ type EvalBlockedFor struct {
 type EvalCaseRecord struct {
 	// ID is the suite case's id.
 	ID string `json:"id"`
-	// Outcome is Sending between a claim and its record; otherwise the case's
-	// outcome.
+	// Outcome is Sending between a claim and its record; otherwise Passed or
+	// Failed.
 	// +optional
-	Outcome string `json:"outcome,omitempty"`
+	Outcome EvalCaseOutcome `json:"outcome,omitempty"`
 	// Reason names why a case failed.
 	// +optional
 	Reason string `json:"reason,omitempty"`
@@ -869,6 +871,18 @@ type EvalCaseRecord struct {
 	// +optional
 	Claim string `json:"claim,omitempty"`
 }
+
+// EvalCaseOutcome is a case's state in a run: claimed and in flight, or
+// recorded. Spelled as the verdict is.
+// +kubebuilder:validation:Enum=Sending;Passed;Failed
+type EvalCaseOutcome string
+
+const (
+	// EvalCaseSending is a claim with no outcome yet (design 16 §1.1 step 10).
+	EvalCaseSending EvalCaseOutcome = "Sending"
+	EvalCasePassed  EvalCaseOutcome = "Passed"
+	EvalCaseFailed  EvalCaseOutcome = "Failed"
+)
 
 // EvalPair is a revision digest and the suite digest it was evaluated against.
 type EvalPair struct {

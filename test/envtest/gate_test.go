@@ -179,9 +179,9 @@ func TestTheCollisionPairsVerdictDoesNotPromoteTheOtherMember(t *testing.T) {
 		t.Fatalf("M (digest %s) was promoted on the verdict S (digest %s) earned under the shared "+
 			"name %s: the gate compared the 40-bit name, not the digest", mDigest, sDigest, shared)
 	}
-	if c := gatesPassed(t, a); c.Status != metav1.ConditionFalse || c.Reason != "GateControllerUnimplemented" {
-		t.Errorf("GatesPassed is %s/%s; want False/GateControllerUnimplemented — no verdict is "+
-			"recorded for M's digest, and no eval controller exists to write one", c.Status, c.Reason)
+	if c := gatesPassed(t, a); c.Status != metav1.ConditionFalse || c.Reason != controller.ReasonEvalRunning {
+		t.Errorf("GatesPassed is %s/%s; want False/EvalRunning — no verdict is recorded for M's "+
+			"digest, so M's own run is what the gate waits on", c.Status, c.Reason)
 	}
 
 	// The control: the same record, keyed on M's own digest, promotes M. So
@@ -323,7 +323,8 @@ func TestRemovingTheGatePromotesAFailedCandidateAndSaysSo(t *testing.T) {
 	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
 		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: rev, RevisionDigest: digest,
 			SuiteDigest: sd, Verdict: assaydv1alpha1.EvalVerdictFailed, Score: "0/1",
-			Cases:  []assaydv1alpha1.EvalCaseRecord{{ID: "arithmetic", Outcome: "fail", Reason: "Mismatch"}},
+			Cases: []assaydv1alpha1.EvalCaseRecord{{ID: "arithmetic", Outcome: assaydv1alpha1.EvalCaseFailed,
+				Reason: "Mismatch"}},
 			Failed: []assaydv1alpha1.EvalPair{{RevisionDigest: digest, SuiteDigest: sd}}}
 		putCard(st, rev, digest, time.Now())
 	})
@@ -424,10 +425,10 @@ func TestAGateAddedOverAServingRevisionSaysItWasNotEvaluated(t *testing.T) {
 	}
 }
 
-// A gated candidate with its suite, its card and no verdict holds under
-// GateControllerUnimplemented, never EvalRunning: until the eval controller
-// lands (build step 6), nothing runs, and no pass may say a run is under way.
-func TestAGatedCandidateWithNoVerdictHoldsWithNoRunClaimed(t *testing.T) {
+// A gated candidate with its suite, its card and no final verdict holds under
+// EvalRunning, before its run starts and while a Running record stands: a
+// Running record is not a verdict, and nothing promotes on it.
+func TestAGatedCandidateWithNoVerdictHoldsWhileItRuns(t *testing.T) {
 	ns := newNamespace(t)
 	sd := mustCreateSuite(t, ns, "smoke")
 	a, r := servedUngated(t, ns, "noverdict")
@@ -436,11 +437,11 @@ func TestAGatedCandidateWithNoVerdictHoldsWithNoRunClaimed(t *testing.T) {
 	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) { putCard(st, rev, digest, time.Now()) })
 	reconcileOnce(t, r, a)
 	c := gatesPassed(t, a)
-	if c.Status != metav1.ConditionFalse || c.Reason != "GateControllerUnimplemented" {
-		t.Errorf("GatesPassed is %s/%s, want False/GateControllerUnimplemented", c.Status, c.Reason)
+	if c.Status != metav1.ConditionFalse || c.Reason != controller.ReasonEvalRunning {
+		t.Errorf("GatesPassed is %s/%s, want False/EvalRunning", c.Status, c.Reason)
 	}
-	// A Running record, which only an eval controller writes, changes nothing
-	// either: there is no verdict to promote on.
+	// A Running record, which only the eval controller writes, changes
+	// nothing: there is no verdict to promote on.
 	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
 		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: rev, RevisionDigest: digest,
 			SuiteDigest: sd, Verdict: assaydv1alpha1.EvalVerdictRunning}
@@ -449,8 +450,8 @@ func TestAGatedCandidateWithNoVerdictHoldsWithNoRunClaimed(t *testing.T) {
 	if got := liveAgent(t, a); got.Status.ActiveRevisionDigest != active {
 		t.Fatal("a Running record promoted the candidate")
 	}
-	if c := gatesPassed(t, a); c.Reason != "GateControllerUnimplemented" {
-		t.Errorf("GatesPassed is %s with a Running record, want GateControllerUnimplemented", c.Reason)
+	if c := gatesPassed(t, a); c.Reason != controller.ReasonEvalRunning {
+		t.Errorf("GatesPassed is %s with a Running record, want EvalRunning", c.Reason)
 	}
 }
 
@@ -612,11 +613,9 @@ func TestAGatedCandidateUnderTheI1HoldSaysItIsHeldForAuth(t *testing.T) {
 }
 
 // A route re-create's Create recorded on a served Agent, beside a gated
-// candidate with its suite and card. Until build step 6 nothing would run the
-// eval after the transaction either, so the candidate reads
-// GateControllerUnimplemented, which claims no run, and the message names
-// the transaction as a further reason no case would be claimed — never
-// EvalWaitingForAuth, which would point at auth while the gate is the block.
+// candidate with its suite and card: the eval controller claims no case while
+// it is recorded, and the candidate reads EvalWaitingForAuth naming the Create
+// and its stage (design 16 §1.1's table).
 func TestAGatedCandidateBesideARecordedCreateClaimsNoRun(t *testing.T) {
 	a, r, _ := servedAPIKeyAgent(t, "besidecreate")
 	ns := a.Namespace
@@ -632,9 +631,9 @@ func TestAGatedCandidateBesideARecordedCreateClaimsNoRun(t *testing.T) {
 	}
 	reconcileOnce(t, r, a)
 	tx = txOf(t, a)
-	c := condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateControllerUnimplemented")
-	if c != nil && !strings.Contains(c.Message, "An -auth Create is also recorded on this Agent, in stage "+tx.Stage) {
-		t.Errorf("GateControllerUnimplemented does not name the recorded Create and its stage (%s): %s",
+	c := condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalWaitingForAuth)
+	if c != nil && !strings.Contains(c.Message, "an -auth Create is recorded on this Agent, in stage "+tx.Stage) {
+		t.Errorf("EvalWaitingForAuth does not name the recorded Create and its stage (%s): %s",
 			tx.Stage, c.Message)
 	}
 }
@@ -655,7 +654,7 @@ func TestANeverServedGatedAgentsReadyNamesTheGatesCause(t *testing.T) {
 	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) { putCard(st, rev, digest, time.Now()) })
 	reconcileOnce(t, r, a)
 	condIs(t, a, assaydv1alpha1.CondReady, metav1.ConditionFalse, "AwaitingGates")
-	condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateControllerUnimplemented")
+	condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalRunning)
 
 	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
 		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: rev, RevisionDigest: digest,

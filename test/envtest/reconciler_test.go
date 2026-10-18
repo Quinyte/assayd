@@ -279,12 +279,13 @@ func TestGatesDeclaredWithoutTheCRDIsLoudAboutIt(t *testing.T) {
 	}
 }
 
-// The fail-closed direction: gates declared, gate controller absent. The agent
-// must hold at zero traffic rather than promote ungated. Its suite exists and
-// its card is recorded, so every precondition holds and the hold is the
-// missing eval controller's alone: GateControllerUnimplemented, never a reason
-// that says a run is under way (design 16 build step 5; step 6 retires it).
-func TestDeclaredGatesHoldWhenNoGateControllerExists(t *testing.T) {
+// The fail-closed direction: gates declared and the EvalSuite CRD installed.
+// The agent holds at zero traffic until status.eval records a verdict, rather
+// than promoting ungated. Its suite exists and its card is recorded, so every
+// precondition holds and the hold is the run's: EvalRunning. No eval
+// controller runs in this test, so no verdict is ever written, and the agent
+// must never promote on its own (design 16 §1.1).
+func TestDeclaredGatesHoldUntilAVerdict(t *testing.T) {
 	ns := newNamespace(t)
 	mustCreateSuite(t, ns, "pa-regression")
 	a := mustCreateAgent(t, ns, "gated", func(a *assaydv1alpha1.Agent) {
@@ -306,10 +307,9 @@ func TestDeclaredGatesHoldWhenNoGateControllerExists(t *testing.T) {
 	}
 	if c := condition(&got, assaydv1alpha1.CondGatesPassed); c == nil || c.Status != metav1.ConditionFalse {
 		t.Error("GatesPassed must be False and say why")
-	} else if c.Reason != controller.ReasonGateControllerUnimplemented {
+	} else if c.Reason != controller.ReasonEvalRunning {
 		t.Errorf("GatesPassed's reason is %q, want %s: the suite exists and the card is recorded, so "+
-			"the only thing missing is the eval controller, and no reason may say a run is under way "+
-			"while none can be", c.Reason, controller.ReasonGateControllerUnimplemented)
+			"the only thing missing is a verdict", c.Reason, controller.ReasonEvalRunning)
 	}
 }
 

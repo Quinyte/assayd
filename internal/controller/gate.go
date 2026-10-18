@@ -21,30 +21,30 @@ import (
 )
 
 // The GatesPassed reasons the Agent reconciler's gate branch sets (design 16
-// §1.1, "Status, conditions and phase"). Three more of the table's are not
-// here, and that is build step 5's scope rather than an omission:
-// EvalRunning and EvalPaused describe a run, and nothing runs one until the
-// eval controller lands (build step 6), so until then a gated candidate with
-// no verdict keeps ReasonGateControllerUnimplemented and no pass ever says a
-// run is under way. The pin rule's reasons are build step 8's.
+// §1.1, "Status, conditions and phase"). The pin rule's reasons are build
+// step 8's.
 const (
-	// ReasonGateControllerUnimplemented: a gated candidate with its suite, its
-	// card and no final verdict. Retired by build step 6, which replaces it
-	// with EvalRunning.
-	ReasonGateControllerUnimplemented = "GateControllerUnimplemented"
-	ReasonEvalRecordNotKept           = "EvalRecordNotKept"
-	ReasonEvalRecordUnverifiable      = "EvalRecordUnverifiable"
-	ReasonEvalSuiteNotFound           = "EvalSuiteNotFound"
-	ReasonEvalSuiteUnreadable         = "EvalSuiteUnreadable"
-	ReasonEvalAwaitingCard            = "EvalAwaitingCard"
-	ReasonEvalBindingUnsupported      = "EvalBindingUnsupported"
-	ReasonEvalWaitingForAuth          = "EvalWaitingForAuth"
-	ReasonEvalPairAlreadyFailed       = "EvalPairAlreadyFailed"
-	ReasonEvalFailed                  = "EvalFailed"
-	ReasonEvalPassed                  = "EvalPassed"
-	ReasonEvalHeldForAuth             = "EvalHeldForAuth"
-	ReasonActiveRevisionNotEvaluated  = "ActiveRevisionNotEvaluated"
-	reasonAwaitingGates               = "AwaitingGates"
+	// ReasonEvalRunning: a gated candidate with its suite and its card, no
+	// final verdict, and nothing recorded that stops the eval controller
+	// claiming its next case. It replaced GateControllerUnimplemented, which
+	// held every such candidate while no eval controller existed.
+	ReasonEvalRunning = "EvalRunning"
+	// ReasonEvalPaused: the same, with the candidate not available, so the
+	// eval controller sends it nothing until it is again (step 8).
+	ReasonEvalPaused                 = "EvalPaused"
+	ReasonEvalRecordNotKept          = "EvalRecordNotKept"
+	ReasonEvalRecordUnverifiable     = "EvalRecordUnverifiable"
+	ReasonEvalSuiteNotFound          = "EvalSuiteNotFound"
+	ReasonEvalSuiteUnreadable        = "EvalSuiteUnreadable"
+	ReasonEvalAwaitingCard           = "EvalAwaitingCard"
+	ReasonEvalBindingUnsupported     = "EvalBindingUnsupported"
+	ReasonEvalWaitingForAuth         = "EvalWaitingForAuth"
+	ReasonEvalPairAlreadyFailed      = "EvalPairAlreadyFailed"
+	ReasonEvalFailed                 = "EvalFailed"
+	ReasonEvalPassed                 = "EvalPassed"
+	ReasonEvalHeldForAuth            = "EvalHeldForAuth"
+	ReasonActiveRevisionNotEvaluated = "ActiveRevisionNotEvaluated"
+	reasonAwaitingGates              = "AwaitingGates"
 
 	// agentCRDName is the CRD the schema check reads.
 	agentCRDName = "agents.assayd.dev"
@@ -126,7 +126,11 @@ type gateInput struct {
 	// status is the pass's working status: the card step has already run on
 	// it, so a card a failed re-read cleared this pass reads cleared.
 	status *assaydv1alpha1.AgentStatus
-	now    time.Time
+	// available is whether the candidate has an available replica this pass.
+	// The not-ready branches report the decision too, and a candidate that is
+	// not available is sent nothing (step 8).
+	available bool
+	now       time.Time
 }
 
 // decideGate answers the gate branch from the four promotion conditions,
@@ -152,20 +156,25 @@ type gateInput struct {
 //     the record still holds them.
 //  5. no card recorded for the candidate (EvalAwaitingCard): a run cannot
 //     start without one.
-//  6. a Create or Lock recorded in status.auth.transaction. A refused Adopt is
-//     neither, and does not count. Until build step 6 this gives
-//     GateControllerUnimplemented with the transaction named, not
-//     EvalWaitingForAuth: no eval controller exists to wait on it, and
-//     nothing would run after it either.
+//  6. a Create or Lock recorded in status.auth.transaction
+//     (EvalWaitingForAuth), naming its kind and stage, and when its deadline
+//     passed if it has: on Q12 (a) the eval keeps waiting after it. A refused
+//     Adopt is neither, and does not count.
 //  7. status.eval.blocked, applied only while status.eval.blockedFor matches
 //     the current pair and the current Lock's deadline (A12).
-//  8. otherwise no final verdict: GateControllerUnimplemented.
+//  8. otherwise no final verdict: EvalPaused while the candidate is not
+//     available, and EvalRunning while it is. Neither names how many cases
+//     are done while the run goes on: EvalRunning names the pair and N, and
+//     status.eval.cases[] carries progress, so an eval patch that records a
+//     case leaves the Agent reconciler's status write a no-op (A5).
+//     EvalPaused names k of N, which no send changes while the candidate is
+//     unavailable.
 //
 // The exemption for a J2 or K2 Lock that can finish only through a promotion,
 // and the missing-policy wedge's message, are build step 7's: until then
-// every recorded Create or Lock holds at 6, which is fail-closed. Step 5
-// sets EvalWaitingForAuth only from blocked (7), which nothing writes before
-// step 6.
+// every recorded Create or Lock holds at 6, which is fail-closed. Reasons 5
+// and 6 are two of the shared send predicates (sendpredicates.go), so this
+// branch and the eval controller cannot disagree about them.
 func decideGate(in gateInput) gateDecision {
 	rev := fmt.Sprintf("revision %s (digest %s)", in.desired, in.desiredDigest)
 
@@ -235,20 +244,19 @@ func decideGate(in gateInput) gateDecision {
 					"with its card recorded (design 16 Q10). It holds at zero traffic, and is not "+
 					"promoted without one", rev)}
 	}
-	// A recorded Create or Lock is a further reason no case would be claimed,
-	// and in build step 6, where an eval controller exists to wait on it, it
-	// becomes EvalWaitingForAuth here. Until then nothing runs after the
-	// transaction either, and for a J2 or K2 Lock that can finish only
-	// through a promotion (step 7's exemption) the gate is the real block, so
-	// the reason stays GateControllerUnimplemented and the message names the
-	// transaction beside it.
+	// A recorded Create or Lock: the eval controller claims no case while it
+	// is (design 16 §1.1, "On the Agent being evaluated"). On Q12 (a) a
+	// transaction past its deadline still holds the eval, and the message says
+	// when the deadline passed.
 	if tx := claimHoldingTransaction(in.status); tx != nil {
-		msg := noVerdictMessage(pair) + fmt.Sprintf(". An -auth %s is also recorded on this Agent, "+
-			"in stage %s, and no case would be claimed while it is (design 16 §1.1)", tx.Kind, tx.Stage)
+		msg := fmt.Sprintf("an -auth %s is recorded on this Agent, in stage %s, and the eval controller "+
+			"claims no case of %s while a Create or Lock is recorded (design 16 §1.1). It holds at "+
+			"zero traffic until the transaction ends", tx.Kind, tx.Stage, pair)
 		if tx.Deadline != nil && !in.now.Before(tx.Deadline.Time) {
-			msg += fmt.Sprintf("; its deadline passed at %s", tx.Deadline.UTC().Format(time.RFC3339))
+			msg += fmt.Sprintf("; its deadline passed at %s, and the eval keeps waiting after it "+
+				"(design 16 Q12 (a))", tx.Deadline.UTC().Format(time.RFC3339))
 		}
-		return gateDecision{reason: ReasonGateControllerUnimplemented, readyReason: reasonAwaitingGates,
+		return gateDecision{reason: ReasonEvalWaitingForAuth, readyReason: reasonAwaitingGates,
 			message: msg}
 	}
 	if e != nil && e.Blocked != nil && blockedForMatches(e.BlockedFor, in.desiredDigest, in.suiteDigest, in.status) {
@@ -267,27 +275,34 @@ func decideGate(in gateInput) gateDecision {
 			return d
 		}
 	}
-	return gateDecision{reason: ReasonGateControllerUnimplemented, readyReason: reasonAwaitingGates,
-		message: noVerdictMessage(pair)}
-}
-
-// noVerdictMessage is GateControllerUnimplemented's message. It claims no run
-// is under way or will be: none can be until the eval controller exists.
-func noVerdictMessage(pair string) string {
-	return fmt.Sprintf("status.eval records no final verdict for %s, and design 16's eval controller, "+
-		"which would run the suite and write one, is not built in this release. It holds at zero "+
-		"traffic rather than promoting ungated", pair)
-}
-
-// claimHoldingTransaction is the transaction §1.1 holds every new claim for:
-// a Create or a Lock recorded in status.auth.transaction, at any stage. A
-// refused Adopt is neither, and does not count. The J2/K2 exemption is build
-// step 7's.
-func claimHoldingTransaction(status *assaydv1alpha1.AgentStatus) *assaydv1alpha1.AuthTransaction {
-	if tx := authTransaction(status); tx != nil && (tx.Kind == TxCreate || tx.Kind == TxLock) {
-		return tx
+	n := len(in.suite.Spec.Dataset.Cases)
+	if !in.available {
+		progress := "no run has started for it"
+		if e != nil && e.RevisionDigest == in.desiredDigest && e.SuiteDigest == in.suiteDigest &&
+			e.Verdict == assaydv1alpha1.EvalVerdictRunning {
+			progress = fmt.Sprintf("%d of its %d cases have an outcome, and the run resumes at the next "+
+				"case by id once it is available again", recordedOutcomes(e.Cases, in.suite), n)
+		}
+		return gateDecision{reason: ReasonEvalPaused, readyReason: reasonAwaitingGates,
+			message: fmt.Sprintf("%s is not available, so the eval controller sends it no case: %s. "+
+				"Nothing times a paused run out; it holds at zero traffic", pair, progress)}
 	}
-	return nil
+	return gateDecision{reason: ReasonEvalRunning, readyReason: reasonAwaitingGates,
+		message: fmt.Sprintf("the eval controller is evaluating %s: each of the suite's %d cases is sent "+
+			"to the candidate once, and status.eval.cases[] records its outcome. It holds at zero "+
+			"traffic until a verdict is written", pair, n)}
+}
+
+// recordedOutcomes counts the suite ids whose entry in cases[] carries an
+// outcome, which a claim in flight (Sending) does not.
+func recordedOutcomes(cases []assaydv1alpha1.EvalCaseRecord, s *assaydv1alpha1.EvalSuite) int {
+	k := 0
+	for _, c := range s.Spec.Dataset.Cases {
+		if rec := caseRecord(cases, c.ID); rec != nil && outcomeRecorded(rec.Outcome) {
+			k++
+		}
+	}
+	return k
 }
 
 // blockedForMatches is A12's fail-closed reading: blocked applies only while
@@ -299,17 +314,23 @@ func blockedForMatches(bf *assaydv1alpha1.EvalBlockedFor, revDigest, suiteDigest
 	if bf == nil || bf.RevisionDigest != revDigest || bf.SuiteDigest != suiteDigest {
 		return false
 	}
-	var lock *time.Time
-	if tx := authTransaction(status); tx != nil && tx.Kind == TxLock && tx.Deadline != nil {
-		t := tx.Deadline.Time
-		lock = &t
-	}
+	lock := recordedLockDeadline(status)
 	switch {
 	case lock == nil || bf.LockDeadline == nil:
 		return lock == nil && bf.LockDeadline == nil
 	default:
-		return lock.Equal(bf.LockDeadline.Time)
+		return lock.Equal(bf.LockDeadline)
 	}
+}
+
+// recordedLockDeadline is the deadline of the Lock recorded in
+// status.auth.transaction, or nil: the third part of blockedFor, which the
+// eval controller writes and this branch matches with the same reading.
+func recordedLockDeadline(status *assaydv1alpha1.AgentStatus) *metav1.Time {
+	if tx := authTransaction(status); tx != nil && tx.Kind == TxLock && tx.Deadline != nil {
+		return tx.Deadline.DeepCopy()
+	}
+	return nil
 }
 
 func pairFailed(failed []assaydv1alpha1.EvalPair, revDigest, suiteDigest string) bool {
@@ -336,22 +357,25 @@ func failedCases(cases []assaydv1alpha1.EvalCaseRecord) string {
 	return strings.Join(out, ", ")
 }
 
-// threshold is the suite's threshold as written, or "1" when it declares no
-// metric: absent means every case must pass (design 16 §1.1).
+// threshold is the suite's threshold as the verdict rule reads it,
+// evalsuite.Threshold rendered by evalsuite.FormatThreshold, so the EvalFailed
+// message and the rule that wrote the verdict cannot disagree about it. A
+// suite with no metric reads "1.000": every case must pass (design 16 §1.1).
 func threshold(s *assaydv1alpha1.EvalSuite) string {
-	if s != nil && len(s.Spec.Metrics) > 0 {
-		return s.Spec.Metrics[0].Threshold
+	th, err := evalsuite.Threshold(s.Spec)
+	if err != nil {
+		return fmt.Sprintf("unreadable (%v)", err)
 	}
-	return "1"
+	return evalsuite.FormatThreshold(th)
 }
 
 // gateFor gathers the gate branch's inputs and decides. It reads the suite
 // uncached by a get, so no EvalSuite informer starts and the operator needs
 // get alone, and the Agent CRD behind the schema check's TTL cache.
 func (r *AgentReconciler) gateFor(ctx context.Context, agent *assaydv1alpha1.Agent,
-	status *assaydv1alpha1.AgentStatus, desired, desiredDigest string) gateDecision {
+	status *assaydv1alpha1.AgentStatus, desired, desiredDigest string, available bool) gateDecision {
 	in := gateInput{desired: desired, desiredDigest: desiredDigest, status: status, now: time.Now(),
-		namespace: agent.Namespace, suiteName: agent.Spec.Gates[0].EvalSuiteRef}
+		namespace: agent.Namespace, suiteName: agent.Spec.Gates[0].EvalSuiteRef, available: available}
 	in.missing, in.recordErr = r.evalRecordMissing(ctx)
 	if in.recordErr == nil && len(in.missing) == 0 {
 		var s assaydv1alpha1.EvalSuite

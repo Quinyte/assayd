@@ -3108,7 +3108,9 @@ this record names.<br/>
         <td>string</td>
         <td>
           EndpointPath is the path, taken from the candidate's card at run start,
-that each case is sent to.<br/>
+that each case is sent to. At most 1024 characters: the eval controller
+refuses a longer one at run start, under EvalBindingUnsupported, before
+it is written.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -3294,10 +3296,12 @@ claim nonce, never the answer text.
         <td>false</td>
       </tr><tr>
         <td><b>outcome</b></td>
-        <td>string</td>
+        <td>enum</td>
         <td>
-          Outcome is Sending between a claim and its record; otherwise the case's
-outcome.<br/>
+          Outcome is Sending between a claim and its record; otherwise Passed or
+Failed.<br/>
+          <br/>
+            <i>Enum</i>: Sending, Passed, Failed<br/>
         </td>
         <td>false</td>
       </tr><tr>
