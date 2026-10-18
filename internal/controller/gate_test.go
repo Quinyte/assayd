@@ -89,7 +89,13 @@ func TestTheGateBranchsReasonsTakeTheirPrecedence(t *testing.T) {
 		in.status.Eval.Verdict = ""
 	})
 	step("no card for the candidate", ReasonEvalAwaitingCard, func(in *gateInput) { in.status.Eval.Failed = nil })
-	step("a recorded Lock", ReasonEvalWaitingForAuth, func(in *gateInput) { withCard(in.status) })
+	// Until build step 6 a recorded transaction names itself under
+	// GateControllerUnimplemented, never EvalWaitingForAuth: no eval
+	// controller exists to wait on it (the coordinator's decision).
+	step("a recorded Lock", ReasonGateControllerUnimplemented, func(in *gateInput) { withCard(in.status) })
+	if d := decideGate(in); !strings.Contains(d.message, "An -auth Lock is also recorded") {
+		t.Fatalf("a recorded Lock: GateControllerUnimplemented does not name it: %s", d.message)
+	}
 	step("blocked, matched", ReasonEvalBindingUnsupported, func(in *gateInput) {
 		in.status.Auth = nil
 		in.status.Eval.BlockedFor.LockDeadline = nil
@@ -146,7 +152,9 @@ func TestEachPromotionConditionHoldsTheCandidateAlone(t *testing.T) {
 }
 
 // A refused Adopt is not a Create or a Lock, and does not hold the eval
-// (design 16 §1.1's table).
+// (design 16 §1.1's table). Until build step 6 a recorded Create is named
+// under GateControllerUnimplemented, which claims no run, never as
+// EvalWaitingForAuth.
 func TestARefusedAdoptDoesNotHoldTheEval(t *testing.T) {
 	in := gateInput{desired: gRev, desiredDigest: gDigest, suiteDigest: gSuite, now: time.Now(),
 		status: &assaydv1alpha1.AgentStatus{Auth: &assaydv1alpha1.AuthStatus{Transaction: &assaydv1alpha1.AuthTransaction{
@@ -154,20 +162,34 @@ func TestARefusedAdoptDoesNotHoldTheEval(t *testing.T) {
 	withCard(in.status)
 	if d := decideGate(in); d.reason != ReasonGateControllerUnimplemented {
 		t.Errorf("beside a refused Adopt the reason is %q, want GateControllerUnimplemented", d.reason)
+	} else if strings.Contains(d.message, "also recorded") {
+		t.Errorf("a refused Adopt is named as a transaction that holds claims: %s", d.message)
 	}
 	in.status.Auth.Transaction = &assaydv1alpha1.AuthTransaction{Kind: TxCreate, Stage: StagePreparingRoute}
-	if d := decideGate(in); d.reason != ReasonEvalWaitingForAuth {
-		t.Errorf("beside a recorded Create the reason is %q, want EvalWaitingForAuth", d.reason)
-	} else if !strings.Contains(d.message, "Create") || !strings.Contains(d.message, StagePreparingRoute) {
-		t.Errorf("EvalWaitingForAuth does not name the kind and stage: %s", d.message)
+	if d := decideGate(in); d.reason != ReasonGateControllerUnimplemented {
+		t.Errorf("beside a recorded Create the reason is %q, want GateControllerUnimplemented", d.reason)
+	} else if !strings.Contains(d.message, "An -auth Create is also recorded on this Agent, in stage "+
+		StagePreparingRoute) {
+		t.Errorf("GateControllerUnimplemented does not name the Create and its stage: %s", d.message)
 	} else if strings.Contains(d.message, "deadline") {
-		t.Errorf("EvalWaitingForAuth names a deadline the transaction does not have: %s", d.message)
+		t.Errorf("the message names a deadline the transaction does not have: %s", d.message)
+	}
+	if got := claimHoldingTransaction(in.status); got == nil || got.Kind != TxCreate {
+		t.Errorf("claimHoldingTransaction misses a recorded Create: %+v", got)
+	}
+	in.status.Auth.Transaction = &assaydv1alpha1.AuthTransaction{Kind: TxLock, Stage: StageApplyingPolicies}
+	if got := claimHoldingTransaction(in.status); got == nil || got.Kind != TxLock {
+		t.Errorf("claimHoldingTransaction misses a recorded Lock: %+v", got)
+	}
+	in.status.Auth.Transaction = &assaydv1alpha1.AuthTransaction{Kind: TxAdopt, Stage: StageRefused}
+	if got := claimHoldingTransaction(in.status); got != nil {
+		t.Errorf("claimHoldingTransaction counts a refused Adopt: %+v", got)
 	}
 }
 
 // Q12 (a): past its deadline, the transaction still holds the eval, and the
 // message says when the deadline passed; before it, it says nothing of one.
-func TestEvalWaitingForAuthNamesAPassedDeadline(t *testing.T) {
+func TestARecordedTransactionNamesAPassedDeadline(t *testing.T) {
 	now := time.Now()
 	past, future := metav1.NewTime(now.Add(-time.Minute)), metav1.NewTime(now.Add(time.Minute))
 	in := gateInput{desired: gRev, desiredDigest: gDigest, suiteDigest: gSuite, now: now,

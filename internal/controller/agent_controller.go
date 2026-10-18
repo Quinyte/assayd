@@ -367,7 +367,9 @@ func (r *AgentReconciler) installIdentity(ctx context.Context) (string, error) {
 // before creating a run namespace, and fail-closes if they do not.
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingadmissionpolicies;validatingadmissionpolicybindings,verbs=get
 // Discovery of whether the EvalSuite CRD is installed decides whether rollouts
-// are eval-gated (ADR-0006), so the operator must be able to see CRDs.
+// are eval-gated (ADR-0006), so the operator must be able to see CRDs. The gate
+// branch's schema check also gets the agents.assayd.dev CRD by name, uncached,
+// to confirm it keeps status.eval's record (design 16 §1.1 step 11).
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
 
 func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -969,7 +971,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if gating == gateEnforced {
 			conds.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, ReasonEvalHeldForAuth,
 				fmt.Sprintf("revision %s is held by the -auth promotion hold, which comes before its "+
-					"eval gate: %s. Its eval does not run while the hold stands, and the edit that "+
+					"eval gate: %s. It is not promoted while the hold stands, and the edit that "+
 					"fixes -auth mints a new revision, which is held for its own gate instead", desired, authHold))
 		}
 

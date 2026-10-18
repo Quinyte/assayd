@@ -625,7 +625,7 @@ kubectl -n "$RUN_NS" get deploy -l assayd.dev/agent=toolcaller \
 
 The first prints the revision Service the route sends to; the second prints each revision's Deployment and the URL it carries. If the serving one carries none, the ways out are: let the current spec's revision become the one serving, by promoting it or by reverting the spec to it; remove the pin; fix whatever stopped the reconcile; or create a new Agent.
 
-**No gate passes yet.** An Agent held at `AwaitingGates` stays held until `spec.gates` is emptied or the EvalSuite CRD is removed — `gatesSatisfied` is true only in those two cases, and nothing evaluates a gate (`internal/controller/agent_controller.go`).
+**No gate passes yet.** A gated candidate is promoted only when `status.eval` records a `Passed` verdict for its full digest against the digest of its suite, with its card recorded (`decideGate`, `internal/controller/gate.go`), and nothing in this release runs a suite or writes a verdict. So an Agent held at `AwaitingGates` stays held until `spec.gates` is emptied or the EvalSuite CRD is removed, unless some other writer of `agents/status` records that verdict. `GatesPassed`'s reason says what holds it: `GateControllerUnimplemented` once its suite and card are in place, or a missing suite, card or Agent CRD field before that.
 
 Create a second Agent. It needs `MCP_TOOL_HOST`, which `hello` does not set:
 

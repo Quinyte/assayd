@@ -611,11 +611,14 @@ func TestAGatedCandidateUnderTheI1HoldSaysItIsHeldForAuth(t *testing.T) {
 	condIs(t, a, assaydv1alpha1.CondProgressing, metav1.ConditionTrue, "AuthInputUncompilable")
 }
 
-// EvalWaitingForAuth: a route re-create's Create recorded on a served Agent
-// holds its gated candidate's eval, and the message names the transaction's
-// kind and stage.
-func TestAGatedCandidateWaitsForARecordedCreate(t *testing.T) {
-	a, r, _ := servedAPIKeyAgent(t, "waitsforauth")
+// A route re-create's Create recorded on a served Agent, beside a gated
+// candidate with its suite and card. Until build step 6 nothing would run the
+// eval after the transaction either, so the candidate reads
+// GateControllerUnimplemented, which claims no run, and the message names
+// the transaction as a further reason no case would be claimed — never
+// EvalWaitingForAuth, which would point at auth while the gate is the block.
+func TestAGatedCandidateBesideARecordedCreateClaimsNoRun(t *testing.T) {
+	a, r, _ := servedAPIKeyAgent(t, "besidecreate")
 	ns := a.Namespace
 	r.EvalSuiteInstalled = func() bool { return true }
 	mustCreateSuite(t, ns, "smoke")
@@ -629,9 +632,9 @@ func TestAGatedCandidateWaitsForARecordedCreate(t *testing.T) {
 	}
 	reconcileOnce(t, r, a)
 	tx = txOf(t, a)
-	c := condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "EvalWaitingForAuth")
-	if c != nil && (!strings.Contains(c.Message, "Create") || !strings.Contains(c.Message, tx.Stage)) {
-		t.Errorf("EvalWaitingForAuth does not name the transaction's kind and stage (%s): %s",
+	c := condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "GateControllerUnimplemented")
+	if c != nil && !strings.Contains(c.Message, "An -auth Create is also recorded on this Agent, in stage "+tx.Stage) {
+		t.Errorf("GateControllerUnimplemented does not name the recorded Create and its stage (%s): %s",
 			tx.Stage, c.Message)
 	}
 }
