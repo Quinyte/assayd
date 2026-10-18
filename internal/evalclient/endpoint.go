@@ -120,7 +120,7 @@ func EndpointPath(interfaces []Interface) (string, error) {
 		"Declare one"}
 }
 
-// pathPunctuation is every byte other than a letter or a digit that a card's
+// pathPunctuation is every byte other than an ASCII letter or a digit that a card's
 // path may be written with: ones url.URL puts on the request line unescaped.
 const pathPunctuation = "-._~/:@$&+,;="
 
@@ -133,7 +133,7 @@ func quotedPunctuation() string {
 	return strings.Join(q, " ")
 }
 
-// pathSendsAsWritten reports whether every byte of p is a letter, a digit,
+// pathSendsAsWritten reports whether every byte of p is an ASCII letter, a digit,
 // or in pathPunctuation.
 func pathSendsAsWritten(p string) bool {
 	for i := 0; i < len(p); i++ {
