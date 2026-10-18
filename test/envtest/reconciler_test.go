@@ -280,15 +280,21 @@ func TestGatesDeclaredWithoutTheCRDIsLoudAboutIt(t *testing.T) {
 }
 
 // The fail-closed direction: gates declared, gate controller absent. The agent
-// must hold at zero traffic rather than promote ungated.
+// must hold at zero traffic rather than promote ungated. Its suite exists and
+// its card is recorded, so every precondition holds and the hold is the
+// missing eval controller's alone: GateControllerUnimplemented, never a reason
+// that says a run is under way (design 16 build step 5; step 6 retires it).
 func TestDeclaredGatesHoldWhenNoGateControllerExists(t *testing.T) {
 	ns := newNamespace(t)
+	mustCreateSuite(t, ns, "pa-regression")
 	a := mustCreateAgent(t, ns, "gated", func(a *assaydv1alpha1.Agent) {
 		a.Spec.Gates = []assaydv1alpha1.GateRef{{EvalSuiteRef: "pa-regression"}}
 	})
 	r := newReconciler(true) // EvalSuite CRD present
+	rev, digest := revision.MustHash(a.Spec), revision.MustDigest(a.Spec)
 	settle(t, r, a)
-	markAvailable(t, ns, controller.WorkloadName("gated", revision.MustHash(a.Spec)), 1)
+	markAvailable(t, ns, controller.WorkloadName("gated", rev), 1)
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) { putCard(st, rev, digest, time.Now()) })
 	got := settle(t, r, a)
 
 	if got.Status.Phase != assaydv1alpha1.PhaseHeld {
@@ -300,6 +306,10 @@ func TestDeclaredGatesHoldWhenNoGateControllerExists(t *testing.T) {
 	}
 	if c := condition(&got, assaydv1alpha1.CondGatesPassed); c == nil || c.Status != metav1.ConditionFalse {
 		t.Error("GatesPassed must be False and say why")
+	} else if c.Reason != controller.ReasonGateControllerUnimplemented {
+		t.Errorf("GatesPassed's reason is %q, want %s: the suite exists and the card is recorded, so "+
+			"the only thing missing is the eval controller, and no reason may say a run is under way "+
+			"while none can be", c.Reason, controller.ReasonGateControllerUnimplemented)
 	}
 }
 

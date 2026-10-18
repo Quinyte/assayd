@@ -177,8 +177,9 @@ cluster-up: ## k3d cluster matching the local profile
 cluster-down: ; -k3d cluster delete $(CLUSTER)
 # Only the Agent CRD, as the chart installs. config/crd also holds the EvalSuite
 # CRD, which ships in the chart only with the eval controller (design 16 §1.1
-# build step 6); installed without it, a gated Agent would hold with
-# GateControllerUnimplemented where a chart install reports
-# GatesSkipped/EvalSuiteCRDAbsent. Apply the whole directory again in step 6.
+# build step 6); installed without it, a gated Agent would hold (with
+# EvalSuiteNotFound while its suite does not exist) where a chart install
+# reports GatesSkipped/EvalSuiteCRDAbsent. Apply the whole directory again in
+# step 6.
 install-crds: manifests ## apply the Agent CRD to the current context
 	kubectl apply -f config/crd/assayd.dev_agents.yaml

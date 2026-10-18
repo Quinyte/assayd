@@ -17,9 +17,12 @@ import (
 // An Agent binds a suite through spec.gates[].evalSuiteRef, in the Agent's own
 // namespace; the suite names no Agent.
 //
-// Nothing in the operator runs a suite yet. Declaring a gate holds the
-// candidate with GatesPassed=False/GateControllerUnimplemented until the eval
-// controller ships.
+// Nothing in the operator runs a suite yet. The Agent reconciler reads the
+// suite a gate names and promotes a candidate only once status.eval records a
+// Passed verdict for it against this suite's digest, with its card recorded.
+// Nothing writes a verdict until the eval controller ships, so until then a
+// candidate whose suite and card are in place holds with
+// GatesPassed=False/GateControllerUnimplemented.
 type EvalSuiteSpec struct {
 	// Dataset holds the cases each candidate revision is sent.
 	Dataset EvalDataset `json:"dataset"`

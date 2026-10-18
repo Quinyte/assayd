@@ -29,6 +29,22 @@
 # Entries are alphabetical by reason.
 
 reasons:
+  - reason: ActiveRevisionNotEvaluated
+    state: >-
+      The Agent declares a gate, the EvalSuite CRD is installed, and the
+      revision being served is the desired one, but `status.eval` records no
+      `Passed` verdict for its digest. A gate added after the revision began
+      serving is one cause; a revert to a revision whose own `Passed` record a
+      later candidate's record has replaced is another, and the reason does not
+      tell them apart.
+    operator: >-
+      Sets `GatesPassed=False` with this reason in the promotion branch and
+      changes nothing else: the revision keeps serving, phase `Ready`. The
+      message says what `status.eval` records instead, and that the revision
+      serving is not re-evaluated, because `gates` is policy surface; the next
+      revision the spec mints is held for its gate.
+    traffic: not-withdrawn
+
   - reason: ActiveRevisionServiceUnaddressable
     state: >-
       The active revision is not the desired one, and the active revision's
@@ -322,13 +338,16 @@ reasons:
   - reason: AwaitingGates
     state: >-
       The Agent declares gates, the desired revision has not satisfied them, and
-      its digest differs from the active one. Today that is always because the
-      gate controller is unbuilt or gate detection is unwired, not because a gate
-      ran and failed.
+      its digest differs from the active one. `GatesPassed` names why. Nothing
+      in this release writes a verdict, so a gate is satisfied only by a
+      `status.eval` record some other writer of `agents/status` made.
     operator: >-
       Records the candidate, holds the promotion at zero traffic and sets phase
-      `Held`. `Ready` stays `True` where an earlier revision is active and goes
-      `False` with this reason where none is.
+      `Held` and `Progressing=True` with this reason. `Ready` stays `True` where
+      an earlier revision is active and goes `False` where none is, with this
+      reason unless `GatesPassed`'s reason names a cause of its own:
+      `EvalRecordNotKept`, `EvalRecordUnverifiable`, or `EvalFailed` for a
+      failed or already-failed pair.
     traffic: not-withdrawn
     note: >-
       Not withdrawn where an earlier revision is active. Where the Agent has
@@ -493,6 +512,165 @@ reasons:
       This is the reason on `Ready`; the same pass puts `Unresolved` on the
       `EnvSourceUnresolved` condition.
 
+  - reason: EvalAwaitingCard
+    state: >-
+      A gated candidate has no card digest recorded in `status.cards[]`
+      for its full digest, whether or not it has a `Passed` verdict for
+      the current suite (a failed drift re-read clears a recorded one); or
+      `status.eval.blocked` records that the eval controller's run-start
+      card fetch failed or did not match the recorded digest, and
+      `status.eval.blockedFor` matches the current candidate, suite and
+      `Lock`.
+    operator: >-
+      Sets `GatesPassed=False` with this reason in the gate branch, holds the
+      candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
+      For a candidate not available yet, or no longer, the not-ready branches
+      before the gate set the same reason and leave phase, `Progressing` and
+      `Ready` as they set them. `Ready` stays `True` where an earlier revision
+      serves, and goes `False/AwaitingGates` where none does. A gated candidate
+      is not promoted without its card recorded (design 16 Q10), which is new
+      enforcement: an ungated candidate is promoted whatever its card. The
+      message says whether the candidate had already passed.
+    traffic: not-withdrawn
+    note: >-
+      Not withdrawn where an earlier revision is active. Where the Agent has
+      never served, no route is published at all, so there is no traffic to
+      withdraw.
+
+  - reason: EvalBindingUnsupported
+    state: >-
+      `status.eval.blocked` records that the candidate's card has no
+      usable `HTTP+JSON` 1.0 interface, and `status.eval.blockedFor`
+      matches the current candidate, suite and `Lock`. Only the eval
+      controller writes `blocked`, and it is not built in this release, so
+      no code path here produces that record.
+    operator: >-
+      Sets `GatesPassed=False` with this reason in the gate branch, holds the
+      candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
+      For a candidate not available yet, or no longer, the not-ready branches
+      before the gate set the same reason and leave phase, `Progressing` and
+      `Ready` as they set them. `Ready` stays `True` where an earlier revision
+      serves, and goes `False/AwaitingGates` where none does. The message
+      carries `blocked.message`.
+    traffic: not-withdrawn
+    note: >-
+      Not withdrawn where an earlier revision is active. Where the Agent has
+      never served, no route is published at all, so there is no traffic to
+      withdraw.
+
+  - reason: EvalFailed
+    state: >-
+      `status.eval` records a `Failed` verdict for the candidate's full
+      digest against the digest of the suite read in this pass.
+    operator: >-
+      Sets `GatesPassed=False` with this reason in the gate branch, holds the
+      candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
+      For a candidate not available yet, or no longer, the not-ready branches
+      before the gate set the same reason and leave phase, `Progressing` and
+      `Ready` as they set them. `Ready` stays `True` where an earlier revision
+      serves, and goes `False/EvalFailed` where none does. The message names
+      each failed case and its reason, the score against the threshold, and both
+      digests. The candidate is held, not deleted, until a new spec supersedes
+      it or the suite's digest changes (design 16 Q2). Removing the gate
+      promotes it (Q9).
+    traffic: not-withdrawn
+    note: >-
+      Not withdrawn where an earlier revision is active. Where the Agent has
+      never served, no route is published at all, so there is no traffic to
+      withdraw.
+
+  - reason: EvalHeldForAuth
+    state: >-
+      A gated candidate of a served Agent is held by design 03's I1
+      promotion hold: its `-auth` input does not compile. The I1 branch
+      comes before the gate branch.
+    operator: >-
+      Sets `GatesPassed=False` with this reason in the I1 branch, beside that
+      branch's own `Progressing=True/AuthInputUncompilable`, phase `Held` and
+      `Ready=True/Available`. It is not promoted while the hold stands. The edit
+      that fixes `-auth` mints a new revision, which is held for its own gate
+      instead.
+    traffic: not-withdrawn
+    note: >-
+      I1 applies only to a served Agent, so an earlier revision always serves
+      here.
+
+  - reason: EvalPairAlreadyFailed
+    state: >-
+      The pair of the candidate's full digest and the current suite digest
+      is in `status.eval.failed[]`, and `status.eval` does not record that
+      pair's `Failed` verdict, which would give `EvalFailed`.
+    operator: >-
+      Sets `GatesPassed=False` with this reason in the gate branch, holds the
+      candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
+      For a candidate not available yet, or no longer, the not-ready branches
+      before the gate set the same reason and leave phase, `Progressing` and
+      `Ready` as they set them. `Ready` stays `True` where an earlier revision
+      serves, and goes `False/EvalFailed` where none does. A pair in `failed[]`
+      is not evaluated again; the message says an edit to the suite gives a new
+      pair, which the record does not hold.
+    traffic: not-withdrawn
+    note: >-
+      Not withdrawn where an earlier revision is active. Where the Agent has
+      never served, no route is published at all, so there is no traffic to
+      withdraw.
+
+  - reason: EvalPassed
+    state: >-
+      `status.eval` records `Passed` for the revision being promoted or
+      serving, by its full digest. For a candidate, the gate was
+      satisfied: the verdict is for the suite digest read in this pass,
+      and a card digest is recorded for the candidate.
+    operator: >-
+      Sets `GatesPassed=True` with this reason in the promotion branch,
+      naming both digests and the score, and promotes as `RolloutComplete`
+      does. It is set only when that record exists, never merely because
+      the promotion branch ran.
+    traffic: not-withdrawn
+
+  - reason: EvalRecordNotKept
+    state: >-
+      A gated candidate's pass reads the installed `agents.assayd.dev`
+      CRD, through the uncached reader behind a 30 s cache, and its
+      `v1alpha1` schema lacks one of `status.eval`'s `suiteDigest`,
+      `endpointPath`, `cardDigest`, `blocked`, `blockedFor`, `verdict`,
+      `cases` (with `claim`) or `failed`. Such a CRD prunes them from
+      every write without an error. It is what an upgraded install has,
+      because `helm upgrade` never updates a chart's `crds/`.
+    operator: >-
+      Sets `GatesPassed=False` with this reason in the gate branch, holds the
+      candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
+      For a candidate not available yet, or no longer, the not-ready branches
+      before the gate set the same reason and leave phase, `Progressing` and
+      `Ready` as they set them. `Ready` stays `True` where an earlier revision
+      serves, and goes `False` with this reason where none does. Checked before
+      any of `status.eval` is read. The message names the missing fields and the
+      remedy: apply this release's `charts/assayd/crds/` with `kubectl`.
+    traffic: not-withdrawn
+    note: >-
+      Not withdrawn where an earlier revision is active. Where the Agent has
+      never served, no route is published at all, so there is no traffic to
+      withdraw.
+
+  - reason: EvalRecordUnverifiable
+    state: >-
+      The installed Agent CRD could not be read for that check, and no
+      earlier answer is cached in this process. With one cached, however
+      old, the cached answer stands instead.
+    operator: >-
+      Sets `GatesPassed=False` with this reason in the gate branch, holds the
+      candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
+      For a candidate not available yet, or no longer, the not-ready branches
+      before the gate set the same reason and leave phase, `Progressing` and
+      `Ready` as they set them. `Ready` stays `True` where an earlier revision
+      serves, and goes `False` with this reason where none does. The message
+      names the error.
+    traffic: not-withdrawn
+    note: >-
+      Not withdrawn where an earlier revision is active. Where the Agent has
+      never served, no route is published at all, so there is no traffic to
+      withdraw.
+
   - reason: EvalSuiteCRDAbsent
     state: >-
       The Agent declares gates, gate detection is wired, and it reports that the
@@ -504,6 +682,65 @@ reasons:
     note: >-
       The promotion proceeds. This reason is the record that a gate an operator
       declared did not run.
+
+  - reason: EvalSuiteNotFound
+    state: >-
+      The EvalSuite that `spec.gates` names does not exist in the Agent's
+      namespace, as an uncached get by name finds it.
+    operator: >-
+      Sets `GatesPassed=False` with this reason in the gate branch, holds the
+      candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
+      For a candidate not available yet, or no longer, the not-ready branches
+      before the gate set the same reason and leave phase, `Progressing` and
+      `Ready` as they set them. `Ready` stays `True` where an earlier revision
+      serves, and goes `False/AwaitingGates` where none does. The message names
+      the suite.
+    traffic: not-withdrawn
+    note: >-
+      Not withdrawn where an earlier revision is active. Where the Agent has
+      never served, no route is published at all, so there is no traffic to
+      withdraw.
+
+  - reason: EvalSuiteUnreadable
+    state: >-
+      The EvalSuite that `spec.gates` names could not be read, with an
+      error that is not NotFound, such as `Forbidden`.
+    operator: >-
+      Sets `GatesPassed=False` with this reason in the gate branch, holds the
+      candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
+      For a candidate not available yet, or no longer, the not-ready branches
+      before the gate set the same reason and leave phase, `Progressing` and
+      `Ready` as they set them. `Ready` stays `True` where an earlier revision
+      serves, and goes `False/AwaitingGates` where none does. The message names
+      the error.
+    traffic: not-withdrawn
+    note: >-
+      Not withdrawn where an earlier revision is active. Where the Agent has
+      never served, no route is published at all, so there is no traffic to
+      withdraw.
+
+  - reason: EvalWaitingForAuth
+    state: >-
+      `status.eval.blocked` records this reason and `status.eval.blockedFor`
+      matches the current candidate, suite and `Lock`. Only the eval controller
+      writes `blocked`, and it is not built in this release, so nothing reports
+      this reason yet. A recorded `Create` or `Lock` does not give it before
+      design 16 build step 6: with no eval controller to wait on the transaction
+      it reads `GateControllerUnimplemented`, whose message names the
+      transaction. Step 6 makes a recorded `Create` or `Lock` give this reason.
+    operator: >-
+      Sets `GatesPassed=False` with this reason in the gate branch, holds the
+      candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
+      For a candidate not available yet, or no longer, the not-ready branches
+      before the gate set the same reason and leave phase, `Progressing` and
+      `Ready` as they set them. `Ready` stays `True` where an earlier revision
+      serves. The message carries `blocked.message`.
+    traffic: not-withdrawn
+    note: >-
+      Kept, though unreported, because `blocked` is read now and design 16 build
+      step 6 adds the transaction rule beside it. Step 7 adds the exemption for
+      a J2 or K2 `Lock` that can finish only through a promotion, and the
+      missing-policy wedge's exits.
 
   - reason: ExternalRegistrationUnimplemented
     state: >-
@@ -550,13 +787,23 @@ reasons:
 
   - reason: GateControllerUnimplemented
     state: >-
-      The Agent declares gates and the EvalSuite CRD is installed, but design
-      16's gate controller is not built, so nothing can decide whether the gate
-      passed.
+      A gated candidate whose suite exists and whose card is recorded, and for
+      which `status.eval` records no final verdict against the current suite
+      digest. A `Running` record counts as none. Design 16's eval controller,
+      which would run the suite and write one, is not built in this release. A
+      `Create` or `Lock` recorded in `status.auth.transaction` does not change
+      the reason; a refused `Adopt` does not count.
     operator: >-
-      Sets `GatesPassed=False`, which holds the promotion: the candidate sits at
-      zero traffic under `AwaitingGates` and phase `Held`, with no exit in this
-      build.
+      Sets `GatesPassed=False` with this reason in the gate branch, which holds
+      the promotion: the candidate sits at zero traffic under `AwaitingGates`
+      and phase `Held`. For a candidate not available yet, or no longer, the
+      not-ready branches before the gate set the same reason and leave phase,
+      `Progressing` and `Ready` as they set them. Where a `Create` or `Lock` is
+      recorded, the message names its kind and stage, and when its deadline
+      passed, as a further reason no case would be claimed. It never says a run
+      is under way, or will be; design 16 build step 6, the eval controller,
+      replaces it with `EvalRunning`, and a recorded transaction with
+      `EvalWaitingForAuth`.
     traffic: not-withdrawn
     note: >-
       Not withdrawn where an earlier revision is active; where none ever served,
@@ -670,17 +917,19 @@ reasons:
     note: Only the SECOND tenant's Agents are affected.
 
   - reason: NoGatesDeclared
-    state: The Agent declares no gates. Checked first, before gate detection.
+    state: >-
+      The Agent declares no gates. Checked first, before gate detection.
     operator: >-
       Sets `GatesSkipped=True`; gates count as satisfied and the candidate
       promotes normally.
     traffic: not-withdrawn
-    disagreement: >-
-      Design 16 describes gate assessment also setting `GatesPassed=False` with
-      this reason for an Agent whose gate was removed. No such branch exists in
-      the code. Design 16 approves only its first slice and that slice is
-      unimplemented, so this may be intended-future rather than drift; it is
-      recorded either way.
+    note: >-
+      On an Agent that had `GatesPassed`, because its gate was removed, it also
+      sets `GatesPassed=False` with this reason, so a sticky `EvalFailed` does
+      not stay beside a revision it no longer describes, and the promotion
+      branch names the revision then serving. Where `status.eval` records a
+      `Failed` or `Running` verdict for the revision the pass converges, both
+      messages name the verdict and its digests (design 16 Q9).
 
   - reason: NoRolloutInFlight
     state: >-
