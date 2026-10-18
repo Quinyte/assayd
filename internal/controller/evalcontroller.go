@@ -18,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
@@ -597,20 +596,13 @@ func (r *EvalReconciler) runStartCard(ctx context.Context, run *evalRun, addr st
 }
 
 // checkEndpointPath refuses, under EvalBindingUnsupported, a path the eval
-// would record and send to but should not (#105 item 9): not valid UTF-8,
-// longer than MaxEndpointPathLength, with no leading "/", or with a control
-// character. EndpointPath takes the decoded path of the card's URL, so a byte
-// or a control character the card escaped comes back raw, and a relative URL
-// gives a path with no leading "/". A path that is not UTF-8 cannot be
-// recorded as it is: status is JSON, which stores U+FFFD in its place, so the
-// record would name a path the card never declared (and the read-back would
-// blame the CRD).
+// would record and send to but should not (#105 item 9): longer than
+// MaxEndpointPathLength, or with no leading "/", which a relative card URL
+// gives. A path that decodes to bytes that are not UTF-8, or to a control
+// character, or that the client would send re-encoded, is refused before
+// this, by evalclient.EndpointPath, which has the URL as the card wrote it.
 func checkEndpointPath(path string) error {
 	switch {
-	case !utf8.ValidString(path):
-		return bindingRefusal("its first HTTP+JSON 1.0 interface's url decodes to a path that is not " +
-			"valid UTF-8, which status.eval cannot record as it is. Serve the interface at a path " +
-			"that decodes to UTF-8")
 	case utf8.RuneCountInString(path) > MaxEndpointPathLength:
 		return bindingRefusal(fmt.Sprintf("the endpoint path its first HTTP+JSON 1.0 interface names is "+
 			"%d characters long, and the eval records and sends to one of at most %d. Serve the "+
@@ -619,9 +611,6 @@ func checkEndpointPath(path string) error {
 		return bindingRefusal("its first HTTP+JSON 1.0 interface's url is not an absolute URL with a " +
 			"path, so the endpoint the eval would take from it does not begin with \"/\". Serve the " +
 			"interface at an absolute URL")
-	case strings.ContainsFunc(path, unicode.IsControl):
-		return bindingRefusal("its first HTTP+JSON 1.0 interface's url decodes to a path with a " +
-			"control character in it. Serve the interface at a path without one")
 	}
 	return nil
 }

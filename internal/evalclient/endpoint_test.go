@@ -176,9 +176,50 @@ func TestACardDecodesIntoInterfaces(t *testing.T) {
 	}
 }
 
-// A path written with an escape url.URL's Path does not keep, an escaped
-// slash, cannot be sent as declared, and is refused rather than sent to
-// another path; an escape Path does keep, a space, is admitted.
+// The path as the card wrote it must be the path the client sends, up to
+// RFC 3986 §6.2.2's percent-encoding equivalence. Spellings that differ only
+// there are admitted; a path the client would send re-encoded is refused as
+// not sendable; a byte that is a control character or not UTF-8 is refused as
+// that, whichever case its hex is written in.
+func TestTheWrittenPathMustBeThePathSent(t *testing.T) {
+	const sendable, control, notUTF8 = "is not the path the eval client would send", "control character",
+		"not valid UTF-8"
+	for path, want := range map[string]string{
+		"/caf%c3%a9/": "", "/caf%C3%A9/": "", "/café/": "", "/%7Eu/": "", "/~u/": "", "/a b/": "",
+		"/a%20b/": "", "/a2a/": "", "/": "",
+		"/a%2Fb/": sendable, "/a%2fb/": sendable, "/a!b/": sendable, "/a(b)/": sendable, "/a*b/": sendable,
+		"/a%0ab/": control, "/a%0Ab/": control,
+		"/%ff/": notUTF8, "/%FF/": notUTF8,
+	} {
+		_, err := EndpointPath([]Interface{{URL: "http://agent.example" + path, ProtocolBinding: "HTTP+JSON",
+			ProtocolVersion: "1.0"}})
+		switch {
+		case want == "" && err != nil:
+			t.Errorf("%q is refused: %v", path, err)
+		case want != "" && (err == nil || !strings.Contains(err.Error(), want)):
+			t.Errorf("%q: %v; want a refusal saying %q", path, err, want)
+		}
+	}
+}
+
+// WirePath is what Send puts on the request line for a case's Path, so the
+// comparison above is against the wire and not an assumption about it.
+func TestWirePathIsWhatSendPutsOnTheWire(t *testing.T) {
+	for _, p := range []string{"/café/message:send", "/a b/message:send", "/~u/message:send",
+		"/a!b/message:send", "/a(b)*/message:send", "/a2a/message:send"} {
+		req, err := http.NewRequest(http.MethodPost, Case{Address: "10.0.0.1:8080", Path: p}.target(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := req.URL.RequestURI(); got != WirePath(p) {
+			t.Errorf("for %q the request line carries %q and WirePath says %q", p, got, WirePath(p))
+		}
+	}
+}
+
+// A path written with an escaped slash cannot be sent as declared, and is
+// refused rather than sent to another path; an escape Path does keep, a
+// space, is admitted.
 func TestAnEscapedSlashIsRefused(t *testing.T) {
 	_, err := EndpointPath([]Interface{{URL: "http://agent.example/a%2Fb/", ProtocolBinding: "HTTP+JSON",
 		ProtocolVersion: "1.0"}})

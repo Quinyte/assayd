@@ -396,12 +396,8 @@ func TestTheEndpointPathIsBounded(t *testing.T) {
 		t.Errorf("a path of %d two-byte characters is refused: %v", MaxEndpointPathLength, err)
 	}
 	for name, path := range map[string]string{
-		"too long":          ok + "a",
-		"no leading slash":  "a2a/message:send",
-		"a control char":    "/a\x01/message:send",
-		"a DEL":             "/a\x7f/message:send",
-		"an escaped return": "/a\r/message:send",
-		"not UTF-8":         "/\xff/message:send",
+		"too long":         ok + "a",
+		"no leading slash": "a2a/message:send",
 	} {
 		if err := checkEndpointPath(path); err == nil {
 			t.Errorf("%s: %q is admitted", name, path)
@@ -828,6 +824,30 @@ func TestPausedCountsOnlyTheCurrentPairsRun(t *testing.T) {
 	d := decideGate(in)
 	if d.reason != ReasonEvalPaused || !strings.Contains(d.message, "no run has started") ||
 		strings.Contains(d.message, "1 of its 2") {
-		t.Errorf("a paused candidate beside another pair's run: %s %s", d.reason, d.message)
+		t.Errorf("a paused candidate beside another revision's run: %s %s", d.reason, d.message)
+	}
+	// The same revision against a suite edited while the candidate was paused
+	// mid-run: no run of the edited suite has started.
+	in.status.Eval.RevisionDigest, in.status.Eval.SuiteDigest = gDigest, "sha256:the-suite-before-its-edit"
+	d = decideGate(in)
+	if d.reason != ReasonEvalPaused || !strings.Contains(d.message, "no run has started") ||
+		strings.Contains(d.message, "1 of its 2") {
+		t.Errorf("a paused candidate beside the run of its suite before an edit: %s %s", d.reason, d.message)
+	}
+}
+
+// A run-start fetch that failed at the connection names that class, not
+// "the body is not JSON": the validity check reads a body only when there is
+// one.
+func TestAFailedFetchNamesItsOwnClass(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"))
+	f.stub.refuse = true
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	e := f.agent(t).Status.Eval
+	if e == nil || e.Blocked == nil || !strings.Contains(e.Blocked.Message, "refused or failed") ||
+		strings.Contains(e.Blocked.Message, "not JSON") {
+		t.Errorf("a refused run-start fetch: blocked %+v; want it to name the refused connection", e)
 	}
 }
