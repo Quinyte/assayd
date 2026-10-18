@@ -43,7 +43,7 @@ func stub(t *testing.T, code int, body string) string {
 
 func send(t *testing.T, addr string, expect assaydv1alpha1.EvalExpect) Outcome {
 	t.Helper()
-	return New().Send(context.Background(), Case{
+	return sendOn(t, New(), context.Background(), Case{
 		Address: addr, Path: "/message:send", Message: "q", Expect: expect, TimeoutSeconds: 2,
 	})
 }
@@ -195,11 +195,51 @@ func TestARefusedConnectionIsUnreachable(t *testing.T) {
 	}
 }
 
-// An address no request can be built for reaches nothing, so it is
-// Unreachable rather than a protocol fault of the candidate's.
-func TestAnUnusableAddressIsUnreachable(t *testing.T) {
-	if got := send(t, "bad host:1", contains("x")); got != fail(ReasonUnreachable) {
-		t.Errorf("outcome %+v, want Unreachable", got)
+// sendOn sends cs and fails the test if no request could be built.
+func sendOn(t *testing.T, c *Client, ctx context.Context, cs Case) Outcome {
+	t.Helper()
+	out, err := c.Send(ctx, cs)
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	return out
+}
+
+// A case no request can be built for is the caller's fault, not the
+// candidate's: Send returns an error and no outcome, and sends nothing, so
+// nothing can fail the candidate or reach failed[] for it. Check refuses the
+// same case without sending, and admits a usable one.
+func TestAnUnbuildableRequestIsAnErrorNotAnOutcome(t *testing.T) {
+	var sent atomic.Int32
+	c := &Client{HTTP: doerFunc(func(*http.Request) (*http.Response, error) {
+		sent.Add(1)
+		return nil, fmt.Errorf("stop")
+	})}
+	bad := Case{Address: "bad host:1", Path: "/message:send", Message: "q", Expect: contains("x"), TimeoutSeconds: 1}
+	out, err := c.Send(context.Background(), bad)
+	if err == nil {
+		t.Errorf("Send = %+v, nil; want an error for an address no URL can carry", out)
+	}
+	if out != (Outcome{}) {
+		t.Errorf("Send returned outcome %+v beside its error; want none", out)
+	}
+	if n := sent.Load(); n != 0 {
+		t.Errorf("%d requests were sent for a case with no usable address", n)
+	}
+	if Check(bad) == nil {
+		t.Error("Check admitted a case Send cannot build")
+	}
+	if err := Check(Case{Address: "10.0.0.1:8080", Path: "/a2a/message:send"}); err != nil {
+		t.Errorf("Check refused a usable case: %v", err)
+	}
+}
+
+// Every Client New returns shares one transport, so a client built per send
+// does not open a keep-alive pool of its own.
+func TestClientsShareOneTransport(t *testing.T) {
+	a, b := New().HTTP.(*http.Client), New().HTTP.(*http.Client)
+	if a.Transport != b.Transport {
+		t.Error("two clients from New have different transports; each would hold its own connection pool")
 	}
 }
 
@@ -231,7 +271,7 @@ func TestATimeoutIsUnreachableWithinTheBound(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			addr := blocker(t, header)
 			start := time.Now()
-			got := New().Send(context.Background(), Case{
+			got := sendOn(t, New(), context.Background(), Case{
 				Address: addr, Path: "/message:send", Message: "q", Expect: contains("x"), TimeoutSeconds: 1,
 			})
 			if el := time.Since(start); el > 2*time.Second {
@@ -252,7 +292,7 @@ func TestACancelledSendIsInterrupted(t *testing.T) {
 			addr := blocker(t, header)
 			ctx, cancel := context.WithCancel(context.Background())
 			time.AfterFunc(200*time.Millisecond, cancel)
-			got := New().Send(ctx, Case{
+			got := sendOn(t, New(), ctx, Case{
 				Address: addr, Path: "/message:send", Message: "q", Expect: contains("x"), TimeoutSeconds: 5,
 			})
 			if got != fail(ReasonInterrupted) {
@@ -277,7 +317,7 @@ func TestTheDeadlineIsCaseTimeoutSeconds(t *testing.T) {
 			left = time.Until(d)
 			return nil, fmt.Errorf("stop")
 		})}
-		c.Send(context.Background(), Case{Address: "127.0.0.1:1", Path: "/message:send", Message: "q",
+		sendOn(t, c, context.Background(), Case{Address: "127.0.0.1:1", Path: "/message:send", Message: "q",
 			Expect: contains("x"), TimeoutSeconds: in})
 		if left > want || left < want-100*time.Millisecond {
 			t.Errorf("caseTimeoutSeconds %d: the request's deadline was %s away, want %s", in, left, want)
@@ -295,7 +335,7 @@ func TestACallerDeadlineIsUnreachable(t *testing.T) {
 			addr := blocker(t, header)
 			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 			defer cancel()
-			got := New().Send(ctx, Case{Address: addr, Path: "/message:send", Message: "q", Expect: contains("x"),
+			got := sendOn(t, New(), ctx, Case{Address: addr, Path: "/message:send", Message: "q", Expect: contains("x"),
 				TimeoutSeconds: 5})
 			if got != fail(ReasonUnreachable) {
 				t.Errorf("outcome %+v, want Unreachable", got)
@@ -328,7 +368,7 @@ func TestTheRequest(t *testing.T) {
 
 	c := New()
 	for range 2 {
-		c.Send(context.Background(), Case{
+		sendOn(t, c, context.Background(), Case{
 			Address: hostOf(t, srv.URL), Path: "/a2a/message:send", Message: "What is 2 + 2?",
 			Expect: contains("4"), TimeoutSeconds: 2,
 		})
@@ -461,7 +501,7 @@ func TestTheBodyCap(t *testing.T) {
 	c := &Client{HTTP: doerFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(body), Header: http.Header{}, Request: r}, nil
 	})}
-	got := c.Send(context.Background(), Case{Address: "127.0.0.1:1", Path: "/message:send", Message: "q",
+	got := sendOn(t, c, context.Background(), Case{Address: "127.0.0.1:1", Path: "/message:send", Message: "q",
 		Expect: contains("4"), TimeoutSeconds: 2})
 	if got != fail(ReasonProtocolError) {
 		t.Errorf("a 4 MiB answer: outcome %+v, want ProtocolError", got)
@@ -490,7 +530,7 @@ func TestABodyThatBreaksOffIsAProtocolError(t *testing.T) {
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Request: r,
 			Body: io.NopCloser(io.MultiReader(strings.NewReader(`{"task":`), errReader{}))}, nil
 	})}
-	got := c.Send(context.Background(), Case{Address: "127.0.0.1:1", Path: "/message:send", Message: "q",
+	got := sendOn(t, c, context.Background(), Case{Address: "127.0.0.1:1", Path: "/message:send", Message: "q",
 		Expect: contains("4"), TimeoutSeconds: 2})
 	if got != fail(ReasonProtocolError) {
 		t.Errorf("outcome %+v, want ProtocolError", got)

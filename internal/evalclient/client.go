@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -104,20 +105,38 @@ type Client struct {
 // the card fetch's and the auth probe's policy (internal/controller,
 // directTransport and refuseRedirects), mirrored here rather than shared,
 // because the controller will import this package.
+//
+// Every Client New returns shares one transport, and so one pool of
+// keep-alive connections, as the controller's card fetch and probe share
+// theirs. A Client is meant to be built once and reused; building one per
+// send costs nothing more than the struct.
 func New() *Client {
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.Proxy = nil
 	return &Client{HTTP: &http.Client{
-		Transport: t,
+		Transport: directTransport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}}
 }
 
+// directTransport is http.DefaultTransport with no proxy, shared by every
+// Client New returns.
+var directTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil
+	return t
+}()
+
 // Send sends one case and scores the answer. It makes exactly one request and
 // never retries: a case is sent at most once (design 16 §1.1 step 10), and the
 // claim that guarantees it is the caller's.
+//
+// It returns an error, and sends nothing, only when no request can be built
+// from cs — an Address or Path that does not make a URL. That is the caller's
+// fault and not the candidate's, so it is no outcome: recording one would
+// fail the candidate, and step 7's failed[] would make that final. Check
+// validates the same thing without sending, so the caller can refuse such a
+// case before it claims it.
 //
 // The request is bounded by the case's timeout, derived from ctx. If ctx is
 // cancelled first, the outcome is Interrupted, never Unreachable. A deadline
@@ -132,7 +151,7 @@ func New() *Client {
 // 200's body is still arriving. Design 16 §1.1 step 6 names a refused connection and
 // a timeout; the other transport failures are not in its table, and are read
 // as the candidate not being reached rather than as its protocol fault.
-func (c *Client) Send(ctx context.Context, cs Case) Outcome {
+func (c *Client) Send(ctx context.Context, cs Case) (Outcome, error) {
 	timeout := time.Duration(cs.TimeoutSeconds) * time.Second
 	if cs.TimeoutSeconds <= 0 {
 		timeout = evalsuite.DefaultCaseTimeoutSeconds * time.Second
@@ -146,35 +165,50 @@ func (c *Client) Send(ctx context.Context, cs Case) Outcome {
 		Role:      "ROLE_USER",
 		Parts:     []requestPart{{Text: cs.Message}},
 	}})
-	target := (&url.URL{Scheme: "http", Host: cs.Address, Path: cs.Path}).String()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, target, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cs.target(), bytes.NewReader(body))
 	if err != nil {
-		return Outcome{Reason: ReasonUnreachable}
+		return Outcome{}, fmt.Errorf("build the request for this case: %w", err)
 	}
 	// A2A 1.0 §3.6: a client MUST send A2A-Version, and an agent reads its
-	// absence as 0.3. The content type is the HTTP+JSON binding's.
+	// absence as 0.3. The content type is the one the specification's §11.1
+	// says the HTTP+JSON binding SHOULD use, read from its main branch and not
+	// checked against the v1.0.1 tag (#105).
 	req.Header.Set("A2A-Version", "1.0")
 	req.Header.Set("Content-Type", "application/a2a+json")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return failed(ctx, ReasonUnreachable)
+		return failed(ctx, ReasonUnreachable), nil
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return Outcome{Reason: ReasonProtocolError}
+		return Outcome{Reason: ReasonProtocolError}, nil
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes+1))
 	if err != nil {
 		if reqCtx.Err() != nil {
-			return failed(ctx, ReasonUnreachable)
+			return failed(ctx, ReasonUnreachable), nil
 		}
-		return Outcome{Reason: ReasonProtocolError}
+		return Outcome{Reason: ReasonProtocolError}, nil
 	}
 	if len(raw) > MaxBodyBytes {
-		return Outcome{Reason: ReasonProtocolError}
+		return Outcome{Reason: ReasonProtocolError}, nil
 	}
-	return score(raw, cs.Expect)
+	return score(raw, cs.Expect), nil
+}
+
+// Check reports whether a request can be built for cs, without sending one.
+// Send fails on exactly the cases Check refuses.
+func Check(cs Case) error {
+	if _, err := http.NewRequest(http.MethodPost, cs.target(), nil); err != nil {
+		return fmt.Errorf("build the request for this case: %w", err)
+	}
+	return nil
+}
+
+// target is the case's URL: the operator's address, the card's path.
+func (cs Case) target() string {
+	return (&url.URL{Scheme: "http", Host: cs.Address, Path: cs.Path}).String()
 }
 
 // failed is the outcome of a request that ended without a full answer:

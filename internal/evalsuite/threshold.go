@@ -29,6 +29,8 @@ func Threshold(spec assaydv1alpha1.EvalSuiteSpec) (int64, error) {
 	if len(spec.Metrics) == 0 {
 		return 1000, nil
 	}
+	// Admission admits one metric at most, named task_completion, so the
+	// name is not checked here.
 	s := spec.Metrics[0].Threshold
 	if !thresholdForm.MatchString(s) {
 		return 0, fmt.Errorf("spec.metrics[0].threshold %q is not a decimal from 0 to 1 with at most three decimal places", s)

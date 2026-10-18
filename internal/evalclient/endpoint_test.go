@@ -120,7 +120,7 @@ func TestTheCardURLHostIsNeverDialled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EndpointPath: %v", err)
 	}
-	out := New().Send(context.Background(), Case{
+	out := sendOn(t, New(), context.Background(), Case{
 		Address: hostOf(t, svc.URL), Path: path, Message: "2 + 2?", Expect: contains("4"), TimeoutSeconds: 2,
 	})
 	if out != (Outcome{Passed: true}) {
