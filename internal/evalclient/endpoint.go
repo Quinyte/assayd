@@ -87,7 +87,7 @@ func EndpointPath(interfaces []Interface) (string, error) {
 		}
 		// The eval records the path decoded (status.eval.endpointPath) and
 		// sends it with url.URL's default escaping, so it admits only a path
-		// that both leave as the card wrote it: one written from letters,
+		// that both leave as the card wrote it: one written from ASCII letters,
 		// digits and pathPunctuation, with no percent-escape (#105 item 8).
 		// Two checks give that. An escape of a byte inside the allowed set
 		// differs from url.URL's default escaping of the decoded path, so

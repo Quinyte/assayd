@@ -385,8 +385,9 @@ func TestAnAddressThatBreaksMidRunClaimsNothing(t *testing.T) {
 
 // #105 item 9: the endpoint path the eval would record and send to is
 // refused at run start, under EvalBindingUnsupported, when it is too long or
-// has no leading "/". A control character is refused before this: written
-// raw it fails url.Parse, and escaped it is refused by evalclient's allowlist
+// has no leading "/". A control character is refused before this, by
+// evalclient.EndpointPath: an ASCII control byte written raw fails url.Parse,
+// and any other control character, raw or escaped, is refused by its allowlist
 // (TestAPathIsSentAsWrittenOrRefused).
 func TestTheEndpointPathIsBounded(t *testing.T) {
 	ok := "/" + strings.Repeat("a", MaxEndpointPathLength-1)
