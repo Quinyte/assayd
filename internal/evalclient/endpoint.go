@@ -84,22 +84,27 @@ func EndpointPath(interfaces []Interface) (string, error) {
 					"fragment in its url. The eval sends each case to the URL's path alone, so it cannot "+
 					"honour either; serve the interface at a URL with neither", i)}
 		}
-		// The path is admitted only if the client will send it exactly as the
-		// card wrote it: no percent-escape anywhere in it (RawPath is empty,
-		// so Path is what was written), and every byte in pathAllowed, the
-		// bytes url.URL puts on the request line unescaped. Anything else —
-		// an escape, which Path decodes and the client re-encodes its own
-		// way; a byte the client escapes, such as "!", a space or any byte
-		// from 0x80 — would send the candidate a path its card does not
-		// declare, and fail it for good as a ProtocolError. Refused instead
-		// (#105 item 8). TestEveryByteIsSentAsWrittenOrRefused holds the set
-		// to what Send puts on the wire.
+		// The eval records the path decoded (status.eval.endpointPath) and
+		// sends it with url.URL's default escaping, so it admits only a path
+		// that both leave as the card wrote it: one written from letters,
+		// digits and pathPunctuation, with no percent-escape (#105 item 8).
+		// Two checks give that. An escape of a byte inside the allowed set
+		// differs from url.URL's default escaping of the decoded path, so
+		// url.Parse sets RawPath, and the first check refuses it. An escape
+		// of a byte outside the set decodes to that byte, and
+		// pathSendsAsWritten refuses it. So an admitted path holds no escape
+		// and only bytes url.URL puts on the request line unescaped: it is
+		// recorded and sent exactly as written.
+		// TestEveryByteIsSentAsWrittenOrRefused holds that to what Send puts
+		// on the wire. Other paths are not all unsendable — "/a%20b/" would
+		// go out as written — but the eval could not record them as written,
+		// and a path it records is the path it sends.
 		if u.RawPath != "" || !pathSendsAsWritten(u.Path) {
 			return "", &BindingError{msg: fmt.Sprintf(
 				"the candidate's card declares HTTP+JSON 1.0 at supportedInterfaces[%d] with a url whose "+
-					"path holds a character or an escape the eval client cannot send exactly as written. "+
-					"Write the path with only letters, digits, \"-\" \".\" \"_\" \"~\" \"/\" \":\" \"@\" "+
-					"\"$\" \"&\" \"+\" \",\" \";\" \"=\", and no percent-escapes", i)}
+					"path is not one the eval admits: it admits only a path written with letters, digits "+
+					"and %s, with no percent-escape, because it records the path decoded and sends it "+
+					"unescaped. Serve the interface at such a path", i, quotedPunctuation())}
 		}
 		if in.Tenant != "" {
 			return "", &BindingError{msg: fmt.Sprintf(
@@ -115,15 +120,27 @@ func EndpointPath(interfaces []Interface) (string, error) {
 		"Declare one"}
 }
 
-// pathSendsAsWritten reports whether every byte of p is one url.URL puts on
-// the request line as it is: ALPHA / DIGIT / "-" "." "_" "~" "/" ":" "@" "$"
-// "&" "+" "," ";" "=".
+// pathPunctuation is every byte other than a letter or a digit that a card's
+// path may be written with: ones url.URL puts on the request line unescaped.
+const pathPunctuation = "-._~/:@$&+,;="
+
+// quotedPunctuation is pathPunctuation as the refusal lists it.
+func quotedPunctuation() string {
+	q := make([]string, 0, len(pathPunctuation))
+	for i := 0; i < len(pathPunctuation); i++ {
+		q = append(q, `"`+pathPunctuation[i:i+1]+`"`)
+	}
+	return strings.Join(q, " ")
+}
+
+// pathSendsAsWritten reports whether every byte of p is a letter, a digit,
+// or in pathPunctuation.
 func pathSendsAsWritten(p string) bool {
 	for i := 0; i < len(p); i++ {
 		c := p[i]
 		switch {
 		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
-		case strings.IndexByte("-._~/:@$&+,;=", c) >= 0:
+		case strings.IndexByte(pathPunctuation, c) >= 0:
 		default:
 			return false
 		}

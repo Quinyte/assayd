@@ -547,11 +547,14 @@ reasons:
       writes it at run start for a card whose interfaces do not decode as A2A
       1.0 interfaces (a field of the wrong JSON type), or whose first
       `HTTP+JSON` 1.0 interface is missing, has a url that does not parse,
-      names a tenant, carries a query or a fragment, or has a path that is not sent exactly as written: the path
-      is admitted only if it holds no percent-escape and every byte of it is a
-      letter, a digit, or one of `-` `.` `_` `~` `/` `:` `@` `$` `&` `+` `,`
-      `;` `=`, and refused otherwise. An admitted path is also refused if it
-      is longer than 1024 characters, or lacks a leading `/`, which a relative card URL
+      names a tenant, carries a query or a fragment, or has a path the
+      eval does not admit. It admits only a path written with letters,
+      digits and `-` `.` `_` `~` `/` `:` `@` `$` `&` `+` `,` `;` `=`, with no
+      percent-escape, because it records the path decoded and sends it
+      unescaped; it refuses every other path, including some that would go on
+      the wire as written. It also refuses an endpoint path (the path with one
+      trailing `/` trimmed and `/message:send` appended) longer than 1024
+      characters, or one with no leading `/`, which a relative card URL
       gives.
     operator: >-
       Sets `GatesPassed=False` with this reason in the gate branch, holds the

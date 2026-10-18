@@ -595,12 +595,13 @@ func (r *EvalReconciler) runStartCard(ctx context.Context, run *evalRun, addr st
 	return path, digest, nil, 0
 }
 
-// checkEndpointPath refuses, under EvalBindingUnsupported, a path the eval
-// would record and send to but should not (#105 item 9): longer than
+// checkEndpointPath refuses, under EvalBindingUnsupported, an endpoint path
+// the eval would record and send to but should not (#105 item 9): longer than
 // MaxEndpointPathLength, or with no leading "/", which a relative card URL
-// gives. A path that decodes to bytes that are not UTF-8, or to a control
-// character, or that the client would send re-encoded, is refused before
-// this, by evalclient.EndpointPath, which has the URL as the card wrote it.
+// gives. The bound is on the endpoint, the trimmed path with "/message:send"
+// appended. A path written with a percent-escape or a byte outside
+// evalclient's allowlist is refused before this, by evalclient.EndpointPath,
+// which has the URL as the card wrote it.
 func checkEndpointPath(path string) error {
 	switch {
 	case utf8.RuneCountInString(path) > MaxEndpointPathLength:

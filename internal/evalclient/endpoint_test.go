@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -191,8 +192,11 @@ func sentURI(t *testing.T, path string) string {
 // path /a<byte>b/ is admitted exactly when the byte is in the allowlist —
 // ALPHA / DIGIT / "-" "." "_" "~" "/" ":" "@" "$" "&" "+" "," ";" "=" —
 // and an admitted path goes on the request line exactly as written, with
-// "message:send" appended. Narrowing the request line's encoding, or widening
-// the allowlist by one byte, fails a row here.
+// "message:send" appended. And the same byte written as an escape,
+// /a%XXb/, is refused for every byte. Narrowing the request line's encoding
+// fails the first half. Widening the allowlist fails the second: written raw,
+// "!" "*" "'" "(" ")" and bytes from 0x80 make url.Parse set RawPath, and a
+// raw "%" does not parse, so only the escaped form reaches the allowlist.
 func TestEveryByteIsSentAsWrittenOrRefused(t *testing.T) {
 	const allowed = "-._~/:@$&+,;="
 	for b := 0; b < 256; b++ {
@@ -211,6 +215,10 @@ func TestEveryByteIsSentAsWrittenOrRefused(t *testing.T) {
 		case !in && err == nil:
 			t.Errorf("byte %#02x: %q is admitted, as endpoint %q, sent as %q", b, written, got, sentURI(t, got))
 		}
+		escaped := fmt.Sprintf("/a%%%02Xb/", b)
+		if got, err := EndpointPath([]Interface{httpJSON("http://agent.example" + escaped)}); err == nil {
+			t.Errorf("byte %#02x: %q, an escape, is admitted as %q", b, escaped, got)
+		}
 	}
 }
 
@@ -223,7 +231,11 @@ func TestAPathIsSentAsWrittenOrRefused(t *testing.T) {
 		"/a b/": false, "/a!b/": false, "/a(b)/": false, "/a%0Ab/": false, "/%FF/": false, "/a%2/": false,
 		"/a%GGb/": false, "/a%01b/": false, "/a%7Fb/": false, "/a%0Db/": false, "/a%C2%85b/": false,
 		"/a\x01b/": false, "/a\x7fb/": false, "/a\u0085b/": false, "/%7Eu/": false,
-		"//a/": true, "/a/../b/": true, "/": true, "": true, "/a2a/v1:x@y$z/": true, "/~u/": true,
+		// Escapes that leave RawPath empty, so the allowlist alone refuses
+		// them: widening it by any of these bytes fails one of these rows.
+		"/a%21b/": false, "/a%2Ab/": false, "/a%27b/": false, "/a%28b/": false, "/a%29b/": false,
+		"/a%25b/": false,
+		"//a/":    true, "/a/../b/": true, "/": true, "": true, "/a2a/v1:x@y$z/": true, "/~u/": true,
 	} {
 		got, err := EndpointPath([]Interface{httpJSON("http://agent.example" + path)})
 		switch {
@@ -233,7 +245,7 @@ func TestAPathIsSentAsWrittenOrRefused(t *testing.T) {
 			t.Errorf("%q gives endpoint %q, sent as %q", path, got, sentURI(t, got))
 		case !admit && err == nil:
 			t.Errorf("%q is admitted as %q", path, got)
-		case !admit && !strings.Contains(err.Error(), "cannot send exactly as written") &&
+		case !admit && !strings.Contains(err.Error(), "is not one the eval admits") &&
 			!strings.Contains(err.Error(), "does not parse"):
 			t.Errorf("%q is refused for another cause: %v", path, err)
 		}
@@ -241,9 +253,9 @@ func TestAPathIsSentAsWrittenOrRefused(t *testing.T) {
 }
 
 // M-3: Send puts the path on the wire as written. A real server reads the
-// request line of a case whose endpoint came from an admitted, non-trivial
-// path; this fails if Send stops building its URL through target(), or its
-// encoding changes.
+// request line of a case whose endpoint came from a path holding every
+// allowed punctuation byte; this fails if Send stops building its URL
+// through target(), or escapes any of them.
 func TestSendPutsTheEndpointOnTheWireAsWritten(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +263,7 @@ func TestSendPutsTheEndpointOnTheWireAsWritten(t *testing.T) {
 		_, _ = w.Write([]byte(`{"message":{"parts":[{"text":"4"}]}}`))
 	}))
 	defer srv.Close()
-	path, err := EndpointPath([]Interface{httpJSON("http://agent.example/a2a/v1:x@y$z/")})
+	path, err := EndpointPath([]Interface{httpJSON("http://agent.example/a-._~:@$&+,;=b/")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,8 +271,8 @@ func TestSendPutsTheEndpointOnTheWireAsWritten(t *testing.T) {
 		Message: "q", Expect: contains("4"), TimeoutSeconds: 2}); err != nil {
 		t.Fatal(err)
 	}
-	if got != "/a2a/v1:x@y$z/message:send" {
-		t.Errorf("the candidate was sent %q; the card wrote /a2a/v1:x@y$z/ (endpoint %q)", got, path)
+	if got != "/a-._~:@$&+,;=b/message:send" {
+		t.Errorf("the candidate was sent %q; the card wrote /a-._~:@$&+,;=b/ (endpoint %q)", got, path)
 	}
 }
 
@@ -278,5 +290,29 @@ func TestThePathAllowlistIsExactlyTheStatedSet(t *testing.T) {
 		if got := pathSendsAsWritten(string([]byte{c})); got != want {
 			t.Errorf("byte %#02x: allowed %v, want %v", b, got, want)
 		}
+	}
+}
+
+// The refusal lists exactly the allowed set: the bytes it quotes are the
+// bytes the allowlist test holds the code to, so the message cannot state a
+// rule the code does not apply.
+func TestTheRefusalListsTheAllowedSet(t *testing.T) {
+	const allowed = "-._~/:@$&+,;="
+	_, err := EndpointPath([]Interface{httpJSON("http://agent.example/a!b/")})
+	if err == nil {
+		t.Fatal("/a!b/ is admitted")
+	}
+	msg := err.Error()
+	start := strings.Index(msg, "letters, digits and ")
+	end := strings.Index(msg, ", with no percent-escape")
+	if start < 0 || end < start {
+		t.Fatalf("the refusal does not list the allowed set: %s", msg)
+	}
+	var want []string
+	for i := 0; i < len(allowed); i++ {
+		want = append(want, `"`+allowed[i:i+1]+`"`)
+	}
+	if got := msg[start+len("letters, digits and ") : end]; got != strings.Join(want, " ") {
+		t.Errorf("the refusal lists %s; the allowlist is %s", got, strings.Join(want, " "))
 	}
 }
