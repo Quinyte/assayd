@@ -20,6 +20,34 @@ import (
 // controller-gen that could disagree with it.
 const CRDSource = "config/crd/assayd.dev_agents.yaml"
 
+// EvalSuiteCRDSource is the generated EvalSuite CRD, rendered the same way.
+const EvalSuiteCRDSource = "config/crd/assayd.dev_evalsuites.yaml"
+
+// crdPage is one generated CRD and the reference page rendered from it.
+type crdPage struct {
+	source      string // the generated CRD, relative to the repository root
+	page        string // the page under docs/reference/
+	kind        string
+	types       string // the Go file controller-gen generates it from
+	title       string
+	description string
+}
+
+// renderedCRDs is every CRD config/crd holds, each rendered to a page of its
+// own. checkCRDs holds config/crd to exactly this set, and every page's scope
+// paragraph names every kind in it, so a CRD added to config/crd without a
+// page fails generation rather than publishing a page that miscounts.
+var renderedCRDs = []crdPage{
+	{source: CRDSource, page: "crd-agent.md", kind: "Agent", types: "api/v1alpha1/agent_types.go",
+		title: "The Agent CRD",
+		description: "Every field of the Agent custom resource: type, required, default, CEL validation " +
+			"and doc text."},
+	{source: EvalSuiteCRDSource, page: "crd-evalsuite.md", kind: "EvalSuite",
+		types: "api/v1alpha1/evalsuite_types.go", title: "The EvalSuite CRD",
+		description: "Every field of the EvalSuite custom resource: type, required, default, CEL " +
+			"validation and doc text."},
+}
+
 // crdocBin renders the FIELD TABLES — names, types, required, defaults, doc
 // text, and the nested-type sections they link to. That is what it is adopted
 // for, and it does it well.
@@ -40,9 +68,47 @@ const CRDSource = "config/crd/assayd.dev_agents.yaml"
 // Apache-2.0, like this repository.
 const crdocBin = "crdoc"
 
-// renderCRD produces docs/reference/crd-agent.md.
+// renderCRD produces one page per generated CRD: docs/reference/crd-agent.md
+// and crd-evalsuite.md.
 func renderCRD(root, out string) error {
-	src := filepath.Join(root, CRDSource)
+	for _, p := range renderedCRDs {
+		if err := renderCRDPage(root, out, p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// scopeParagraph is the sentence every CRD page opens with: which CRDs the
+// chart ships, all of them, by kind. TestEveryPageNamesEveryRenderedCRD holds
+// it to renderedCRDs.
+func scopeParagraph(p crdPage) string {
+	words := map[int]string{1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
+	var kinds, list []string
+	for _, c := range renderedCRDs {
+		kinds = append(kinds, "`"+c.kind+"`")
+		list = append(list, fmt.Sprintf("- `%s`, from `%s`: `docs/reference/%s`", c.kind, c.types, c.page))
+	}
+	return fmt.Sprintf(`This page is the schema of the `+"`%s`"+` custom resource, one of the %s the assayd chart installs.
+
+**%s are the whole API surface the chart ships today.** `+"`make manifests`"+` produces %s CRDs,
+each rendered to a page of its own:
+
+%s
+
+The chart ships every one of them in `+"`charts/assayd/crds/`"+`, byte-identical to what
+`+"`make manifests`"+` generates. The generator checks the set of generated CRDs before writing these
+pages and refuses to write them if any other appears, so the sentence cannot outlive the fact.
+(Each kind's `+"`List`"+` type carries the same root marker and is the list type of its CRD, not
+another one.) Documentation elsewhere that counts more assayd CRDs is describing designs, not this
+build.
+`, p.kind, words[len(renderedCRDs)], strings.Join(kinds, " and "), words[len(renderedCRDs)],
+		strings.Join(list, "\n"))
+}
+
+// renderCRDPage renders one CRD's page.
+func renderCRDPage(root, out string, p crdPage) error {
+	src := filepath.Join(root, p.source)
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("the CRD the reference is generated from is missing: %w — run `make manifests`", err)
 	}
@@ -82,24 +148,10 @@ func renderCRD(root, out string) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(frontMatter("The Agent CRD",
-		"Every field of the Agent custom resource: type, required, default, CEL validation and doc text."))
+	sb.WriteString(frontMatter(p.title, p.description))
 	sb.WriteString(generatedNotice())
+	sb.WriteString("\n" + scopeParagraph(p))
 	sb.WriteString(fmt.Sprintf(`
-This page is the schema of the only custom resource the assayd chart installs.
-
-**`+"`Agent`"+` is the whole API surface the chart ships today.** `+"`make manifests`"+` produces two CRDs:
-this one, from `+"`api/v1alpha1/agent_types.go`"+`, and `+"`EvalSuite`"+`, from
-`+"`api/v1alpha1/evalsuite_types.go`"+`. The chart ships the Agent CRD alone. The EvalSuite CRD is
-generated into `+"`config/crd/`"+` so that the operator's tests install it and exercise its admission
-rules, but it is not in `+"`charts/assayd/crds/`"+`, no cluster installed from the chart serves it,
-and this page does not render it: nothing in this release runs a suite. It ships with the eval
-controller, in design 16 §1.1's build step 6. The generator checks the set of generated CRDs
-before writing the page and refuses to write it if any other appears, so the sentence cannot
-outlive the fact. (`+"`AgentList`"+` carries the same root marker and is the list type of this CRD, not
-a second one.) Documentation elsewhere that counts several assayd CRDs is describing designs, not
-this build.
-
 **Defaults are applied by the API SERVER, not by the operator.** Every `+"`Default`"+` below comes from a
 `+"`+kubebuilder:default`"+` marker, which controller-gen writes into the structural schema as
 `+"`default:`"+`. The API server substitutes it on write, so the value is present on the stored object
@@ -132,7 +184,7 @@ page is checked before the page is written.
 	if err := verifyEveryRuleIsPublished(page, src); err != nil {
 		return err
 	}
-	return write(filepath.Join(out, "crd-agent.md"), page)
+	return write(filepath.Join(out, p.page), page)
 }
 
 // demoteHeadings pushes the table renderer's headings down one level.

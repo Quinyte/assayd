@@ -38,28 +38,13 @@ func Generate(root, out string) error {
 	return renderConditions(root, out)
 }
 
-// unrenderedCRDs are the CRDs config/crd holds that the reference does not
-// render, keyed by file, each with the kind crd-agent.md names it by. The
-// page's prose says why each is left out;
-// TestThePageNamesEveryUnrenderedCRD holds the prose to this map, so an entry
-// added here without a sentence there fails the unit tests.
+// checkCRDs holds the claim every CRD page makes about its scope.
 //
-// The EvalSuite CRD is generated so that envtest installs it and its admission
-// rules are tested, but the chart does not ship it until the eval controller
-// does (design 16 §1.1 build step 6), so no cluster installed from the chart
-// serves it. Step 6 renders it and removes it from this map.
-var unrenderedCRDs = map[string]string{
-	"assayd.dev_evalsuites.yaml": "EvalSuite",
-}
-
-// checkCRDs holds the claim crd-agent.md makes about its own scope.
-//
-// The page says Agent is the whole API surface the chart ships, and names each
-// other generated CRD as generated and not shipped. AGENTS.md rule 7 says never
-// to state a bound the code does not enforce — so the generator enforces it:
-// a CRD in config/crd that is neither rendered nor named in unrenderedCRDs, or
-// a named one that is no longer generated, fails generation here, naming the
-// file, rather than publishing a page that miscounts.
+// The pages say the kinds in renderedCRDs are the whole API surface the chart
+// ships. AGENTS.md rule 7 says never to state a bound the code does not
+// enforce — so the generator enforces it: a CRD in config/crd that has no page,
+// or a page whose CRD is no longer generated, fails generation here, naming
+// the file, rather than publishing pages that miscount.
 func checkCRDs(root string) error {
 	dir := filepath.Join(root, "config", "crd")
 	ents, err := os.ReadDir(dir)
@@ -72,16 +57,16 @@ func checkCRDs(root string) error {
 			yamls = append(yamls, e.Name())
 		}
 	}
-	want := []string{filepath.Base(CRDSource)}
-	for f := range unrenderedCRDs {
-		want = append(want, f)
+	var want []string
+	for _, p := range renderedCRDs {
+		want = append(want, filepath.Base(p.source))
 	}
 	sort.Strings(want)
 	sort.Strings(yamls)
 	if strings.Join(yamls, ",") != strings.Join(want, ",") {
-		return fmt.Errorf("docs/reference/crd-agent.md states that config/crd holds exactly %s, "+
-			"but it holds %d CRD file(s): %s. Render the new CRD, or name it in unrenderedCRDs "+
-			"with the reason, and correct that sentence", strings.Join(want, " and "),
+		return fmt.Errorf("the CRD pages under docs/reference state that config/crd holds exactly %s, "+
+			"but it holds %d CRD file(s): %s. Give the new CRD a page in renderedCRDs, or remove the "+
+			"page of one no longer generated", strings.Join(want, " and "),
 			len(yamls), strings.Join(yamls, ", "))
 	}
 	return nil

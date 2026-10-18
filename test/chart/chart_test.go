@@ -1136,21 +1136,33 @@ func TestOperatorPodIsHardened(t *testing.T) {
 	}
 }
 
-// The CRD ships in crds/, and it must be the one the operator was built against.
-// A chart carrying a stale CRD installs a cluster the operator cannot serve.
+// The CRDs ship in crds/, and each must be the one the operator was built
+// against. A chart carrying a stale CRD installs a cluster the operator cannot
+// serve. Every CRD config/crd holds is shipped: the Agent's, and the
+// EvalSuite's since the eval controller that reads suites shipped (design 16
+// §1.1 build step 6). Without the EvalSuite CRD a chart install would report
+// GatesSkipped=EvalSuiteCRDAbsent and promote every gated Agent ungated.
 func TestChartShipsTheGeneratedCRD(t *testing.T) {
-	shipped, err := os.ReadFile(filepath.Join(chartPath, "crds", "assayd.dev_agents.yaml"))
-	if err != nil {
-		t.Fatalf("the chart ships no Agent CRD: %v", err)
+	generated, err := filepath.Glob(filepath.Join("..", "..", "config", "crd", "*.yaml"))
+	if err != nil || len(generated) < 2 {
+		t.Fatalf("config/crd holds %v (%v); want the Agent and EvalSuite CRDs", generated, err)
 	}
-	generated, err := os.ReadFile(filepath.Join("..", "..", "config", "crd", "assayd.dev_agents.yaml"))
-	if err != nil {
-		t.Fatalf("read generated CRD: %v", err)
-	}
-	if string(shipped) != string(generated) {
-		t.Error("the CRD in charts/assayd/crds differs from config/crd. The chart would " +
-			"install a schema the operator was not built against; re-copy it in the same " +
-			"change that regenerates it.")
+	for _, g := range generated {
+		name := filepath.Base(g)
+		shipped, err := os.ReadFile(filepath.Join(chartPath, "crds", name))
+		if err != nil {
+			t.Errorf("the chart does not ship %s: %v", name, err)
+			continue
+		}
+		want, err := os.ReadFile(g)
+		if err != nil {
+			t.Fatalf("read generated CRD: %v", err)
+		}
+		if string(shipped) != string(want) {
+			t.Errorf("%s in charts/assayd/crds differs from config/crd. The chart would install a "+
+				"schema the operator was not built against; re-copy it in the same change that "+
+				"regenerates it.", name)
+		}
 	}
 }
 

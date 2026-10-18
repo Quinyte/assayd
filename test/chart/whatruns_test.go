@@ -129,8 +129,9 @@ func TestADefaultInstallRunsOneOperatorAndNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(crds) != 1 || filepath.Base(crds[0]) != "assayd.dev_agents.yaml" {
-		t.Errorf("the chart ships CRDs %v; the site says it ships one, the Agent CRD", crds)
+	if len(crds) != 2 || filepath.Base(crds[0]) != "assayd.dev_agents.yaml" ||
+		filepath.Base(crds[1]) != "assayd.dev_evalsuites.yaml" {
+		t.Errorf("the chart ships CRDs %v; the site says it ships two, the Agent and EvalSuite CRDs", crds)
 	}
 	if entries, err := os.ReadDir(filepath.Join(chartPath, "charts")); err == nil && len(entries) > 0 {
 		t.Errorf("the chart vendors %d subchart(s); the site says none is installed", len(entries))
