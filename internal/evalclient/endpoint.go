@@ -51,10 +51,11 @@ func (e *BindingError) Reason() string { return ReasonBindingUnsupported }
 // refused, as is a card with no such entry. The first matching entry is the
 // one judged: a refused entry is not passed over for a later one.
 //
-// So is a path the client would not send exactly as written: one with any
-// percent-escape, or with a byte outside letters, digits and
-// "-" "." "_" "~" "/" ":" "@" "$" "&" "+" "," ";" "=". §1.1 does not list this
-// refusal either (#105 item 8).
+// So is a path the eval does not admit: one with any percent-escape, or with
+// a byte outside ASCII letters, digits and
+// "-" "." "_" "~" "/" ":" "@" "$" "&" "+" "," ";" "=". The eval records the
+// path decoded, and only such a path is both recorded and sent exactly as the
+// card wrote it. §1.1 does not list this refusal either (#105 item 8).
 //
 // An entry that names a tenant is refused too, which design 16 §1.1 does not
 // list; the human decided on 2026-10-18 to keep the refusal (#108).
@@ -102,9 +103,8 @@ func EndpointPath(interfaces []Interface) (string, error) {
 		if u.RawPath != "" || !pathSendsAsWritten(u.Path) {
 			return "", &BindingError{msg: fmt.Sprintf(
 				"the candidate's card declares HTTP+JSON 1.0 at supportedInterfaces[%d] with a url whose "+
-					"path is not one the eval admits: it admits only a path written with letters, digits "+
-					"and %s, with no percent-escape, because it records the path decoded and sends it "+
-					"unescaped. Serve the interface at such a path", i, quotedPunctuation())}
+					"path is not one the eval admits: it admits only a path written with ASCII letters, digits "+
+					"and %s, with no percent-escape. Serve the interface at such a path", i, quotedPunctuation())}
 		}
 		if in.Tenant != "" {
 			return "", &BindingError{msg: fmt.Sprintf(

@@ -548,11 +548,12 @@ reasons:
       1.0 interfaces (a field of the wrong JSON type), or whose first
       `HTTP+JSON` 1.0 interface is missing, has a url that does not parse,
       names a tenant, carries a query or a fragment, or has a path the
-      eval does not admit. It admits only a path written with letters,
-      digits and `-` `.` `_` `~` `/` `:` `@` `$` `&` `+` `,` `;` `=`, with no
-      percent-escape, because it records the path decoded and sends it
-      unescaped; it refuses every other path, including some that would go on
-      the wire as written. It also refuses an endpoint path (the path with one
+      eval does not admit. It admits only a path written with ASCII
+      letters, digits and `-` `.` `_` `~` `/` `:` `@` `$` `&` `+` `,` `;` `=`,
+      with no percent-escape, and refuses every other path, including some
+      that would go on the wire as written: the eval records the path decoded,
+      and only such a path is both recorded and sent exactly as the card wrote
+      it. It also refuses an endpoint path (the path with one
       trailing `/` trimmed and `/message:send` appended) longer than 1024
       characters, or one with no leading `/`, which a relative card URL
       gives.
