@@ -9,14 +9,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/yaml"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
@@ -404,5 +407,62 @@ func TestRemovingTheGateNamesTheVerdictItOverrides(t *testing.T) {
 		if note := removedGateNote(e, gRev, "sha256:another"); note != "" {
 			t.Errorf("verdict %q recorded for another revision is named: %s", verdict, note)
 		}
+	}
+}
+
+// countingSink counts the Info and Error lines a logger receives.
+type countingSink struct {
+	mu          sync.Mutex
+	info, error int
+}
+
+func (c *countingSink) Init(logr.RuntimeInfo)          {}
+func (c *countingSink) Enabled(int) bool               { return true }
+func (c *countingSink) WithValues(...any) logr.LogSink { return c }
+func (c *countingSink) WithName(string) logr.LogSink   { return c }
+func (c *countingSink) Info(int, string, ...any)       { c.mu.Lock(); c.info++; c.mu.Unlock() }
+func (c *countingSink) Error(error, string, ...any)    { c.mu.Lock(); c.error++; c.mu.Unlock() }
+func (c *countingSink) counts() (info, error int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.info, c.error
+}
+
+// The schema check logs once per transition, not once per pass: a run of
+// failed reads logs one Error, the recovery one Info, and a second outage one
+// Error again. Every failed read logging would flood the operator's log for
+// as long as the Agent CRD cannot be read, once per pass of each gated Agent.
+func TestTheSchemaCheckLogsOncePerTransition(t *testing.T) {
+	sink := &countingSink{}
+	ctx := log.IntoContext(context.Background(), logr.New(sink))
+	f := &flakyCRDReader{crd: generatedAgentCRD(t), fail: true}
+	// A zero TTL is the default, 30 s; one nanosecond makes every call read.
+	r := &AgentReconciler{Reader: f, EvalRecordCheckTTL: time.Nanosecond}
+	expect := func(when string, wantInfo, wantError int) {
+		t.Helper()
+		if info, errs := sink.counts(); info != wantInfo || errs != wantError {
+			t.Fatalf("%s: %d Info and %d Error lines, want %d and %d", when, info, errs, wantInfo, wantError)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		_, _ = r.evalRecordMissing(ctx)
+	}
+	expect("three failed reads with nothing cached", 0, 1)
+	f.fail = false
+	for i := 0; i < 3; i++ {
+		time.Sleep(time.Millisecond)
+		_, _ = r.evalRecordMissing(ctx)
+	}
+	expect("the recovery, and two good reads after it", 1, 1)
+	f.fail = true
+	for i := 0; i < 3; i++ {
+		time.Sleep(time.Millisecond)
+		if missing, err := r.evalRecordMissing(ctx); err != nil || len(missing) != 0 {
+			t.Fatalf("a failed read with an answer cached: missing %v, err %v", missing, err)
+		}
+	}
+	expect("a second outage of three failed reads", 1, 2)
+	if f.reads != 9 {
+		t.Fatalf("the CRD was read %d times, want 9: the TTL kept a call from reading", f.reads)
 	}
 }
