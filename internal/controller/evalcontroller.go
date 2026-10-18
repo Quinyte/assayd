@@ -14,7 +14,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -108,7 +107,10 @@ type EvalReconciler struct {
 	client.Client
 	// uncached reads the Agent before every write, because the manager's
 	// cache can lag this controller's own last patch, and the EvalSuite,
-	// which no informer watches. Required.
+	// which no informer watches. Required. What keeps a recorded case from
+	// being sent again is the optimistic lock on the claim: a claim built
+	// from a stale read is refused with Conflict. The live read is what keeps
+	// that from happening on every pass after a write.
 	uncached client.Reader
 	// EvalSuiteInstalled is the EvalSuite detector the Agent reconciler holds.
 	EvalSuiteInstalled func() bool
@@ -134,8 +136,9 @@ type EvalReconciler struct {
 
 // NewEvalReconciler builds the eval controller. The uncached reader is
 // required, unlike the Agent reconciler's: every write here is preceded by a
-// live read of the Agent, and a cached one could miss a case already recorded
-// and send it again.
+// live read of the Agent (design 16 §1.1, "The two controllers"). A cached
+// read can lag this controller's own last patch, and every claim built from
+// it would then be refused by the optimistic lock, losing the pass.
 func NewEvalReconciler(c client.Client, uncached client.Reader, evalSuiteInstalled func() bool,
 	gateway GatewayConfig) (*EvalReconciler, error) {
 	switch {
@@ -337,25 +340,29 @@ func (r *EvalReconciler) patchEval(ctx context.Context, agent *assaydv1alpha1.Ag
 	return r.Status().Patch(ctx, agent, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
 }
 
-// clearSuperseded is the human's decision of 2026-10-18 (#111). When the
-// revision the spec now asks for is no longer the one whose run status.eval
-// records, and that run's verdict is final, the superseded run's verdict,
-// cases[], score and at are cleared and failed[] is kept. Re-applying a failed
-// revision then reads EvalPairAlreadyFailed rather than EvalFailed, and a stale
-// score is not shown beside another revision.
+// clearSuperseded is the human's decision of 2026-10-18 (#111): "When the
+// spec moves away from the failed revision, the eval controller clears the
+// verdict and cases[] of the superseded run and keeps failed[]." Re-applying
+// the failed revision then reads EvalPairAlreadyFailed rather than EvalFailed.
+// score and at go with the verdict, so a stale score is not shown beside
+// another revision.
 //
-// The trigger is exactly: a final verdict (Passed or Failed) is recorded, and
-// the recorded revision digest differs from the revision the Agent reconciler
-// has recorded as desired — the candidate while one is pending, otherwise the
-// active revision — with observedGeneration current (checked by the caller).
-// A Running record is not touched here: the next run start replaces it. The
-// clear is an eval write, so it waits on the no-transaction predicate like
-// every other, and the Agent reconciler, which never writes status.eval,
-// cannot fight it. A Passed record of the revision serving is kept, because
-// the desired revision is then the active one.
+// The trigger is exactly: a Failed verdict is recorded, and the recorded
+// revision digest differs from the revision the Agent reconciler has recorded
+// as desired — the candidate while one is pending, otherwise the active
+// revision — with observedGeneration current (checked by the caller).
+//
+// A Passed verdict is never cleared: #111 covers the failed revision only.
+// Clearing a Passed one would erase the evidence for a revision that may
+// still serve, or still promote on it — re-applied, it would be sent its
+// cases again — and the serving revision would read
+// ActiveRevisionNotEvaluated for a revision that passed. A Running record is
+// not touched either: the next run start replaces it. The clear is an eval
+// write, so it waits on the no-transaction predicate like every other, and
+// the Agent reconciler, which never writes status.eval, cannot fight it.
 func (r *EvalReconciler) clearSuperseded(ctx context.Context, agent *assaydv1alpha1.Agent) (bool, error) {
 	e := agent.Status.Eval
-	if e == nil || (e.Verdict != assaydv1alpha1.EvalVerdictPassed && e.Verdict != assaydv1alpha1.EvalVerdictFailed) {
+	if e == nil || e.Verdict != assaydv1alpha1.EvalVerdictFailed {
 		return false, nil
 	}
 	desired := agent.Status.ActiveRevisionDigest
@@ -375,7 +382,7 @@ func (r *EvalReconciler) clearSuperseded(ctx context.Context, agent *assaydv1alp
 	if err != nil {
 		return true, fmt.Errorf("clear the superseded run of %s: %w", e.RevisionDigest, err)
 	}
-	log.FromContext(ctx).Info("the spec moved away from a revision with a final verdict; its run's "+
+	log.FromContext(ctx).Info("the spec moved away from a revision whose run failed; its run's "+
 		"verdict and cases are cleared, and failed[] is kept", "revisionDigest", e.RevisionDigest)
 	return true, nil
 }
@@ -455,7 +462,7 @@ func (r *EvalReconciler) readBackFailed(ctx context.Context, what string) (ctrl.
 // replaces the previous pair's record. done is true when the pass must return
 // res; otherwise the run has started and the pass goes on to its first case.
 func (r *EvalReconciler) startRun(ctx context.Context, run *evalRun) (ctrl.Result, bool, error) {
-	addr, err := r.candidateAddress(ctx, run)
+	addr, err := r.candidateAddress(ctx, run, cardPath(run.agent))
 	if err != nil {
 		return ctrl.Result{}, true, err
 	}
@@ -506,43 +513,27 @@ func (r *EvalReconciler) startRun(ctx context.Context, run *evalRun) (ctrl.Resul
 
 // candidateAddress is where every request of this pass goes: the candidate
 // revision's Service, by its ClusterIP and spec.runtime.port, as the card
-// fetch derives it (step 3). It is validated before anything is claimed
-// (#105 item 12): an address that is not an IP and a port is the operator's
-// fault, not the candidate's, so it records no outcome — failed[] would make
-// one final — and the pass returns the error for controller-runtime's backoff.
-// No condition says so; that is owed to design 16's amendment (#105).
-func (r *EvalReconciler) candidateAddress(ctx context.Context, run *evalRun) (string, error) {
+// fetch derives it (step 3). evalclient.Check, the one validator of it, must
+// admit it with path before anything is fetched or claimed (#105 item 12): an
+// address that is not an IP and a port is the operator's fault, not the
+// candidate's, so it records no outcome — failed[] would make one final — and
+// the pass returns the error for controller-runtime's backoff. No condition
+// says so; that is owed to design 16's amendment (#113).
+func (r *EvalReconciler) candidateAddress(ctx context.Context, run *evalRun, path string) (string, error) {
 	var svc corev1.Service
 	key := types.NamespacedName{Namespace: run.runNS, Name: WorkloadName(run.agent.Name, run.revision)}
 	if err := r.Get(ctx, key, &svc); err != nil {
+		log.FromContext(ctx).Error(err, "the candidate's Service cannot be read; nothing is fetched, "+
+			"claimed or sent", "service", key)
 		return "", fmt.Errorf("read the candidate's Service %s: %w", key, err)
 	}
 	addr := net.JoinHostPort(svc.Spec.ClusterIP, strconv.Itoa(int(port(run.agent.Spec.Runtime))))
-	if err := validateCandidateAddress(addr); err != nil {
+	if err := evalclient.Check(evalclient.Case{Address: addr, Path: path}); err != nil {
 		log.FromContext(ctx).Error(err, "the candidate's address is not one a case can be sent to; "+
-			"nothing is claimed", "service", key)
+			"nothing is fetched, claimed or sent", "service", key)
 		return "", err
 	}
 	return addr, nil
-}
-
-// validateCandidateAddress holds an address to an IP and a port from 1 to
-// 65535. Anything else would dial somewhere the operator did not choose — an
-// empty host dials loopback, a missing port dials 80 — or fail as
-// Unreachable, recording the operator's own fault against the candidate.
-func validateCandidateAddress(addr string) error {
-	host, p, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("candidate address %q: %w", addr, err)
-	}
-	if _, err := netip.ParseAddr(host); err != nil {
-		return fmt.Errorf("candidate address %q: the host is not an IP address: %w", addr, err)
-	}
-	n, err := strconv.Atoi(p)
-	if err != nil || n < 1 || n > 65535 {
-		return fmt.Errorf("candidate address %q: the port is not one from 1 to 65535", addr)
-	}
-	return nil
 }
 
 // runStartCard fetches the candidate's card through the eval client and
@@ -558,11 +549,6 @@ func (r *EvalReconciler) runStartCard(ctx context.Context, run *evalRun, addr st
 		// not into the card fetch's agentInterface, which does not: a tenant
 		// refusal built from that type could never fire (#108).
 		SupportedInterfaces []evalclient.Interface `json:"supportedInterfaces"`
-	}
-	if class == "" {
-		if err := json.Unmarshal(body, &card); err != nil {
-			class = "the body is not JSON"
-		}
 	}
 	if class != "" {
 		// Nothing was compared, so the message names no mismatch (A15).
@@ -583,9 +569,19 @@ func (r *EvalReconciler) runStartCard(ctx context.Context, run *evalRun, addr st
 				"for it. The eval takes its endpoint only from the card the operator recorded, so no run "+
 				"starts until the two agree", shortDigest(digest), shortDigest(recorded))}, waitRefused
 	}
+	// Decoded only once its digest matches the card the operator recorded,
+	// which the Agent reconciler has parsed as JSON. A decode failure here is
+	// an interface entry of the wrong JSON type — a number for a tenant, say
+	// — which the card fetch's own type does not read: a property of the card,
+	// as stable as it, and not a fetch to retry.
+	if err := json.Unmarshal(body, &card); err != nil {
+		return "", "", &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalBindingUnsupported, Message: bindingRefusal(
+			"its supportedInterfaces[] do not decode as A2A 1.0 interfaces: an entry carries a field of " +
+				"the wrong JSON type. Serve a card whose interfaces are well-typed").Error()}, waitRefused
+	}
 	path, err := evalclient.EndpointPath(card.SupportedInterfaces)
 	if err == nil {
-		err = checkEndpointPath(path, addr)
+		err = checkEndpointPath(path)
 	}
 	if err != nil {
 		return "", "", &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalBindingUnsupported,
@@ -595,13 +591,20 @@ func (r *EvalReconciler) runStartCard(ctx context.Context, run *evalRun, addr st
 }
 
 // checkEndpointPath refuses, under EvalBindingUnsupported, a path the eval
-// would record and send to but should not (#105 item 9): longer than
-// MaxEndpointPathLength, with no leading "/", with a control character, or one
-// evalclient.Check refuses with a valid address. EndpointPath takes the
-// decoded path of the card's URL, so a control character the card escaped
-// comes back raw, and a relative URL gives a path with no leading "/".
-func checkEndpointPath(path, addr string) error {
+// would record and send to but should not (#105 item 9): not valid UTF-8,
+// longer than MaxEndpointPathLength, with no leading "/", or with a control
+// character. EndpointPath takes the decoded path of the card's URL, so a byte
+// or a control character the card escaped comes back raw, and a relative URL
+// gives a path with no leading "/". A path that is not UTF-8 cannot be
+// recorded as it is: status is JSON, which stores U+FFFD in its place, so the
+// record would name a path the card never declared (and the read-back would
+// blame the CRD).
+func checkEndpointPath(path string) error {
 	switch {
+	case !utf8.ValidString(path):
+		return bindingRefusal("its first HTTP+JSON 1.0 interface's url decodes to a path that is not " +
+			"valid UTF-8, which status.eval cannot record as it is. Serve the interface at a path " +
+			"that decodes to UTF-8")
 	case utf8.RuneCountInString(path) > MaxEndpointPathLength:
 		return bindingRefusal(fmt.Sprintf("the endpoint path its first HTTP+JSON 1.0 interface names is "+
 			"%d characters long, and the eval records and sends to one of at most %d. Serve the "+
@@ -613,10 +616,6 @@ func checkEndpointPath(path, addr string) error {
 	case strings.ContainsFunc(path, unicode.IsControl):
 		return bindingRefusal("its first HTTP+JSON 1.0 interface's url decodes to a path with a " +
 			"control character in it. Serve the interface at a path without one")
-	}
-	if err := evalclient.Check(evalclient.Case{Address: addr, Path: path}); err != nil {
-		return bindingRefusal("no request can be built for the endpoint its first HTTP+JSON 1.0 " +
-			"interface names. Serve the interface at a plain path")
 	}
 	return nil
 }
@@ -714,19 +713,15 @@ func (r *EvalReconciler) nextCase(ctx context.Context, run *evalRun) (ctrl.Resul
 		// wrote the verdict with it; nothing is left to send.
 		return ctrl.Result{}, nil
 	}
-	addr, err := r.candidateAddress(ctx, run)
+	// Check before the claim, inside candidateAddress: a claim followed by
+	// Send's error would be left with no outcome and recorded Interrupted,
+	// failing the candidate for the operator's fault.
+	addr, err := r.candidateAddress(ctx, run, run.agent.Status.Eval.EndpointPath)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	cs := evalclient.Case{Address: addr, Path: run.agent.Status.Eval.EndpointPath, Message: next.Message,
 		Expect: next.Expect, TimeoutSeconds: run.suite.Spec.CaseTimeoutSeconds}
-	// A case no request can be built for is refused before it is claimed: a
-	// claim followed by Send's error would be left with no outcome and
-	// recorded Interrupted, failing the candidate for the operator's fault.
-	if err := evalclient.Check(cs); err != nil {
-		logger.Error(err, "no request can be built for this case; nothing is claimed", "case", next.ID)
-		return ctrl.Result{}, err
-	}
 
 	if r.BeforeClaimCheck != nil {
 		r.BeforeClaimCheck(key)
@@ -767,8 +762,12 @@ func (r *EvalReconciler) nextCase(ctx context.Context, run *evalRun) (ctrl.Resul
 	// by caseTimeoutSeconds.
 	out, err := r.A2A.Send(bg, cs)
 	if err != nil {
-		// Unreachable after Check, which refuses exactly what Send does; no
-		// outcome is recorded for it, and the claim reads Interrupted next.
+		// Send returns an error exactly when evalclient.Check refuses the
+		// case (Send's doc, pinned by evalclient's
+		// TestCheckRefusesAnAddressThatIsNotAnIPAndAPort), and candidateAddress
+		// had Check admit this address and path on this pass, so no error can
+		// come back here. The signature returns one, so it is handled: no
+		// outcome is recorded, and the claim reads Interrupted next.
 		logger.Error(err, "the case could not be sent; no outcome is recorded", "case", next.ID)
 		return ctrl.Result{}, err
 	}

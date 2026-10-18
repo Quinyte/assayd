@@ -1101,3 +1101,64 @@ func TestARunStartRecordThatDoesNotComeBackSendsNothing(t *testing.T) {
 		t.Errorf("a failed read-back requeued after %v, want CardDriftInterval", res.RequeueAfter)
 	}
 }
+
+// #111 clears a failed revision's record only. A Passed record is kept
+// across a candidate that is applied and abandoned: (i) the revision serving
+// on it still reads EvalPassed once the spec returns to it, never
+// ActiveRevisionNotEvaluated about a revision that passed.
+func TestAServingRevisionKeepsItsPassedRecordAcrossAnAbandonedCandidate(t *testing.T) {
+	g := newEvalRig(t, "keeppassed", echo("a", "one"))
+	g.both(t, 1)
+	if got := liveAgent(t, g.a); got.Status.ActiveRevisionDigest != g.dgst {
+		t.Fatalf("setup: B was not promoted: %+v", got.Status.Eval)
+	}
+	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, controller.ReasonEvalPassed)
+
+	imageC := "ghcr.io/acme/agent@sha256:c1c1000000000000000000000000000000000000000000000000000000000000"
+	mustEdit(t, g.a, func(a *assaydv1alpha1.Agent) { a.Spec.Runtime.Image = imageC })
+	g.agentPass(t)
+	g.agentPass(t)
+	if got := liveAgent(t, g.a); got.Status.CandidateRevisionDigest == "" ||
+		got.Status.CandidateRevisionDigest == g.dgst {
+		t.Fatalf("setup: no candidate C: %+v", got.Status)
+	}
+	g.evalPass(t)
+	g.evalPass(t)
+
+	mustEdit(t, g.a, func(a *assaydv1alpha1.Agent) { a.Spec.Runtime.Image = imageB })
+	g.agentPass(t)
+	g.evalPass(t)
+	g.agentPass(t)
+	if e := g.eval(t); e.Verdict != assaydv1alpha1.EvalVerdictPassed || e.RevisionDigest != g.dgst {
+		t.Errorf("B's Passed record did not survive an abandoned candidate: %+v", e)
+	}
+	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, controller.ReasonEvalPassed)
+}
+
+// (ii) A candidate that passed and is not yet promoted keeps its record
+// across a spec edit away from it and back: it is not sent its cases again,
+// and it promotes on the verdict it earned.
+func TestAPassedCandidateIsNotSentItsCasesAgainAfterAnEditAndBack(t *testing.T) {
+	g := newEvalRig(t, "passedback", echo("a", "one"))
+	g.evalPass(t)
+	if e := g.eval(t); e.Verdict != assaydv1alpha1.EvalVerdictPassed {
+		t.Fatalf("setup: %+v", e)
+	}
+	imageC := "ghcr.io/acme/agent@sha256:c2c2000000000000000000000000000000000000000000000000000000000000"
+	mustEdit(t, g.a, func(a *assaydv1alpha1.Agent) { a.Spec.Runtime.Image = imageC })
+	g.agentPass(t)
+	g.agentPass(t)
+	g.evalPass(t)
+	mustEdit(t, g.a, func(a *assaydv1alpha1.Agent) { a.Spec.Runtime.Image = imageB })
+	for i := 0; i < 2; i++ {
+		g.agentPass(t)
+		g.evalPass(t)
+	}
+	if n := g.stub.sent(g.name, g.rev, "one"); n != 1 {
+		t.Errorf("a candidate that had passed was sent its case %d times", n)
+	}
+	if got := liveAgent(t, g.a); got.Status.ActiveRevisionDigest != g.dgst {
+		t.Errorf("B did not promote on the verdict it earned: active %s, eval %+v",
+			got.Status.ActiveRevisionDigest, got.Status.Eval)
+	}
+}

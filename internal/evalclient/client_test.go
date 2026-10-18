@@ -552,3 +552,27 @@ func TestNoDuplicateKeysRefusesWhatItCannotRead(t *testing.T) {
 		}
 	}
 }
+
+// #105 item 12: Check is the one validator of the address the operator
+// derives, and Send refuses the same set, sending nothing.
+func TestCheckRefusesAnAddressThatIsNotAnIPAndAPort(t *testing.T) {
+	for addr, ok := range map[string]bool{
+		"10.43.0.9:8080": true, "[fd00::1]:8080": true, "10.43.0.9:1": true, "10.43.0.9:65535": true,
+		"": false, "10.43.0.9": false, ":8080": false, "None:8080": false, "agent.example:8080": false,
+		"10.43.0.9:0": false, "10.43.0.9:65536": false, "10.43.0.9:http": false, "bad host:1": false,
+	} {
+		cs := Case{Address: addr, Path: "/a2a/message:send", Message: "q", Expect: contains("x"), TimeoutSeconds: 1}
+		if err := Check(cs); (err == nil) != ok {
+			t.Errorf("%q: Check admitted it %v, want %v (%v)", addr, err == nil, ok, err)
+		}
+		var sent atomic.Int32
+		c := &Client{HTTP: doerFunc(func(*http.Request) (*http.Response, error) {
+			sent.Add(1)
+			return nil, fmt.Errorf("stop")
+		})}
+		if _, err := c.Send(context.Background(), cs); (err == nil) != ok || (!ok && sent.Load() != 0) {
+			t.Errorf("%q: Send gave error %v after %d requests; it must refuse what Check refuses, "+
+				"sending nothing", addr, err, sent.Load())
+		}
+	}
+}

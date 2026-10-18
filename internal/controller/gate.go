@@ -288,9 +288,9 @@ func decideGate(in gateInput) gateDecision {
 				"Nothing times a paused run out; it holds at zero traffic", pair, progress)}
 	}
 	return gateDecision{reason: ReasonEvalRunning, readyReason: reasonAwaitingGates,
-		message: fmt.Sprintf("the eval controller is evaluating %s: each of the suite's %d cases is sent "+
-			"to the candidate once, and status.eval.cases[] records its outcome. It holds at zero "+
-			"traffic until a verdict is written", pair, n)}
+		message: fmt.Sprintf("status.eval records no final verdict for %s, a run of the suite's %d "+
+			"cases; status.eval.cases[] records the outcomes it has. It holds at zero traffic until a "+
+			"verdict is written", pair, n)}
 }
 
 // recordedOutcomes counts the suite ids whose entry in cases[] carries an

@@ -159,7 +159,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 - `internal/controller/agent_controller.go:2069` in `assessPromotedGate()` — constant at the call site
 
-**Referenced by a test:** `test/envtest/gate_test.go`
+**Referenced by a test:** `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`
 
 **State:** The Agent declares a gate, the EvalSuite CRD is installed, and the revision being served is the desired one, but `status.eval` records no `Passed` verdict for its digest. A gate added after the revision began serving is one cause; a revert to a revision whose own `Passed` record a later candidate's record has replaced is another, and the reason does not tell them apart.
 
@@ -861,7 +861,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 - `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`
+**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`
 
 **State:** A gated candidate has no card digest recorded in `status.cards[]` for its full digest, whether or not it has a `Passed` verdict for the current suite (a failed drift re-read clears a recorded one); or `status.eval.blocked` records that the eval controller's run-start card fetch failed or did not match the recorded digest, and `status.eval.blockedFor` matches the current candidate, suite and `Lock`.
 
@@ -883,7 +883,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/gate_test.go`, `internal/evalclient/endpoint_test.go`, `test/envtest/evalcontroller_test.go`
 
-**State:** `status.eval.blocked` records that the candidate's card has no usable `HTTP+JSON` 1.0 interface, and `status.eval.blockedFor` matches the current candidate, suite and `Lock`. The eval controller writes it at run start for a card whose first `HTTP+JSON` 1.0 interface is missing, names a tenant, carries a query or a fragment, or gives an endpoint path longer than 1024 bytes, without a leading `/`, or with a control character in it.
+**State:** `status.eval.blocked` records that the candidate's card has no usable `HTTP+JSON` 1.0 interface, and `status.eval.blockedFor` matches the current candidate, suite and `Lock`. The eval controller writes it at run start for a card whose interfaces do not decode as A2A 1.0 interfaces (a field of the wrong JSON type), or whose first `HTTP+JSON` 1.0 interface is missing, names a tenant, carries a query or a fragment, or gives an endpoint path that is not valid UTF-8, is longer than 1024 characters, lacks a leading `/`, or has a control character in it.
 
 **What the operator does:** Sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. For a candidate not available yet, or no longer, the not-ready branches before the gate set the same reason and leave phase, `Progressing` and `Ready` as they set them. `Ready` stays `True` where an earlier revision serves, and goes `False/AwaitingGates` where none does. The message carries `blocked.message`.
 
@@ -1048,13 +1048,13 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/gate_test.go`, `test/envtest/reconciler_test.go`
 
-**State:** A gated, available candidate with its suite and its card has no final verdict for the pair of its full digest and the suite read in this pass, no `Create` or `Lock` is recorded, and no `status.eval.blocked` applies: the eval controller is running the suite against it, or will start the run on its next pass. A `Running` record counts as no verdict.
+**State:** A gated, available candidate with its suite and its card has no final verdict for the pair of its full digest and the suite read in this pass, no `Create` or `Lock` is recorded, and no `status.eval.blocked` applies. A `Running` record counts as no verdict. It does not establish that a case is being sent: the eval controller may be unable to derive the candidate's address (see the note).
 
-**What the operator does:** Sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. `Ready` stays `True` where an earlier revision serves, and goes `False/AwaitingGates` where none does. The message names the pair and the suite's number of cases, never how many are done, so a case's record leaves the Agent reconciler's status write a no-op; progress is in `status.eval.cases[]`.
+**What the operator does:** Sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. `Ready` stays `True` where an earlier revision serves, and goes `False/AwaitingGates` where none does. The message names the pair and the suite's number of cases and says progress is in `status.eval.cases[]`; it never says how many are done, so a case's record leaves the Agent reconciler's status write a no-op, and it does not say a case is being sent.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
-**Note:** The eval controller gives no condition of its own when it cannot derive the candidate's address, or cannot build a request for a case: it claims nothing and retries under controller-runtime's backoff, while this reason stands (design 16 #105).
+**Note:** The eval controller gives no condition of its own when it cannot read the candidate's Service or derive an address from it: it logs the Service and the fault, fetches, claims and sends nothing, and retries under controller-runtime's backoff, while this reason stands. A reason of its own needs a design 16 amendment (#113).
 
 ### `EvalSuiteCRDAbsent`
 

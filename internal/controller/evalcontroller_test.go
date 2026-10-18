@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,10 +36,13 @@ import (
 // and each SendMessage with "echo: <message>", completed. It counts the
 // messages it was sent, by text.
 type candidateStub struct {
-	mu    sync.Mutex
-	card  string
-	hits  map[string]int
-	sends int
+	mu       sync.Mutex
+	card     string
+	hits     map[string]int
+	sends    int
+	cardGets int
+	// refuse fails the card fetch at the connection.
+	refuse bool
 }
 
 func newCandidateStub(card string) *candidateStub {
@@ -53,6 +57,10 @@ func (s *candidateStub) Do(req *http.Request) (*http.Response, error) {
 	if req.Method == http.MethodGet {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		s.cardGets++
+		if s.refuse {
+			return nil, errors.New("connection refused")
+		}
 		return answer(http.StatusOK, s.card)
 	}
 	var m struct {
@@ -243,7 +251,9 @@ func TestEachWaitingPassReturnsItsInterval(t *testing.T) {
 			a.Status.Auth = &assaydv1alpha1.AuthStatus{Transaction: &assaydv1alpha1.AuthTransaction{
 				Kind: TxCreate, Stage: StagePreparingRoute, Deadline: &deadline}}
 		}, want: AuthProbeInterval},
-		"a failed run-start fetch": {card: "not json", want: CardRetryInterval},
+		"a failed run-start fetch": {edit: func(_ *assaydv1alpha1.Agent, f *evalFixture) {
+			f.stub.refuse = true
+		}, want: CardRetryInterval},
 		"a refusal that read a card": {card: strings.Replace(evalCard, "HTTP+JSON", "JSONRPC", 1),
 			want: CardDriftInterval},
 		"a final verdict": {edit: func(a *assaydv1alpha1.Agent, f *evalFixture) {
@@ -323,20 +333,6 @@ func TestTheEvalControllerRequiresAnUncachedReader(t *testing.T) {
 	}
 }
 
-// #105 item 12: the address the operator derives is an IP and a port from 1
-// to 65535, or nothing is claimed.
-func TestTheCandidateAddressIsValidated(t *testing.T) {
-	for addr, ok := range map[string]bool{
-		"10.43.0.9:8080": true, "[fd00::1]:8080": true,
-		"": false, "10.43.0.9": false, ":8080": false, "None:8080": false,
-		"10.43.0.9:0": false, "10.43.0.9:65536": false, "10.43.0.9:http": false,
-	} {
-		if err := validateCandidateAddress(addr); (err == nil) != ok {
-			t.Errorf("%q: validated %v, want %v (%v)", addr, err == nil, ok, err)
-		}
-	}
-}
-
 // A Service with no usable ClusterIP is the operator's fault: the pass
 // returns an error and claims, sends and records nothing.
 func TestAnUnusableAddressClaimsNothing(t *testing.T) {
@@ -353,8 +349,34 @@ func TestAnUnusableAddressClaimsNothing(t *testing.T) {
 	if _, err := f.pass(t); err == nil {
 		t.Error("a headless candidate Service gave no error")
 	}
-	if e := f.agent(t).Status.Eval; e != nil || f.stub.total() != 0 {
-		t.Errorf("an unusable address wrote %+v and sent %d", e, f.stub.total())
+	if e := f.agent(t).Status.Eval; e != nil || f.stub.total() != 0 || f.stub.cardGets != 0 {
+		t.Errorf("an unusable address wrote %+v, fetched the card %d times and sent %d", e,
+			f.stub.cardGets, f.stub.total())
+	}
+}
+
+// The same, mid-run: the address is checked before every claim, not only at
+// run start. A Service that loses its ClusterIP after the first case gets no
+// claim and no send for the second.
+func TestAnAddressThatBreaksMidRunClaimsNothing(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"), echoCase("b", "two"))
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	var svc corev1.Service
+	key := types.NamespacedName{Namespace: RunNamespaceName("team"), Name: WorkloadName("gated", "cand000001")}
+	if err := f.c.Get(context.Background(), key, &svc); err != nil {
+		t.Fatal(err)
+	}
+	svc.Spec.ClusterIP = "None"
+	if err := f.c.Update(context.Background(), &svc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pass(t); err == nil {
+		t.Error("a candidate Service that lost its address gave no error")
+	}
+	if c := caseRecord(f.agent(t).Status.Eval.Cases, "b"); c != nil || f.stub.count("two") != 0 {
+		t.Errorf("a case was claimed (%+v) or sent (%d) to an unusable address", c, f.stub.count("two"))
 	}
 }
 
@@ -363,11 +385,11 @@ func TestAnUnusableAddressClaimsNothing(t *testing.T) {
 // "/", or carries a control character.
 func TestTheEndpointPathIsBounded(t *testing.T) {
 	ok := "/" + strings.Repeat("a", MaxEndpointPathLength-1)
-	if err := checkEndpointPath(ok, "10.43.0.9:8080"); err != nil {
+	if err := checkEndpointPath(ok); err != nil {
 		t.Errorf("a path of exactly %d characters is refused: %v", MaxEndpointPathLength, err)
 	}
 	// Counted in characters, as the CRD's MaxLength counts them, not bytes.
-	if err := checkEndpointPath("/"+strings.Repeat("é", MaxEndpointPathLength-1), "10.43.0.9:8080"); err != nil {
+	if err := checkEndpointPath("/" + strings.Repeat("é", MaxEndpointPathLength-1)); err != nil {
 		t.Errorf("a path of %d two-byte characters is refused: %v", MaxEndpointPathLength, err)
 	}
 	for name, path := range map[string]string{
@@ -376,8 +398,9 @@ func TestTheEndpointPathIsBounded(t *testing.T) {
 		"a control char":    "/a\x01/message:send",
 		"a DEL":             "/a\x7f/message:send",
 		"an escaped return": "/a\r/message:send",
+		"not UTF-8":         "/\xff/message:send",
 	} {
-		if err := checkEndpointPath(path, "10.43.0.9:8080"); err == nil {
+		if err := checkEndpointPath(path); err == nil {
 			t.Errorf("%s: %q is admitted", name, path)
 		}
 	}
@@ -393,6 +416,15 @@ func TestARunStartRefusalIsWrittenToBlocked(t *testing.T) {
 		"a relative url": strings.Replace(evalCard, "http://agent.example/a2a/", "a2a", 1),
 		"a long path": strings.Replace(evalCard, "http://agent.example/a2a/",
 			"http://agent.example/"+strings.Repeat("p", MaxEndpointPathLength), 1),
+		// %FF decodes to a byte that is not UTF-8, which status, being JSON,
+		// would store as U+FFFD: a path the card never declared.
+		"a path that is not UTF-8": strings.Replace(evalCard, "http://agent.example/a2a/",
+			"http://agent.example/%FF/", 1),
+		// A tenant that is a number: the card fetch's own type does not read
+		// it, so the card is recorded, and it is a property of the card, not
+		// a fetch to retry.
+		"a wrongly typed interface field": strings.Replace(evalCard, `"protocolVersion":"1.0"`,
+			`"protocolVersion":"1.0","tenant":5`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newEvalFixture(t, nil, echoCase("a", "one"))
@@ -545,8 +577,16 @@ func TestRunningNamesNAndPausedNamesKOfN(t *testing.T) {
 	if before.reason != ReasonEvalRunning || after != before {
 		t.Errorf("EvalRunning changed as a case recorded:\n%+v\n%+v", before, after)
 	}
-	if !strings.Contains(before.message, "2 cases") || !strings.Contains(before.message, gDigest) {
-		t.Errorf("EvalRunning does not name the pair and N: %s", before.message)
+	if !strings.Contains(before.message, "2 cases") || !strings.Contains(before.message, gDigest) ||
+		!strings.Contains(before.message, "status.eval.cases[]") {
+		t.Errorf("EvalRunning does not name the pair, N and where progress is: %s", before.message)
+	}
+	// It claims nothing about sending: the eval controller may be unable to
+	// reach the candidate at all, and nothing tells this branch (#113).
+	for _, claim := range []string{"is sent", "evaluating", "sending"} {
+		if strings.Contains(before.message, claim) {
+			t.Errorf("EvalRunning asserts progress (%q): %s", claim, before.message)
+		}
 	}
 	in.available = false
 	d := decideGate(in)
@@ -608,5 +648,108 @@ func TestCasesStaySortedByID(t *testing.T) {
 	cases = withCase(cases, assaydv1alpha1.EvalCaseRecord{ID: "b", Outcome: assaydv1alpha1.EvalCasePassed})
 	if len(cases) != 2 || cases[0].ID != "a" || cases[1].ID != "b" || cases[1].Outcome != assaydv1alpha1.EvalCasePassed {
 		t.Errorf("cases[] is %+v; want a then b, b replaced in place", cases)
+	}
+}
+
+// A card body that is not JSON is a fetch that did not give the recorded card
+// (its digest cannot match, and the message says so), while a card that
+// matches and decodes badly is the card's own fault: the two are told apart.
+func TestABodyThatIsNotJSONIsNotABindingRefusal(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"))
+	f.stub.card = "not json"
+	res, err := f.pass(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := f.agent(t).Status.Eval
+	if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalAwaitingCard ||
+		!strings.Contains(e.Blocked.Message, "has digest") || res.RequeueAfter != CardDriftInterval {
+		t.Errorf("a body that is not JSON: blocked %+v, requeue %v; want EvalAwaitingCard naming the "+
+			"mismatch", e, res.RequeueAfter)
+	}
+}
+
+// T31's other half: a record whose first patch meets a Conflict, while the
+// claim still stands and its outcome is still Sending, is re-read and
+// re-applied, and the outcome the candidate gave is recorded, not left for
+// the next pass to record Interrupted.
+func TestARecordThatConflictsIsReapplied(t *testing.T) {
+	conflicted := false
+	funcs := &interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string,
+		obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+		raw, _ := patch.Data(obj)
+		if !conflicted && strings.Contains(string(raw), `"Passed"`) && strings.Contains(string(raw), `"cases"`) {
+			conflicted = true
+			// A real write by another writer first, so the re-read finds a
+			// newer object with the claim still standing.
+			var live assaydv1alpha1.Agent
+			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), &live); err != nil {
+				return err
+			}
+			live.Status.Phase = assaydv1alpha1.PhaseHeld
+			if err := c.Status().Update(ctx, &live); err != nil {
+				return err
+			}
+			return apierrors.NewConflict(evalAgentGR, obj.GetName(), errors.New("injected"))
+		}
+		return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+	}}
+	f := newEvalFixture(t, funcs, echoCase("a", "one"), echoCase("b", "two"))
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	if !conflicted {
+		t.Fatal("setup: the record never met the injected Conflict")
+	}
+	c := caseRecord(f.agent(t).Status.Eval.Cases, "a")
+	if c == nil || c.Outcome != assaydv1alpha1.EvalCasePassed {
+		t.Fatalf("after a Conflict on its record, case a is %+v; want Passed, re-applied", c)
+	}
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	if c := caseRecord(f.agent(t).Status.Eval.Cases, "a"); c.Reason == string(evalclient.ReasonInterrupted) {
+		t.Errorf("case a was recorded Interrupted: %+v", c)
+	}
+	if f.stub.count("one") != 1 {
+		t.Errorf("case a was sent %d times", f.stub.count("one"))
+	}
+}
+
+var evalAgentGR = schema.GroupResource{Group: "assayd.dev", Resource: "agents"}
+
+// staleAgents answers every Agent read with a snapshot, and every other
+// read through the client: a cache that lags the API server.
+type staleAgents struct {
+	client.Client
+	snapshot *assaydv1alpha1.Agent
+}
+
+func (s staleAgents) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if a, ok := obj.(*assaydv1alpha1.Agent); ok {
+		s.snapshot.DeepCopyInto(a)
+		return nil
+	}
+	return s.Client.Get(ctx, key, obj, opts...)
+}
+
+// The Agent is read through the uncached reader before every write, never
+// through the cached client (design 16 §1.1, "The two controllers"). With a
+// cache that lags — here, a snapshot from before the run — a pass still
+// reads the live record and goes on to the next case; one that read the
+// cache would build its writes on a stale object and lose every pass to the
+// optimistic lock.
+func TestTheAgentIsReadLiveNotFromTheCache(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"), echoCase("b", "two"))
+	before := f.agent(t)
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	f.r.Client = staleAgents{Client: f.c, snapshot: before}
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	if f.stub.count("two") != 1 || f.stub.count("one") != 1 {
+		t.Errorf("with a lagging cache the run sent %v; want b next, read live", f.stub.hits)
 	}
 }
