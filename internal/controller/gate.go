@@ -369,7 +369,7 @@ func noVerdictRows(in gateInput, pair string) gateDecision {
 		when := "once it is available again"
 		switch {
 		case matched && e.Blocked.Reason == ReasonEvalWaitingForAuth:
-			when = "once it is available again and the Gateway-level or foreign traffic policy hold " +
+			when = "once it is available again and the clause-5 hold " +
 				"the eval controller recorded for this Lock before it went away has cleared, which it " +
 				"re-reads then"
 		case matched && (e.Blocked.Reason == ReasonEvalBindingUnsupported ||
@@ -410,7 +410,7 @@ func failedBehind(in gateInput) string {
 		e.SuiteDigest == in.suiteDigest && e.Verdict == assaydv1alpha1.EvalVerdictFailed {
 		return "its Failed verdict"
 	}
-	return "its entry in status.eval.failed[], which no run is started for again,"
+	return "its entry in status.eval.failed[], for which no run of the pair is started again,"
 }
 
 // failedRows are the table's two rows for a pair that failed: a Failed

@@ -604,11 +604,11 @@ func TestEvalPausedSaysAHoldMustClearToo(t *testing.T) {
 	in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalWaitingForAuth, Message: "a hold"}
 	d := decideGate(in)
 	if d.reason != ReasonEvalPaused || !strings.Contains(d.message, "once it is available again and the "+
-		"Gateway-level or foreign traffic policy hold") {
+		"clause-5 hold") {
 		t.Errorf("beside a matched hold, EvalPaused does not say the hold must clear too: %s %s", d.reason, d.message)
 	}
 	in.status.Eval.Blocked = nil
-	if d := decideGate(in); d.reason != ReasonEvalPaused || strings.Contains(d.message, "policy hold") ||
+	if d := decideGate(in); d.reason != ReasonEvalPaused || strings.Contains(d.message, "clause-5 hold") ||
 		!strings.Contains(d.message, "once it is available again") {
 		t.Errorf("with no hold, EvalPaused names one: %s", d.message)
 	}
@@ -756,7 +756,33 @@ func TestEvalPausedDoesNotClaimAHoldForAnotherLock(t *testing.T) {
 	other := metav1.NewTime(in.status.Auth.Transaction.Deadline.Add(time.Hour))
 	in.status.Eval.BlockedFor.LockDeadline = &other
 	in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalWaitingForAuth, Message: "a hold"}
-	if d := decideGate(in); d.reason != ReasonEvalPaused || strings.Contains(d.message, "policy hold") {
+	if d := decideGate(in); d.reason != ReasonEvalPaused || strings.Contains(d.message, "clause-5 hold") {
 		t.Errorf("a hold computed for another Lock is named as this Lock's: %s %s", d.reason, d.message)
+	}
+}
+
+// EvalPaused names a stored hold or refusal only while blockedFor names the
+// current pair: one computed for another revision — R1's, before an edit made
+// R2 the candidate — or another suite is not described as this one's.
+func TestEvalPausedDoesNotClaimBlockedForAnotherPair(t *testing.T) {
+	for _, blocked := range []*assaydv1alpha1.EvalBlocked{
+		{Reason: ReasonEvalWaitingForAuth, Message: "a hold"},
+		{Reason: ReasonEvalBindingUnsupported, Message: "a refusal"},
+	} {
+		for part, edit := range map[string]func(*assaydv1alpha1.EvalBlockedFor){
+			"revision": func(bf *assaydv1alpha1.EvalBlockedFor) { bf.RevisionDigest = "sha256:r1" },
+			"suite":    func(bf *assaydv1alpha1.EvalBlockedFor) { bf.SuiteDigest = "another" },
+		} {
+			in := exemptInput(time.Now())
+			in.available = false
+			in.status.Eval.Blocked = blocked
+			edit(in.status.Eval.BlockedFor)
+			d := decideGate(in)
+			if d.reason != ReasonEvalPaused || strings.Contains(d.message, "clause-5 hold") ||
+				strings.Contains(d.message, "run-start refusal") {
+				t.Errorf("%s computed for another %s is named as this pair's: %s %s", blocked.Reason, part,
+					d.reason, d.message)
+			}
+		}
 	}
 }
