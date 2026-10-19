@@ -192,7 +192,14 @@ func (g *authEvalRig) waitingForAuth(t *testing.T, when string) *metav1.Conditio
 func exemptJ2(t *testing.T, name string, deadline time.Duration,
 	plant func(*authEvalRig)) (*authEvalRig, string, string) {
 	t.Helper()
-	g := newAuthEvalRig(t, name, true, echo("a", "one"), echo("b", "two"))
+	return exemptJ2With(t, name, deadline, plant, echo("a", "one"), echo("b", "two"))
+}
+
+// exemptJ2With is exemptJ2 with the suite's cases given.
+func exemptJ2With(t *testing.T, name string, deadline time.Duration, plant func(*authEvalRig),
+	cases ...assaydv1alpha1.EvalCase) (*authEvalRig, string, string) {
+	t.Helper()
+	g := newAuthEvalRig(t, name, true, cases...)
 	g.gate(t)
 	g.clearCard(t)
 	g.r.AuthDeadline = deadline
@@ -325,6 +332,7 @@ func TestAGatewayLevelPolicyHoldsTheExemptLockAcrossItsDeadline(t *testing.T) {
 	}
 	g.noHits(t, c, "while the Gateway-level policy stands", 3)
 	held := g.waitingForAuth(t, "after the eval controller's first clause-5 pass")
+	beforeDeadline(t, g, "the interval before the deadline")
 	if !strings.Contains(held.Message, key.Namespace+"/"+key.Name) {
 		t.Errorf("the hold does not name the Gateway-level policy %s: %s", key, held.Message)
 	}
@@ -399,6 +407,7 @@ func TestAForeignTrafficPolicyHoldsTheExemptLockAcrossItsDeadline(t *testing.T) 
 	}
 	g.noHits(t, c, "while the foreign policy stands", 3)
 	held := g.waitingForAuth(t, "beside the foreign policy")
+	beforeDeadline(t, g, "the interval before the deadline")
 	if !strings.Contains(held.Message, "intruder") {
 		t.Errorf("the hold does not name the foreign policy: %s", held.Message)
 	}
@@ -1306,5 +1315,123 @@ func touch(t *testing.T, a *assaydv1alpha1.Agent) {
 	live.Annotations["test.assayd.dev/touch"] = time.Now().Format(time.RFC3339Nano)
 	if err := k8s.Update(context.Background(), live); err != nil {
 		t.Fatalf("touch the Agent: %v", err)
+	}
+}
+
+// beforeDeadline fails a row whose interval before the Lock's deadline ended
+// after it: on a slow runner that interval would measure nothing.
+func beforeDeadline(t *testing.T, g *authEvalRig, what string) {
+	t.Helper()
+	if tx := txOf(t, g.a); tx == nil || !time.Now().Before(tx.Deadline.Time) {
+		t.Fatalf("%s ended after the Lock's deadline, so it measured nothing before it", what)
+	}
+}
+
+// A clause-5 hold is not applied to a candidate that is not available. The
+// eval controller reads clause 5 only on a pass on which the candidate is
+// available, so a hold recorded before it went away is not re-read while it is
+// away: here the hold names a foreign traffic policy, the policy is removed and
+// the candidate made unavailable, and GatesPassed reads EvalPaused, not the
+// hold naming a policy that no longer exists (rule 8). Once the candidate is
+// available again, the next clause-5 pass clears the stale hold and the run
+// goes on.
+//
+// Mutations: blocked before availability in the exempt arm (EvalPaused); or a
+// blocked write skipped while blockedFor is unchanged (the hold cleared on the
+// candidate's return).
+func TestAHoldIsNotAppliedToAnUnavailableCandidate(t *testing.T) {
+	g, c, _ := exemptJ2(t, "jtwopaused", 0, nil)
+	g.evalPass(t) // the run start, and case a
+	foreign := plantForeign(t, g.a)
+	g.evalPass(t)
+	if e := liveAgent(t, g.a).Status.Eval; e.Blocked == nil || !strings.Contains(e.Blocked.Message, "intruder") {
+		t.Fatalf("setup: the hold is not recorded: %+v", e.Blocked)
+	}
+	if err := k8s.Delete(context.Background(), foreign); err != nil {
+		t.Fatal(err)
+	}
+	markAvailable(t, g.ns, controller.WorkloadName(g.name, c), 0)
+	for i := 0; i < 2; i++ {
+		g.evalPass(t)
+		g.agentPass(t)
+	}
+	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalPaused)
+	if gp := condition(liveAgent(t, g.a), assaydv1alpha1.CondGatesPassed); gp != nil &&
+		strings.Contains(gp.Message, "intruder") {
+		t.Errorf("GatesPassed names a policy that no longer exists: %s", gp.Message)
+	}
+
+	markAvailable(t, g.ns, controller.WorkloadName(g.name, c), 1)
+	g.agentPass(t)
+	g.evalPass(t)
+	if e := liveAgent(t, g.a).Status.Eval; e.Blocked != nil {
+		t.Errorf("the next clause-5 pass did not clear the stale hold: %+v", e.Blocked)
+	}
+	if g.hits(c) != 2 {
+		t.Errorf("the run did not go on once the candidate came back: %d cases sent, want 2", g.hits(c))
+	}
+}
+
+// The abandonWaiting row of §1.1's table: a J2 Lock being abandoned while it
+// waits on a finalizer, whose record meets the five clauses, is claimed
+// beside. The abandoning edit (back to none, on a new image) mints the
+// candidate D, and a finalizer on `<agent>-auth` holds the delete, so the Lock
+// stays recorded at ProbingAfter with PolicyApplyIncomplete=AuthAbandonWaiting.
+//
+// Mutation: exclude a Lock waiting on its abandonment from the exemption.
+func TestALockAbandonedBehindAFinalizerIsClaimedBeside(t *testing.T) {
+	g, _, _ := exemptJ2(t, "jtwoabandon", 0, nil)
+	p := policyExists(t, runNS(g.ns), policyNameOf(g.a))
+	p.SetFinalizers([]string{"test.assayd.dev/hold"})
+	if err := k8s.Update(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if q := policyExists(t, runNS(g.ns), policyNameOf(g.a)); q != nil {
+			q.SetFinalizers(nil)
+			_ = k8s.Update(context.Background(), q)
+		}
+	})
+	d, _ := g.candidate(t, func(x *assaydv1alpha1.Agent) {
+		noneSpec(x)
+		x.Spec.Runtime.Image = imageN(5)
+	})
+	tx := txOf(t, g.a)
+	if tx == nil || tx.Kind != "Lock" || tx.Stage != "ProbingAfter" {
+		t.Fatalf("setup: the Lock is not recorded while its abandonment waits: %+v", tx)
+	}
+	condIs(t, g.a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, controller.ReasonAuthAbandonWaiting)
+	g.evalPass(t)
+	if g.hits(d) != 1 {
+		t.Fatalf("a Lock waiting on its abandonment, whose record meets the five clauses, held the eval: "+
+			"%d cases sent to D", g.hits(d))
+	}
+}
+
+// A clause-5 hold on a final-verdict pass in the exempt state. §1.1's table
+// rows come after blocked in the exempt state, EvalFailed among them, and the
+// eval controller evaluates clause 5 on a held candidate's passes too, so a
+// hold that appears after a Failed verdict reads EvalWaitingForAuth, naming
+// the policy, ahead of EvalFailed; once it clears, EvalFailed again.
+//
+// Mutation: write no hold on a final-verdict pass.
+func TestAHoldAfterAFailedVerdictComesBeforeIt(t *testing.T) {
+	g, c, _ := exemptJ2With(t, "jtwofailed", 0, nil, evalCase("a", "one", "nope", ""))
+	g.evalPass(t)
+	g.agentPass(t)
+	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalFailed)
+	key := gatewayAuthPolicy(t, g.a, g.prober)
+	g.evalPass(t)
+	g.agentPass(t)
+	held := g.waitingForAuth(t, "a hold after the Failed verdict")
+	if !strings.Contains(held.Message, key.Name) {
+		t.Errorf("the hold does not name the policy: %s", held.Message)
+	}
+	removePolicy(t, key)
+	g.evalPass(t)
+	g.agentPass(t)
+	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalFailed)
+	if g.hits(c) != 1 {
+		t.Errorf("C was sent %d cases, want its one", g.hits(c))
 	}
 }

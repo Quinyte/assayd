@@ -229,7 +229,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/authtxn.go:1077` in `abandonWaiting()` — constant at the call site
 - `internal/controller/agent_controller.go:1213` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
-**Referenced by a test:** `test/envtest/authabandonlive_test.go`, `test/envtest/authlockreview_test.go`, `test/envtest/authreview3_test.go`
+**Referenced by a test:** `test/envtest/authabandonlive_test.go`, `test/envtest/authlockreview_test.go`, `test/envtest/authreview3_test.go`, `test/envtest/exemption_test.go`
 
 **State:** A transaction whose target no longer matches the spec was abandoned, and the route or policy delete it issued has returned while the object is still held by another controller's finalizer.
 
@@ -902,7 +902,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 - `internal/controller/agent_controller.go:1005` in `Reconcile()` — from `gate.readyReason`, one of the 4 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/gate_test.go`
+**Referenced by a test:** `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/exemption_test.go`, `test/envtest/gate_test.go`
 
 **State:** `status.eval` records a `Failed` verdict for the candidate's full digest against the digest of the suite read in this pass.
 
@@ -982,7 +982,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 - `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`
+**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/exemption_test.go`
 
 **State:** A gated candidate with its suite and its card has no final verdict, and it is not available, so the eval controller sends it nothing. A run already under way keeps its recorded outcomes and resumes at the next case by id once the candidate is available again; nothing times a paused run out.
 

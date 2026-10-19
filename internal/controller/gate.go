@@ -188,15 +188,23 @@ type gateInput struct {
 //  4. no card recorded for the candidate (EvalAwaitingCard). Before the
 //     exempt rows, because the eval controller evaluates clause 5 only on a
 //     pass on which the card predicate holds, so blockedFor could not match.
-//  5. blockedFor does not match: EvalWaitingForAuth, saying the eval
+//  5. the candidate not available: EvalFailed, then EvalPairAlreadyFailed,
+//     else EvalPaused. Before the exempt rows for the card row's reason: the
+//     eval controller evaluates clause 5 only on a pass on which the
+//     candidate is available, so a hold recorded before it went away is not
+//     re-read while it is away, and applied would name a cause that may be
+//     gone for as long as it stays away (§1.1 step 8: a candidate that is not
+//     available is EvalPaused). The next clause-5 pass after it comes back
+//     rewrites blocked.
+//  6. blockedFor does not match: EvalWaitingForAuth, saying the eval
 //     controller has not yet evaluated clause 5 for this Lock.
-//  6. blocked set: its reason, with blocked.message — clause 5's hold
+//  7. blocked set: its reason, with blocked.message — clause 5's hold
 //     (EvalWaitingForAuth), or a run-start refusal.
-//  7. EvalFailed, then EvalPairAlreadyFailed: blocked comes before them here.
+//  8. EvalFailed, then EvalPairAlreadyFailed: blocked comes before them here.
 //
-// And last, in either arm:
+// And last, in either arm — 8 outside the exempt state, 9 in it:
 //
-//  8. no final verdict: EvalPaused while the candidate is not available, and
+//   - no final verdict: EvalPaused while the candidate is not available, and
 //     EvalRunning while it is. Neither names how many cases are done while the
 //     run goes on: EvalRunning names the pair and N, and status.eval.cases[]
 //     carries progress, so an eval patch that records a case leaves the Agent
@@ -278,6 +286,13 @@ func decideGate(in gateInput) gateDecision {
 		// evaluated"). On Q12 (a) one past its deadline still holds the eval.
 		return gateDecision{reason: ReasonEvalWaitingForAuth, readyReason: reasonAwaitingGates,
 			message: waitingMessage(in, tx, why, pair)}
+	case exempt && !in.available:
+		// Ahead of blocked: no clause-5 pass reaches an unavailable candidate,
+		// so a hold recorded before it went away is not re-read meanwhile.
+		if d, ok := failedRows(in, pair); ok {
+			return d
+		}
+		return noVerdictRows(in, pair)
 	case exempt && !bfMatched:
 		// The exempt state, before the eval controller has evaluated clause 5
 		// for this Lock: fail-closed, never EvalRunning on a blocked that was
@@ -314,6 +329,13 @@ func decideGate(in gateInput) gateDecision {
 			return d
 		}
 	}
+	return noVerdictRows(in, pair)
+}
+
+// noVerdictRows are the table's rows with no final verdict: EvalPaused while
+// the candidate is not available, naming k of N, and EvalRunning while it is.
+func noVerdictRows(in gateInput, pair string) gateDecision {
+	e := in.status.Eval
 	n := len(in.suite.Spec.Dataset.Cases)
 	if !in.available {
 		progress := "no run has started for it"

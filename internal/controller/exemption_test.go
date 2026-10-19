@@ -116,8 +116,10 @@ func exemptInput(now time.Time) gateInput {
 
 // The gate branch's order in the exempt state (design 16 §1.1, "What the gate
 // branch derives in the exempt state"): a Passed verdict and the card come
-// first; then an unmatched blockedFor, as not yet evaluated; then blocked; and
-// only then the table's rows, EvalFailed and EvalPairAlreadyFailed among them.
+// first; then a candidate that is not available, which no clause-5 pass
+// reaches (its final verdict, else EvalPaused); then an unmatched blockedFor,
+// as not yet evaluated; then blocked; and only then the table's rows,
+// EvalFailed and EvalPairAlreadyFailed among them.
 // Each row clears the previous row's cause.
 func TestTheExemptStateTakesItsOwnPrecedence(t *testing.T) {
 	in := exemptInput(time.Now())
@@ -142,8 +144,22 @@ func TestTheExemptStateTakesItsOwnPrecedence(t *testing.T) {
 		return d
 	}
 	step("no card for the candidate", ReasonEvalAwaitingCard, nil)
+	// The candidate not available: ahead of blocked and of an unmatched
+	// blockedFor, because no clause-5 pass reaches it; a final verdict first.
+	step("not available, a Failed verdict", ReasonEvalFailed, func(in *gateInput) { withCard(in.status) })
+	step("not available, the pair in failed[]", ReasonEvalPairAlreadyFailed, func(in *gateInput) {
+		in.status.Eval.Verdict = ""
+	})
+	step("not available, beside a hold for another Lock", ReasonEvalPaused, func(in *gateInput) {
+		in.status.Eval.Failed = nil
+	})
+	in.status.Eval.BlockedFor.LockDeadline = in.status.Auth.Transaction.Deadline.DeepCopy()
+	step("not available, beside a matched hold", ReasonEvalPaused, nil)
+	in.status.Eval.BlockedFor.LockDeadline = &other
+	in.status.Eval.Verdict = assaydv1alpha1.EvalVerdictFailed
+	in.status.Eval.Failed = []assaydv1alpha1.EvalPair{{RevisionDigest: gDigest, SuiteDigest: gSuite}}
 	d := step("blockedFor computed for another Lock", ReasonEvalWaitingForAuth, func(in *gateInput) {
-		withCard(in.status)
+		in.available = true
 	})
 	if !strings.Contains(d.message, "has not yet evaluated clause 5 for this Lock") {
 		t.Errorf("an unmatched blockedFor in the exempt state does not say clause 5 is unevaluated: %s",
@@ -157,10 +173,9 @@ func TestTheExemptStateTakesItsOwnPrecedence(t *testing.T) {
 	}
 	step("a Failed verdict for the pair", ReasonEvalFailed, func(in *gateInput) { in.status.Eval.Blocked = nil })
 	step("the pair in failed[]", ReasonEvalPairAlreadyFailed, func(in *gateInput) { in.status.Eval.Verdict = "" })
-	step("no verdict, the candidate not available", ReasonEvalPaused, func(in *gateInput) {
+	step("no verdict, the candidate available", ReasonEvalRunning, func(in *gateInput) {
 		in.status.Eval.Failed = nil
 	})
-	step("no verdict, the candidate available", ReasonEvalRunning, func(in *gateInput) { in.available = true })
 
 	// A Passed verdict outranks the exempt rows, an unmatched blockedFor and a
 	// standing hold included: clause 5 stops new claims only.
@@ -222,18 +237,28 @@ func TestBlockedForTruncatesTheLockDeadlineToTheSecond(t *testing.T) {
 // the same class compute the same value.
 func TestClauseFivesHoldNamesItsCausesAndIsStable(t *testing.T) {
 	gw := GatewayConfig{Enabled: true, Name: "assayd", Namespace: "gw"}
-	if h := clause5Hold(gw, "assayd-run-team", "gated-serving", gatewayAuth{}, nil, nil); h != nil {
+	if h := clause5Hold(gw, "assayd-run-team", "gated-serving", gatewayAuth{}, nil, nil, nil); h != nil {
 		t.Fatalf("no cause, and a hold: %+v", h)
 	}
 	gr := schema.GroupResource{Group: "agentgateway.dev", Resource: "agentgatewaypolicies"}
 	for name, tc := range map[string]struct {
-		above   gatewayAuth
-		foreign []string
-		ferr    error
-		says    []string
+		above    gatewayAuth
+		foreign  []string
+		ferr     error
+		routeErr error
+		says     []string
+		not      []string
 	}{
 		"a Gateway-level policy": {above: gatewayAuth{policies: []string{"gw/allow-all"}},
-			says: []string{"gw/allow-all", "Gateway gw/assayd"}},
+			says: []string{"gw/allow-all", "Gateway gw/assayd on a listener that can take"},
+			not:  []string{"could not be read"}},
+		"a Gateway-level policy beside an unread Gateway": {above: gatewayAuth{policies: []string{"gw/allow-all"},
+			unreadable: "x", gatewayErr: apierrors.NewForbidden(schema.GroupResource{Group: gatewayv1.GroupName,
+				Resource: "gateways"}, "assayd", errors.New("no"))},
+			says: []string{"gw/allow-all", "whose listeners could not be read", "(Forbidden)"},
+			not:  []string{"on a listener that can take"}},
+		"a serving route name that cannot be derived": {routeErr: errors.New("too long"),
+			says: []string{"serving route name could not be derived"}, not: []string{"too long"}},
 		"ListenerSets admitted": {above: gatewayAuth{listeners: "All"}, says: []string{"admits ListenerSets", "All"}},
 		"an unreadable Gateway": {above: gatewayAuth{unreadable: "x", gatewayErr: apierrors.NewNotFound(
 			schema.GroupResource{Group: gatewayv1.GroupName, Resource: "gateways"}, "assayd")},
@@ -246,7 +271,7 @@ func TestClauseFivesHoldNamesItsCausesAndIsStable(t *testing.T) {
 		"a failed foreign list": {ferr: apierrors.NewInternalError(errors.New("etcd is sad")),
 			says: []string{"could not be listed to find a foreign traffic policy", "(a server error)"}},
 	} {
-		h := clause5Hold(gw, "assayd-run-team", "gated-serving", tc.above, tc.foreign, tc.ferr)
+		h := clause5Hold(gw, "assayd-run-team", "gated-serving", tc.above, tc.foreign, tc.ferr, tc.routeErr)
 		if h == nil || h.Reason != ReasonEvalWaitingForAuth {
 			t.Errorf("%s: no EvalWaitingForAuth hold: %+v", name, h)
 			continue
@@ -256,11 +281,16 @@ func TestClauseFivesHoldNamesItsCausesAndIsStable(t *testing.T) {
 				t.Errorf("%s: the hold does not name %q: %s", name, want, h.Message)
 			}
 		}
+		for _, not := range tc.not {
+			if strings.Contains(h.Message, not) {
+				t.Errorf("%s: the hold says %q, which this read did not find: %s", name, not, h.Message)
+			}
+		}
 	}
 	a := clause5Hold(gw, "ns", "r", gatewayAuth{}, nil, fmt.Errorf("list: %w",
-		apierrors.NewForbidden(gr, "", errors.New("user alice cannot list"))))
+		apierrors.NewForbidden(gr, "", errors.New("user alice cannot list"))), nil)
 	b := clause5Hold(gw, "ns", "r", gatewayAuth{}, nil, fmt.Errorf("list: %w",
-		apierrors.NewForbidden(gr, "", errors.New("user bob cannot list"))))
+		apierrors.NewForbidden(gr, "", errors.New("user bob cannot list"))), nil)
 	if a == nil || b == nil || *a != *b {
 		t.Errorf("two Forbidden lists worded differently compute different holds:\n%+v\n%+v", a, b)
 	}

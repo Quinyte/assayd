@@ -35,15 +35,20 @@ func (r *EvalReconciler) clause5(ctx context.Context, agent *assaydv1alpha1.Agen
 	runNS string) (*assaydv1alpha1.EvalBlocked, error) {
 	reads := r.policyReads()
 	above := reads.gatewayAuthPolicies(ctx, r.Gateway.Hostname(agent.Name, agent.Namespace))
-	route, err := compiler.ServingRouteName(agent.Name)
-	if err != nil {
-		return nil, err
+	route, rerr := compiler.ServingRouteName(agent.Name)
+	if rerr != nil {
+		// Fail closed: with no route name there is no foreign list to read,
+		// and an empty blocked beside a matching blockedFor would read
+		// EvalRunning while nothing is claimed. No Agent name reaches this
+		// today — the serving concern leaves 38 characters of any name
+		// inside the 63-character limit — so clause5Hold's row pins it.
+		return clause5Hold(r.Gateway, runNS, "", above, nil, nil, rerr), fmt.Errorf("clause 5: %w", rerr)
 	}
 	// foreignTrafficPolicies lists the run namespace with notServedIsEmpty, so
 	// a NotFound there reads as no foreign policies and holds nothing; any
 	// other error comes back here, and holds.
 	foreign, ferr := reads.foreignTrafficPolicies(ctx, agent, runNS, route)
-	hold := clause5Hold(r.Gateway, runNS, route, above, foreign, ferr)
+	hold := clause5Hold(r.Gateway, runNS, route, above, foreign, ferr, nil)
 	switch {
 	case ferr != nil:
 		return hold, fmt.Errorf("clause 5: %w", ferr)
@@ -60,9 +65,16 @@ func (r *EvalReconciler) clause5(ctx context.Context, agent *assaydv1alpha1.Agen
 // error's raw text, so the value is the same on every pass a cause stands and
 // blocked is rewritten only when the hold changes (§1.1, "`blocked`: one
 // slot, one computation").
+//
+// routeErr is a serving-route name that could not be derived, which holds:
+// with no name, no foreign traffic policy on the route can be ruled out.
 func clause5Hold(gw GatewayConfig, runNS, route string, above gatewayAuth, foreign []string,
-	ferr error) *assaydv1alpha1.EvalBlocked {
+	ferr, routeErr error) *assaydv1alpha1.EvalBlocked {
 	var causes []string
+	if routeErr != nil {
+		causes = append(causes, "this Agent's serving route name could not be derived, so no foreign "+
+			"traffic policy on it can be ruled out")
+	}
 	if above.gatewayErr != nil {
 		causes = append(causes, fmt.Sprintf("Gateway %s/%s could not be read (%s), so nothing on it can "+
 			"be ruled out", gw.Namespace, gw.Name, readErrorClass(above.gatewayErr)))
@@ -72,9 +84,16 @@ func clause5Hold(gw GatewayConfig, runNS, route string, above gatewayAuth, forei
 			"none on the Gateway can be ruled out", gw.Namespace, readErrorClass(above.listErr)))
 	}
 	if len(above.policies) > 0 {
-		causes = append(causes, fmt.Sprintf("the AgentgatewayPolicy %s targets Gateway %s/%s on a "+
-			"listener that can take this Agent's traffic, and could answer an anonymous request itself",
-			strings.Join(above.policies, ", "), gw.Namespace, gw.Name))
+		// With the Gateway unread its listeners are unknown, and every policy
+		// that targets it was counted whatever its sectionName or selector.
+		where := "on a listener that can take this Agent's traffic"
+		if above.gatewayErr != nil {
+			where = "whose listeners could not be read, so no sectionName or selector is taken as " +
+				"keeping it off this Agent's traffic"
+		}
+		causes = append(causes, fmt.Sprintf("the AgentgatewayPolicy %s targets Gateway %s/%s %s, and "+
+			"could answer an anonymous request itself", strings.Join(above.policies, ", "), gw.Namespace,
+			gw.Name, where))
 	}
 	if above.listeners != "" {
 		causes = append(causes, fmt.Sprintf("Gateway %s/%s admits ListenerSets (spec.allowedListeners."+
