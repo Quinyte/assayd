@@ -31,15 +31,19 @@ import (
 //	                                            (EvalHeldForAuth)
 //	a card is recorded for the candidate        hasCardFor (decideGate's    hasCardFor
 //	                                            EvalAwaitingCard)
-//	no Create or Lock is recorded               claimHoldingTransaction     claimHoldingTransaction
+//	no Create or Lock is recorded, or the       recordedTransaction and     recordedTransaction and
+//	one recorded is exempt (clauses 1 to 4)     exemptTransaction           exemptTransaction
 //	                                            (EvalWaitingForAuth)
+//	the exempt Lock's clause 5: no Gateway-     —, read from                clause5, last
+//	level or foreign traffic hold stands        status.eval.blocked
 //	observedGeneration == generation            —                           evalGenerationCurrent
 //
 // The generation clause is the eval controller's alone: the Agent reconciler
 // is the observer that sets observedGeneration in the same pass, so it does not
-// evaluate it, and no GatesPassed row depends on it (A6). The J2/K2 exemption
-// from the transaction predicate is design 16 build step 7's; until it lands
-// every recorded Create or Lock holds the eval, which is fail-closed.
+// evaluate it, and no GatesPassed row depends on it (A6). Clause 5 is the eval
+// controller's alone in the same way: it makes the Gateway and policy reads,
+// and the Agent reconciler reads its result from status.eval.blocked, applied
+// only while status.eval.blockedFor matches (A11, A12).
 
 // candidatePending is the third predicate: status records a candidate whose
 // digest differs from the active one's. Every comparison is on the digest,
@@ -49,15 +53,60 @@ func candidatePending(status *assaydv1alpha1.AgentStatus) bool {
 		status.CandidateRevisionDigest != status.ActiveRevisionDigest
 }
 
-// claimHoldingTransaction is the transaction §1.1 holds every new claim for:
-// a Create or a Lock recorded in status.auth.transaction, at any stage. A
-// refused Adopt is neither, and does not count. The J2/K2 exemption is build
-// step 7's.
-func claimHoldingTransaction(status *assaydv1alpha1.AgentStatus) *assaydv1alpha1.AuthTransaction {
+// recordedTransaction is a Create or a Lock recorded in
+// status.auth.transaction, at any stage, being abandoned or not, or nil. A
+// refused Adopt is neither: a standing record, not a transaction in flight,
+// so it never holds the eval (design 16 §1.1's table).
+func recordedTransaction(status *assaydv1alpha1.AgentStatus) *assaydv1alpha1.AuthTransaction {
 	if tx := authTransaction(status); tx != nil && (tx.Kind == TxCreate || tx.Kind == TxLock) {
 		return tx
 	}
 	return nil
+}
+
+// exemptTransaction is clauses 1 to 4 of the exemption for a J2 or K2 Lock
+// that can finish only through a promotion (design 16 §1.1, "The exemption"),
+// read from status alone. exempt is true when all four hold; why names the
+// first that does not, for the message of a transaction the eval waits on.
+// Clause 5 is the eval controller's, evaluated last, and only on a pass on
+// which these four hold.
+//
+// A Lock being abandoned while it waits on a finalizer (abandonWaiting) is
+// read by the same four clauses on its record: its table row claims exactly
+// when its record meets them, so nothing here tells it from a Lock in
+// progress.
+func exemptTransaction(status *assaydv1alpha1.AgentStatus) (exempt bool, why string) {
+	tx := recordedTransaction(status)
+	switch {
+	case tx == nil:
+		return false, "no Create or Lock is recorded"
+	case tx.Kind != TxLock:
+		return false, "a Create writes and publishes the route, and its status writes must not " +
+			"conflict with eval patches"
+	// Clause 1: a J2 or K2 entry, not a re-creation — isReCreation's test,
+	// negated. The human decided on 2026-09-17 to leave this boundary (A19,
+	// option (a)): the missing-policy Lock is never exempt.
+	case isReCreation(status.Auth):
+		return false, "it is the Lock of a missing policy, a re-creation, which is never exempt"
+	// Clause 2: the policy is written and converged, and only attribution is
+	// left.
+	case tx.Stage != StageProbingAfter:
+		return false, "it is in stage " + tx.Stage + ", before " + StageProbingAfter + ", so the policy " +
+			"that closes the route is not yet written, converged and probed"
+	// Clause 3: nothing was observed before the Lock, so a 401 can be
+	// attributed only on a recorded card.
+	case tx.BeforeObserved:
+		return false, "it observed the route open before it wrote its policy, so it can finish on " +
+			"its own passes"
+	// Clause 4: status.cards[] records no non-empty digest for
+	// status.activeRevision, read by revision NAME (cardedRevision), the key
+	// cardAttributes matches a card entry on, and not by digest (hasCardFor):
+	// this clause must negate that attribution exactly (A19).
+	case cardedRevision(status, status.ActiveRevision):
+		return false, "status.cards[] records a card digest for status.activeRevision " +
+			status.ActiveRevision + ", which the route names, so it can finish on its own passes"
+	}
+	return true, ""
 }
 
 // evalGenerationCurrent is the eval controller's own predicate: the Agent

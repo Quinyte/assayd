@@ -55,8 +55,9 @@ func everyCause(now time.Time) gateInput {
 				Blocked: &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalBindingUnsupported, Message: "no HTTP+JSON 1.0 interface"},
 				BlockedFor: &assaydv1alpha1.EvalBlockedFor{RevisionDigest: gDigest, SuiteDigest: gSuite,
 					LockDeadline: &deadline}},
+			// A J2 Lock short of ProbingAfter: recorded, and not exempt.
 			Auth: &assaydv1alpha1.AuthStatus{Mode: "none", Transaction: &assaydv1alpha1.AuthTransaction{
-				Kind: TxLock, Stage: StageProbingAfter, Deadline: &deadline}},
+				Kind: TxLock, TargetMode: "apikey", Stage: StageConverging, Deadline: &deadline}},
 		},
 	}
 }
@@ -72,9 +73,10 @@ func withCard(st *assaydv1alpha1.AgentStatus) {
 	st.Cards = append(st.Cards, assaydv1alpha1.CardStatus{Revision: gRev, RevisionDigest: gDigest, Digest: "cafe"})
 }
 
-// Every GatesPassed reason of the gate branch, in its precedence (design 16
-// §1.1; the order is decideGate's comment). Each row clears the previous
-// row's cause, so a rule moved below its successor fails that row.
+// Every GatesPassed reason of the gate branch outside the exempt state, in
+// its precedence (design 16 §1.1; the order is decideGate's comment). Each row
+// clears the previous row's cause, so a rule moved below its successor fails
+// that row.
 func TestTheGateBranchsReasonsTakeTheirPrecedence(t *testing.T) {
 	now := time.Now()
 	in := everyCause(now)
@@ -100,21 +102,23 @@ func TestTheGateBranchsReasonsTakeTheirPrecedence(t *testing.T) {
 		in.status.Eval.Verdict = ""
 	})
 	step("no card for the candidate", ReasonEvalAwaitingCard, func(in *gateInput) { in.status.Eval.Failed = nil })
-	// A recorded Create or Lock holds every new claim (step 6 waits on all of
-	// them; the J2/K2 exemption is build step 7's).
+	// A recorded Lock that is not exempt holds every new claim, ahead of
+	// blocked, and says why it is not exempt.
 	step("a recorded Lock", ReasonEvalWaitingForAuth, func(in *gateInput) { withCard(in.status) })
 	if d := decideGate(in); !strings.Contains(d.message, "an -auth Lock is recorded on this Agent, in stage "+
-		StageProbingAfter) {
-		t.Fatalf("a recorded Lock: EvalWaitingForAuth does not name its kind and stage: %s", d.message)
+		StageConverging) || !strings.Contains(d.message, "so the policy that closes the route is not yet written") {
+		t.Fatalf("a recorded Lock: EvalWaitingForAuth does not name its kind, stage and why: %s", d.message)
 	}
-	step("blocked, matched", ReasonEvalBindingUnsupported, func(in *gateInput) {
+	// The candidate not available: ahead of a matched blocked, as §1.1 step 8
+	// puts the not-ready branches before the gate.
+	step("not available, beside a matched blocked", ReasonEvalPaused, func(in *gateInput) {
 		in.status.Auth = nil
 		in.status.Eval.BlockedFor.LockDeadline = nil
 	})
-	step("no verdict, the candidate not available", ReasonEvalPaused, func(in *gateInput) {
+	step("blocked, matched", ReasonEvalBindingUnsupported, func(in *gateInput) { in.available = true })
+	step("no verdict, the candidate available", ReasonEvalRunning, func(in *gateInput) {
 		in.status.Eval.Blocked = nil
 	})
-	step("no verdict, the candidate available", ReasonEvalRunning, func(in *gateInput) { in.available = true })
 }
 
 // A written verdict outranks every reason a run could be waiting for: a
@@ -188,16 +192,19 @@ func TestARefusedAdoptDoesNotHoldTheEval(t *testing.T) {
 	} else if strings.Contains(d.message, "deadline") {
 		t.Errorf("the message names a deadline the transaction does not have: %s", d.message)
 	}
-	if got := claimHoldingTransaction(in.status); got == nil || got.Kind != TxCreate {
-		t.Errorf("claimHoldingTransaction misses a recorded Create: %+v", got)
+	if got := recordedTransaction(in.status); got == nil || got.Kind != TxCreate {
+		t.Errorf("recordedTransaction misses a recorded Create: %+v", got)
+	}
+	if ok, _ := exemptTransaction(in.status); ok {
+		t.Error("a recorded Create is exempt")
 	}
 	in.status.Auth.Transaction = &assaydv1alpha1.AuthTransaction{Kind: TxLock, Stage: StageApplyingPolicies}
-	if got := claimHoldingTransaction(in.status); got == nil || got.Kind != TxLock {
-		t.Errorf("claimHoldingTransaction misses a recorded Lock: %+v", got)
+	if got := recordedTransaction(in.status); got == nil || got.Kind != TxLock {
+		t.Errorf("recordedTransaction misses a recorded Lock: %+v", got)
 	}
 	in.status.Auth.Transaction = &assaydv1alpha1.AuthTransaction{Kind: TxAdopt, Stage: StageRefused}
-	if got := claimHoldingTransaction(in.status); got != nil {
-		t.Errorf("claimHoldingTransaction counts a refused Adopt: %+v", got)
+	if got := recordedTransaction(in.status); got != nil {
+		t.Errorf("recordedTransaction counts a refused Adopt: %+v", got)
 	}
 }
 
@@ -208,8 +215,10 @@ func TestARecordedTransactionNamesAPassedDeadline(t *testing.T) {
 	past, future := metav1.NewTime(now.Add(-time.Minute)), metav1.NewTime(now.Add(time.Minute))
 	in := gateInput{desired: gRev, desiredDigest: gDigest, suiteDigest: gSuite, now: now,
 		suite: twoCaseSuite(), available: true,
-		status: &assaydv1alpha1.AgentStatus{Auth: &assaydv1alpha1.AuthStatus{Transaction: &assaydv1alpha1.AuthTransaction{
-			Kind: TxLock, Stage: StageProbingAfter, Deadline: &past}}}}
+		// A missing-policy Lock: a re-creation, never exempt, whatever its stage.
+		status: &assaydv1alpha1.AgentStatus{Auth: &assaydv1alpha1.AuthStatus{Mode: "apikey",
+			Transaction: &assaydv1alpha1.AuthTransaction{Kind: TxLock, TargetMode: "apikey",
+				Stage: StageProbingAfter, Deadline: &past}}}}
 	withCard(in.status)
 	if d := decideGate(in); d.reason != ReasonEvalWaitingForAuth ||
 		!strings.Contains(d.message, "deadline passed at "+past.UTC().Format(time.RFC3339)) {

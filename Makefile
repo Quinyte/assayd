@@ -9,9 +9,11 @@ CRDOC          := $(GOBIN)/crdoc
 ENVTEST_K8S    ?= 1.36.x
 # `make envtest` runs the suite once. A scheduled workflow reruns it with
 # ENVTEST_COUNT=3 so that a test which cannot run twice in one process is caught,
-# which a single run never shows (#32). The default timeout is go test's own.
+# which a single run never shows (#32). The timeout is above go test's own 10m:
+# one run measured 534 s locally with design 16 build step 7's rows, and CI
+# runners are slower.
 ENVTEST_COUNT   ?= 1
-ENVTEST_TIMEOUT ?= 10m
+ENVTEST_TIMEOUT ?= 15m
 CLUSTER        ?= assayd-local
 
 # Tool versions are pinned here, not floated with @latest. A build whose output

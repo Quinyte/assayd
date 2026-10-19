@@ -22,7 +22,7 @@ jobs:
   envtest-rerun:
     name: envtest, three runs in one process
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -32,4 +32,4 @@ jobs:
           cache: true
 
       - name: envtest, -count=3
-        run: make envtest ENVTEST_COUNT=3 ENVTEST_TIMEOUT=30m
+        run: make envtest ENVTEST_COUNT=3 ENVTEST_TIMEOUT=45m
