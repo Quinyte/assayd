@@ -174,9 +174,9 @@ func (c *Client) Send(ctx context.Context, cs Case) (Outcome, error) {
 		return Outcome{}, fmt.Errorf("build the request for this case: %w", err)
 	}
 	// A2A 1.0 §3.6: a client MUST send A2A-Version, and an agent reads its
-	// absence as 0.3. The content type is the one the specification's §11.1
-	// says the HTTP+JSON binding SHOULD use, read from its main branch and not
-	// checked against the v1.0.1 tag (#105).
+	// absence as 0.3. The content type, application/a2a+json, is a SHOULD for
+	// requests and responses in the A2A specification at tag v1.0.1, §11.1
+	// (docs/specification.md).
 	req.Header.Set("A2A-Version", "1.0")
 	req.Header.Set("Content-Type", "application/a2a+json")
 
