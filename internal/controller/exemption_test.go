@@ -11,11 +11,13 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -128,7 +130,8 @@ func TestTheExemptStateTakesItsOwnPrecedence(t *testing.T) {
 	in.status.Eval.RevisionDigest, in.status.Eval.SuiteDigest = gDigest, gSuite
 	in.status.Eval.Verdict, in.status.Eval.Score = assaydv1alpha1.EvalVerdictFailed, "0/2"
 	in.status.Eval.Failed = []assaydv1alpha1.EvalPair{{RevisionDigest: gDigest, SuiteDigest: gSuite}}
-	in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalWaitingForAuth, Message: "a hold"}
+	in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalWaitingForAuth,
+		Message: "a hold" + holdClaimsTail}
 	in.status.Eval.BlockedFor.LockDeadline = &other
 	in.available = false
 	step := func(name, want string, clear func(*gateInput)) gateDecision {
@@ -161,15 +164,23 @@ func TestTheExemptStateTakesItsOwnPrecedence(t *testing.T) {
 	d := step("blockedFor computed for another Lock", ReasonEvalWaitingForAuth, func(in *gateInput) {
 		in.available = true
 	})
-	if !strings.Contains(d.message, "has not yet evaluated clause 5 for this Lock") {
-		t.Errorf("an unmatched blockedFor in the exempt state does not say clause 5 is unevaluated: %s",
-			d.message)
+	// The pair has failed: the message says no case of it is claimed whatever
+	// clause 5 finds, and that the verdict stands behind this condition.
+	for _, want := range []string{"has not yet evaluated clause 5 for it", "has already failed",
+		"no case of it is claimed whatever clause 5 finds", "Failed verdict stands behind"} {
+		if !strings.Contains(d.message, want) {
+			t.Errorf("an unmatched blockedFor beside a failed pair does not say %q: %s", want, d.message)
+		}
+	}
+	if strings.Contains(d.message, "may claim cases") {
+		t.Errorf("beside a failed pair the message says cases may be claimed: %s", d.message)
 	}
 	d = step("blocked, matched", ReasonEvalWaitingForAuth, func(in *gateInput) {
 		in.status.Eval.BlockedFor.LockDeadline = in.status.Auth.Transaction.Deadline.DeepCopy()
 	})
-	if !strings.Contains(d.message, "a hold") {
-		t.Errorf("blocked's message is not carried: %s", d.message)
+	if !strings.Contains(d.message, "a hold") || !strings.Contains(d.message,
+		"no case of it is claimed whether or not the hold clears") || strings.Contains(d.message, "until it clears") {
+		t.Errorf("a hold beside a failed pair does not carry blocked's message and the verdict: %s", d.message)
 	}
 	step("a Failed verdict for the pair", ReasonEvalFailed, func(in *gateInput) { in.status.Eval.Blocked = nil })
 	step("the pair in failed[]", ReasonEvalPairAlreadyFailed, func(in *gateInput) { in.status.Eval.Verdict = "" })
@@ -237,17 +248,16 @@ func TestBlockedForTruncatesTheLockDeadlineToTheSecond(t *testing.T) {
 // the same class compute the same value.
 func TestClauseFivesHoldNamesItsCausesAndIsStable(t *testing.T) {
 	gw := GatewayConfig{Enabled: true, Name: "assayd", Namespace: "gw"}
-	if h := clause5Hold(gw, "assayd-run-team", "gated-serving", gatewayAuth{}, nil, nil, nil); h != nil {
+	if h := clause5Hold(gw, "assayd-run-team", "gated-serving", gatewayAuth{}, nil, nil); h != nil {
 		t.Fatalf("no cause, and a hold: %+v", h)
 	}
 	gr := schema.GroupResource{Group: "agentgateway.dev", Resource: "agentgatewaypolicies"}
 	for name, tc := range map[string]struct {
-		above    gatewayAuth
-		foreign  []string
-		ferr     error
-		routeErr error
-		says     []string
-		not      []string
+		above   gatewayAuth
+		foreign []string
+		ferr    error
+		says    []string
+		not     []string
 	}{
 		"a Gateway-level policy": {above: gatewayAuth{policies: []string{"gw/allow-all"}},
 			says: []string{"gw/allow-all", "Gateway gw/assayd on a listener that can take"},
@@ -257,8 +267,6 @@ func TestClauseFivesHoldNamesItsCausesAndIsStable(t *testing.T) {
 				Resource: "gateways"}, "assayd", errors.New("no"))},
 			says: []string{"gw/allow-all", "whose listeners could not be read", "(Forbidden)"},
 			not:  []string{"on a listener that can take"}},
-		"a serving route name that cannot be derived": {routeErr: errors.New("too long"),
-			says: []string{"serving route name could not be derived"}, not: []string{"too long"}},
 		"ListenerSets admitted": {above: gatewayAuth{listeners: "All"}, says: []string{"admits ListenerSets", "All"}},
 		"an unreadable Gateway": {above: gatewayAuth{unreadable: "x", gatewayErr: apierrors.NewNotFound(
 			schema.GroupResource{Group: gatewayv1.GroupName, Resource: "gateways"}, "assayd")},
@@ -271,7 +279,7 @@ func TestClauseFivesHoldNamesItsCausesAndIsStable(t *testing.T) {
 		"a failed foreign list": {ferr: apierrors.NewInternalError(errors.New("etcd is sad")),
 			says: []string{"could not be listed to find a foreign traffic policy", "(a server error)"}},
 	} {
-		h := clause5Hold(gw, "assayd-run-team", "gated-serving", tc.above, tc.foreign, tc.ferr, tc.routeErr)
+		h := clause5Hold(gw, "assayd-run-team", "gated-serving", tc.above, tc.foreign, tc.ferr)
 		if h == nil || h.Reason != ReasonEvalWaitingForAuth {
 			t.Errorf("%s: no EvalWaitingForAuth hold: %+v", name, h)
 			continue
@@ -288,9 +296,9 @@ func TestClauseFivesHoldNamesItsCausesAndIsStable(t *testing.T) {
 		}
 	}
 	a := clause5Hold(gw, "ns", "r", gatewayAuth{}, nil, fmt.Errorf("list: %w",
-		apierrors.NewForbidden(gr, "", errors.New("user alice cannot list"))), nil)
+		apierrors.NewForbidden(gr, "", errors.New("user alice cannot list"))))
 	b := clause5Hold(gw, "ns", "r", gatewayAuth{}, nil, fmt.Errorf("list: %w",
-		apierrors.NewForbidden(gr, "", errors.New("user bob cannot list"))), nil)
+		apierrors.NewForbidden(gr, "", errors.New("user bob cannot list"))))
 	if a == nil || b == nil || *a != *b {
 		t.Errorf("two Forbidden lists worded differently compute different holds:\n%+v\n%+v", a, b)
 	}
@@ -322,7 +330,7 @@ func TestReadErrorClassNamesEachClass(t *testing.T) {
 // by reads: the Gateway get, the Gateway namespace's list and the run
 // namespace's list. The fake client serves neither kind, so every one of them
 // is intercepted.
-func clause5Fixture(t *testing.T, reads clause5Reads, card string) *evalFixture {
+func clause5Fixture(t *testing.T, reads *clause5Reads, card string) *evalFixture {
 	t.Helper()
 	funcs := &interceptor.Funcs{
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
@@ -395,7 +403,7 @@ func TestClauseFiveHoldsAndReleasesThroughReconcile(t *testing.T) {
 	notFound := apierrors.NewNotFound(schema.GroupResource{Group: "agentgateway.dev",
 		Resource: "agentgatewaypolicies"}, "")
 	t.Run("no hold, and a NotFound run-namespace list", func(t *testing.T) {
-		f := clause5Fixture(t, clause5Reads{runListErr: notFound}, "")
+		f := clause5Fixture(t, &clause5Reads{runListErr: notFound}, "")
 		res, err := f.pass(t)
 		if err != nil {
 			t.Fatal(err)
@@ -432,7 +440,7 @@ func TestClauseFiveHoldsAndReleasesThroughReconcile(t *testing.T) {
 			message: "intruder"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := clause5Fixture(t, tc.reads, "")
+			f := clause5Fixture(t, &tc.reads, "")
 			res, err := f.pass(t)
 			if (err != nil) != tc.failed {
 				t.Fatalf("pass error %v, want one: %v", err, tc.failed)
@@ -468,7 +476,7 @@ func TestClauseFiveHoldsAndReleasesThroughReconcile(t *testing.T) {
 // clears, the refusal is, and it stands without a rewrite.
 func TestARunStartRefusalAndClauseFiveShareOneSlot(t *testing.T) {
 	bad := strings.Replace(evalCard, "HTTP+JSON", "JSONRPC", 1)
-	f := clause5Fixture(t, clause5Reads{listenerSets: true}, bad)
+	f := clause5Fixture(t, &clause5Reads{listenerSets: true}, bad)
 	if _, err := f.pass(t); err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +484,7 @@ func TestARunStartRefusalAndClauseFiveShareOneSlot(t *testing.T) {
 		f.stub.cardGets != 0 {
 		t.Fatalf("under a hold: blocked %+v after %d card fetches; want the hold, and no fetch", e, f.stub.cardGets)
 	}
-	g := clause5Fixture(t, clause5Reads{}, bad)
+	g := clause5Fixture(t, &clause5Reads{}, bad)
 	if _, err := g.pass(t); err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +509,7 @@ func TestARunStartRefusalAndClauseFiveShareOneSlot(t *testing.T) {
 // A Lock that is not exempt holds the pass before anything is read or
 // written: no clause 5 read, no blocked write.
 func TestALockThatIsNotExemptHoldsThePassBeforeAnyRead(t *testing.T) {
-	f := clause5Fixture(t, clause5Reads{listenerSets: true}, "")
+	f := clause5Fixture(t, &clause5Reads{listenerSets: true}, "")
 	a := f.agent(t)
 	a.Status.Auth.Transaction.BeforeObserved = true
 	if err := f.c.Status().Update(context.Background(), a); err != nil {
@@ -580,5 +588,61 @@ func TestTheWedgeNamesItsExitsOnlyWhenNothingCanAttribute(t *testing.T) {
 		if d := decideGate(in); strings.Contains(d.message, "TERMINAL") || strings.Contains(d.message, "exits") {
 			t.Errorf("%s: the exits are named: %s", name, d.message)
 		}
+	}
+}
+
+// EvalPaused's message beside a matched clause-5 hold recorded before the
+// candidate went away: the run resumes once the candidate is available AND
+// the hold has cleared, which the eval controller re-reads then. With no
+// hold, it says only the first.
+func TestEvalPausedSaysAHoldMustClearToo(t *testing.T) {
+	in := exemptInput(time.Now())
+	in.available = false
+	in.status.Eval.RevisionDigest, in.status.Eval.SuiteDigest = gDigest, gSuite
+	in.status.Eval.Verdict = assaydv1alpha1.EvalVerdictRunning
+	in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalWaitingForAuth, Message: "a hold"}
+	d := decideGate(in)
+	if d.reason != ReasonEvalPaused || !strings.Contains(d.message, "once it is available again and the "+
+		"Gateway-level or foreign traffic policy hold") {
+		t.Errorf("beside a matched hold, EvalPaused does not say the hold must clear too: %s %s", d.reason, d.message)
+	}
+	in.status.Eval.Blocked = nil
+	if d := decideGate(in); d.reason != ReasonEvalPaused || strings.Contains(d.message, "policy hold") ||
+		!strings.Contains(d.message, "once it is available again") {
+		t.Errorf("with no hold, EvalPaused names one: %s", d.message)
+	}
+}
+
+// A stale hold is cleared on a run-start pass that clause 5 found clear,
+// even when that pass then stops before the card fetch because the
+// candidate's address cannot be used: startRun returns before it writes
+// blocked, and the hold would otherwise go on naming a cause that is gone.
+func TestAHoldFoundGoneIsClearedBeforeARunStartThatStopsShort(t *testing.T) {
+	reads := &clause5Reads{listenerSets: true}
+	f := clause5Fixture(t, reads, "")
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	if e := f.agent(t).Status.Eval; e == nil || e.Blocked == nil {
+		t.Fatalf("setup: no hold recorded: %+v", e)
+	}
+	reads.listenerSets = false
+	var svc corev1.Service
+	key := types.NamespacedName{Namespace: RunNamespaceName("team"), Name: WorkloadName("gated", "cand000001")}
+	if err := f.c.Get(context.Background(), key, &svc); err != nil {
+		t.Fatal(err)
+	}
+	svc.Spec.ClusterIP = "None"
+	if err := f.c.Update(context.Background(), &svc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pass(t); err == nil {
+		t.Fatal("setup: a pass to an unusable address returned no error")
+	}
+	if e := f.agent(t).Status.Eval; e.Blocked != nil {
+		t.Errorf("a hold clause 5 found gone outlived a run start that stopped short: %+v", e.Blocked)
+	}
+	if f.stub.total() != 0 || f.stub.cardGets != 0 {
+		t.Errorf("a pass to an unusable address sent or fetched something")
 	}
 }

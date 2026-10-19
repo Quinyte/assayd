@@ -291,6 +291,8 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	// refusal outranks it, but only on a pass that would start a run, and a
 	// pass under a hold starts none, so the card is not fetched while one
 	// stands (§1.1, "`blocked`: one slot, one computation").
+	e := st.Eval
+	recorded := e != nil && e.RevisionDigest == candDigest && e.SuiteDigest == sd
 	var hold *assaydv1alpha1.EvalBlocked
 	if exempt {
 		var readErr error
@@ -304,8 +306,6 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
-	e := st.Eval
-	recorded := e != nil && e.RevisionDigest == candDigest && e.SuiteDigest == sd
 	switch {
 	case recorded && (e.Verdict == assaydv1alpha1.EvalVerdictPassed || e.Verdict == assaydv1alpha1.EvalVerdictFailed):
 		// A final verdict for this pair. The Agent reconciler promotes on a
@@ -334,6 +334,16 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		// pruned in part: the run-start read-back refused it, and nothing
 		// may be sent on it. The run starts again, and its read-back fails
 		// again, until the CRD keeps the whole record (step 11).
+		//
+		// A hold this pass found gone is cleared first: startRun returns
+		// before it writes blocked when the candidate's address cannot be
+		// used, and the stored hold would go on naming a cause that is gone
+		// for as long as that lasted.
+		if e != nil && e.Blocked != nil && e.Blocked.Reason == ReasonEvalWaitingForAuth {
+			if res, done, err := r.syncBlocked(ctx, &run, nil); done || err != nil {
+				return res, err
+			}
+		}
 		if res, done, err := r.startRun(ctx, &run); done || err != nil {
 			return res, err
 		}

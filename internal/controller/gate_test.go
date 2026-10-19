@@ -106,17 +106,19 @@ func TestTheGateBranchsReasonsTakeTheirPrecedence(t *testing.T) {
 	// blocked, and says why it is not exempt.
 	step("a recorded Lock", ReasonEvalWaitingForAuth, func(in *gateInput) { withCard(in.status) })
 	if d := decideGate(in); !strings.Contains(d.message, "an -auth Lock is recorded on this Agent, in stage "+
-		StageConverging) || !strings.Contains(d.message, "writing or converging the policy") {
+		StageConverging) || !strings.Contains(d.message, "so the policy that closes the route is not yet written") {
 		t.Fatalf("a recorded Lock: EvalWaitingForAuth does not name its kind, stage and why: %s", d.message)
 	}
-	step("blocked, matched", ReasonEvalBindingUnsupported, func(in *gateInput) {
+	// The candidate not available: ahead of a matched blocked, as §1.1 step 8
+	// puts the not-ready branches before the gate.
+	step("not available, beside a matched blocked", ReasonEvalPaused, func(in *gateInput) {
 		in.status.Auth = nil
 		in.status.Eval.BlockedFor.LockDeadline = nil
 	})
-	step("no verdict, the candidate not available", ReasonEvalPaused, func(in *gateInput) {
+	step("blocked, matched", ReasonEvalBindingUnsupported, func(in *gateInput) { in.available = true })
+	step("no verdict, the candidate available", ReasonEvalRunning, func(in *gateInput) {
 		in.status.Eval.Blocked = nil
 	})
-	step("no verdict, the candidate available", ReasonEvalRunning, func(in *gateInput) { in.available = true })
 }
 
 // A written verdict outranks every reason a run could be waiting for: a

@@ -178,7 +178,12 @@ type gateInput struct {
 //     naming its kind, its stage and why it holds the eval, the missing-policy
 //     wedge's exits where "When it names the exits" says, and when its
 //     deadline passed if it has: on Q12 (a) the eval keeps waiting after it.
-//  7. status.eval.blocked, applied only while status.eval.blockedFor matches
+//  7. the candidate not available: EvalPaused (its Failed verdict and
+//     failed[] entry were answered at 4). Before blocked, as §1.1 step 8 has
+//     it — "the rollout step's not-ready branches come before the gate" — and
+//     for the same reason as in the exempt arm: the eval controller computes
+//     blocked only on a pass on which the candidate is available.
+//  8. status.eval.blocked, applied only while status.eval.blockedFor matches
 //     the current pair and the current Lock's deadline (A12): a refusal
 //     written while an exempt Lock stood stops applying the moment it ends.
 //
@@ -202,7 +207,7 @@ type gateInput struct {
 //     (EvalWaitingForAuth), or a run-start refusal.
 //  8. EvalFailed, then EvalPairAlreadyFailed: blocked comes before them here.
 //
-// And last, in either arm — 8 outside the exempt state, 9 in it:
+// And last, in either arm — 9 in both:
 //
 //   - no final verdict: EvalPaused while the candidate is not available, and
 //     EvalRunning while it is. Neither names how many cases are done while the
@@ -286,9 +291,11 @@ func decideGate(in gateInput) gateDecision {
 		// evaluated"). On Q12 (a) one past its deadline still holds the eval.
 		return gateDecision{reason: ReasonEvalWaitingForAuth, readyReason: reasonAwaitingGates,
 			message: waitingMessage(in, tx, why, pair)}
-	case exempt && !in.available:
-		// Ahead of blocked: no clause-5 pass reaches an unavailable candidate,
-		// so a hold recorded before it went away is not re-read meanwhile.
+	case !in.available:
+		// In both arms, ahead of blocked: neither clause 5 nor a run-start
+		// refusal is computed on a pass whose candidate is not available, so
+		// what blocked records was evaluated before it went away (§1.1 step 8).
+		// Outside the exempt state failedRows has already been answered.
 		if d, ok := failedRows(in, pair); ok {
 			return d
 		}
@@ -298,13 +305,20 @@ func decideGate(in gateInput) gateDecision {
 		// for this Lock: fail-closed, never EvalRunning on a blocked that was
 		// not evaluated for the current state (§1.1, "What the gate branch
 		// derives in the exempt state").
+		claims := fmt.Sprintf("so the eval controller may claim cases of %s beside it once it has "+
+			"found no Gateway-level or foreign traffic policy holding it (design 16 §1.1, the "+
+			"exemption's clause 5). It has not yet evaluated clause 5 for this Lock — it does so on a "+
+			"pass on which every other send predicate holds — and claims nothing until it has. It "+
+			"holds at zero traffic meanwhile", pair)
+		if pairHasFailed(in) {
+			claims = fmt.Sprintf("and the eval controller has not yet evaluated clause 5 for it "+
+				"(design 16 §1.1, the exemption's clause 5). %s has already failed, so no case of it "+
+				"is claimed whatever clause 5 finds: its Failed verdict stands behind this condition, "+
+				"and holds the candidate at zero traffic", pair)
+		}
 		return gateDecision{reason: ReasonEvalWaitingForAuth, readyReason: reasonAwaitingGates,
 			message: fmt.Sprintf("an -auth Lock is recorded on this Agent, in stage %s, that can finish "+
-				"only through a promotion, so the eval controller may claim cases of %s beside it once "+
-				"it has found no Gateway-level or foreign traffic policy holding it (design 16 §1.1, "+
-				"the exemption's clause 5). It has not yet evaluated clause 5 for this Lock — it does "+
-				"so on a pass on which every other send predicate holds — and claims nothing until it "+
-				"has. It holds at zero traffic meanwhile", tx.Stage, pair)}
+				"only through a promotion, %s", tx.Stage, claims)}
 	}
 	if e != nil && e.Blocked != nil && bfMatched {
 		var d gateDecision
@@ -317,8 +331,15 @@ func decideGate(in gateInput) gateDecision {
 			d = gateDecision{reason: ReasonEvalWaitingForAuth, readyReason: reasonAwaitingGates}
 		}
 		if d.reason != "" {
+			msg := e.Blocked.Message
+			if d.reason == ReasonEvalWaitingForAuth && pairHasFailed(in) {
+				// A hold outranks a Failed verdict in the exempt arm for as
+				// long as it stands, and its "until it clears" is not true of
+				// a pair that has failed.
+				msg = strings.TrimSuffix(msg, holdClaimsTail) + holdFailedTail
+			}
 			d.message = fmt.Sprintf("the eval controller recorded for %s that no case can be sent: %s",
-				pair, e.Blocked.Message)
+				pair, msg)
 			return d
 		}
 	}
@@ -338,11 +359,22 @@ func noVerdictRows(in gateInput, pair string) gateDecision {
 	e := in.status.Eval
 	n := len(in.suite.Spec.Dataset.Cases)
 	if !in.available {
-		progress := "no run has started for it"
+		// A matched clause-5 hold recorded before the candidate went away
+		// still has to clear: it is re-read on the first pass after the
+		// candidate is available again.
+		held := e != nil && e.Blocked != nil && e.Blocked.Reason == ReasonEvalWaitingForAuth &&
+			blockedForMatches(e.BlockedFor, in.desiredDigest, in.suiteDigest, in.status)
+		when := "once it is available again"
+		if held {
+			when = "once it is available again and the Gateway-level or foreign traffic policy hold " +
+				"the eval controller recorded for this Lock before it went away has cleared, which it " +
+				"re-reads then"
+		}
+		progress := "no run has started for it, and one starts " + when
 		if e != nil && e.RevisionDigest == in.desiredDigest && e.SuiteDigest == in.suiteDigest &&
 			e.Verdict == assaydv1alpha1.EvalVerdictRunning {
 			progress = fmt.Sprintf("%d of its %d cases have an outcome, and the run resumes at the next "+
-				"case by id once it is available again", recordedOutcomes(e.Cases, in.suite), n)
+				"case by id %s", recordedOutcomes(e.Cases, in.suite), n, when)
 		}
 		return gateDecision{reason: ReasonEvalPaused, readyReason: reasonAwaitingGates,
 			message: fmt.Sprintf("%s is not available, so the eval controller sends it no case: %s. "+
@@ -352,6 +384,14 @@ func noVerdictRows(in gateInput, pair string) gateDecision {
 		message: fmt.Sprintf("status.eval records no final verdict for %s, a run of the suite's %d "+
 			"cases; status.eval.cases[] records the outcomes it has. It holds at zero traffic until a "+
 			"verdict is written", pair, n)}
+}
+
+// pairHasFailed reports whether this pair can no longer pass: status.eval
+// records a Failed verdict for it, or failed[] holds it.
+func pairHasFailed(in gateInput) bool {
+	e := in.status.Eval
+	return e != nil && ((e.RevisionDigest == in.desiredDigest && e.SuiteDigest == in.suiteDigest &&
+		e.Verdict == assaydv1alpha1.EvalVerdictFailed) || pairFailed(e.Failed, in.desiredDigest, in.suiteDigest))
 }
 
 // failedRows are the table's two rows for a pair that failed: a Failed
@@ -539,10 +579,12 @@ func (r *AgentReconciler) gateFor(ctx context.Context, agent *assaydv1alpha1.Age
 	// it can be one pass stale (§1.1, "It can be one pass stale"). A route
 	// that is gone, or a read that fails, leaves the generic text.
 	if wedgeNeedsRoute(status) {
-		if name, err := compiler.ServingRouteName(agent.Name); err == nil {
-			if rt, err := r.currentServingRoute(ctx, agent, in.runNS, name); err == nil {
-				in.route = rt
-			}
+		// EmittedName errors only when the concern's own suffix leaves no room
+		// for the Agent's name; "-serving" leaves 38 characters, so this
+		// cannot fail.
+		name, _ := compiler.ServingRouteName(agent.Name)
+		if rt, err := r.currentServingRoute(ctx, agent, in.runNS, name); err == nil {
+			in.route = rt
 		}
 	}
 	in.missing, in.recordErr = r.evalRecordMissing(ctx)

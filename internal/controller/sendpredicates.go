@@ -91,8 +91,8 @@ func exemptTransaction(status *assaydv1alpha1.AgentStatus) (exempt bool, why str
 	// Clause 2: the policy is written and converged, and only attribution is
 	// left.
 	case tx.Stage != StageProbingAfter:
-		return false, "it is writing or converging the policy that closes the route, before " +
-			StageProbingAfter
+		return false, "it is in stage " + tx.Stage + ", before " + StageProbingAfter + ", so the policy " +
+			"that closes the route is not yet written, converged and probed"
 	// Clause 3: nothing was observed before the Lock, so a 401 can be
 	// attributed only on a recorded card.
 	case tx.BeforeObserved:

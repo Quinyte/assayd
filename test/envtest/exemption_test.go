@@ -1424,13 +1424,48 @@ func TestAHoldAfterAFailedVerdictComesBeforeIt(t *testing.T) {
 	g.evalPass(t)
 	g.agentPass(t)
 	held := g.waitingForAuth(t, "a hold after the Failed verdict")
-	if !strings.Contains(held.Message, key.Name) {
-		t.Errorf("the hold does not name the policy: %s", held.Message)
+	if !strings.Contains(held.Message, key.Name) ||
+		!strings.Contains(held.Message, "no case of it is claimed whether or not the hold clears") ||
+		strings.Contains(held.Message, "until it clears") {
+		t.Errorf("the hold does not name the policy, or says cases may be claimed for a failed pair: %s",
+			held.Message)
 	}
 	removePolicy(t, key)
 	g.evalPass(t)
 	g.agentPass(t)
 	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalFailed)
+	if g.hits(c) != 1 {
+		t.Errorf("C was sent %d cases, want its one", g.hits(c))
+	}
+}
+
+// The failed-pair branch's hold, as the Failed-verdict row's: the pair is in
+// status.eval.failed[] with no verdict recorded for it (#111's clear leaves
+// that), and a hold that appears reads EvalWaitingForAuth, worded for a pair
+// that has failed, ahead of EvalPairAlreadyFailed; once it clears,
+// EvalPairAlreadyFailed again.
+//
+// Mutation: write no hold on the failed-pair branch's pass.
+func TestAHoldBesideAFailedPairComesBeforeIt(t *testing.T) {
+	g, c, _ := exemptJ2With(t, "jtwofailedpair", 0, nil, evalCase("a", "one", "nope", ""))
+	g.evalPass(t)
+	writeAgentStatus(t, g.a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Eval.Verdict, st.Eval.Cases, st.Eval.Score, st.Eval.At = "", nil, "", nil
+	})
+	g.agentPass(t)
+	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalPairAlreadyFailed)
+	key := gatewayAuthPolicy(t, g.a, g.prober)
+	g.evalPass(t)
+	g.agentPass(t)
+	held := g.waitingForAuth(t, "a hold beside the failed pair")
+	if !strings.Contains(held.Message, key.Name) ||
+		!strings.Contains(held.Message, "no case of it is claimed whether or not the hold clears") {
+		t.Errorf("the hold does not name the policy and the failed pair: %s", held.Message)
+	}
+	removePolicy(t, key)
+	g.evalPass(t)
+	g.agentPass(t)
+	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalPairAlreadyFailed)
 	if g.hits(c) != 1 {
 		t.Errorf("C was sent %d cases, want its one", g.hits(c))
 	}

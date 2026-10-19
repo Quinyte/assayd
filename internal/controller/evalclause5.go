@@ -35,20 +35,15 @@ func (r *EvalReconciler) clause5(ctx context.Context, agent *assaydv1alpha1.Agen
 	runNS string) (*assaydv1alpha1.EvalBlocked, error) {
 	reads := r.policyReads()
 	above := reads.gatewayAuthPolicies(ctx, r.Gateway.Hostname(agent.Name, agent.Namespace))
-	route, rerr := compiler.ServingRouteName(agent.Name)
-	if rerr != nil {
-		// Fail closed: with no route name there is no foreign list to read,
-		// and an empty blocked beside a matching blockedFor would read
-		// EvalRunning while nothing is claimed. No Agent name reaches this
-		// today — the serving concern leaves 38 characters of any name
-		// inside the 63-character limit — so clause5Hold's row pins it.
-		return clause5Hold(r.Gateway, runNS, "", above, nil, nil, rerr), fmt.Errorf("clause 5: %w", rerr)
-	}
+	// EmittedName errors only when the concern's own suffix leaves no room
+	// for the Agent's name; "-serving" leaves 38 characters, so this cannot
+	// fail.
+	route, _ := compiler.ServingRouteName(agent.Name)
 	// foreignTrafficPolicies lists the run namespace with notServedIsEmpty, so
 	// a NotFound there reads as no foreign policies and holds nothing; any
 	// other error comes back here, and holds.
 	foreign, ferr := reads.foreignTrafficPolicies(ctx, agent, runNS, route)
-	hold := clause5Hold(r.Gateway, runNS, route, above, foreign, ferr, nil)
+	hold := clause5Hold(r.Gateway, runNS, route, above, foreign, ferr)
 	switch {
 	case ferr != nil:
 		return hold, fmt.Errorf("clause 5: %w", ferr)
@@ -65,16 +60,9 @@ func (r *EvalReconciler) clause5(ctx context.Context, agent *assaydv1alpha1.Agen
 // error's raw text, so the value is the same on every pass a cause stands and
 // blocked is rewritten only when the hold changes (§1.1, "`blocked`: one
 // slot, one computation").
-//
-// routeErr is a serving-route name that could not be derived, which holds:
-// with no name, no foreign traffic policy on the route can be ruled out.
 func clause5Hold(gw GatewayConfig, runNS, route string, above gatewayAuth, foreign []string,
-	ferr, routeErr error) *assaydv1alpha1.EvalBlocked {
+	ferr error) *assaydv1alpha1.EvalBlocked {
 	var causes []string
-	if routeErr != nil {
-		causes = append(causes, "this Agent's serving route name could not be derived, so no foreign "+
-			"traffic policy on it can be ruled out")
-	}
 	if above.gatewayErr != nil {
 		causes = append(causes, fmt.Sprintf("Gateway %s/%s could not be read (%s), so nothing on it can "+
 			"be ruled out", gw.Namespace, gw.Name, readErrorClass(above.gatewayErr)))
@@ -116,10 +104,21 @@ func clause5Hold(gw GatewayConfig, runNS, route string, above gatewayAuth, forei
 	return &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalWaitingForAuth, Message: "an -auth Lock that " +
 		"can finish only through a promotion is recorded on this Agent, and the eval claims a case " +
 		"beside it only while no Gateway-level or foreign traffic policy holds it (design 16 §1.1, the " +
-		"exemption's clause 5). A hold stands: " + strings.Join(causes, "; and ") + ". No case is " +
-		"claimed until it clears; a case already in flight is not stopped, and a Passed verdict " +
-		"already written still promotes"}
+		"exemption's clause 5). A hold stands: " + strings.Join(causes, "; and ") + holdClaimsTail}
 }
+
+// holdClaimsTail ends a hold's message on a pass that would otherwise claim:
+// what the hold stops and what it does not.
+const holdClaimsTail = ". No case is claimed until it clears; a case already in flight is not stopped, " +
+	"and a Passed verdict already written still promotes"
+
+// holdFailedTail is what the gate branch puts in holdClaimsTail's place when
+// the pair has already failed: no case of it is claimed whether or not the
+// hold clears, and the verdict stands behind the hold. The gate branch words
+// it from the pass's own state, so the eval controller writes no second value
+// when a verdict lands under a standing hold.
+const holdFailedTail = ". This pair has already failed, so no case of it is claimed whether or not the " +
+	"hold clears; its Failed verdict stands behind this hold, and is shown again once the hold clears"
 
 // readErrorClass names an API read error's class, which is stable from pass
 // to pass where its text is not.
