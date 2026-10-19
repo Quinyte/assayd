@@ -777,28 +777,44 @@ reasons:
 
   - reason: EvalWaitingForAuth
     state: >-
-      A `Create` or `Lock` is recorded in `status.auth.transaction`, at any
-      stage, beside a gated candidate with its suite and its card and no final
-      verdict; the eval controller claims no case while it is. A refused
-      `Adopt` does not count. Past the transaction's deadline the eval keeps
-      waiting (design 16 Q12 (a)). Also given when `status.eval.blocked`
-      records it and `status.eval.blockedFor` matches the current candidate,
-      suite and `Lock`, which nothing in this release writes: that is clause
-      5's hold, design 16 build step 7's.
+      Beside a gated candidate with its suite and its card and no `Passed`
+      verdict, one of three. A `Create` or `Lock` is recorded in
+      `status.auth.transaction` that is not exempt — any `Create`, the `Lock`
+      of a missing policy, or a J2 or K2 `Lock` short of `ProbingAfter`, with
+      its before-state observed, or with a card recorded for
+      `status.activeRevision` — with no `Failed` verdict for the pair or entry
+      in `failed[]` either, and the eval controller claims no case while it
+      is; past its deadline the eval keeps waiting (design 16 Q12 (a)). Or
+      a J2 or K2 `Lock` at `ProbingAfter` that can finish only through a
+      promotion is recorded, and `status.eval.blockedFor` does not match it:
+      the eval controller has not yet evaluated clause 5 for it. Or
+      `status.eval.blocked` records clause 5's hold on that `Lock` — a
+      counting policy on the assayd Gateway, a Gateway that admits
+      ListenerSets, a foreign traffic policy on `<agent>-serving`, or one of
+      those reads failing — and `blockedFor` matches the current candidate,
+      suite and `Lock`. A refused `Adopt` never holds the eval.
     operator: >-
       Sets `GatesPassed=False` with this reason in the gate branch, holds the
       candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
       For a candidate not available yet, or no longer, the not-ready branches
       before the gate set the same reason and leave phase, `Progressing` and
       `Ready` as they set them. `Ready` stays `True` where an earlier revision
-      serves. The message names the transaction's kind and stage, and when its
-      deadline passed if it has; from `blocked`, it carries `blocked.message`.
+      serves. For a transaction that is not exempt the message names its kind
+      and stage, why it holds the eval, and when its deadline passed if it
+      has; for the missing-policy `Lock` at `ProbingAfter` where nothing can
+      attribute a 401, it names the revision the route's single backendRef
+      names and the exits. From `blocked`, it carries `blocked.message`, which
+      the eval controller builds from the hold's policy names and error
+      classes, never an API error's text. A hold stops new claims only: a
+      case in flight finishes, and a `Passed` verdict already written still
+      promotes.
     traffic: not-withdrawn
     note: >-
-      Every recorded `Create` or `Lock` holds the eval in this release, which
-      is fail-closed. Design 16 build step 7 adds the exemption for a J2 or K2
-      `Lock` that can finish only through a promotion, and the missing-policy
-      wedge's exits.
+      The eval controller reads clause 5 — the assayd Gateway, the policies in
+      its namespace and those in the run namespace — uncached, on every pass
+      of an exempt `Lock` that meets the other send predicates, about once per
+      `AuthProbeInterval` while the hold stands. The Agent reconciler makes no
+      such read; it reads the result from `status.eval.blocked`.
 
   - reason: ExternalRegistrationUnimplemented
     state: >-

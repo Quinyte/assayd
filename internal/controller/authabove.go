@@ -94,6 +94,11 @@ type gatewayAuth struct {
 	// unreadable says why the Gateway or its policies could not be read:
 	// nothing on it can then be ruled out.
 	unreadable string
+	// gatewayErr and listErr are the errors behind unreadable, kept so that a
+	// reader which must not quote an API error's raw text — the eval
+	// controller's status.eval.blocked, rewritten whenever its text changes
+	// (design 16 §1.1, "`blocked`: one slot") — can name their class instead.
+	gatewayErr, listErr error
 }
 
 // stands reports whether a 401 on the route cannot be credited to
@@ -203,6 +208,7 @@ func (r gatewayPolicyReads) gatewayAuthPolicies(ctx context.Context, host string
 	known := true
 	if err := r.reader().Get(ctx, client.ObjectKey{Namespace: gw.Namespace, Name: gw.Name}, &g); err != nil {
 		known = false
+		out.gatewayErr = err
 		why := fmt.Sprintf("Gateway %s/%s could not be read (%v)", gw.Namespace, gw.Name, err)
 		switch {
 		case meta.IsNoMatchError(err):
@@ -222,7 +228,7 @@ func (r gatewayPolicyReads) gatewayAuthPolicies(ctx context.Context, host string
 	if err != nil {
 		out.unreadable = joinCauses(out.unreadable, fmt.Sprintf("the AgentgatewayPolicies in %s could not be "+
 			"listed (%v), so none on the Gateway can be ruled out", gw.Namespace, err))
-		out.unlisted = true
+		out.unlisted, out.listErr = true, err
 		return out
 	}
 	var capture map[string]bool

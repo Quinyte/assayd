@@ -153,7 +153,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonActiveRevisionNotEvaluated` (`internal/controller/gate.go:46`)
+**Constant:** `ReasonActiveRevisionNotEvaluated` (`internal/controller/gate.go:48`)
 
 **Set at:**
 
@@ -365,7 +365,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/httproute.go:727` in `assessGovernance()` — constant at the call site
 - `internal/controller/agent_controller.go:1213` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/conformance/slice_cluster_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authlockrace_test.go`, `test/envtest/authlockreview_test.go`, `test/envtest/authreview4_test.go`
+**Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/conformance/slice_cluster_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authlockrace_test.go`, `test/envtest/authlockreview_test.go`, `test/envtest/authreview4_test.go`, `test/envtest/exemption_test.go`
 
 **State:** A `Lock` is past its deadline, or it saw a NACK. The policy has been written and the `401` that would prove it has not been credited.
 
@@ -412,7 +412,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/httproute.go:740` in `assessGovernance()` — constant at the call site
 - `internal/controller/agent_controller.go:1213` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/authserved_unit_test.go`, `internal/controller/httproute_unit_test.go`, `test/envtest/admission_reservation_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authcheck_test.go`, `test/envtest/authgate_test.go`, `test/envtest/authrace_test.go`, `test/envtest/authrecreate_test.go`, `test/envtest/authserved_test.go`, `test/envtest/authtransient_test.go`, `test/envtest/service_test.go`
+**Referenced by a test:** `internal/controller/authserved_unit_test.go`, `internal/controller/httproute_unit_test.go`, `test/envtest/admission_reservation_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authcheck_test.go`, `test/envtest/authgate_test.go`, `test/envtest/authrace_test.go`, `test/envtest/authrecreate_test.go`, `test/envtest/authserved_test.go`, `test/envtest/authtransient_test.go`, `test/envtest/exemption_test.go`, `test/envtest/service_test.go`
 
 **State:** A served API-key Agent's `<agent>-auth` policy is absent, or the `Lock` that restores it is already in the slot.
 
@@ -529,7 +529,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/authtxn.go:2305` in `lockServed()` — from the local `reason`, one of 3 reasons it folds to
 - `internal/controller/httproute.go:750` in `assessGovernance()` — from the local `reason`, one of 3 reasons it folds to
 
-**Referenced by a test:** `internal/controller/authtxn_test.go`, `internal/controller/httproute_unit_test.go`, `test/e2e/auth_helpers_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authcreate_test.go`, `test/envtest/authgate_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authrecreate_test.go`, `test/envtest/authserved_test.go`
+**Referenced by a test:** `internal/controller/authtxn_test.go`, `internal/controller/httproute_unit_test.go`, `test/e2e/auth_helpers_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authcreate_test.go`, `test/envtest/authgate_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authrecreate_test.go`, `test/envtest/authserved_test.go`, `test/envtest/exemption_test.go`
 
 **State:** A served API-key Agent whose replica count is unknown or greater than one: one anonymous probe proved one gateway replica, and nothing declares how many there are. Also a `Create` that has just published and whose route has not yet converged.
 
@@ -855,13 +855,13 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonEvalAwaitingCard` (`internal/controller/gate.go:39`)
+**Constant:** `ReasonEvalAwaitingCard` (`internal/controller/gate.go:41`)
 
 **Set at:**
 
-- `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`
+**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`
 
 **State:** A gated candidate has no card digest recorded in `status.cards[]` for its full digest, whether or not it has a `Passed` verdict for the current suite (a failed drift re-read clears a recorded one); or `status.eval.blocked` records that the eval controller's run-start card fetch failed or did not match the recorded digest, and `status.eval.blockedFor` matches the current candidate, suite and `Lock`.
 
@@ -875,13 +875,13 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonEvalBindingUnsupported` (`internal/controller/gate.go:40`)
+**Constant:** `ReasonEvalBindingUnsupported` (`internal/controller/gate.go:42`)
 
 **Set at:**
 
-- `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/gate_test.go`, `internal/evalclient/endpoint_test.go`, `test/envtest/evalcontroller_test.go`
+**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `internal/evalclient/endpoint_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/exemption_test.go`
 
 **State:** `status.eval.blocked` records that the candidate's card has no usable `HTTP+JSON` 1.0 interface, and `status.eval.blockedFor` matches the current candidate, suite and `Lock`. The eval controller writes it at run start for a card whose interfaces do not decode as A2A 1.0 interfaces (a field of the wrong JSON type), or whose first `HTTP+JSON` 1.0 interface is missing, has a url that does not parse, names a tenant, carries a query or a fragment, or has a path the eval does not admit. It admits only a path written with ASCII letters, digits and `-` `.` `_` `~` `/` `:` `@` `$` `&` `+` `,` `;` `=`, with no percent-escape, and refuses every other path, including some that would go on the wire as written: the eval records the path decoded, and only such a path is both recorded and sent exactly as the card wrote it. It also refuses an endpoint path (the path with one trailing `/` trimmed and `/message:send` appended) longer than 1024 characters, or one with no leading `/`, which a relative card URL gives.
 
@@ -895,14 +895,14 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`, `Ready=False`
 
-**Constant:** `ReasonEvalFailed` (`internal/controller/gate.go:43`)
+**Constant:** `ReasonEvalFailed` (`internal/controller/gate.go:45`)
 
 **Set at:**
 
-- `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 - `internal/controller/agent_controller.go:1005` in `Reconcile()` — from `gate.readyReason`, one of the 4 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/gate_test.go`
+**Referenced by a test:** `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/gate_test.go`
 
 **State:** `status.eval` records a `Failed` verdict for the candidate's full digest against the digest of the suite read in this pass.
 
@@ -916,7 +916,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonEvalHeldForAuth` (`internal/controller/gate.go:45`)
+**Constant:** `ReasonEvalHeldForAuth` (`internal/controller/gate.go:47`)
 
 **Set at:**
 
@@ -936,13 +936,13 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonEvalPairAlreadyFailed` (`internal/controller/gate.go:42`)
+**Constant:** `ReasonEvalPairAlreadyFailed` (`internal/controller/gate.go:44`)
 
 **Set at:**
 
-- `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`
+**Referenced by a test:** `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`
 
 **State:** The pair of the candidate's full digest and the current suite digest is in `status.eval.failed[]`, and `status.eval` does not record that pair's `Failed` verdict, which would give `EvalFailed`.
 
@@ -956,7 +956,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=True`
 
-**Constant:** `ReasonEvalPassed` (`internal/controller/gate.go:44`)
+**Constant:** `ReasonEvalPassed` (`internal/controller/gate.go:46`)
 
 **Set at:**
 
@@ -974,15 +974,15 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonEvalPaused` (`internal/controller/gate.go:34`)
+**Constant:** `ReasonEvalPaused` (`internal/controller/gate.go:36`)
 
 > ReasonEvalPaused: the same, with the candidate not available, so the eval controller sends it nothing until it is again (step 8).
 
 **Set at:**
 
-- `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`
+**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`
 
 **State:** A gated candidate with its suite and its card has no final verdict, and it is not available, so the eval controller sends it nothing. A run already under way keeps its recorded outcomes and resumes at the next case by id once the candidate is available again; nothing times a paused run out.
 
@@ -996,11 +996,11 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`, `Ready=False`
 
-**Constant:** `ReasonEvalRecordNotKept` (`internal/controller/gate.go:35`)
+**Constant:** `ReasonEvalRecordNotKept` (`internal/controller/gate.go:37`)
 
 **Set at:**
 
-- `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 - `internal/controller/agent_controller.go:1005` in `Reconcile()` — from `gate.readyReason`, one of the 4 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/gate_test.go`
@@ -1017,11 +1017,11 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`, `Ready=False`
 
-**Constant:** `ReasonEvalRecordUnverifiable` (`internal/controller/gate.go:36`)
+**Constant:** `ReasonEvalRecordUnverifiable` (`internal/controller/gate.go:38`)
 
 **Set at:**
 
-- `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 - `internal/controller/agent_controller.go:1005` in `Reconcile()` — from `gate.readyReason`, one of the 4 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/gate_test.go`
@@ -1038,15 +1038,15 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonEvalRunning` (`internal/controller/gate.go:31`)
+**Constant:** `ReasonEvalRunning` (`internal/controller/gate.go:33`)
 
 > ReasonEvalRunning: a gated candidate with its suite and its card, no final verdict, and nothing recorded that stops the eval controller claiming its next case. It replaced GateControllerUnimplemented, which held every such candidate while no eval controller existed.
 
 **Set at:**
 
-- `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/gate_test.go`, `test/envtest/reconciler_test.go`
+**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/exemption_test.go`, `test/envtest/gate_test.go`, `test/envtest/reconciler_test.go`
 
 **State:** A gated, available candidate with its suite and its card has no final verdict for the pair of its full digest and the suite read in this pass, no `Create` or `Lock` is recorded, and no `status.eval.blocked` applies. A `Running` record counts as no verdict. It does not establish that a case is being sent: the eval controller may be unable to derive the candidate's address (see the note).
 
@@ -1080,11 +1080,11 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonEvalSuiteNotFound` (`internal/controller/gate.go:37`)
+**Constant:** `ReasonEvalSuiteNotFound` (`internal/controller/gate.go:39`)
 
 **Set at:**
 
-- `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/gate_test.go`
 
@@ -1100,11 +1100,11 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonEvalSuiteUnreadable` (`internal/controller/gate.go:38`)
+**Constant:** `ReasonEvalSuiteUnreadable` (`internal/controller/gate.go:40`)
 
 **Set at:**
 
-- `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/gate_test.go`
 
@@ -1120,21 +1120,21 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonEvalWaitingForAuth` (`internal/controller/gate.go:41`)
+**Constant:** `ReasonEvalWaitingForAuth` (`internal/controller/gate.go:43`)
 
 **Set at:**
 
-- `internal/controller/gate.go:110` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/gate_test.go`, `test/envtest/service_test.go`
+**Referenced by a test:** `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/exemption_test.go`, `test/envtest/gate_test.go`, `test/envtest/service_test.go`
 
-**State:** A `Create` or `Lock` is recorded in `status.auth.transaction`, at any stage, beside a gated candidate with its suite and its card and no final verdict; the eval controller claims no case while it is. A refused `Adopt` does not count. Past the transaction's deadline the eval keeps waiting (design 16 Q12 (a)). Also given when `status.eval.blocked` records it and `status.eval.blockedFor` matches the current candidate, suite and `Lock`, which nothing in this release writes: that is clause 5's hold, design 16 build step 7's.
+**State:** Beside a gated candidate with its suite and its card and no `Passed` verdict, one of three. A `Create` or `Lock` is recorded in `status.auth.transaction` that is not exempt — any `Create`, the `Lock` of a missing policy, or a J2 or K2 `Lock` short of `ProbingAfter`, with its before-state observed, or with a card recorded for `status.activeRevision` — with no `Failed` verdict for the pair or entry in `failed[]` either, and the eval controller claims no case while it is; past its deadline the eval keeps waiting (design 16 Q12 (a)). Or a J2 or K2 `Lock` at `ProbingAfter` that can finish only through a promotion is recorded, and `status.eval.blockedFor` does not match it: the eval controller has not yet evaluated clause 5 for it. Or `status.eval.blocked` records clause 5's hold on that `Lock` — a counting policy on the assayd Gateway, a Gateway that admits ListenerSets, a foreign traffic policy on `<agent>-serving`, or one of those reads failing — and `blockedFor` matches the current candidate, suite and `Lock`. A refused `Adopt` never holds the eval.
 
-**What the operator does:** Sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. For a candidate not available yet, or no longer, the not-ready branches before the gate set the same reason and leave phase, `Progressing` and `Ready` as they set them. `Ready` stays `True` where an earlier revision serves. The message names the transaction's kind and stage, and when its deadline passed if it has; from `blocked`, it carries `blocked.message`.
+**What the operator does:** Sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. For a candidate not available yet, or no longer, the not-ready branches before the gate set the same reason and leave phase, `Progressing` and `Ready` as they set them. `Ready` stays `True` where an earlier revision serves. For a transaction that is not exempt the message names its kind and stage, why it holds the eval, and when its deadline passed if it has; for the missing-policy `Lock` at `ProbingAfter` where nothing can attribute a 401, it names the revision the route's single backendRef names and the exits. From `blocked`, it carries `blocked.message`, which the eval controller builds from the hold's policy names and error classes, never an API error's text. A hold stops new claims only: a case in flight finishes, and a `Passed` verdict already written still promotes.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
-**Note:** Every recorded `Create` or `Lock` holds the eval in this release, which is fail-closed. Design 16 build step 7 adds the exemption for a J2 or K2 `Lock` that can finish only through a promotion, and the missing-policy wedge's exits.
+**Note:** The eval controller reads clause 5 — the assayd Gateway, the policies in its namespace and those in the run namespace — uncached, on every pass of an exempt `Lock` that meets the other send predicates, about once per `AuthProbeInterval` while the hold stands. The Agent reconciler makes no such read; it reads the result from `status.eval.blocked`.
 
 ### `ExternalRegistrationUnimplemented`
 

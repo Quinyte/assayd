@@ -15,8 +15,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/compiler"
 	"github.com/Quinyte/assayd/internal/evalsuite"
 )
 
@@ -131,6 +133,13 @@ type gateInput struct {
 	// not available is sent nothing (step 8).
 	available bool
 	now       time.Time
+	// agent, runNS and route word the missing-policy wedge's message. route
+	// is `<agent>-serving` as the gate branch read it through the manager's
+	// client, read only when wedgeNeedsRoute, and nil when it was not read,
+	// is gone, or could not be read.
+	agent *assaydv1alpha1.Agent
+	runNS string
+	route *gatewayv1.HTTPRoute
 }
 
 // decideGate answers the gate branch from the four promotion conditions,
@@ -141,40 +150,63 @@ type gateInput struct {
 //   - status.eval.suiteDigest equals the digest of the suite read this pass;
 //   - status.cards[] records a non-empty card digest for the desired digest.
 //
-// When any is false it says why, first match wins:
+// When any is false it says why, first match wins. §1.1 fixes two orderings:
+// the schema reasons come first (A13), and a written Passed verdict outranks a
+// recorded transaction ("Clause 5 stops new claims only"). The rest is this
+// function's, and it has two arms, by whether a Lock exempt by clauses 1 to 4
+// is recorded (exemptTransaction):
 //
-//  1. the Agent CRD would prune the eval record (EvalRecordNotKept,
-//     EvalRecordUnverifiable). First, because a stale CRD prunes every new
+//  1. the Agent CRD would prune the eval record (EvalRecordUnverifiable, then
+//     EvalRecordNotKept). First, because a stale CRD prunes every new
 //     status.eval field, and everything below reads them (A13).
-//  2. the suite is missing or unreadable (EvalSuiteNotFound,
+//  2. the suite is missing or unreadable (EvalSuiteNotFound, then
 //     EvalSuiteUnreadable). The pair is unknown without it.
-//  3. a final verdict for this pair: Passed with no recorded card
-//     (EvalAwaitingCard), or Failed (EvalFailed). A written verdict outranks
-//     every reason a run could be waiting for, because no run is pending.
-//  4. the pair is in status.eval.failed[] (EvalPairAlreadyFailed): no run
-//     starts for it again. After 3's EvalFailed, which names the cases while
-//     the record still holds them.
+//  3. a Passed verdict for this pair: satisfied with its card recorded, and
+//     EvalAwaitingCard without it. A written Passed verdict outranks every
+//     reason a run could be waiting for, the transaction included.
+//
+// Outside the exempt state — no Create or Lock recorded, a refused Adopt, or
+// a recorded Create or Lock that is not exempt:
+//
+//  4. a Failed verdict for this pair (EvalFailed), then the pair in
+//     status.eval.failed[] (EvalPairAlreadyFailed): no run starts for it
+//     again. EvalFailed first, which names the cases while the record still
+//     holds them (#111).
 //  5. no card recorded for the candidate (EvalAwaitingCard): a run cannot
 //     start without one.
-//  6. a Create or Lock recorded in status.auth.transaction
-//     (EvalWaitingForAuth), naming its kind and stage, and when its deadline
-//     passed if it has: on Q12 (a) the eval keeps waiting after it. A refused
-//     Adopt is neither, and does not count.
+//  6. a recorded Create or Lock that is not exempt (EvalWaitingForAuth),
+//     naming its kind, its stage and why it holds the eval, the missing-policy
+//     wedge's exits where "When it names the exits" says, and when its
+//     deadline passed if it has: on Q12 (a) the eval keeps waiting after it.
 //  7. status.eval.blocked, applied only while status.eval.blockedFor matches
-//     the current pair and the current Lock's deadline (A12).
-//  8. otherwise no final verdict: EvalPaused while the candidate is not
-//     available, and EvalRunning while it is. Neither names how many cases
-//     are done while the run goes on: EvalRunning names the pair and N, and
-//     status.eval.cases[] carries progress, so an eval patch that records a
-//     case leaves the Agent reconciler's status write a no-op (A5).
-//     EvalPaused names k of N, which no send changes while the candidate is
-//     unavailable.
+//     the current pair and the current Lock's deadline (A12): a refusal
+//     written while an exempt Lock stood stops applying the moment it ends.
 //
-// The exemption for a J2 or K2 Lock that can finish only through a promotion,
-// and the missing-policy wedge's message, are build step 7's: until then
-// every recorded Create or Lock holds at 6, which is fail-closed. Reasons 5
-// and 6 are two of the shared send predicates (sendpredicates.go), so this
-// branch and the eval controller cannot disagree about them.
+// In the exempt state — a J2 or K2 Lock that meets clauses 1 to 4 — §1.1's
+// "What the gate branch derives in the exempt state":
+//
+//  4. no card recorded for the candidate (EvalAwaitingCard). Before the
+//     exempt rows, because the eval controller evaluates clause 5 only on a
+//     pass on which the card predicate holds, so blockedFor could not match.
+//  5. blockedFor does not match: EvalWaitingForAuth, saying the eval
+//     controller has not yet evaluated clause 5 for this Lock.
+//  6. blocked set: its reason, with blocked.message — clause 5's hold
+//     (EvalWaitingForAuth), or a run-start refusal.
+//  7. EvalFailed, then EvalPairAlreadyFailed: blocked comes before them here.
+//
+// And last, in either arm:
+//
+//  8. no final verdict: EvalPaused while the candidate is not available, and
+//     EvalRunning while it is. Neither names how many cases are done while the
+//     run goes on: EvalRunning names the pair and N, and status.eval.cases[]
+//     carries progress, so an eval patch that records a case leaves the Agent
+//     reconciler's status write a no-op (A5). EvalPaused names k of N, which no
+//     send changes while the candidate is unavailable.
+//
+// The card row, the transaction rows and clauses 1 to 4 are shared send
+// predicates (sendpredicates.go), so this branch and the eval controller
+// cannot disagree about them. Clause 5 is not: this branch makes no Gateway or
+// policy read, and reads its result from blocked (A11).
 func decideGate(in gateInput) gateDecision {
 	rev := fmt.Sprintf("revision %s (digest %s)", in.desired, in.desiredDigest)
 
@@ -210,32 +242,26 @@ func decideGate(in gateInput) gateDecision {
 
 	pair := fmt.Sprintf("%s against suite %s (digest %s)", rev, in.suiteName, in.suiteDigest)
 	e := in.status.Eval
-	if e != nil && e.RevisionDigest == in.desiredDigest && e.SuiteDigest == in.suiteDigest {
-		switch e.Verdict {
-		case assaydv1alpha1.EvalVerdictPassed:
-			if hasCardFor(in.status, in.desiredDigest) {
-				return gateDecision{satisfied: true}
-			}
-			return gateDecision{reason: ReasonEvalAwaitingCard, readyReason: reasonAwaitingGates,
-				message: fmt.Sprintf(
-					"%s passed, score %s, but status.cards[] no longer records a card digest for it, and "+
-						"a gated revision is promoted only with its card recorded (design 16 Q10). It "+
-						"holds at zero traffic, and is not promoted without one", pair, e.Score)}
-		case assaydv1alpha1.EvalVerdictFailed:
-			return gateDecision{reason: ReasonEvalFailed, readyReason: ReasonEvalFailed,
-				message: fmt.Sprintf(
-					"%s failed: score %s against threshold %s; failed cases: %s. It holds at zero traffic "+
-						"and is not evaluated again for this pair: an edit to the suite gives a new pair, "+
-						"and an edit to the spec supersedes it with a new revision", pair, e.Score,
-					threshold(in.suite), failedCases(e.Cases))}
+	matched := e != nil && e.RevisionDigest == in.desiredDigest && e.SuiteDigest == in.suiteDigest
+	if matched && e.Verdict == assaydv1alpha1.EvalVerdictPassed {
+		if hasCardFor(in.status, in.desiredDigest) {
+			return gateDecision{satisfied: true}
 		}
-	}
-	if e != nil && pairFailed(e.Failed, in.desiredDigest, in.suiteDigest) {
-		return gateDecision{reason: ReasonEvalPairAlreadyFailed, readyReason: ReasonEvalFailed,
+		return gateDecision{reason: ReasonEvalAwaitingCard, readyReason: reasonAwaitingGates,
 			message: fmt.Sprintf(
-				"%s already failed: status.eval.failed[] records the pair, so it is not evaluated again "+
-					"and holds at zero traffic. An edit to the suite gives a new pair, which this record "+
-					"does not hold", pair)}
+				"%s passed, score %s, but status.cards[] no longer records a card digest for it, and "+
+					"a gated revision is promoted only with its card recorded (design 16 Q10). It "+
+					"holds at zero traffic, and is not promoted without one", pair, e.Score)}
+	}
+	tx := recordedTransaction(in.status)
+	exempt, why := false, ""
+	if tx != nil {
+		exempt, why = exemptTransaction(in.status)
+	}
+	if !exempt {
+		if d, ok := failedRows(in, pair); ok {
+			return d
+		}
 	}
 	if !hasCardFor(in.status, in.desiredDigest) {
 		return gateDecision{reason: ReasonEvalAwaitingCard, readyReason: reasonAwaitingGates,
@@ -244,22 +270,28 @@ func decideGate(in gateInput) gateDecision {
 					"with its card recorded (design 16 Q10). It holds at zero traffic, and is not "+
 					"promoted without one", rev)}
 	}
-	// A recorded Create or Lock: the eval controller claims no case while it
-	// is (design 16 §1.1, "On the Agent being evaluated"). On Q12 (a) a
-	// transaction past its deadline still holds the eval, and the message says
-	// when the deadline passed.
-	if tx := claimHoldingTransaction(in.status); tx != nil {
-		msg := fmt.Sprintf("an -auth %s is recorded on this Agent, in stage %s, and the eval controller "+
-			"claims no case of %s while a Create or Lock is recorded (design 16 §1.1). It holds at "+
-			"zero traffic until the transaction ends", tx.Kind, tx.Stage, pair)
-		if tx.Deadline != nil && !in.now.Before(tx.Deadline.Time) {
-			msg += fmt.Sprintf("; its deadline passed at %s, and the eval keeps waiting after it "+
-				"(design 16 Q12 (a))", tx.Deadline.UTC().Format(time.RFC3339))
-		}
+	bfMatched := e != nil && blockedForMatches(e.BlockedFor, in.desiredDigest, in.suiteDigest, in.status)
+	switch {
+	case tx != nil && !exempt:
+		// A recorded Create or Lock that is not exempt: the eval controller
+		// claims no case while it is (design 16 §1.1, "On the Agent being
+		// evaluated"). On Q12 (a) one past its deadline still holds the eval.
 		return gateDecision{reason: ReasonEvalWaitingForAuth, readyReason: reasonAwaitingGates,
-			message: msg}
+			message: waitingMessage(in, tx, why, pair)}
+	case exempt && !bfMatched:
+		// The exempt state, before the eval controller has evaluated clause 5
+		// for this Lock: fail-closed, never EvalRunning on a blocked that was
+		// not evaluated for the current state (§1.1, "What the gate branch
+		// derives in the exempt state").
+		return gateDecision{reason: ReasonEvalWaitingForAuth, readyReason: reasonAwaitingGates,
+			message: fmt.Sprintf("an -auth Lock is recorded on this Agent, in stage %s, that can finish "+
+				"only through a promotion, so the eval controller may claim cases of %s beside it once "+
+				"it has found no Gateway-level or foreign traffic policy holding it (design 16 §1.1, "+
+				"the exemption's clause 5). It has not yet evaluated clause 5 for this Lock — it does "+
+				"so on a pass on which every other send predicate holds — and claims nothing until it "+
+				"has. It holds at zero traffic meanwhile", tx.Stage, pair)}
 	}
-	if e != nil && e.Blocked != nil && blockedForMatches(e.BlockedFor, in.desiredDigest, in.suiteDigest, in.status) {
+	if e != nil && e.Blocked != nil && bfMatched {
 		var d gateDecision
 		switch e.Blocked.Reason {
 		case ReasonEvalBindingUnsupported:
@@ -272,6 +304,13 @@ func decideGate(in gateInput) gateDecision {
 		if d.reason != "" {
 			d.message = fmt.Sprintf("the eval controller recorded for %s that no case can be sent: %s",
 				pair, e.Blocked.Message)
+			return d
+		}
+	}
+	if exempt {
+		// In the exempt state blocked comes before the table's rows,
+		// EvalFailed and EvalPairAlreadyFailed among them.
+		if d, ok := failedRows(in, pair); ok {
 			return d
 		}
 	}
@@ -291,6 +330,93 @@ func decideGate(in gateInput) gateDecision {
 		message: fmt.Sprintf("status.eval records no final verdict for %s, a run of the suite's %d "+
 			"cases; status.eval.cases[] records the outcomes it has. It holds at zero traffic until a "+
 			"verdict is written", pair, n)}
+}
+
+// failedRows are the table's two rows for a pair that failed: a Failed
+// verdict for it (EvalFailed), which names the cases while the record still
+// holds them, and then the pair in failed[] (EvalPairAlreadyFailed), for which
+// no run starts again.
+func failedRows(in gateInput, pair string) (gateDecision, bool) {
+	e := in.status.Eval
+	if e == nil {
+		return gateDecision{}, false
+	}
+	if e.RevisionDigest == in.desiredDigest && e.SuiteDigest == in.suiteDigest &&
+		e.Verdict == assaydv1alpha1.EvalVerdictFailed {
+		return gateDecision{reason: ReasonEvalFailed, readyReason: ReasonEvalFailed,
+			message: fmt.Sprintf(
+				"%s failed: score %s against threshold %s; failed cases: %s. It holds at zero traffic "+
+					"and is not evaluated again for this pair: an edit to the suite gives a new pair, "+
+					"and an edit to the spec supersedes it with a new revision", pair, e.Score,
+				threshold(in.suite), failedCases(e.Cases))}, true
+	}
+	if pairFailed(e.Failed, in.desiredDigest, in.suiteDigest) {
+		return gateDecision{reason: ReasonEvalPairAlreadyFailed, readyReason: ReasonEvalFailed,
+			message: fmt.Sprintf(
+				"%s already failed: status.eval.failed[] records the pair, so it is not evaluated again "+
+					"and holds at zero traffic. An edit to the suite gives a new pair, which this record "+
+					"does not hold", pair)}, true
+	}
+	return gateDecision{}, false
+}
+
+// waitingMessage is EvalWaitingForAuth's message for a recorded Create or
+// Lock that is not exempt: its kind and stage, why it holds the eval, and, on
+// Q12 (a), when its deadline passed if it has. For the missing-policy wedge
+// it names the exits instead ("When it names the exits"), from the route the
+// gate branch read.
+func waitingMessage(in gateInput, tx *assaydv1alpha1.AuthTransaction, why, pair string) string {
+	msg := fmt.Sprintf("an -auth %s is recorded on this Agent, in stage %s, and the eval controller "+
+		"claims no case of %s while it is, because %s (design 16 §1.1). It holds at zero traffic "+
+		"until the transaction ends", tx.Kind, tx.Stage, pair, why)
+	if note := wedgeExits(in); note != "" {
+		msg += ". " + note
+	}
+	if tx.Deadline != nil && !in.now.Before(tx.Deadline.Time) {
+		msg += fmt.Sprintf("; its deadline passed at %s, and the eval keeps waiting after it "+
+			"(design 16 Q12 (a))", tx.Deadline.UTC().Format(time.RFC3339))
+	}
+	return msg
+}
+
+// wedgeNeedsRoute reports whether the gate branch must read `<agent>-serving`
+// to word EvalWaitingForAuth: the first and third of "When it names the
+// exits"' clauses, which status alone answers — the recorded transaction is a
+// missing-policy Lock at ProbingAfter, and status.cards[] records no digest
+// for status.activeRevision. The second needs the route.
+func wedgeNeedsRoute(status *assaydv1alpha1.AgentStatus) bool {
+	tx := recordedTransaction(status)
+	return tx != nil && tx.Kind == TxLock && isReCreation(status.Auth) && tx.Stage == StageProbingAfter &&
+		!cardedRevision(status, status.ActiveRevision)
+}
+
+// wedgeExits is the missing-policy wedge's part of EvalWaitingForAuth, or ""
+// (design 16 §1.1, "When it names the exits"). All three clauses must hold:
+// the recorded transaction is a missing-policy Lock at ProbingAfter; the route
+// does not carry exactly one backendRef, or the revision its single
+// backendRef names has no recorded card digest; and status.cards[] records
+// none for status.activeRevision either. Those are cardAttributes' reading
+// and the re-point's, composed as missingPolicyRouteNote composes them, and
+// the note is that function's own wording, so one state has one phrasing. R's
+// name is the backendRef's, with the `<agent>-` prefix trimmed, so it
+// survives R's Service being collected. A route that was not read — gone, or
+// unreadable — has no R, and the message is the generic one.
+func wedgeExits(in gateInput) string {
+	if !wedgeNeedsRoute(in.status) || in.route == nil || in.agent == nil {
+		return ""
+	}
+	if attributed, _, _ := cardAttributes(in.agent, in.status, in.route); attributed {
+		return ""
+	}
+	note := missingPolicyRouteNote(in.agent, in.status, in.route, in.runNS, false, false, nil)
+	return "The eval waits on the Lock of a missing policy for which no 401 through the route can be " +
+		"attributed, which is design 03's state and not the gate's; deleting the route is an " +
+		"administrator's of the run namespace, where by default no user holds any right. " + note +
+		" On this gated Agent the eval claims no case while the Lock is recorded, so a candidate's " +
+		"promotion, which would end it with nobody acting, waits on the Lock in turn, unless its " +
+		"verdict was written before the Lock began or comes from the case in flight when it began; " +
+		"and status.activeRevision's own card recording would end it too, though no fetch of that " +
+		"card runs while another revision is the desired one"
 }
 
 // recordedOutcomes counts the suite ids whose entry in cases[] carries an
@@ -324,11 +450,19 @@ func blockedForMatches(bf *assaydv1alpha1.EvalBlockedFor, revDigest, suiteDigest
 }
 
 // recordedLockDeadline is the deadline of the Lock recorded in
-// status.auth.transaction, or nil: the third part of blockedFor, which the
-// eval controller writes and this branch matches with the same reading.
+// status.auth.transaction, truncated to the second, or nil: the third part of
+// blockedFor, which the eval controller writes and this branch matches with
+// the same reading. Design 03 sets it truncated (enterLock,
+// lockMissingPolicy) and the API server stores it to the second; truncating
+// here too keeps a deadline held in memory at a finer grain from reading as
+// another Lock. So two Locks entered inside one second share it: they would
+// also need the same pair, and the spec edit that re-enters a Lock changes the
+// candidate, so the residue is at most one pass of a wrong condition, with
+// sends still fail-closed (A13).
 func recordedLockDeadline(status *assaydv1alpha1.AgentStatus) *metav1.Time {
 	if tx := authTransaction(status); tx != nil && tx.Kind == TxLock && tx.Deadline != nil {
-		return tx.Deadline.DeepCopy()
+		d := metav1.NewTime(tx.Deadline.Truncate(time.Second))
+		return &d
 	}
 	return nil
 }
@@ -375,7 +509,20 @@ func threshold(s *assaydv1alpha1.EvalSuite) string {
 func (r *AgentReconciler) gateFor(ctx context.Context, agent *assaydv1alpha1.Agent,
 	status *assaydv1alpha1.AgentStatus, desired, desiredDigest string, available bool) gateDecision {
 	in := gateInput{desired: desired, desiredDigest: desiredDigest, status: status, now: time.Now(),
-		namespace: agent.Namespace, suiteName: agent.Spec.Gates[0].EvalSuiteRef, available: available}
+		namespace: agent.Namespace, suiteName: agent.Spec.Gates[0].EvalSuiteRef, available: available,
+		agent: agent, runNS: RunNamespaceName(agent.Namespace)}
+	// The wedge's message is computed from this read of the route, through
+	// the manager's client, and from status.auth.transaction as recorded at
+	// the start of the pass: the gate branch runs before reconcileGateway, so
+	// it can be one pass stale (§1.1, "It can be one pass stale"). A route
+	// that is gone, or a read that fails, leaves the generic text.
+	if wedgeNeedsRoute(status) {
+		if name, err := compiler.ServingRouteName(agent.Name); err == nil {
+			if rt, err := r.currentServingRoute(ctx, agent, in.runNS, name); err == nil {
+				in.route = rt
+			}
+		}
+	}
 	in.missing, in.recordErr = r.evalRecordMissing(ctx)
 	if in.recordErr == nil && len(in.missing) == 0 {
 		var s assaydv1alpha1.EvalSuite
