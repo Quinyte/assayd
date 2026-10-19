@@ -40,11 +40,11 @@ import (
 // status.eval and nothing else. The Agent reconciler reads the verdict and
 // promotes on it; this controller never promotes.
 //
-// What it does not do yet, and why: the exemption for a J2 or K2 Lock that can
-// finish only through a promotion (clauses 1 to 5), clause 5's EvalWaitingForAuth
-// in status.eval.blocked, and the missing-policy wedge's message are design 16
-// build step 7's. Until then this controller waits on every recorded Create or
-// Lock, which is fail-closed.
+// It waits on every Create or Lock recorded in status.auth.transaction but
+// one: a J2 or K2 Lock that can finish only through a promotion, which meets
+// clauses 1 to 4 of the exemption from status (exemptTransaction) and clause
+// 5 from the Gateway and two policy lists (clause5), evaluated last. A refused
+// Adopt never holds it (design 16 §1.1, "What the rule does with each record").
 
 const (
 	// evalWriteBound bounds a claim, and a record including its retries
@@ -73,8 +73,9 @@ const (
 type evalWait int
 
 const (
-	// waitTransaction: a Create or Lock is recorded. AuthProbeInterval, the
-	// rate design 03 probes at.
+	// waitTransaction: a Create or Lock is recorded that is not exempt, or
+	// clause 5 holds an exempt one. AuthProbeInterval, the rate design 03
+	// probes at.
 	waitTransaction evalWait = iota
 	// waitFetchFailed: the run-start card fetch did not succeed. Nothing in
 	// Agent status changes when it fails, so no event would wake the pass:
@@ -114,7 +115,8 @@ type EvalReconciler struct {
 	// EvalSuiteInstalled is the EvalSuite detector the Agent reconciler holds.
 	EvalSuiteInstalled func() bool
 	// Gateway is the assayd Gateway: the I1 hold reads whether it is enabled,
-	// and design 16 build step 7's clause 5 reads it through policyReads.
+	// and clause 5 reads it, and the Agent's hostname on it, through
+	// policyReads.
 	Gateway GatewayConfig
 	// A2A is the eval client, built once and reused, so every send shares one
 	// transport. Its HTTP is the test seam, as AgentReconciler.CardClient is.
@@ -156,9 +158,9 @@ func NewEvalReconciler(c client.Client, uncached client.Reader, evalSuiteInstall
 }
 
 // policyReads is this controller's gatewayPolicyReads: its client, its
-// uncached reader and its Gateway, built per pass. Design 16 build step 7's
-// clause 5 reads the Gateway and the two policy lists through it; nothing in
-// step 6 calls it.
+// uncached reader and its Gateway, built per pass. Clause 5 reads the Gateway
+// and the two policy lists through it, uncached, and `<agent>-serving`'s
+// labels through the cached client (servingRouteLabels).
 func (r *EvalReconciler) policyReads() gatewayPolicyReads {
 	return gatewayPolicyReads{Client: r.Client, uncached: r.uncached, Gateway: r.Gateway}
 }
@@ -221,16 +223,27 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 	st := &agent.Status
-	// Every eval write waits on the no-transaction predicate, the clear
-	// below and an Interrupted record included (design 16 §1.1, "The case in
-	// flight when a transaction begins").
-	if tx := claimHoldingTransaction(st); tx != nil {
-		logger.V(1).Info("an -auth transaction is recorded; no case is claimed while it is",
-			"kind", tx.Kind, "stage", tx.Stage)
-		return r.wait(waitTransaction)
+	// Every eval write waits on the transaction predicate, the clear below
+	// and an Interrupted record included (design 16 §1.1, "The case in flight
+	// when a transaction begins"). A Lock exempt by clauses 1 to 4 lets the
+	// pass go on to clause 5, read last, below; every other recorded Create
+	// or Lock holds the pass here, before anything is read or written.
+	exempt := false
+	if tx := recordedTransaction(st); tx != nil {
+		var why string
+		if exempt, why = exemptTransaction(st); !exempt {
+			logger.V(1).Info("an -auth transaction is recorded and is not exempt; no case is claimed "+
+				"while it is", "kind", tx.Kind, "stage", tx.Stage, "why", why)
+			return r.wait(waitTransaction)
+		}
 	}
-	if done, err := r.clearSuperseded(ctx, agent); done || err != nil {
-		return ctrl.Result{}, err
+	// The clear of a superseded run waits for the exempt Lock to end too: it
+	// is an eval write that no claim needs, and clause 5 is read only on a
+	// pass that has a pair to record it for.
+	if !exempt {
+		if done, err := r.clearSuperseded(ctx, agent); done || err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	if !candidatePending(st) {
 		return ctrl.Result{}, nil
@@ -273,23 +286,49 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	run := evalRun{agent: agent, suite: &suite, suiteDigest: sd, threshold: th, runNS: runNS,
 		revision: cand, revisionDigest: candDigest}
 
+	// Clause 5, last, on a pass that met clauses 1 to 4 and every other send
+	// predicate. Its hold is the second reason blocked can carry; a run-start
+	// refusal outranks it, but only on a pass that would start a run, and a
+	// pass under a hold starts none, so the card is not fetched while one
+	// stands (§1.1, "`blocked`: one slot, one computation").
 	e := st.Eval
 	recorded := e != nil && e.RevisionDigest == candDigest && e.SuiteDigest == sd
+	var hold *assaydv1alpha1.EvalBlocked
+	if exempt {
+		var readErr error
+		if hold, readErr = r.clause5(ctx, agent, runNS); readErr != nil {
+			if res, done, err := r.syncBlocked(ctx, &run, hold); done || err != nil {
+				return res, err
+			}
+			logger.Info("clause 5 could not be read; the hold is recorded and no case is claimed",
+				"error", readErr.Error())
+			return ctrl.Result{}, readErr
+		}
+	}
+
 	switch {
 	case recorded && (e.Verdict == assaydv1alpha1.EvalVerdictPassed || e.Verdict == assaydv1alpha1.EvalVerdictFailed):
 		// A final verdict for this pair. The Agent reconciler promotes on a
-		// Passed one; a Failed one holds the candidate, and a suite edit,
-		// noticed on this requeue, gives a new pair (A4).
-		if res, done, err := r.syncBlocked(ctx, &run, nil); done || err != nil {
+		// Passed one, whatever blocked says; a Failed one holds the candidate,
+		// and a suite edit, noticed on this requeue, gives a new pair (A4).
+		if res, done, err := r.syncBlocked(ctx, &run, hold); done || err != nil {
 			return res, err
 		}
 		return r.wait(waitHeld)
 	case pairFailed(failedOf(e), candDigest, sd):
 		// No run starts for a failed pair again (step 7, Q3 (a)).
-		if res, done, err := r.syncBlocked(ctx, &run, nil); done || err != nil {
+		if res, done, err := r.syncBlocked(ctx, &run, hold); done || err != nil {
 			return res, err
 		}
 		return r.wait(waitHeld)
+	case hold != nil:
+		// Nothing is claimed, and no run starts, while the hold stands. The
+		// pass comes round at the rate design 03 probes at.
+		if res, done, err := r.syncBlocked(ctx, &run, hold); done || err != nil {
+			return res, err
+		}
+		logger.V(1).Info("clause 5 holds the exempt Lock; no case is claimed", "hold", hold.Message)
+		return r.wait(waitTransaction)
 	case !recorded || e.Verdict != assaydv1alpha1.EvalVerdictRunning || e.EndpointPath == "" || e.CardDigest == "":
 		// A Running record with no endpoint or card digest is one a CRD
 		// pruned in part: the run-start read-back refused it, and nothing
@@ -388,9 +427,15 @@ func (r *EvalReconciler) clearSuperseded(ctx context.Context, agent *assaydv1alp
 
 // syncBlocked writes status.eval.blocked and blockedFor when the value this
 // pass computed differs from the stored one, and reads both back (step 11).
-// It is called only on a pass on which every shared send predicate holds, so
-// the stored value is replaced only by one evaluated for the current pair.
-// done is true when the pass must return res.
+// blocked is the pass's one computation, in §1.1's precedence: a run-start
+// refusal on a pass that would start a run (startRun), otherwise clause 5's
+// hold on an exempt Lock, otherwise empty. It is called only on a pass on
+// which every shared send predicate holds, the transaction predicate with its
+// exemption included, so the stored value is replaced only by one evaluated
+// for the current pair. A pass that waits on a transaction that is not exempt
+// writes nothing at all, blocked included: that is what the wait is for, and
+// the gate branch answers such a transaction before it reads blocked. done is
+// true when the pass must return res.
 func (r *EvalReconciler) syncBlocked(ctx context.Context, run *evalRun, blocked *assaydv1alpha1.EvalBlocked) (
 	ctrl.Result, bool, error) {
 	want := run.blockedFor()
@@ -463,6 +508,19 @@ func (r *EvalReconciler) readBackFailed(ctx context.Context, what string) (ctrl.
 func (r *EvalReconciler) startRun(ctx context.Context, run *evalRun) (ctrl.Result, bool, error) {
 	addr, err := r.candidateAddress(ctx, run, cardPath(run.agent))
 	if err != nil {
+		// Every other way out of a run start writes blocked once, with the
+		// pass's own value. This one would write nothing, and a clause-5 hold
+		// this pass found gone would go on naming a cause that is gone for as
+		// long as the address cannot be used; so it is cleared here, the
+		// pass's one blocked write.
+		if e := run.agent.Status.Eval; e != nil && e.Blocked != nil && e.Blocked.Reason == ReasonEvalWaitingForAuth {
+			if res, done, serr := r.syncBlocked(ctx, run, nil); done || serr != nil {
+				if serr == nil {
+					serr = err
+				}
+				return res, true, serr
+			}
+		}
 		return ctrl.Result{}, true, err
 	}
 	path, cardDigest, refusal, wait := r.runStartCard(ctx, run, addr)
