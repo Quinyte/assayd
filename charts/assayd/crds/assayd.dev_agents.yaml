@@ -654,11 +654,15 @@ spec:
                       point under source drift.
 
                       On an Agent that declares spec.gates, with the EvalSuite CRD installed, a
-                      pin to the current candidate, or to a revision status.eval.failed[]
-                      records against the suite in force, is refused with
-                      Degraded=True/PinnedRevisionNotEligible and nothing is rolled back. Any
-                      other pin is served without evaluation, under
-                      GatesBypassed=True/PinnedRollback (design 16 Q5).
+                      pin to the recorded candidate (status.candidateRevisionDigest) is
+                      refused with Degraded=True/PinnedRevisionNotEligible and nothing is
+                      rolled back. So is a pin to a revision status.eval.failed[] records
+                      against the suite in force, except while that suite is missing or
+                      cannot be read, when there is no suite in force to check against and
+                      the pin is admitted. Any other pin to a revision that is not serving is
+                      served without evaluation, under GatesBypassed=True/PinnedRollback, and
+                      is not judged again while it stands; a pin to the revision already
+                      serving changes nothing (design 16 Q5).
                     pattern: ^[0-9a-f]{64}$
                     type: string
                 type: object

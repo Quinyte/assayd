@@ -1043,45 +1043,61 @@ reasons:
   - reason: PinnedRevisionNotEligible
     state: >-
       The Agent declares a gate, the EvalSuite CRD is installed, and
-      `spec.release.targetRevisionDigest` names a retained revision that design
-      16 Q5 (a) refuses: the current candidate — the revision the current spec
-      mints, while it is not the one serving — or a digest that
-      `status.eval.failed[]` records against the suite in force, at its current
-      digest. With no current suite digest, because the suite does not exist or
-      cannot be read, only the first refusal applies.
+      `spec.release.targetRevisionDigest` names a retained revision that is
+      not the one serving, that no standing `GatesBypassed=True/PinnedRollback`
+      record already admitted, and that design 16 Q5 (a) refuses: the recorded
+      candidate, `status.candidateRevisionDigest` as stored when the pass
+      began — so a single write that edits the spec and pins the candidate is
+      refused too — or a digest that `status.eval.failed[]` records against
+      the suite in force, at its current digest. With no current suite digest,
+      because the suite does not exist or cannot be read, only the first
+      refusal applies.
     operator: >-
-      Refuses the pin through the unresolvable-pin path, before anything else
-      in the pass moves: sets `Degraded=True` with this reason and phase
-      `Degraded`, leaves `Ready` as it was, and returns. Nothing is rolled back
-      and the current release, its candidate included, is untouched. The
-      message names the digest, why it is not eligible — the current candidate,
-      or the failed pair and the suite digest — and the fix: clear the pin, pin
+      Refuses the pin through the unresolvable-pin path, after the pinned
+      revision's retained material is verified and before anything else in
+      the pass moves: sets `Degraded=True` with this reason and phase
+      `Degraded`, leaves `Ready` as it was, withdraws any `GatesBypassed`, and
+      returns. Nothing is rolled back and the current release, its candidate
+      included, is untouched: the eval controller goes on evaluating that
+      candidate, because it holds off only for an admitted pin. The message
+      names the digest, why it is not eligible — the current candidate, or
+      the failed pair and the suite digest — and the fix: clear the pin, pin
       another revision, edit the suite, or remove `spec.gates` and then pin
       (design 16 Q9). It requeues on `CardDriftInterval`, because a suite edit
-      can lift the refusal and nothing watches suites. While the pin names the
-      recorded candidate, the eval controller sends that candidate no case.
+      can lift the refusal and nothing watches suites.
     traffic: not-withdrawn
     note: >-
-      The current candidate is read from the spec, not from
-      `status.candidateRevisionDigest`, because an admitted pinned revision
-      that is not yet available is itself recorded there.
+      A pin whose material is gone reads `ReleasePinUnresolvable` instead,
+      whatever its eval record says. While the refusal stands the eval
+      controller's I1 predicate still reads the pin as set and turns the I1
+      hold off, which design 16 A20.26 records.
 
   - reason: PinnedRollback
     state: >-
       The Agent declares a gate, the EvalSuite CRD is installed, and
-      `spec.release.targetRevisionDigest` names a retained revision that design
-      16 Q5 (a) admits: it is not the current candidate, and
-      `status.eval.failed[]` does not record it against the suite in force —
-      or there is no current suite digest to check it against.
+      `spec.release.targetRevisionDigest` names a retained revision that is
+      not the one serving and that design 16 Q5 (a) admits: it is not the
+      recorded candidate, and `status.eval.failed[]` does not record it
+      against the suite in force — or there is no current suite digest to
+      check it against. A pin to the revision already serving sets nothing.
     operator: >-
-      Sets `GatesBypassed=True` with this reason, naming the pinned revision and
-      its digest, on every pass that reaches the rollout switch while the pin
-      stands. The pinned revision is promoted once available without its gate
-      being consulted, and the eval controller sends it no case. `GatesPassed`
-      is not asserted, so it keeps describing the revision `status.eval`
-      names. `GatesBypassed` is owned and not sticky: it clears on the first
-      pass after the pin is removed or refused.
+      Sets `GatesBypassed=True` with this reason, naming the pinned revision
+      and its digest, on every pass that reaches the rollout switch while the
+      pin stands. The message says either that the revision will be promoted
+      once available without its gate, and that the eval controller sends it
+      no case, or that it serves by pin and its gate was bypassed; the pass
+      that admits the pin also says why. The condition is the admission
+      record: while it names the pin's digest the rule is not applied again,
+      so a suite edited back to one the revision failed, or a suite restored
+      after an incident, does not refuse a pin that serves. It is owned and
+      not sticky, carried across a pass that returns before the pin step, and
+      withdrawn on the pass after the pin is removed, refused or no longer
+      resolves. `GatesPassed` is not asserted, so it keeps describing the
+      revision `status.eval` names.
     traffic: not-withdrawn
+    note: >-
+      The record is a status condition, so a principal that can write
+      `agents/status` can forge it, as it can already forge a verdict.
 
   - reason: PolicyWriteFailed
     state: >-

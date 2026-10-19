@@ -128,6 +128,9 @@ func (r *AgentReconciler) reportUnresolvablePin(ctx context.Context, agent *assa
 		reason = ReasonPinnedRevisionNotEligible
 	}
 	conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, reason, e.Error())
+	// A pin that is refused, or no longer resolves, bypasses nothing: the
+	// admission record assessGates carried is withdrawn.
+	conds.unset(assaydv1alpha1.CondGatesBypassed)
 	status.Phase = assaydv1alpha1.PhaseDegraded
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation

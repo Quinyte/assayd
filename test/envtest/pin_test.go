@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -74,18 +75,29 @@ func refusedPin(t *testing.T, a *assaydv1alpha1.Agent, want ...string) {
 	}
 }
 
-// bypassed asserts GatesBypassed=True/PinnedRollback naming the revision.
-func bypassed(t *testing.T, a *assaydv1alpha1.Agent, rev, digest string) {
+const (
+	pinPending = "will be promoted once it is available"
+	pinServing = "serves by pin"
+)
+
+// bypassed asserts GatesBypassed=True/PinnedRollback naming the revision, in
+// the state the message says it is in: pinPending or pinServing.
+func bypassed(t *testing.T, a *assaydv1alpha1.Agent, rev, digest, state string) *metav1.Condition {
 	t.Helper()
 	c := condition(liveAgent(t, a), assaydv1alpha1.CondGatesBypassed)
 	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != reasonPinnedRollback {
 		t.Fatalf("GatesBypassed is %+v; want True/%s", c, reasonPinnedRollback)
+	}
+	other := map[string]string{pinPending: pinServing, pinServing: pinPending}[state]
+	if !strings.Contains(c.Message, state) || strings.Contains(c.Message, other) {
+		t.Errorf("GatesBypassed's message does not say %q (and only that): %s", state, c.Message)
 	}
 	for _, w := range []string{rev, digest} {
 		if !strings.Contains(c.Message, w) {
 			t.Errorf("GatesBypassed does not name the pinned revision's %q: %s", w, c.Message)
 		}
 	}
+	return c
 }
 
 // T28: pins on a gated Agent, and on an ungated one.
@@ -142,7 +154,7 @@ func TestAPinOnAGatedAgentIsAdmittedOrRefusedByQ5(t *testing.T) {
 			t.Fatalf("setup: want B coming up beside C; active %s, candidate %s",
 				got.Status.ActiveRevisionDigest, got.Status.CandidateRevisionDigest)
 		}
-		bypassed(t, a, revB, dB)
+		bypassed(t, a, revB, dB, pinPending)
 
 		markAvailable(t, ns, controller.WorkloadName("pinserved", revB), 1)
 		reconcileOnce(t, r, a)
@@ -151,7 +163,7 @@ func TestAPinOnAGatedAgentIsAdmittedOrRefusedByQ5(t *testing.T) {
 			t.Fatalf("the admitted pin to B did not promote it: active %s, phase %s",
 				got.Status.ActiveRevisionDigest, got.Status.Phase)
 		}
-		bypassed(t, a, revB, dB)
+		bypassed(t, a, revB, dB, pinServing)
 		// GatesPassed is sticky and the pin does not assert it: it goes on
 		// describing the revision status.eval names (§1.1).
 		after := *gatesPassed(t, a)
@@ -201,6 +213,11 @@ func TestAPinOnAGatedAgentIsAdmittedOrRefusedByQ5(t *testing.T) {
 		reconcileOnce(t, r, a)
 		condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "EvalFailed")
 		_, dC := gatedCandidate(t, r, a, imageOf('c'), "smoke")
+		// #111's state: the spec moved away from B, so its run's verdict was
+		// cleared and only failed[] holds the pair. The rule reads failed[].
+		writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+			st.Eval.Verdict, st.Eval.Cases, st.Eval.Score = "", nil, ""
+		})
 
 		pinTo(t, a, dB)
 		reconcileOnce(t, r, a)
@@ -265,16 +282,17 @@ func TestAPinWithoutACurrentSuiteOrWithoutTheCRD(t *testing.T) {
 
 		pinTo(t, a, dB)
 		reconcileOnce(t, r, a)
-		reconcileOnce(t, r, a)
 		if got := liveAgent(t, a).Status.ActiveRevisionDigest; got != dB {
 			t.Fatalf("with the suite missing, a pin to a digest in failed[] was not admitted (active %s)", got)
 		}
-		bypassed(t, a, revB, dB)
-		c := condition(liveAgent(t, a), assaydv1alpha1.CondGatesBypassed)
-		if !strings.Contains(c.Message, `"absent"`) {
+		// The admitting pass says why failed[] was not consulted.
+		c := bypassed(t, a, revB, dB, pinServing)
+		if !strings.Contains(c.Message, "could not be read") || !strings.Contains(c.Message, "not consulted") {
 			t.Errorf("GatesBypassed does not say the suite could not be read, which is why failed[] "+
 				"was not consulted: %s", c.Message)
 		}
+		reconcileOnce(t, r, a)
+		bypassed(t, a, revB, dB, pinServing)
 	})
 
 	// Under GatesSkipped=EvalSuiteCRDAbsent nothing is gated, so the rule does
@@ -356,5 +374,257 @@ func TestAPinnedRollbackIsSentNoCase(t *testing.T) {
 	if got := liveAgent(t, g.a).Status.ActiveRevisionDigest; got != rollbackDigest {
 		t.Fatalf("the pinned rollback did not promote once available (active %s)", got)
 	}
-	bypassed(t, g.a, rollback, rollbackDigest)
+	bypassed(t, g.a, rollback, rollbackDigest, pinServing)
+}
+
+// An admitted pin is not refused while it stands: neither once its revision
+// serves and the suite in force becomes one it failed, nor after the
+// incident path T53 exists for, where a deleted suite let a failed revision
+// be pinned and the suite was then restored. A refusal there would return
+// before the rest of the Agent's reconcile on every pass while the pinned
+// revision served.
+func TestAnAdmittedPinIsNotRefusedWhileItServes(t *testing.T) {
+	setup := func(t *testing.T, name string) (string, *assaydv1alpha1.Agent, *controller.AgentReconciler,
+		string, string, string) {
+		t.Helper()
+		ns := newNamespace(t)
+		sd1 := mustCreateSuite(t, ns, "smoke")
+		a, r := servedUngated(t, ns, name)
+		revB, dB := gatedCandidate(t, r, a, imageB, "smoke")
+		writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) { st.Eval = failedRecord(revB, dB, sd1) })
+		reconcileOnce(t, r, a)
+		gatedCandidate(t, r, a, imageOf('c'), "smoke")
+		return ns, a, r, revB, dB, sd1
+	}
+	stillServes := func(t *testing.T, a *assaydv1alpha1.Agent, r *controller.AgentReconciler, revB, dB string) {
+		t.Helper()
+		for i := 0; i < 2; i++ {
+			reconcileOnce(t, r, a)
+		}
+		got := liveAgent(t, a)
+		if c := condition(got, assaydv1alpha1.CondDegraded); c != nil && c.Status == metav1.ConditionTrue {
+			t.Fatalf("the admitted, serving pin was refused: %s/%s", c.Reason, c.Message)
+		}
+		if got.Status.ActiveRevisionDigest != dB || got.Status.Phase != assaydv1alpha1.PhaseReady {
+			t.Fatalf("active %s, phase %s; want B serving", got.Status.ActiveRevisionDigest, got.Status.Phase)
+		}
+		bypassed(t, a, revB, dB, pinServing)
+	}
+
+	t.Run("the suite edited back to one it failed", func(t *testing.T) {
+		ns, a, r, revB, dB, sd1 := setup(t, "pinback")
+		putSuite(t, ns, "smoke", evalCase("arithmetic", "What is 3 + 3?", "6", ""))
+		pinTo(t, a, dB)
+		reconcileOnce(t, r, a)
+		if got := liveAgent(t, a).Status.ActiveRevisionDigest; got != dB {
+			t.Fatalf("setup: B, failed only against the old suite, was not promoted (active %s)", got)
+		}
+		if back := putSuite(t, ns, "smoke", evalCase("arithmetic", "What is 2 + 2?", "4", "")); back != sd1 {
+			t.Fatalf("setup: the restored suite's digest is %s, want %s", back, sd1)
+		}
+		stillServes(t, a, r, revB, dB)
+	})
+	t.Run("the suite deleted, then restored", func(t *testing.T) {
+		ns, a, r, revB, dB, sd1 := setup(t, "pinrestore")
+		s := &assaydv1alpha1.EvalSuite{}
+		s.Namespace, s.Name = ns, "smoke"
+		if err := k8s.Delete(context.Background(), s); err != nil {
+			t.Fatal(err)
+		}
+		pinTo(t, a, dB)
+		reconcileOnce(t, r, a)
+		if got := liveAgent(t, a).Status.ActiveRevisionDigest; got != dB {
+			t.Fatalf("setup: with the suite gone, B was not promoted (active %s)", got)
+		}
+		if back := putSuite(t, ns, "smoke", evalCase("arithmetic", "What is 2 + 2?", "4", "")); back != sd1 {
+			t.Fatalf("setup: the restored suite's digest is %s, want %s", back, sd1)
+		}
+		stillServes(t, a, r, revB, dB)
+	})
+}
+
+// A pin naming the revision already serving has nothing to admit or refuse,
+// and bypasses nothing: no GatesBypassed, and the failed[] clause does not
+// refuse it even when failed[] records it against the suite in force.
+func TestAPinToTheServingRevisionBypassesNothing(t *testing.T) {
+	ns := newNamespace(t)
+	sd := mustCreateSuite(t, ns, "smoke")
+	a, r := servedUngated(t, ns, "pinserving")
+	active, activeName := a.Status.ActiveRevisionDigest, a.Status.ActiveRevision
+	gatedCandidate(t, r, a, imageB, "smoke")
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Eval = failedRecord(activeName, active, sd)
+	})
+	pinTo(t, a, active)
+	reconcileOnce(t, r, a)
+	reconcileOnce(t, r, a)
+	got := liveAgent(t, a)
+	if c := condition(got, assaydv1alpha1.CondDegraded); c != nil && c.Status == metav1.ConditionTrue {
+		t.Fatalf("a pin to the serving revision was refused: %s/%s", c.Reason, c.Message)
+	}
+	if c := condition(got, assaydv1alpha1.CondGatesBypassed); c != nil {
+		t.Errorf("a pin to the serving revision says a gate was bypassed: %+v", c)
+	}
+	if got.Status.ActiveRevisionDigest != active {
+		t.Errorf("the active revision moved to %s", got.Status.ActiveRevisionDigest)
+	}
+}
+
+// §1.1 reads the candidate as recorded: "The candidate is recorded in
+// status.candidateRevision and candidateRevisionDigest while it is evaluated
+// and while it is held." One write that edits the spec and pins the
+// candidate under evaluation is refused, and leaves the release as it was.
+func TestOneWriteThatEditsTheSpecAndPinsTheCandidateIsRefused(t *testing.T) {
+	ns := newNamespace(t)
+	mustCreateSuite(t, ns, "smoke")
+	a, r := servedUngated(t, ns, "pinonewrite")
+	active := a.Status.ActiveRevisionDigest
+	_, dB := gatedCandidate(t, r, a, imageB, "smoke")
+	reconcileOnce(t, r, a)
+	mustEdit(t, a, func(a *assaydv1alpha1.Agent) {
+		a.Spec.Runtime.Image = imageOf('d')
+		a.Spec.Release = &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: dB}
+	})
+	reconcileOnce(t, r, a)
+	reconcileOnce(t, r, a)
+	refusedPin(t, a, dB, "current candidate")
+	got := liveAgent(t, a)
+	if got.Status.ActiveRevisionDigest != active || got.Status.CandidateRevisionDigest != dB {
+		t.Errorf("the refused pin moved the release: active %s, candidate %s",
+			got.Status.ActiveRevisionDigest, got.Status.CandidateRevisionDigest)
+	}
+}
+
+// A refused pin pauses nothing: the eval controller goes on evaluating the
+// candidate it names, since only an admitted pin's candidate is not
+// evaluated.
+func TestARefusedPinLeavesTheCandidatesRunGoing(t *testing.T) {
+	g := newEvalRig(t, "pinrefusedrun", echo("a", "one"), echo("b", "two"))
+	pinTo(t, g.a, g.dgst)
+	g.agentPass(t)
+	refusedPin(t, g.a, g.dgst, "current candidate")
+	for i := 0; i < 3; i++ {
+		g.evalPass(t)
+	}
+	if n := g.stub.sentTo(g.name, g.rev); n == 0 {
+		t.Error("the candidate a refused pin names was sent no case; its run should go on")
+	}
+}
+
+// pinFixture is a served Agent with a ConfigMap env source, so each revision
+// has retained material: A served ungated, then a gate, B available and
+// retained, and C the gated candidate. Revision names come from status: the
+// spec's names depend on the ConfigMap's content.
+func pinFixture(t *testing.T, name string) (ns string, a *assaydv1alpha1.Agent, r *controller.AgentReconciler,
+	revB, dB, sd string) {
+	t.Helper()
+	ns = newNamespace(t)
+	sd = mustCreateSuite(t, ns, "smoke")
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cfg"},
+		Data: map[string]string{"MODE": "safe"}}
+	if err := k8s.Create(context.Background(), cm); err != nil {
+		t.Fatal(err)
+	}
+	a = mustCreateAgent(t, ns, name, func(a *assaydv1alpha1.Agent) {
+		a.Spec.Runtime.Env = []corev1.EnvVar{{Name: "MODE", ValueFrom: &corev1.EnvVarSource{
+			ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "cfg"}, Key: "MODE"}}}}
+	})
+	r = newReconciler(true)
+	bringUp := func(want string) (string, string) {
+		t.Helper()
+		reconcileOnce(t, r, a)
+		reconcileOnce(t, r, a)
+		got := liveAgent(t, a)
+		rev, d := got.Status.CandidateRevision, got.Status.CandidateRevisionDigest
+		if rev == "" {
+			t.Fatalf("setup: no %s candidate recorded: %+v", want, got.Status)
+		}
+		markAvailable(t, ns, controller.WorkloadName(name, rev), 1)
+		reconcileOnce(t, r, a)
+		return rev, d
+	}
+	bringUp("first")
+	if liveAgent(t, a).Status.ActiveRevision == "" {
+		t.Fatal("setup: the first revision did not promote")
+	}
+	mustEdit(t, a, func(a *assaydv1alpha1.Agent) {
+		a.Spec.Runtime.Image = imageB
+		a.Spec.Gates = []assaydv1alpha1.GateRef{{EvalSuiteRef: "smoke"}}
+	})
+	revB, dB = bringUp("B")
+	mustEdit(t, a, func(a *assaydv1alpha1.Agent) { a.Spec.Runtime.Image = imageOf('c') })
+	bringUp("C")
+	return ns, a, r, revB, dB, sd
+}
+
+// The retained material is verified before the eligibility rule, so a pin to
+// a revision whose material is gone is refused for that, and is never told
+// to edit a suite.
+func TestAPinWhoseMaterialIsGoneIsRefusedForThatFirst(t *testing.T) {
+	ns, a, r, revB, dB, sd := pinFixture(t, "pinmaterial")
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) { st.Eval = failedRecord(revB, dB, sd) })
+	var copies corev1.ConfigMapList
+	if err := k8s.List(context.Background(), &copies, client.InNamespace(runNS(ns)),
+		client.MatchingLabels{controller.MaterialRevisionLabel: revB}); err != nil || len(copies.Items) == 0 {
+		t.Fatalf("setup: no immutable copy of B to delete (%v)", err)
+	}
+	if err := k8s.Delete(context.Background(), &copies.Items[0]); err != nil {
+		t.Fatal(err)
+	}
+	pinTo(t, a, dB)
+	reconcileOnce(t, r, a)
+	c := condition(liveAgent(t, a), assaydv1alpha1.CondDegraded)
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != "ReleasePinUnresolvable" {
+		t.Fatalf("Degraded is %+v; want True/ReleasePinUnresolvable — B's material is gone, which is the "+
+			"refusal that holds whatever its eval record says", c)
+	}
+}
+
+// An admitted pin's GatesBypassed survives a pass that returns before the pin
+// step: here a referenced ConfigMap deleted while the pinned revision serves,
+// which the source resolution reports before any revision is computed.
+func TestAnAdmittedPinsBypassSurvivesAnEarlyExit(t *testing.T) {
+	ns, a, r, revB, dB, _ := pinFixture(t, "pinearly")
+	pinTo(t, a, dB)
+	reconcileOnce(t, r, a)
+	if got := liveAgent(t, a).Status.ActiveRevisionDigest; got != dB {
+		t.Fatalf("setup: the pin to B did not promote it (active %s)", got)
+	}
+	bypassed(t, a, revB, dB, pinServing)
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cfg"}}
+	if err := k8s.Delete(context.Background(), cm); err != nil {
+		t.Fatal(err)
+	}
+	reconcileOnce(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondEnvSourceUnresolved, metav1.ConditionTrue, "Unresolved")
+	bypassed(t, a, revB, dB, pinServing)
+}
+
+// An admitted pin that stops resolving bypasses nothing: here the pinned
+// revision is still coming up when its material is collected, so its
+// GatesBypassed, which said it would be promoted once available, is withdrawn
+// with the refusal.
+func TestAnAdmittedPinThatStopsResolvingWithdrawsItsBypass(t *testing.T) {
+	ns, a, r, revB, dB, _ := pinFixture(t, "pinlost")
+	markAvailable(t, ns, controller.WorkloadName("pinlost", revB), 0)
+	pinTo(t, a, dB)
+	reconcileOnce(t, r, a)
+	bypassed(t, a, revB, dB, pinPending)
+	var copies corev1.ConfigMapList
+	if err := k8s.List(context.Background(), &copies, client.InNamespace(runNS(ns)),
+		client.MatchingLabels{controller.MaterialRevisionLabel: revB}); err != nil || len(copies.Items) == 0 {
+		t.Fatalf("setup: no immutable copy of B to delete (%v)", err)
+	}
+	if err := k8s.Delete(context.Background(), &copies.Items[0]); err != nil {
+		t.Fatal(err)
+	}
+	reconcileOnce(t, r, a)
+	got := liveAgent(t, a)
+	if c := condition(got, assaydv1alpha1.CondDegraded); c == nil || c.Reason != "ReleasePinUnresolvable" {
+		t.Fatalf("setup: Degraded is %+v, want ReleasePinUnresolvable", c)
+	}
+	if c := condition(got, assaydv1alpha1.CondGatesBypassed); c != nil {
+		t.Errorf("a pin that no longer resolves still says its gate is bypassed: %+v", c)
+	}
 }
