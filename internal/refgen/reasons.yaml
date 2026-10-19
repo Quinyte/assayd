@@ -658,7 +658,8 @@ reasons:
       the candidate at zero traffic. The message names how many of the
       suite's cases have an outcome, k of N, or says no run has started, and
       when a clause-5 hold is recorded for the current `Lock`, that it must
-      clear too.
+      clear too, or, beside a matched run-start refusal, names the refusal and
+      says no run starts until it is answered.
     traffic: not-withdrawn
     note: >-
       Not withdrawn where an earlier revision is active. Where the Agent has
@@ -802,8 +803,9 @@ reasons:
       suite and `Lock`. An unavailable candidate reads `EvalPaused` in the
       last two cases instead, or its `Failed` verdict or `failed[]` entry. A
       hold comes ahead of a `Failed` verdict or `failed[]` entry for as long
-      as it stands, and the message then says no case of the pair is claimed
-      whether or not it clears. A refused `Adopt` never holds the eval.
+      as it stands, and so does the "not yet evaluated" case; the message
+      then says no case of the pair is claimed whatever clause 5 finds, and
+      names what records the failure, the verdict or the `failed[]` entry. A refused `Adopt` never holds the eval.
     operator: >-
       Sets `GatesPassed=False` with this reason in the gate branch, holds the
       candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
@@ -816,7 +818,9 @@ reasons:
       attribute a 401, it names the revision the route's single backendRef
       names and the exits. From `blocked`, it carries `blocked.message`, which
       the eval controller builds from the hold's policy names and error
-      classes, never an API error's text. A hold stops new claims only: a
+      classes, never an API error's text; for a pair that has already failed
+      the gate branch replaces that message's closing sentence, which says
+      when cases are claimed, with one saying none of the pair is. A hold stops new claims only: a
       case in flight finishes, and a `Passed` verdict already written still
       promotes.
     traffic: not-withdrawn

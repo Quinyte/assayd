@@ -334,16 +334,6 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		// pruned in part: the run-start read-back refused it, and nothing
 		// may be sent on it. The run starts again, and its read-back fails
 		// again, until the CRD keeps the whole record (step 11).
-		//
-		// A hold this pass found gone is cleared first: startRun returns
-		// before it writes blocked when the candidate's address cannot be
-		// used, and the stored hold would go on naming a cause that is gone
-		// for as long as that lasted.
-		if e != nil && e.Blocked != nil && e.Blocked.Reason == ReasonEvalWaitingForAuth {
-			if res, done, err := r.syncBlocked(ctx, &run, nil); done || err != nil {
-				return res, err
-			}
-		}
 		if res, done, err := r.startRun(ctx, &run); done || err != nil {
 			return res, err
 		}
@@ -518,6 +508,19 @@ func (r *EvalReconciler) readBackFailed(ctx context.Context, what string) (ctrl.
 func (r *EvalReconciler) startRun(ctx context.Context, run *evalRun) (ctrl.Result, bool, error) {
 	addr, err := r.candidateAddress(ctx, run, cardPath(run.agent))
 	if err != nil {
+		// Every other way out of a run start writes blocked once, with the
+		// pass's own value. This one would write nothing, and a clause-5 hold
+		// this pass found gone would go on naming a cause that is gone for as
+		// long as the address cannot be used; so it is cleared here, the
+		// pass's one blocked write.
+		if e := run.agent.Status.Eval; e != nil && e.Blocked != nil && e.Blocked.Reason == ReasonEvalWaitingForAuth {
+			if res, done, serr := r.syncBlocked(ctx, run, nil); done || serr != nil {
+				if serr == nil {
+					serr = err
+				}
+				return res, true, serr
+			}
+		}
 		return ctrl.Result{}, true, err
 	}
 	path, cardDigest, refusal, wait := r.runStartCard(ctx, run, addr)

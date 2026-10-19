@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -644,5 +645,118 @@ func TestAHoldFoundGoneIsClearedBeforeARunStartThatStopsShort(t *testing.T) {
 	}
 	if f.stub.total() != 0 || f.stub.cardGets != 0 {
 		t.Errorf("a pass to an unusable address sent or fetched something")
+	}
+}
+
+// A pass makes at most one blocked write (§1.1, "computes it once per
+// pass"): a hold whose cause is gone, on a run-start pass whose card fetch is
+// refused, is replaced by the refusal in one write, and a run-start pass
+// that stops at an unusable address clears it in one write.
+func TestARunStartPassWritesBlockedOnce(t *testing.T) {
+	for name, stopShort := range map[string]func(*testing.T, *evalFixture){
+		"a refused run-start fetch": func(_ *testing.T, f *evalFixture) { f.stub.refuse = true },
+		"an unusable address": func(t *testing.T, f *evalFixture) {
+			var svc corev1.Service
+			key := types.NamespacedName{Namespace: RunNamespaceName("team"), Name: WorkloadName("gated", "cand000001")}
+			if err := f.c.Get(context.Background(), key, &svc); err != nil {
+				t.Fatal(err)
+			}
+			svc.Spec.ClusterIP = "None"
+			if err := f.c.Update(context.Background(), &svc); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reads := &clause5Reads{listenerSets: true}
+			f := clause5Fixture(t, reads, "")
+			if _, err := f.pass(t); err != nil {
+				t.Fatal(err)
+			}
+			if e := f.agent(t).Status.Eval; e == nil || e.Blocked == nil {
+				t.Fatalf("setup: no hold recorded: %+v", e)
+			}
+			reads.listenerSets = false
+			stopShort(t, f)
+			before, err := strconv.Atoi(f.agent(t).ResourceVersion)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = f.pass(t)
+			after, _ := strconv.Atoi(f.agent(t).ResourceVersion)
+			if after-before != 1 {
+				t.Errorf("the pass moved the resourceVersion %d → %d; it makes one blocked write", before, after)
+			}
+			if e := f.agent(t).Status.Eval; e.Blocked != nil && e.Blocked.Reason == ReasonEvalWaitingForAuth {
+				t.Errorf("the hold whose cause is gone still stands: %+v", e.Blocked)
+			}
+		})
+	}
+}
+
+// EvalPaused beside a matched run-start refusal, in both arms, does not
+// promise a run once the candidate is back: the card's answer would be the
+// same. It names the refusal.
+func TestEvalPausedBesideARefusalPromisesNoRun(t *testing.T) {
+	for _, arm := range []string{"exempt", "outside the exempt state"} {
+		in := exemptInput(time.Now())
+		if arm != "exempt" {
+			in.status.Auth = nil
+			in.status.Eval.BlockedFor.LockDeadline = nil
+		}
+		in.available = false
+		in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalBindingUnsupported,
+			Message: "no HTTP+JSON 1.0 interface"}
+		d := decideGate(in)
+		if d.reason != ReasonEvalPaused || !strings.Contains(d.message, "only once it is available again and the "+
+			"run-start refusal") || !strings.Contains(d.message, "no HTTP+JSON 1.0 interface") {
+			t.Errorf("%s: EvalPaused beside a refusal: %s %s", arm, d.reason, d.message)
+		}
+	}
+}
+
+// The words for a failed pair name what records the failure: a Failed
+// verdict, or, once #111's clear has taken it, the failed[] entry. Both the
+// hold's message and the not-yet-evaluated one.
+func TestAFailedPairIsNamedByWhatRecordsIt(t *testing.T) {
+	for _, tc := range []struct {
+		name, behind, not string
+		edit              func(*assaydv1alpha1.EvalStatus)
+	}{
+		{"a Failed verdict", "its Failed verdict", "failed[]", func(e *assaydv1alpha1.EvalStatus) {
+			e.RevisionDigest, e.SuiteDigest, e.Verdict = gDigest, gSuite, assaydv1alpha1.EvalVerdictFailed
+		}},
+		{"a failed[] entry", "its entry in status.eval.failed[]", "Failed verdict", func(e *assaydv1alpha1.EvalStatus) {
+			e.Failed = []assaydv1alpha1.EvalPair{{RevisionDigest: gDigest, SuiteDigest: gSuite}}
+		}},
+	} {
+		in := exemptInput(time.Now())
+		tc.edit(in.status.Eval)
+		in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalWaitingForAuth,
+			Message: "a hold" + holdClaimsTail}
+		held := decideGate(in)
+		in.status.Eval.Blocked = nil
+		in.status.Eval.BlockedFor = nil
+		unevaluated := decideGate(in)
+		for which, d := range map[string]gateDecision{"the hold": held, "not yet evaluated": unevaluated} {
+			if d.reason != ReasonEvalWaitingForAuth || !strings.Contains(d.message, tc.behind) ||
+				strings.Contains(d.message, tc.not) {
+				t.Errorf("%s, %s: want %q and not %q: %s %s", tc.name, which, tc.behind, tc.not, d.reason, d.message)
+			}
+		}
+	}
+}
+
+// EvalPaused names a stored hold as recorded for this Lock only while
+// blockedFor matches it: a hold computed under another Lock's deadline is not
+// claimed.
+func TestEvalPausedDoesNotClaimAHoldForAnotherLock(t *testing.T) {
+	in := exemptInput(time.Now())
+	in.available = false
+	other := metav1.NewTime(in.status.Auth.Transaction.Deadline.Add(time.Hour))
+	in.status.Eval.BlockedFor.LockDeadline = &other
+	in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalWaitingForAuth, Message: "a hold"}
+	if d := decideGate(in); d.reason != ReasonEvalPaused || strings.Contains(d.message, "policy hold") {
+		t.Errorf("a hold computed for another Lock is named as this Lock's: %s %s", d.reason, d.message)
 	}
 }

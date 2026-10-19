@@ -313,8 +313,8 @@ func decideGate(in gateInput) gateDecision {
 		if pairHasFailed(in) {
 			claims = fmt.Sprintf("and the eval controller has not yet evaluated clause 5 for it "+
 				"(design 16 §1.1, the exemption's clause 5). %s has already failed, so no case of it "+
-				"is claimed whatever clause 5 finds: its Failed verdict stands behind this condition, "+
-				"and holds the candidate at zero traffic", pair)
+				"is claimed whatever clause 5 finds: %s stands behind this condition, and holds the "+
+				"candidate at zero traffic", pair, failedBehind(in))
 		}
 		return gateDecision{reason: ReasonEvalWaitingForAuth, readyReason: reasonAwaitingGates,
 			message: fmt.Sprintf("an -auth Lock is recorded on this Agent, in stage %s, that can finish "+
@@ -336,7 +336,7 @@ func decideGate(in gateInput) gateDecision {
 				// A hold outranks a Failed verdict in the exempt arm for as
 				// long as it stands, and its "until it clears" is not true of
 				// a pair that has failed.
-				msg = strings.TrimSuffix(msg, holdClaimsTail) + holdFailedTail
+				msg = strings.TrimSuffix(msg, holdClaimsTail) + holdFailedTail(failedBehind(in))
 			}
 			d.message = fmt.Sprintf("the eval controller recorded for %s that no case can be sent: %s",
 				pair, msg)
@@ -362,13 +362,21 @@ func noVerdictRows(in gateInput, pair string) gateDecision {
 		// A matched clause-5 hold recorded before the candidate went away
 		// still has to clear: it is re-read on the first pass after the
 		// candidate is available again.
-		held := e != nil && e.Blocked != nil && e.Blocked.Reason == ReasonEvalWaitingForAuth &&
+		// A matched run-start refusal is the card's answer, which a fetch
+		// once the candidate is back would give again.
+		matched := e != nil && e.Blocked != nil &&
 			blockedForMatches(e.BlockedFor, in.desiredDigest, in.suiteDigest, in.status)
 		when := "once it is available again"
-		if held {
+		switch {
+		case matched && e.Blocked.Reason == ReasonEvalWaitingForAuth:
 			when = "once it is available again and the Gateway-level or foreign traffic policy hold " +
 				"the eval controller recorded for this Lock before it went away has cleared, which it " +
 				"re-reads then"
+		case matched && (e.Blocked.Reason == ReasonEvalBindingUnsupported ||
+			e.Blocked.Reason == ReasonEvalAwaitingCard):
+			when = fmt.Sprintf("only once it is available again and the run-start refusal the eval "+
+				"controller recorded for it is answered, which it re-reads then (%s: %s)",
+				e.Blocked.Reason, e.Blocked.Message)
 		}
 		progress := "no run has started for it, and one starts " + when
 		if e != nil && e.RevisionDigest == in.desiredDigest && e.SuiteDigest == in.suiteDigest &&
@@ -392,6 +400,17 @@ func pairHasFailed(in gateInput) bool {
 	e := in.status.Eval
 	return e != nil && ((e.RevisionDigest == in.desiredDigest && e.SuiteDigest == in.suiteDigest &&
 		e.Verdict == assaydv1alpha1.EvalVerdictFailed) || pairFailed(e.Failed, in.desiredDigest, in.suiteDigest))
+}
+
+// failedBehind names what records a failed pair, for the messages that are
+// shown ahead of it: its Failed verdict, or, once #111's clear has taken the
+// verdict, its entry in status.eval.failed[].
+func failedBehind(in gateInput) string {
+	if e := in.status.Eval; e != nil && e.RevisionDigest == in.desiredDigest &&
+		e.SuiteDigest == in.suiteDigest && e.Verdict == assaydv1alpha1.EvalVerdictFailed {
+		return "its Failed verdict"
+	}
+	return "its entry in status.eval.failed[], which no run is started for again,"
 }
 
 // failedRows are the table's two rows for a pair that failed: a Failed
