@@ -424,6 +424,13 @@ type ReleaseSpec struct {
 	// The pinned revision is SELECTED, never recomputed: the operator serves the
 	// retained material that revision was evaluated with, which is the whole
 	// point under source drift.
+	//
+	// On an Agent that declares spec.gates, with the EvalSuite CRD installed, a
+	// pin to the current candidate, or to a revision status.eval.failed[]
+	// records against the suite in force, is refused with
+	// Degraded=True/PinnedRevisionNotEligible and nothing is rolled back. Any
+	// other pin is served without evaluation, under
+	// GatesBypassed=True/PinnedRollback (design 16 Q5).
 	// +optional
 	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
 	TargetRevisionDigest string `json:"targetRevisionDigest,omitempty"`

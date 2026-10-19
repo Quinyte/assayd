@@ -90,7 +90,7 @@ const (
 	waitRefused
 	// waitHeld: a candidate held with a final verdict, or by anything else
 	// this controller does not wait on actively — an I1 hold, no card
-	// recorded, a suite that does not exist. CardDriftInterval: the bound on
+	// recorded, a suite that does not exist, a pin naming the candidate. CardDriftInterval: the bound on
 	// noticing a suite edit, which nothing watches (A4).
 	waitHeld
 	// waitReadBack: a write did not come back. CardDriftInterval, and nothing
@@ -247,6 +247,12 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 	if !candidatePending(st) {
 		return ctrl.Result{}, nil
+	}
+	// A pinned rollback is promoted, not evaluated (Q5 (a)). The Agent
+	// reconciler's status write when it promotes, or when the pin goes,
+	// brings the next pass.
+	if pinNamesCandidate(agent) {
+		return r.wait(waitHeld)
 	}
 	cand, candDigest := st.CandidateRevision, st.CandidateRevisionDigest
 	runNS := RunNamespaceName(agent.Namespace)

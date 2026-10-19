@@ -23,8 +23,8 @@ import (
 )
 
 // The GatesPassed reasons the Agent reconciler's gate branch sets (design 16
-// §1.1, "Status, conditions and phase"). The pin rule's reasons are build
-// step 8's.
+// §1.1, "Status, conditions and phase"). The pin rule's two reasons, on
+// GatesBypassed and Degraded, are in pinrule.go.
 const (
 	// ReasonEvalRunning: a gated candidate with its suite and its card, no
 	// final verdict, and nothing recorded that stops the eval controller

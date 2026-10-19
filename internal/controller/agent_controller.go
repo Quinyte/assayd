@@ -514,6 +514,23 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 		return ctrl.Result{}, perr
 	}
+	// Design 16 Q5 (a): on a gated Agent a resolved pin is refused when it
+	// names the current candidate, or a pair failed against the suite in
+	// force, through the same unresolvable-pin path; any other pin bypasses
+	// the gate. It is decided here, before the switch reads status or the
+	// supersession below moves the candidate, so a refusal leaves the release
+	// exactly as it found it. The rule does not apply while the EvalSuite CRD
+	// is absent (nothing is gated) or on an unwired reconciler, whose gate
+	// holds every candidate as it did. The refusal requeues on the drift
+	// interval: a suite edit can lift it, and nothing watches suites.
+	pinBypass := ""
+	if pin != nil && gating == gateEnforced {
+		u, bypass := r.pinRule(ctx, &agent, status, pin, desiredDigest)
+		if u != nil {
+			return ctrl.Result{RequeueAfter: CardDriftInterval}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
+		}
+		pinBypass = bypass
+	}
 	if pin != nil {
 		// The pinned revision's material was written when it was minted and is
 		// immutable, so nothing is re-resolved here. That is the property under
@@ -886,11 +903,20 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	gate := gateDecision{satisfied: true}
 	switch {
 	case status.ActiveRevisionDigest == desiredDigest:
+	case pinBypass != "":
+		// A pinned rollback Q5 (a) admitted is promoted, not evaluated.
 	case gating == gateUnwired:
 		// assessGates said GateDetectionUnwired; hold, and say nothing more.
 		gate = gateDecision{}
 	case gating == gateEnforced:
 		gate = r.gateFor(ctx, &agent, status, desired, desiredDigest, ready)
+	}
+
+	// GatesBypassed names the pinned revision on every pass that reaches the
+	// switch while the pin stands, whichever branch the pass takes. It is
+	// owned and not sticky, so it clears on the pass after the pin goes.
+	if pinBypass != "" {
+		conds.set(assaydv1alpha1.CondGatesBypassed, metav1.ConditionTrue, ReasonPinnedRollback, pinBypass)
 	}
 
 	switch {
@@ -1031,6 +1057,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		conds.set(assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", desired))
 		switch {
+		case pinBypass != "":
+			// GatesPassed is not asserted for a pinned rollback: it stays
+			// sticky and goes on describing the revision status.eval names
+			// (design 16 §1.1's table).
 		case gating == gateEnforced:
 			assessPromotedGate(conds, status.Eval, desired, desiredDigest)
 		case gating == gateNone && findCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGatesPassed)) != nil:
