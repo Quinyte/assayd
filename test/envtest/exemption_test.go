@@ -312,9 +312,12 @@ func TestTheExemptionsEdges(t *testing.T) {
 // unmatched blockedFor as no hold (the interval's first moments).
 func TestAGatewayLevelPolicyHoldsTheExemptLockAcrossItsDeadline(t *testing.T) {
 	var key client.ObjectKey
-	g, c, _ := exemptJ2(t, "jtwoabove", 8*time.Second, func(g *authEvalRig) {
+	g, c, _ := exemptJ2(t, "jtwoabove", 5*time.Second, func(g *authEvalRig) {
 		key = gatewayAuthPolicy(t, g.a, g.prober)
 	})
+	if !time.Now().Before(txOf(t, g.a).Deadline.Time) {
+		t.Fatal("setup: the Lock's deadline passed before the interval before it could be measured")
+	}
 	g.agentPass(t)
 	first := g.waitingForAuth(t, "before the eval controller's first clause-5 pass")
 	if !strings.Contains(first.Message, "has not yet evaluated clause 5 for this Lock") {
@@ -387,10 +390,13 @@ func TestAnUnreadableGatewayHoldsTheExemptLock(t *testing.T) {
 // interval); or a gate branch that checks only clauses 1 to 4 (GatesPassed).
 func TestAForeignTrafficPolicyHoldsTheExemptLockAcrossItsDeadline(t *testing.T) {
 	var foreign *unstructured.Unstructured
-	g, c, _ := exemptJ2(t, "jtwoforeign", 8*time.Second, func(g *authEvalRig) {
+	g, c, _ := exemptJ2(t, "jtwoforeign", 5*time.Second, func(g *authEvalRig) {
 		foreign = plantForeign(t, g.a)
 		g.prober.foreignAnswers(g.name, true)
 	})
+	if !time.Now().Before(txOf(t, g.a).Deadline.Time) {
+		t.Fatal("setup: the Lock's deadline passed before the interval before it could be measured")
+	}
 	g.noHits(t, c, "while the foreign policy stands", 3)
 	held := g.waitingForAuth(t, "beside the foreign policy")
 	if !strings.Contains(held.Message, "intruder") {
@@ -796,6 +802,11 @@ func TestTheRepointEndsTheWedgeWithNobodyActingFromTheGatesSide(t *testing.T) {
 	if e := liveAgent(t, g.a).Status.Eval; e.Verdict != assaydv1alpha1.EvalVerdictPassed {
 		t.Fatalf("setup: the case in flight did not write the verdict: %+v", e)
 	}
+	// The eval controller sees the recorded Lock, and waits on it, before it
+	// ends: what must not outlive the Lock is that wait.
+	if res := g.evalPass(t); res.RequeueAfter != controller.AuthProbeInterval {
+		t.Fatalf("an eval pass beside the recorded Lock did not wait on it: %+v", res)
+	}
 	probes := g.prober.count(g.name)
 	g.agentPass(t)
 	live := liveAgent(t, g.a)
@@ -1161,8 +1172,16 @@ func TestAJ2LockOnAGatedAgentHoldsTheEvalUntilServed(t *testing.T) {
 	addGatewayAgentController(t, mgr, g.r.Gateway, g.prober, g.stub, time.Minute)
 	addEvalController(t, mgr, g.stub, func() bool { return true },
 		func(e *controller.EvalReconciler) { e.Gateway = g.r.Gateway })
+	probes := g.prober.count(g.name)
 	startStoppable(t, mgr)
-	time.Sleep(6 * time.Second) // more than one AuthProbeInterval of Lock passes, held
+	// The interval: the manager's first passes of both controllers, which
+	// start on the Agent's initial list event, the Agent reconciler's
+	// probing the held Lock, and one more pass of each, driven by an event.
+	eventually(t, "the manager's first held Lock pass", func() bool { return g.prober.count(g.name) > probes })
+	probes = g.prober.count(g.name)
+	touch(t, g.a)
+	eventually(t, "a second held Lock pass", func() bool { return g.prober.count(g.name) > probes })
+	time.Sleep(time.Second)
 	if h := g.hits(c); h != 0 {
 		t.Fatalf("%d cases were sent while the J2 Lock was recorded", h)
 	}
@@ -1170,6 +1189,7 @@ func TestAJ2LockOnAGatedAgentHoldsTheEvalUntilServed(t *testing.T) {
 		t.Fatalf("setup: the Lock ended while the oracle withheld the 401: %+v", auth)
 	}
 	g.prober.hold(g.name, false)
+	touch(t, g.a) // the next Lock pass now, not at the next AuthProbeInterval
 	eventually(t, "the J2 Lock to reach Served", func() bool {
 		auth := authOf(t, g.a)
 		return auth.Mode == "apikey" && auth.Transaction == nil
@@ -1272,5 +1292,19 @@ func TestAJ2LockFinishesBesideTwoSleepingTenants(t *testing.T) {
 		if n := stub.sentTo(rig.name, rig.rev); n >= len(cases) {
 			t.Errorf("tenant %s's run finished (%d cases) before the Lock did: the row measured nothing", rig.name, n)
 		}
+	}
+}
+
+// touch annotates the Agent, which enqueues it on both controllers' watches
+// at once, so a test need not wait out a requeue interval.
+func touch(t *testing.T, a *assaydv1alpha1.Agent) {
+	t.Helper()
+	live := liveAgent(t, a)
+	if live.Annotations == nil {
+		live.Annotations = map[string]string{}
+	}
+	live.Annotations["test.assayd.dev/touch"] = time.Now().Format(time.RFC3339Nano)
+	if err := k8s.Update(context.Background(), live); err != nil {
+		t.Fatalf("touch the Agent: %v", err)
 	}
 }
