@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -48,34 +49,33 @@ const (
 )
 
 // installEvalSuiteWriters applies the chart's assayd-evalsuite-writers under a
-// name of this test's, narrowed to namespaces carrying scope. It refuses a
-// rendered policy or binding that narrows what the policy reaches, because the
-// narrowing it adds here would hide it: a namespaceSelector, matchConditions
-// or a binding's matchResources each exempt someone from the check.
+// name of this test's, narrowed to namespaces carrying scope. First it holds
+// the default render to the golden fixture the chart test holds it to
+// (test/chart/testdata/evalsuite-writers-default.yaml), byte for byte with
+// comment lines dropped, so any field the fixture does not hold -- one that
+// would narrow the check, and that the narrowing added here could hide --
+// fails this test rather than passing it.
 func installEvalSuiteWriters(t *testing.T, scope string) string {
 	t.Helper()
 	ctx := context.Background()
+	out, err := exec.Command("helm", "template", "assayd", filepath.Join("..", "..", "charts", "assayd")).Output()
+	if err != nil {
+		t.Fatalf("helm template: %v", err)
+	}
+	want, err := os.ReadFile(filepath.Join("..", "chart", "testdata", "evalsuite-writers-default.yaml"))
+	if err != nil {
+		t.Fatalf("read the golden fixture: %v", err)
+	}
+	if got := evalSuiteWritersDocs(string(out)); got != string(want) {
+		t.Fatalf("the rendered %s is not its golden fixture, so what this test would install is not what was "+
+			"reviewed:\n--- rendered\n%s\n--- fixture\n%s", evalSuiteWriters, got, want)
+	}
 	docs := renderedAdmission(t)
 	pol, bind := docs["ValidatingAdmissionPolicy/"+evalSuiteWriters], docs["ValidatingAdmissionPolicyBinding/"+evalSuiteWriters]
 	if pol == nil || bind == nil {
 		t.Fatalf("the chart renders no policy and binding named %s", evalSuiteWriters)
 	}
 	pol, bind = pol.DeepCopy(), bind.DeepCopy()
-	for _, f := range []struct {
-		obj  *unstructured.Unstructured
-		path []string
-	}{
-		{pol, []string{"spec", "matchConstraints", "namespaceSelector"}},
-		{pol, []string{"spec", "matchConstraints", "objectSelector"}},
-		{pol, []string{"spec", "matchConditions"}},
-		{bind, []string{"spec", "matchResources"}},
-		{bind, []string{"spec", "paramRef"}},
-	} {
-		if _, found, _ := unstructured.NestedFieldNoCopy(f.obj.Object, f.path...); found {
-			t.Fatalf("the rendered %s %s now sets %s, which exempts whatever it does not select from the check",
-				f.obj.GetKind(), evalSuiteWriters, strings.Join(f.path, "."))
-		}
-	}
 	if err := unstructured.SetNestedStringMap(pol.Object, map[string]string{scopeLabel: scope},
 		"spec", "matchConstraints", "namespaceSelector", "matchLabels"); err != nil {
 		t.Fatal(err)
@@ -94,6 +94,32 @@ func installEvalSuiteWriters(t *testing.T, scope string) string {
 		t.Cleanup(func() { _ = k8s.Delete(context.Background(), o) })
 	}
 	return unique
+}
+
+// evalSuiteWritersDocs picks assayd-evalsuite-writers' policy and binding out
+// of a render, comment lines dropped, joined by "---": the same extraction as
+// test/chart's, which owns the fixtures.
+func evalSuiteWritersDocs(rendered string) string {
+	var policy, binding string
+	for _, chunk := range strings.Split(rendered, "\n---\n") {
+		var kept []string
+		for _, l := range strings.Split(chunk, "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(l), "#") && strings.TrimSpace(l) != "---" {
+				kept = append(kept, l)
+			}
+		}
+		doc := strings.TrimSpace(strings.Join(kept, "\n")) + "\n"
+		if !strings.Contains(doc, "\n  name: "+evalSuiteWriters+"\n") {
+			continue
+		}
+		switch {
+		case strings.Contains(doc, "kind: ValidatingAdmissionPolicy\n"):
+			policy = doc
+		case strings.Contains(doc, "kind: ValidatingAdmissionPolicyBinding\n"):
+			binding = doc
+		}
+	}
+	return policy + "---\n" + binding
 }
 
 // renderedOperatorAgentRules is the chart's operator ClusterRole's rules over
@@ -133,11 +159,10 @@ func renderedOperatorAgentRules(t *testing.T) []rbacv1.PolicyRule {
 }
 
 // grant binds user to rules in ns by a Role of its own. With no rules, the
-// binding names a Role that does not exist. RBAC grants nothing from that and
-// mentions it in its reason, but returns no error, so the `authorizer`
-// library's errored() stays false: no RBAC state found makes it true, and a
-// policy that admitted on an authorizer error is caught only by the chart
-// test's exact expression.
+// binding names a Role that does not exist: RBAC denies with a reason saying
+// so, and returns no error. That is not an authorizer error, and no RBAC state
+// produces one, so a policy that admitted on an authorizer error is caught
+// only by the chart's golden fixture.
 func grant(t *testing.T, ns, user string, rules ...rbacv1.PolicyRule) {
 	t.Helper()
 	ctx := context.Background()
@@ -195,8 +220,10 @@ func mayAccess(t *testing.T, user, ns, resource, name, verb string) bool {
 // T61: a user who may only write suites is denied; one who may `update` Agents
 // only under `resourceNames` is denied; one who may `update` Agents
 // namespace-wide is admitted. Beside those three, the rows that pin what the
-// check asks: `patch` alone, an Agent editor of another namespace, and a
-// binding to a missing Role are refused; a service account is not exempt; the
+// check asks: `patch` alone and an Agent editor of another namespace are
+// refused, as is a binding to a missing Role (a denial with a reason, not an
+// authorizer error); a service account is not exempt; a suite of another name
+// is refused as one named for its Agent is; the
 // operator, with its rendered ClusterRole, passes; and the garbage collector
 // removes a finalizer. For CREATE and for UPDATE; DELETE stays RBAC's, and the
 // policy reaches nothing but EvalSuites.
@@ -315,7 +342,7 @@ func TestOnlyAnAgentEditorWritesAnEvalSuite(t *testing.T) {
 		{"a user who may update one Agent, by name", as(t, namedEditor)},
 		{"a user who may patch, but not update, Agents", as(t, patchOnly)},
 		{"a user who may update Agents only in another namespace", as(t, otherEditor)},
-		{"a user whose Agent editor binding names a missing Role", as(t, unresolvable)},
+		{"a user whose Agent editor binding names a missing Role (RBAC denies with a reason; not an authorizer error)", as(t, unresolvable)},
 		{"a service account that may only write suites", as(t, serviceAccount,
 			"system:serviceaccounts", "system:serviceaccounts:"+ns, "system:authenticated")},
 	}
@@ -329,6 +356,14 @@ func TestOnlyAnAgentEditorWritesAnEvalSuite(t *testing.T) {
 		}
 		expectRefused(u.who, "create", err)
 	}
+	// A suite named for nothing: a check scoped to names, or a rule scoped
+	// to resourceNames, could pass the rows above, which all write `pricer`.
+	nightly := suite(ns, "nightly", evalCase("a", "ping", "pong", ""))
+	err := as(t, suiteOnly).Create(ctx, nightly)
+	if err == nil {
+		_ = k8s.Delete(ctx, nightly)
+	}
+	expectRefused("a user who may only write suites, on a suite named nightly", "create", err)
 	if err := as(t, renderedOperator).Create(ctx, newSuite(), client.DryRunAll); err != nil {
 		t.Errorf("the operator's identity, holding its rendered ClusterRole's update on every Agent, was refused "+
 			"an EvalSuite create; the policy exempts no one and it passes the check: %v", err)

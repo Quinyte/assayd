@@ -360,12 +360,18 @@ spec:
 # cluster-wide Agent editor passes its check in every namespace, the operator
 # included: its ClusterRole updates every Agent. What keeps the operator from
 # writing a suite is RBAC alone, `get` and nothing else on evalsuites
-# (test/chart, TestTheOperatorOnlyReadsEvalSuites). The same holds for an
-# admission.extraOperators identity that may update Agents.
+# (test/chart, TestTheOperatorOnlyReadsEvalSuites). The chart grants an
+# admission.extraOperators identity nothing; its RBAC is the administrator's,
+# and if that lets it update Agents, it passes here too.
 # Every CREATE and UPDATE is judged, whatever it changes, metadata-only edits
-# included: the garbage collector that removes a deletion finalizer holds
-# `update` on every resource, so it passes. DELETE is RBAC's, as for the other
-# reservations (design 07 A6.10). There is no status subresource to match.
+# included. The garbage collector finishes a foreground delete by an UPDATE
+# that removes its finalizer, and it passes where kube-controller-manager runs
+# with --use-service-account-credentials, as kubeadm's does: its bootstrap
+# ClusterRole grants `update` on every resource (measured on envtest, T61).
+# That is unverified on k3s and on managed control planes; where it fails,
+# the suite's foreground delete stalls, which fails closed. DELETE is RBAC's,
+# as for the other reservations (design 07 A6.10). There is no status
+# subresource to match.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
