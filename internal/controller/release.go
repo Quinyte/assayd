@@ -32,9 +32,14 @@ type releasePin struct {
 // ordinary desired spec: the user asked to serve R1 and silently serving R2
 // instead is the opposite of a rollback, at the moment someone is most likely
 // to be recovering from an incident.
+//
+// A pin design 16 Q5 (a) refuses on a gated Agent takes the same path
+// (pinrule.go): ineligible is set, and the condition's reason is
+// PinnedRevisionNotEligible rather than ReleasePinUnresolvable.
 type unresolvablePinError struct {
-	digest string
-	reason string
+	digest     string
+	reason     string
+	ineligible bool
 }
 
 func (e *unresolvablePinError) Error() string {
@@ -61,7 +66,10 @@ func (e *unresolvablePinError) Error() string {
 // collision (A57), the name shape because ownedWorkloads is the authority on
 // what this operator created for this Agent.
 //
-// **What this does not do yet, and §5 says so.** ADR-0031 **Amendment 1** also
+// **What this does not do yet, and §5 says so.** On a gated Agent, design 16
+// Q5 (a)'s eligibility rule is applied after this resolves (pinRule,
+// pinrule.go): it reads the current candidate and status.eval.failed[], and
+// it is not the check that follows. ADR-0031 **Amendment 1** also
 // requires refusing a revision that lacks the gate evidence a governed install
 // demands, and rechecking current security constraints — a rollback is not
 // authorization to restore a revoked credential. An earlier version of this
@@ -115,7 +123,11 @@ func (r *AgentReconciler) reportUnresolvablePin(ctx context.Context, agent *assa
 	// normally. A13's rule, written into agent_controller.go: Ready=False on an
 	// agent whose active revision is serving "would trip every alert keyed on the
 	// canonical condition".
-	conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ReleasePinUnresolvable", e.Error())
+	reason := "ReleasePinUnresolvable"
+	if e.ineligible {
+		reason = ReasonPinnedRevisionNotEligible
+	}
+	conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, reason, e.Error())
 	status.Phase = assaydv1alpha1.PhaseDegraded
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation

@@ -1040,6 +1040,95 @@ reasons:
       WRITTEN INTO THAT NAMESPACE.
     traffic: not-withdrawn
 
+  - reason: PinnedRevisionNotEligible
+    state: >-
+      The Agent declares a gate, the EvalSuite CRD is installed, and
+      `spec.release.targetRevisionDigest` names a retained revision, other
+      than the one serving and with its retained material intact, that design
+      16 Q5 (a) refuses: the current candidate — the revision the current spec
+      mints, computed each pass with its env sources' content, whether or not
+      a pass has recorded it yet — or a digest that `status.eval.failed[]`
+      records against the suite in force, at its current digest. With no
+      current suite digest, because the suite does not exist or cannot be
+      read, only the first refusal applies. A pin admitted and still coming up
+      is judged again on each pass, so a suite edited to one it failed refuses
+      it.
+    operator: >-
+      Refuses the pin through the unresolvable-pin path, before the collision
+      guard, the supersession and everything else in the pass: sets
+      `Degraded=True` with this reason and phase `Degraded`, leaves `Ready` as
+      it was, and returns. A refused pin never names the revision serving, so no `GatesBypassed` is derived for it. Nothing is rolled
+      back and the current release, its recorded candidate included, is left
+      as it was. The refusal does not stop the recorded candidate's run: when
+      one write reverts the spec to a retained revision and pins it, that
+      recorded candidate is still the revision an earlier spec minted, and the
+      eval controller can run it to a verdict while the refusal stands, though
+      nothing promotes until the pin is cleared, which supersedes it. A pin
+      refused on `failed[]` after the rollout had recorded it as the candidate
+      while it came up is still the recorded candidate, and the eval
+      controller holds it: nothing is evaluated, and that pair has failed
+      already. Like every refusal on this path, the early return also
+      skips the serving revision's route, `-auth` and drift convergence for as
+      long as it stands. The message names the digest, why it is not eligible
+      — the current candidate, or the failed pair and the suite digest — and
+      the fix: clear the pin, pin another revision, edit the suite, or remove
+      `spec.gates` and then pin (design 16 Q9). It requeues on
+      `CardDriftInterval`, because a suite edit can lift the refusal and
+      nothing watches suites.
+    traffic: not-withdrawn
+    note: >-
+      A pin whose material is gone reads `ReleasePinUnresolvable` instead,
+      whatever its eval record says. An Agent CRD too old to keep `status.eval`
+      (`EvalRecordNotKept`) keeps no `failed[]`, so there a pin is never
+      refused on it. An edit to a referenced ConfigMap or Secret, with no
+      write to the Agent, mints a new candidate and so lifts a refusal of the
+      old one. While the refusal stands the eval controller's I1 predicate
+      still reads the pin as set and turns the I1 hold off, which design 16
+      A20.26 records.
+
+  - reason: PinnedRollback
+    state: >-
+      The Agent declares a gate and the EvalSuite CRD is installed, and either
+      `spec.release.targetRevisionDigest` names a retained revision, not yet
+      serving, that design 16 Q5 (a) admits on this pass — it is not the
+      revision the current spec mints, and `status.eval.failed[]` does not
+      record it against the suite in force, or there is no current suite
+      digest to check it against — or the pin names the revision serving and
+      `status.eval` records no `Passed` verdict for it. The second form is a
+      statement about the record, not a claim that the gate was bypassed: its
+      message says only what `status.eval` holds — no run; a run of another
+      revision, in which case whether this one passed is not recorded, and,
+      when `failed[]` names no pair of it either, whether it ever ran; a `Failed` verdict for it, naming the suite digest; a run of
+      it with no verdict yet; or its pair with the verdict cleared — and how
+      many pairs `failed[]` records for it.
+    operator: >-
+      Sets `GatesBypassed=True` with this reason, naming the pinned revision
+      and its digest. For a revision not yet serving the message says it will
+      be promoted once available without its gate, that the eval controller
+      sends it no case, and why the pin was admitted, and it is judged again
+      on each pass until it serves, and it is asserted as soon as the pin is
+      admitted, so an exit later in the same pass keeps it. For the revision
+      serving it says it serves by pin and what the record holds about it;
+      while that holds the promotion branch
+      does not assert `GatesPassed`, which keeps describing the revision
+      `status.eval` names. The condition is derived from the spec and status
+      on every pass, `assessGates` included, and no stored condition is read,
+      so a forged one is recomputed away. It is owned and not sticky, and is
+      withdrawn on the first pass on which it no longer derives: the pin
+      removed, or changed to a digest that is neither admitted nor serving
+      unevaluated; a `Passed` verdict recorded for the serving pinned
+      revision; the pin refused; or a pin not yet serving that no longer
+      resolves. A pending pin's form is also withdrawn on a pass that returns
+      before the pin step — the run namespace unavailable, or a source of the
+      current spec unresolved — because only the serving form is derived
+      before it; it comes back on the next pass that reaches the pin step. A
+      serving pinned revision whose retained material is then collected keeps
+      it, beside `ReleasePinUnresolvable`, because it still serves by pin. On a pass
+      that does not enforce the gate — `spec.gates` removed, or the EvalSuite
+      CRD undiscoverable — it is not asserted, so it is withdrawn there and
+      derived again on the first pass that enforces the gate.
+    traffic: not-withdrawn
+
   - reason: PolicyWriteFailed
     state: >-
       A create, update or delete of an `<agent>-auth` policy failed — during an
