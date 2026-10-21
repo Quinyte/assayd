@@ -514,42 +514,39 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 		return ctrl.Result{}, perr
 	}
-	// The pinned revision's retained material is verified first, so that a
-	// pin whose material is gone is refused for that, and never told to edit a
-	// suite. It is checked before anything in status moves, so a refusal
-	// leaves the release as it found it.
-	if pin != nil {
+	// Design 16 Q5 (a), on a gated Agent with the EvalSuite CRD installed.
+	// The pinned revision's retained material is verified first, so a pin
+	// whose material is gone is refused for that and is never told to edit a
+	// suite; then the rule is applied (pinIneligible, pinrule.go). Both come
+	// before the supersession below moves the candidate, so a refusal leaves
+	// the release exactly as it found it. The rule is derived from the spec
+	// and status on every pass and reads no stored judgement:
+	//
+	//   - a pin that names the revision serving has nothing to admit or
+	//     refuse, and is not judged; a GatesBypassed that names its digest is
+	//     kept, so a pinned rollback that has promoted goes on saying so;
+	//   - any other pin is refused when it names the candidate the current
+	//     spec mints, or a pair failed against the suite in force, through the
+	//     unresolvable-pin path, and is otherwise admitted and bypasses the
+	//     gate. A pin admitted and not yet serving is judged again each pass.
+	//
+	// On an ungated Agent, or with the EvalSuite CRD absent, none of this
+	// runs and the pin is handled exactly as before Q5, its material verified
+	// after the supersession. An unwired reconciler's gate holds every
+	// candidate as it did. A refusal requeues on the drift interval: a suite
+	// edit can lift it, and nothing watches suites.
+	pinBypassed, pinWhy := false, ""
+	if pin != nil && gating == gateEnforced {
 		if merr := r.verifyRetainedMaterial(ctx, &agent, runNS, pin.Revision, pin.Digest); merr != nil {
 			if u := (*unresolvablePinError)(nil); errors.As(merr, &u) {
 				return ctrl.Result{}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
 			}
 			return ctrl.Result{}, merr
 		}
-	}
-	// Design 16 Q5 (a), on a gated Agent with the EvalSuite CRD installed. It
-	// is decided here, before the supersession below moves the candidate, so
-	// a refusal leaves the release exactly as it found it.
-	//
-	//   - A pin the stored admission record covers was admitted on an earlier
-	//     pass and is not judged again (pinAdmitted, pinrule.go).
-	//   - A pin that names the revision serving, with no such record, has
-	//     nothing to admit or refuse, and bypasses nothing.
-	//   - Any other pin is refused when it names the recorded candidate, or a
-	//     pair failed against the suite in force, through the unresolvable-pin
-	//     path, and is otherwise admitted and bypasses the gate.
-	//
-	// The rule does not apply while the EvalSuite CRD is absent (nothing is
-	// gated) or on an unwired reconciler, whose gate holds every candidate as
-	// it did. A refusal requeues on the drift interval: a suite edit can lift
-	// it, and nothing watches suites.
-	pinBypassed, pinWhy := false, ""
-	if pin != nil && gating == gateEnforced {
-		switch {
-		case pinAdmitted(agent.Status.Conditions, pin.Digest) != nil:
-			pinBypassed = true
-		case pin.Digest == status.ActiveRevisionDigest:
-		default:
-			u, why := r.pinRule(ctx, &agent, status, pin)
+		if pin.Digest == status.ActiveRevisionDigest {
+			pinBypassed = keptBypass(agent.Status.Conditions, pin.Digest) != nil
+		} else {
+			u, why := r.pinRule(ctx, &agent, status, pin, desiredDigest)
 			if u != nil {
 				return ctrl.Result{RequeueAfter: CardDriftInterval}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
 			}
@@ -605,10 +602,18 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// immutable copy correctly refuses them (ADR-0031).
 	var material map[revision.SourceRef]string
 	var merr error
-	if pin == nil {
-		// A pinned revision's material was verified above, not rewritten and
-		// not re-pointed: the pinned Deployment already references its own
-		// copies and is not re-rendered.
+	switch {
+	case pin != nil && gating == gateEnforced:
+		// Verified above, before the pin rule.
+	case pin != nil:
+		// Verified, not rewritten and not re-pointed: the pinned Deployment already
+		// references its own copies and is not re-rendered, so this only refuses a
+		// revision whose material is gone or whose spec has changed shape.
+		merr = r.verifyRetainedMaterial(ctx, &agent, runNS, desired, desiredDigest)
+		if u := (*unresolvablePinError)(nil); merr != nil && errors.As(merr, &u) {
+			return ctrl.Result{}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
+		}
+	default:
 		material, merr = r.ensureRevisionMaterial(ctx, &agent, runNS, desired, desiredDigest, buffers)
 	}
 	if merr != nil {
@@ -1085,12 +1090,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 	}
 
-	// GatesBypassed names the admitted pinned revision, and whether it serves
-	// yet, on every pass that reaches here while the pin stands. It is the
-	// admission record (pinrule.go): owned and not sticky, carried by
-	// assessGates across a pass that returns early, and cleared on the pass
-	// after the pin goes or is refused.
-	if pinBypassed {
+	// GatesBypassed names a pin admitted on this pass, and whether it serves
+	// yet. It is owned and not sticky. assessGates keeps the stored one, on a
+	// pass that does not judge the pin, only while the pin still names the
+	// digest it describes (keptBypass), so a pin removed or changed to
+	// another digest withdraws it, and a refusal or a pin that no longer
+	// resolves withdraws it too. It decides nothing.
+	if pinWhy != "" {
 		conds.set(assaydv1alpha1.CondGatesBypassed, metav1.ConditionTrue, ReasonPinnedRollback,
 			pinnedRollbackMessage(pin, status.ActiveRevisionDigest == pin.Digest, pinWhy))
 	}
@@ -2083,8 +2089,8 @@ func (r *AgentReconciler) assessGates(agent *assaydv1alpha1.Agent, mode gateMode
 		c.set(assaydv1alpha1.CondGatesSkipped, metav1.ConditionTrue, "EvalSuiteCRDAbsent",
 			"the EvalSuite CRD is not installed, so this rollout is NOT eval-gated (design 02 §3.3, core tier)")
 	case gateEnforced:
-		// An admitted pin's GatesBypassed survives a pass that returns before
-		// the pin step re-derives it (design 16 Q5 (a)).
+		// A pinned rollback's GatesBypassed survives a pass that does not
+		// judge the pin, while the pin names the same digest (design 16 Q5).
 		carryPinnedRollback(agent, c)
 	}
 }

@@ -426,15 +426,17 @@ type ReleaseSpec struct {
 	// point under source drift.
 	//
 	// On an Agent that declares spec.gates, with the EvalSuite CRD installed, a
-	// pin to the recorded candidate (status.candidateRevisionDigest) is
-	// refused with Degraded=True/PinnedRevisionNotEligible and nothing is
-	// rolled back. So is a pin to a revision status.eval.failed[] records
-	// against the suite in force, except while that suite is missing or
-	// cannot be read, when there is no suite in force to check against and
-	// the pin is admitted. Any other pin to a revision that is not serving is
-	// served without evaluation, under GatesBypassed=True/PinnedRollback, and
-	// is not judged again while it stands; a pin to the revision already
-	// serving changes nothing (design 16 Q5).
+	// pin to the candidate the gate is evaluating — the revision the current
+	// spec mints, recorded in status.candidateRevisionDigest — is refused with
+	// Degraded=True/PinnedRevisionNotEligible and nothing is rolled back. So
+	// is a pin to a revision status.eval.failed[] records against the suite
+	// in force, except while that suite is missing or cannot be read, when
+	// there is nothing to check against and the pin is admitted; an Agent CRD
+	// too old to keep status.eval keeps no failed[], so there the pin is
+	// admitted too. Any other pin is served without evaluation, under
+	// GatesBypassed=True/PinnedRollback. A pin admitted and not yet serving is
+	// judged again on each pass, so a suite edited to one it failed refuses
+	// it. A pin to the revision already serving sets nothing (design 16 Q5).
 	// +optional
 	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
 	TargetRevisionDigest string `json:"targetRevisionDigest,omitempty"`

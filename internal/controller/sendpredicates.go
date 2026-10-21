@@ -9,6 +9,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -64,19 +65,22 @@ func candidatePending(status *assaydv1alpha1.AgentStatus) bool {
 // the two every other send predicate can hold, and a run started there could
 // fail it into status.eval.failed[].
 //
-// Admitted means the stored admission record names the pin's digest
-// (pinAdmitted, pinrule.go), which the Agent reconciler writes in the same
-// status write that records the candidate. A pin the rule refused carries no
-// record, so the candidate it names goes on being evaluated, and its run is
-// untouched. The Agent reconciler does not evaluate this predicate: it
-// decides the pin before the switch, and an admitted pin never reaches the
-// gate.
+// Admitted is read from status as the Agent reconciler leaves it:
+// GatesBypassed=True/PinnedRollback stands, which it writes in the same
+// status write that records the candidate. Only the condition's status and
+// reason are read. A refused pin carries none, so the candidate it names
+// goes on being evaluated. A forged condition can pause a run here, and
+// grants nothing in the Agent reconciler, whose rule does not read it.
 func pinNamesCandidate(agent *assaydv1alpha1.Agent) bool {
 	if agent.Spec.Release == nil {
 		return false
 	}
 	d := agent.Spec.Release.TargetRevisionDigest
-	return d != "" && d == agent.Status.CandidateRevisionDigest && pinAdmitted(agent.Status.Conditions, d) != nil
+	if d == "" || d != agent.Status.CandidateRevisionDigest {
+		return false
+	}
+	c := findCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGatesBypassed))
+	return c != nil && c.Status == metav1.ConditionTrue && c.Reason == ReasonPinnedRollback
 }
 
 // recordedTransaction is a Create or a Lock recorded in

@@ -1043,61 +1043,66 @@ reasons:
   - reason: PinnedRevisionNotEligible
     state: >-
       The Agent declares a gate, the EvalSuite CRD is installed, and
-      `spec.release.targetRevisionDigest` names a retained revision that is
-      not the one serving, that no standing `GatesBypassed=True/PinnedRollback`
-      record already admitted, and that design 16 Q5 (a) refuses: the recorded
-      candidate, `status.candidateRevisionDigest` as stored when the pass
-      began — so a single write that edits the spec and pins the candidate is
-      refused too — or a digest that `status.eval.failed[]` records against
-      the suite in force, at its current digest. With no current suite digest,
+      `spec.release.targetRevisionDigest` names a retained revision, other
+      than the one serving and with its retained material intact, that design
+      16 Q5 (a) refuses: the current candidate — the revision
+      `status.candidateRevisionDigest` records when the current spec also
+      mints it, so not a pinned revision the rollout recorded there while it
+      comes up — or a digest that `status.eval.failed[]` records against the
+      suite in force, at its current digest. With no current suite digest,
       because the suite does not exist or cannot be read, only the first
-      refusal applies.
+      refusal applies. A pin admitted and still coming up is judged again on
+      each pass, so a suite edited to one it failed refuses it.
     operator: >-
-      Refuses the pin through the unresolvable-pin path, after the pinned
-      revision's retained material is verified and before anything else in
-      the pass moves: sets `Degraded=True` with this reason and phase
+      Refuses the pin through the unresolvable-pin path, before anything else
+      in the pass moves: sets `Degraded=True` with this reason and phase
       `Degraded`, leaves `Ready` as it was, withdraws any `GatesBypassed`, and
       returns. Nothing is rolled back and the current release, its candidate
       included, is untouched: the eval controller goes on evaluating that
-      candidate, because it holds off only for an admitted pin. The message
-      names the digest, why it is not eligible — the current candidate, or
-      the failed pair and the suite digest — and the fix: clear the pin, pin
-      another revision, edit the suite, or remove `spec.gates` and then pin
-      (design 16 Q9). It requeues on `CardDriftInterval`, because a suite edit
-      can lift the refusal and nothing watches suites.
+      candidate, because it holds off only beside a standing
+      `GatesBypassed=True/PinnedRollback`. The message names the digest, why
+      it is not eligible — the current candidate, or the failed pair and the
+      suite digest — and the fix: clear the pin, pin another revision, edit
+      the suite, or remove `spec.gates` and then pin (design 16 Q9). It
+      requeues on `CardDriftInterval`, because a suite edit can lift the
+      refusal and nothing watches suites.
     traffic: not-withdrawn
     note: >-
       A pin whose material is gone reads `ReleasePinUnresolvable` instead,
-      whatever its eval record says. While the refusal stands the eval
-      controller's I1 predicate still reads the pin as set and turns the I1
-      hold off, which design 16 A20.26 records.
+      whatever its eval record says. An Agent CRD too old to keep `status.eval`
+      (`EvalRecordNotKept`) keeps no `failed[]`, so there a pin is never
+      refused on it. While the refusal stands the eval controller's I1
+      predicate still reads the pin as set and turns the I1 hold off, which
+      design 16 A20.26 records.
 
   - reason: PinnedRollback
     state: >-
       The Agent declares a gate, the EvalSuite CRD is installed, and
-      `spec.release.targetRevisionDigest` names a retained revision that is
-      not the one serving and that design 16 Q5 (a) admits: it is not the
-      recorded candidate, and `status.eval.failed[]` does not record it
-      against the suite in force — or there is no current suite digest to
-      check it against. A pin to the revision already serving sets nothing.
+      `spec.release.targetRevisionDigest` names a retained revision that design
+      16 Q5 (a) admits: it is not the candidate the current spec mints, and
+      `status.eval.failed[]` does not record it against the suite in force —
+      or there is no current suite digest to check it against. A pin to the
+      revision already serving is not judged, and sets this only when the
+      stored condition already names that digest, which is the pinned
+      rollback having promoted.
     operator: >-
       Sets `GatesBypassed=True` with this reason, naming the pinned revision
-      and its digest, on every pass that reaches the rollout switch while the
-      pin stands. The message says either that the revision will be promoted
-      once available without its gate, and that the eval controller sends it
-      no case, or that it serves by pin and its gate was bypassed; the pass
-      that admits the pin also says why. The condition is the admission
-      record: while it names the pin's digest the rule is not applied again,
-      so a suite edited back to one the revision failed, or a suite restored
-      after an incident, does not refuse a pin that serves. It is owned and
-      not sticky, carried across a pass that returns before the pin step, and
-      withdrawn on the pass after the pin is removed, refused or no longer
-      resolves. `GatesPassed` is not asserted, so it keeps describing the
-      revision `status.eval` names.
+      and its digest, on each pass that admits the pin, which is every pass
+      until the revision serves: the message says it will be promoted once
+      available without its gate, and that the eval controller sends it no
+      case, or that it serves by pin and its gate was bypassed, and why the
+      pin was admitted. On a pass that does not judge the pin — one that
+      returns early, or one whose pin names the revision serving — the stored
+      condition is kept only while the pin names the digest it describes. It
+      is withdrawn when the pin is removed or changed to another digest, when
+      the pin is refused, and when it no longer resolves. It decides nothing:
+      the rule does not read it. `GatesPassed` is not asserted, so it keeps
+      describing the revision `status.eval` names.
     traffic: not-withdrawn
     note: >-
-      The record is a status condition, so a principal that can write
-      `agents/status` can forge it, as it can already forge a verdict.
+      The eval controller reads it, by status and reason only, to hold off
+      the recorded candidate a pin names, so a forged condition can pause a
+      run and grants nothing else.
 
   - reason: PolicyWriteFailed
     state: >-
