@@ -65,3 +65,75 @@ func TestPinIneligibleFollowsQ5(t *testing.T) {
 		})
 	}
 }
+
+// The serving form of GatesBypassed says only what the record holds. One row
+// per branch of servingRecord, each asserting the exact sentence, so a clause
+// added to any of them — "and it never failed", say — fails here.
+func TestServingRecordSaysOnlyWhatStatusEvalHolds(t *testing.T) {
+	const d, other, s1, s2 = "sha256:pinned", "sha256:other", "sha256:s1", "sha256:s2"
+	failed := func(pairs ...assaydv1alpha1.EvalPair) []assaydv1alpha1.EvalPair { return pairs }
+	cases := []struct {
+		name string
+		e    *assaydv1alpha1.EvalStatus
+		want string
+	}{
+		{"no record", nil, "status.eval records no run."},
+		{"a record with no pair", &assaydv1alpha1.EvalStatus{}, "status.eval records no run."},
+		{"another revision's pair", &assaydv1alpha1.EvalStatus{RevisionDigest: other, SuiteDigest: s1,
+			Verdict: assaydv1alpha1.EvalVerdictFailed},
+			"status.eval records a run of another revision (digest sha256:other), so whether this revision " +
+				"passed its gate or never ran is not recorded."},
+		{"its own Failed verdict", &assaydv1alpha1.EvalStatus{RevisionDigest: d, SuiteDigest: s1,
+			Verdict: assaydv1alpha1.EvalVerdictFailed, Failed: failed(assaydv1alpha1.EvalPair{RevisionDigest: d, SuiteDigest: s1})},
+			"status.eval records a Failed verdict for it against suite digest sha256:s1. status.eval.failed[] " +
+				"records 1 failed pair(s) for it, against suite digest(s) sha256:s1."},
+		{"its own run with no verdict", &assaydv1alpha1.EvalStatus{RevisionDigest: d, SuiteDigest: s2,
+			Verdict: assaydv1alpha1.EvalVerdictRunning},
+			"status.eval records a run of it against suite digest sha256:s2 with no verdict yet."},
+		{"its own pair, verdict cleared (#111)", &assaydv1alpha1.EvalStatus{RevisionDigest: d, SuiteDigest: s2,
+			Failed: failed(assaydv1alpha1.EvalPair{RevisionDigest: d, SuiteDigest: s1},
+				assaydv1alpha1.EvalPair{RevisionDigest: other, SuiteDigest: s1},
+				assaydv1alpha1.EvalPair{RevisionDigest: d, SuiteDigest: s2})},
+			"status.eval names it against suite digest sha256:s2 with its verdict cleared. status.eval.failed[] " +
+				"records 2 failed pair(s) for it, against suite digest(s) sha256:s1, sha256:s2."},
+		{"another revision's pair, with its own failures", &assaydv1alpha1.EvalStatus{RevisionDigest: other,
+			SuiteDigest: s2, Verdict: assaydv1alpha1.EvalVerdictFailed,
+			Failed: failed(assaydv1alpha1.EvalPair{RevisionDigest: d, SuiteDigest: s1})},
+			"status.eval records a run of another revision (digest sha256:other), so whether this revision " +
+				"passed its gate or never ran is not recorded. status.eval.failed[] records 1 failed pair(s) " +
+				"for it, against suite digest(s) sha256:s1."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := servingRecord(c.e, d); got != c.want {
+				t.Errorf("servingRecord\n got %q\nwant %q", got, c.want)
+			}
+		})
+	}
+}
+
+// The whole serving message, once with the admitting pass's reason and once in
+// steady state, and nothing for a pinned revision with a Passed verdict.
+func TestServingPinBypassIsTheRecordAndNothingElse(t *testing.T) {
+	const d = "sha256:pinned"
+	agent := &assaydv1alpha1.Agent{Spec: assaydv1alpha1.AgentSpec{
+		Release: &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: d}}}
+	st := &assaydv1alpha1.AgentStatus{ActiveRevision: "rev", ActiveRevisionDigest: d,
+		Eval: &assaydv1alpha1.EvalStatus{RevisionDigest: d, SuiteDigest: "sha256:s1",
+			Verdict: assaydv1alpha1.EvalVerdictFailed}}
+	tail := " While the pin stands nothing is evaluated in its place, and GatesPassed is not asserted for " +
+		"it, so it keeps describing the revision status.eval names"
+	head := "spec.release.targetRevisionDigest pins revision rev (digest sha256:pinned), the revision serving, " +
+		"and it serves by pin"
+	rec := ". status.eval records a Failed verdict for it against suite digest sha256:s1."
+	if got, want := servingPinBypass(agent, st, ""), head+rec+tail; got != want {
+		t.Errorf("steady state\n got %q\nwant %q", got, want)
+	}
+	if got, want := servingPinBypass(agent, st, "why"), head+"; design 16 Q5 (a) admitted the pin: why"+rec+tail; got != want {
+		t.Errorf("admitting pass\n got %q\nwant %q", got, want)
+	}
+	st.Eval.Verdict = assaydv1alpha1.EvalVerdictPassed
+	if got := servingPinBypass(agent, st, ""); got != "" {
+		t.Errorf("a pinned revision with a Passed verdict still reads a serving form: %q", got)
+	}
+}

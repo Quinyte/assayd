@@ -6,6 +6,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
 
@@ -64,8 +65,9 @@ func pinIneligible(pinDigest, specDigest string, status *assaydv1alpha1.AgentSta
 	if pinDigest == specDigest {
 		return fmt.Sprintf("it is the current candidate: the revision the current spec mints, which "+
 			"the gate on EvalSuite %q evaluates before it serves. On a gated Agent a pin does not promote "+
-			"the revision the gate is evaluating (design 16 Q5 (a)), and its run goes on while this pin "+
-			"stands. To serve it without a verdict, remove spec.gates and then pin it (design 16 Q9); "+
+			"the revision the gate is evaluating (design 16 Q5 (a)). While this pin stands the release, "+
+			"its recorded candidate included, is left as it was, and the refusal does not stop the "+
+			"recorded candidate's run. To serve it without a verdict, remove spec.gates and then pin it (design 16 Q9); "+
 			"otherwise clear the pin and let the gate decide", suiteName)
 	}
 	if suiteDigest != "" && status.Eval != nil && pairFailed(status.Eval.Failed, pinDigest, suiteDigest) {
@@ -79,18 +81,13 @@ func pinIneligible(pinDigest, specDigest string, status *assaydv1alpha1.AgentSta
 }
 
 // pinRule applies pinIneligible to a resolved pin that does not name the
-// revision serving. It reads the suite to learn the current suite digest, and returns
+// revision serving; the pin step does not call it for one. It reads the suite to learn the current suite digest, and returns
 // the refusal as an unresolvablePinError, which takes the existing
 // unresolvable-pin path, or why the pin was admitted, for GatesBypassed's
 // message.
 func (r *AgentReconciler) pinRule(ctx context.Context, agent *assaydv1alpha1.Agent,
 	status *assaydv1alpha1.AgentStatus, pin *releasePin, specDigest string) (*unresolvablePinError, string) {
 	suiteName := agent.Spec.Gates[0].EvalSuiteRef
-	if pin.Digest == status.ActiveRevisionDigest {
-		// pinIneligible's own guard admits it; nothing else is checked, so
-		// the reason says only that.
-		return nil, "it names the revision serving, which a pin is never refused for"
-	}
 	// Any failure to learn the digest — NotFound, another read error, or a
 	// suite that cannot be digested — leaves no current suite digest, which
 	// Q5 (a) treats alike.
@@ -123,16 +120,15 @@ func evalPassedFor(e *assaydv1alpha1.EvalStatus, digest string) bool {
 // servingPinBypass is GatesBypassed's message for a pin that names the
 // revision serving, derived from the spec and status alone, or "". It holds
 // while the gate is enforced (the caller's to check) and status.eval records
-// no Passed verdict for that revision: it then serves by pin with no verdict
-// on record, and the pin keeps the gate from evaluating anything in its
-// place. It is a statement about the record, not a claim that the gate was
-// bypassed: status.eval holds one pair, so a revision that passed before a
-// later candidate's run replaced the record reads this too, and the message
-// says only that whether it passed is not recorded. No
-// stored condition is read, so a forged one is recomputed away, and a pass
-// that does not enforce the gate costs nothing once the gate is enforced
-// again. why is the reason the pin was admitted, on the pass that admitted
-// and promoted it; "" otherwise.
+// no Passed verdict for that revision. No stored condition is read, so a
+// forged one is recomputed away, and a pass that does not enforce the gate
+// costs nothing once the gate is enforced again.
+//
+// The message states only what the record holds (servingRecord), never a
+// claim that the gate was bypassed or why it was not passed. why is the
+// reason the pin was admitted, given only on the pass that admitted a pin not
+// yet serving and promoted it in the same pass; every later pass, and
+// assessGates, gives "", so the steady-state text is one text.
 func servingPinBypass(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus, why string) string {
 	if agent.Spec.Release == nil || agent.Spec.Release.TargetRevisionDigest == "" {
 		return ""
@@ -142,14 +138,49 @@ func servingPinBypass(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentS
 		return ""
 	}
 	msg := fmt.Sprintf("spec.release.targetRevisionDigest pins revision %s (digest %s), the revision "+
-		"serving, and status.eval records no Passed verdict for it", status.ActiveRevision, d)
+		"serving, and it serves by pin", status.ActiveRevision, d)
 	if why != "" {
 		msg += "; design 16 Q5 (a) admitted the pin: " + why
 	}
-	return msg + ". It serves by pin. status.eval holds one pair, so whether this revision passed its " +
-		"eval gate before an earlier run's record replaced it, or never had one, is not recorded. While " +
-		"the pin stands nothing is evaluated in its place, and GatesPassed is not asserted for it, so it " +
-		"keeps describing the revision status.eval names"
+	return msg + ". " + servingRecord(status.Eval, d) + " While the pin stands nothing is evaluated " +
+		"in its place, and GatesPassed is not asserted for it, so it keeps describing the revision " +
+		"status.eval names"
+}
+
+// servingRecord is what status.eval records about digest d, which has no
+// Passed verdict there, chosen from a fixed set of sentences by the record
+// alone: status.eval's one pair, and the failed[] pairs for d. Only when the
+// pair names another revision does it say that whether d passed or never
+// ran is not recorded, because then nothing about d's own run is.
+func servingRecord(e *assaydv1alpha1.EvalStatus, d string) string {
+	var out string
+	switch {
+	case e == nil || e.RevisionDigest == "":
+		out = "status.eval records no run."
+	case e.RevisionDigest != d:
+		out = fmt.Sprintf("status.eval records a run of another revision (digest %s), so whether this "+
+			"revision passed its gate or never ran is not recorded.", e.RevisionDigest)
+	case e.Verdict == assaydv1alpha1.EvalVerdictFailed:
+		out = fmt.Sprintf("status.eval records a Failed verdict for it against suite digest %s.", e.SuiteDigest)
+	case e.Verdict == assaydv1alpha1.EvalVerdictRunning:
+		out = fmt.Sprintf("status.eval records a run of it against suite digest %s with no verdict yet.",
+			e.SuiteDigest)
+	default:
+		out = fmt.Sprintf("status.eval names it against suite digest %s with its verdict cleared.", e.SuiteDigest)
+	}
+	var suites []string
+	if e != nil {
+		for _, p := range e.Failed {
+			if p.RevisionDigest == d {
+				suites = append(suites, p.SuiteDigest)
+			}
+		}
+	}
+	if len(suites) > 0 {
+		out += fmt.Sprintf(" status.eval.failed[] records %d failed pair(s) for it, against suite digest(s) %s.",
+			len(suites), strings.Join(suites, ", "))
+	}
+	return out
 }
 
 // pendingPinBypass is GatesBypassed's message for a pin admitted on this pass

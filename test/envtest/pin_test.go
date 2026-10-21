@@ -424,6 +424,13 @@ func TestAnAdmittedPinIsNotRefusedWhileItServes(t *testing.T) {
 			t.Fatalf("setup: the restored suite's digest is %s, want %s", back, sd1)
 		}
 		stillServes(t, a, r, revB, dB)
+		// status.eval still records B's own Failed verdict against S1, now
+		// the suite in force, and the message says so.
+		c := condition(liveAgent(t, a), assaydv1alpha1.CondGatesBypassed)
+		if !strings.Contains(c.Message, "records a Failed verdict for it against suite digest "+sd1) ||
+			strings.Contains(c.Message, "is not recorded") {
+			t.Errorf("GatesBypassed does not state B's recorded failure: %s", c.Message)
+		}
 	})
 	t.Run("the suite deleted, then restored", func(t *testing.T) {
 		ns, a, r, revB, dB, sd1 := setup(t, "pinrestore")
@@ -469,10 +476,19 @@ func TestAPinToTheServingRevisionIsNeverRefused(t *testing.T) {
 		t.Errorf("the active revision moved to %s", got.Status.ActiveRevisionDigest)
 	}
 	c := bypassed(t, a, activeName, active, pinServing)
-	// failed[] records it against the suite in force, so the message must
-	// not say the opposite; it says the pin names the revision serving.
-	if strings.Contains(c.Message, "does not record it") || !strings.Contains(c.Message, "names the revision serving") {
-		t.Errorf("GatesBypassed misstates why a pin to the serving revision is admitted: %s", c.Message)
+	// The human's reading 1, as built: a serving pinned revision that fails
+	// the suite in force. The message names the failure the record holds,
+	// and says nothing the record does not.
+	for _, want := range []string{"records a Failed verdict for it against suite digest " + sd,
+		"failed[] records 1 failed pair(s) for it, against suite digest(s) " + sd} {
+		if !strings.Contains(c.Message, want) {
+			t.Errorf("GatesBypassed does not say %q: %s", want, c.Message)
+		}
+	}
+	for _, never := range []string{"is not recorded", "does not record it", "admitted the pin"} {
+		if strings.Contains(c.Message, never) {
+			t.Errorf("GatesBypassed says %q, which the record does not support here: %s", never, c.Message)
+		}
 	}
 
 	// A Passed verdict for the serving revision: nothing is bypassed.

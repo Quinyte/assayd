@@ -1058,9 +1058,12 @@ reasons:
       guard, the supersession and everything else in the pass: sets
       `Degraded=True` with this reason and phase `Degraded`, leaves `Ready` as
       it was, and returns. A refused pin never names the revision serving, so no `GatesBypassed` is derived for it. Nothing is rolled
-      back and the current release, its candidate included, is untouched. For
-      a refusal as the current candidate the eval controller derives the
-      refusal as this does and goes on evaluating that candidate. A pin
+      back and the current release, its recorded candidate included, is left
+      as it was. The refusal does not stop the recorded candidate's run: when
+      one write reverts the spec to a retained revision and pins it, that
+      recorded candidate is still the revision an earlier spec minted, and the
+      eval controller can run it to a verdict while the refusal stands, though
+      nothing promotes until the pin is cleared, which supersedes it. A pin
       refused on `failed[]` after the rollout had recorded it as the candidate
       while it came up is still the recorded candidate, and the eval
       controller holds it: nothing is evaluated, and that pair has failed
@@ -1092,10 +1095,12 @@ reasons:
       record it against the suite in force, or there is no current suite
       digest to check it against — or the pin names the revision serving and
       `status.eval` records no `Passed` verdict for it. The second form is a
-      statement about the record, not a claim that the gate was bypassed:
-      `status.eval` holds one pair, so a serving revision that passed before
-      a later candidate's run replaced the record reads it too, and the
-      message says whether it passed is not recorded.
+      statement about the record, not a claim that the gate was bypassed: its
+      message says only what `status.eval` holds — no run; a run of another
+      revision, in which case whether this one passed or never ran is not
+      recorded; a `Failed` verdict for it, naming the suite digest; a run of
+      it with no verdict yet; or its pair with the verdict cleared — and how
+      many pairs `failed[]` records for it.
     operator: >-
       Sets `GatesBypassed=True` with this reason, naming the pinned revision
       and its digest. For a revision not yet serving the message says it will
@@ -1103,8 +1108,8 @@ reasons:
       sends it no case, and why the pin was admitted, and it is judged again
       on each pass until it serves, and it is asserted as soon as the pin is
       admitted, so an exit later in the same pass keeps it. For the revision
-      serving it says it serves by pin and that whether it passed its gate is
-      not recorded; while that holds the promotion branch
+      serving it says it serves by pin and what the record holds about it;
+      while that holds the promotion branch
       does not assert `GatesPassed`, which keeps describing the revision
       `status.eval` names. The condition is derived from the spec and status
       on every pass, `assessGates` included, and no stored condition is read,

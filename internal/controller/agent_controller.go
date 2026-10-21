@@ -542,15 +542,19 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			}
 			return ctrl.Result{}, merr
 		}
-		u, why := r.pinRule(ctx, &agent, status, pin, desiredDigest)
-		if u != nil {
-			return ctrl.Result{RequeueAfter: CardDriftInterval}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
-		}
-		pinWhy = why
-		// Asserted at once, so that an exit between here and the switch —
-		// a collision, a refused Service — still says the pin is admitted.
-		// The block after the switch derives it again, serving or pending.
+		// A pin to the revision serving is not judged: it has nothing to
+		// admit or refuse (pinIneligible's own guard says the same). So pinWhy
+		// stays "" on every pass on which the pin already serves, and the
+		// serving form of GatesBypassed is one text in steady state.
 		if pin.Digest != status.ActiveRevisionDigest {
+			u, why := r.pinRule(ctx, &agent, status, pin, desiredDigest)
+			if u != nil {
+				return ctrl.Result{RequeueAfter: CardDriftInterval}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
+			}
+			pinWhy = why
+			// Asserted at once, so that an exit between here and the switch —
+			// the collision guard — still says the pin is admitted. The block
+			// after the switch derives it again, serving or pending.
 			conds.set(assaydv1alpha1.CondGatesBypassed, metav1.ConditionTrue, ReasonPinnedRollback,
 				pendingPinBypass(pin, pinWhy))
 		}
