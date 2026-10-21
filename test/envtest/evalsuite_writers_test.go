@@ -66,7 +66,11 @@ func installEvalSuiteWriters(t *testing.T, scope string) string {
 	if err != nil {
 		t.Fatalf("read the golden fixture: %v", err)
 	}
-	if got := evalSuiteWritersDocs(string(out)); got != string(want) {
+	fixture := string(want)
+	for strings.HasPrefix(fixture, "#") { // the fixture's SPDX header, and only it
+		_, fixture, _ = strings.Cut(fixture, "\n")
+	}
+	if got := evalSuiteWritersDocs(string(out)); got != fixture {
 		t.Fatalf("the rendered %s is not its golden fixture, so what this test would install is not what was "+
 			"reviewed:\n--- rendered\n%s\n--- fixture\n%s", evalSuiteWriters, got, want)
 	}

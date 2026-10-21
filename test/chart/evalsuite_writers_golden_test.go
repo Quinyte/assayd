@@ -84,7 +84,7 @@ func TestTheEvalSuiteWritersPolicyIsExactlyItsFixture(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read the fixture: %v", err)
 			}
-			if got := renderedEvalSuiteWriters(t, p.args...); got != string(want) {
+			if got := renderedEvalSuiteWriters(t, p.args...); got != withoutHeader(string(want)) {
 				t.Errorf("assayd-evalsuite-writers renders differently from testdata/%s. Any field the "+
 					"fixture does not hold can exempt someone from Q6 (c)'s check; change the fixture "+
 					"only by hand, in the commit that changes the policy, and say why.\n--- rendered\n%s\n--- fixture\n%s",
@@ -92,4 +92,18 @@ func TestTheEvalSuiteWritersPolicyIsExactlyItsFixture(t *testing.T) {
 			}
 		})
 	}
+}
+
+// withoutHeader drops a fixture's leading comment lines, its SPDX header, and
+// nothing else: a comment further down stays and fails the comparison, since
+// the render it is compared with carries none.
+func withoutHeader(fixture string) string {
+	for strings.HasPrefix(fixture, "#") {
+		_, rest, found := strings.Cut(fixture, "\n")
+		if !found {
+			return ""
+		}
+		fixture = rest
+	}
+	return fixture
 }
