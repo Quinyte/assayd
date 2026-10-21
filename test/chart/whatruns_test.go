@@ -16,7 +16,7 @@ import (
 // P1) state, as the EXACT list of rendered objects for each configuration the
 // page describes: the default (prod) profile, the same with the gateway on,
 // and the local profile. One workload, the operator's Deployment, at two
-// replicas (one at local); four CEL admission policies, each bound, and no
+// replicas (one at local); five CEL admission policies, each bound, and no
 // webhook; the RBAC, Namespace and disruption budget beside them; one CRD; and
 // no Gateway, GatewayClass, agentgateway object or subchart.
 //
@@ -41,10 +41,12 @@ func TestADefaultInstallRunsOneOperatorAndNothingElse(t *testing.T) {
 		"Namespace/assayd-system",
 		"ServiceAccount/assayd-agent-operator",
 		"ValidatingAdmissionPolicy/assayd-api-keys",
+		"ValidatingAdmissionPolicy/assayd-evalsuite-writers",
 		"ValidatingAdmissionPolicy/assayd-gateway-policies",
 		"ValidatingAdmissionPolicy/assayd-gateway-routes",
 		"ValidatingAdmissionPolicy/assayd-namespace-labels",
 		"ValidatingAdmissionPolicyBinding/assayd-api-keys",
+		"ValidatingAdmissionPolicyBinding/assayd-evalsuite-writers",
 		"ValidatingAdmissionPolicyBinding/assayd-gateway-policies",
 		"ValidatingAdmissionPolicyBinding/assayd-gateway-routes",
 		"ValidatingAdmissionPolicyBinding/assayd-namespace-labels",
@@ -117,7 +119,7 @@ func TestADefaultInstallRunsOneOperatorAndNothingElse(t *testing.T) {
 		"one workload",
 		"at two replicas", // the default profile, as rendered above
 		"at one replica",  // the local profile
-		"four `ValidatingAdmissionPolicy` objects",
+		"five `ValidatingAdmissionPolicy` objects",
 		"two Roles and two RoleBindings", // what gateway.enabled adds
 	} {
 		if !strings.Contains(prose, phrase) {

@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Quinyte
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: assayd-evalsuite-writers
+  labels:
+    app.kubernetes.io/name: assayd
+    app.kubernetes.io/instance: assayd
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: assayd
+    assayd.dev/tier: core
+    assayd.dev/profile: local
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["assayd.dev"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["evalsuites"]
+  validations:
+    - expression: "authorizer.group('assayd.dev').resource('agents').namespace(request.namespace).check('update').allowed()"
+      messageExpression: "'the assayd operator sends the cases of an EvalSuite, unauthenticated, to the held candidate of every Agent in ' + request.namespace + ' that gates on it, so writing one needs `update` on agents.assayd.dev in ' + request.namespace + ', namespace-wide (a grant limited to named Agents does not count): grant that, or ask an Agent editor in ' + request.namespace + ' to apply the suite (design 16 §1.1, Q6)'"
+      message: "the assayd operator sends the cases of an EvalSuite, unauthenticated, to the held candidate of every Agent in its namespace that gates on it, so writing one needs `update` on agents.assayd.dev in that namespace, namespace-wide (a grant limited to named Agents does not count): grant that, or ask an Agent editor there to apply the suite (design 16 §1.1, Q6)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: assayd-evalsuite-writers
+  labels:
+    app.kubernetes.io/name: assayd
+    app.kubernetes.io/instance: assayd
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: assayd
+    assayd.dev/tier: core
+    assayd.dev/profile: local
+spec:
+  policyName: assayd-evalsuite-writers
+  validationActions: ["Deny"]
