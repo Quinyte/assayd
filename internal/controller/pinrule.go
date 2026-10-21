@@ -150,13 +150,26 @@ func servingPinBypass(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentS
 // servingRecord is what status.eval records about digest d, which has no
 // Passed verdict there, chosen from a fixed set of sentences by the record
 // alone: status.eval's one pair, and the failed[] pairs for d. Only when the
-// pair names another revision does it say that whether d passed or never
-// ran is not recorded, because then nothing about d's own run is.
+// pair names another revision does it say that whether d passed is not
+// recorded, because then the pair says nothing about d; and it adds "or
+// never ran" only when failed[] holds no pair for d either, since a failed[]
+// pair records a run of it.
 func servingRecord(e *assaydv1alpha1.EvalStatus, d string) string {
+	var suites []string
+	if e != nil {
+		for _, p := range e.Failed {
+			if p.RevisionDigest == d {
+				suites = append(suites, p.SuiteDigest)
+			}
+		}
+	}
 	var out string
 	switch {
 	case e == nil || e.RevisionDigest == "":
 		out = "status.eval records no run."
+	case e.RevisionDigest != d && len(suites) > 0:
+		out = fmt.Sprintf("status.eval records a run of another revision (digest %s), so whether this "+
+			"revision passed its gate is not recorded.", e.RevisionDigest)
 	case e.RevisionDigest != d:
 		out = fmt.Sprintf("status.eval records a run of another revision (digest %s), so whether this "+
 			"revision passed its gate or never ran is not recorded.", e.RevisionDigest)
@@ -167,14 +180,6 @@ func servingRecord(e *assaydv1alpha1.EvalStatus, d string) string {
 			e.SuiteDigest)
 	default:
 		out = fmt.Sprintf("status.eval names it against suite digest %s with its verdict cleared.", e.SuiteDigest)
-	}
-	var suites []string
-	if e != nil {
-		for _, p := range e.Failed {
-			if p.RevisionDigest == d {
-				suites = append(suites, p.SuiteDigest)
-			}
-		}
 	}
 	if len(suites) > 0 {
 		out += fmt.Sprintf(" status.eval.failed[] records %d failed pair(s) for it, against suite digest(s) %s.",

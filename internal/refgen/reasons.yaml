@@ -1097,8 +1097,8 @@ reasons:
       `status.eval` records no `Passed` verdict for it. The second form is a
       statement about the record, not a claim that the gate was bypassed: its
       message says only what `status.eval` holds — no run; a run of another
-      revision, in which case whether this one passed or never ran is not
-      recorded; a `Failed` verdict for it, naming the suite digest; a run of
+      revision, in which case whether this one passed is not recorded, and,
+      when `failed[]` names no pair of it either, whether it ever ran; a `Failed` verdict for it, naming the suite digest; a run of
       it with no verdict yet; or its pair with the verdict cleared — and how
       many pairs `failed[]` records for it.
     operator: >-

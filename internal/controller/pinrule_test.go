@@ -79,7 +79,7 @@ func TestServingRecordSaysOnlyWhatStatusEvalHolds(t *testing.T) {
 	}{
 		{"no record", nil, "status.eval records no run."},
 		{"a record with no pair", &assaydv1alpha1.EvalStatus{}, "status.eval records no run."},
-		{"another revision's pair", &assaydv1alpha1.EvalStatus{RevisionDigest: other, SuiteDigest: s1,
+		{"another revision's pair, failed[] naming none of its own", &assaydv1alpha1.EvalStatus{RevisionDigest: other, SuiteDigest: s1,
 			Verdict: assaydv1alpha1.EvalVerdictFailed},
 			"status.eval records a run of another revision (digest sha256:other), so whether this revision " +
 				"passed its gate or never ran is not recorded."},
@@ -96,11 +96,13 @@ func TestServingRecordSaysOnlyWhatStatusEvalHolds(t *testing.T) {
 				assaydv1alpha1.EvalPair{RevisionDigest: d, SuiteDigest: s2})},
 			"status.eval names it against suite digest sha256:s2 with its verdict cleared. status.eval.failed[] " +
 				"records 2 failed pair(s) for it, against suite digest(s) sha256:s1, sha256:s2."},
-		{"another revision's pair, with its own failures", &assaydv1alpha1.EvalStatus{RevisionDigest: other,
+		// failed[] records a run of it, so "or never ran" would contradict
+		// the next sentence (review 6's m1).
+		{"another revision's pair, failed[] naming its own", &assaydv1alpha1.EvalStatus{RevisionDigest: other,
 			SuiteDigest: s2, Verdict: assaydv1alpha1.EvalVerdictFailed,
 			Failed: failed(assaydv1alpha1.EvalPair{RevisionDigest: d, SuiteDigest: s1})},
 			"status.eval records a run of another revision (digest sha256:other), so whether this revision " +
-				"passed its gate or never ran is not recorded. status.eval.failed[] records 1 failed pair(s) " +
+				"passed its gate is not recorded. status.eval.failed[] records 1 failed pair(s) " +
 				"for it, against suite digest(s) sha256:s1."},
 	}
 	for _, c := range cases {
