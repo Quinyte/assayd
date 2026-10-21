@@ -32,9 +32,10 @@ installs. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorA
 The `local` profile renders the same Deployment at one replica, and no
 PodDisruptionBudget. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
 
-Admission is four `ValidatingAdmissionPolicy` objects written in CEL, each with
+Admission is five `ValidatingAdmissionPolicy` objects written in CEL, each with
 its binding: `assayd-namespace-labels`, `assayd-gateway-routes`,
-`assayd-gateway-policies` and `assayd-api-keys`. No webhook is registered, and
+`assayd-gateway-policies`, `assayd-api-keys` and `assayd-evalsuite-writers`. No
+webhook is registered, and
 no Service is rendered to serve one. <ClaimClass claim="measured" test="TestADefaultInstallRunsOneOperatorAndNothingElse" />
 
 The chart ships two CustomResourceDefinitions, `agents.assayd.dev` and

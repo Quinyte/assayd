@@ -335,3 +335,57 @@ metadata:
 spec:
   policyName: assayd-api-keys
   validationActions: ["Deny"]
+---
+# Design 16 §1.1, Q6 (c): an EvalSuite is written only by a principal who may
+# also `update` Agents in its namespace.
+#
+# An EvalSuite write makes the operator send the namespace's held candidate up
+# to 20 messages of the writer's choosing, with no API key and no group check,
+# driving its real tools and LLM spend; and it can pass a revision by weakening
+# the suite. An Agent editor already controls the candidate's image, so this
+# grant adds nothing an Agent editor lacks, and nobody else gets it.
+#
+# The check is Kubernetes' CEL `authorizer` (GA with ValidatingAdmissionPolicy
+# in 1.30, Chart.yaml's floor): `update` on `agents.assayd.dev` in the suite's
+# namespace, asked with NO name. RBAC answers a nameless request only from a
+# rule without resourceNames, so an editor scoped to named Agents is refused --
+# it errs toward refusal, as Q6 records.
+#
+# Cluster-wide, with no namespaceSelector: a suite lives in its Agent's
+# namespace, and those namespaces carry no label of assayd's to select on.
+# Nobody is exempt -- not the operator, which only ever `get`s a suite, and not
+# admission.extraOperators: Q6 (c) names one rule, and an exempt identity would
+# hold unauthenticated invocation of every held candidate in the cluster.
+# Every CREATE and UPDATE is judged, whatever it changes: the garbage collector
+# that removes a deletion finalizer holds `update` on every resource, so it
+# passes. DELETE is RBAC's, as for the other reservations (design 07 A6.10).
+# There is no status subresource to match.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: assayd-evalsuite-writers
+  labels:
+    {{- include "assayd.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["assayd.dev"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["evalsuites"]
+  validations:
+    - expression: "authorizer.group('assayd.dev').resource('agents').namespace(request.namespace).check('update').allowed()"
+      messageExpression: "'the assayd operator sends the cases of an EvalSuite, unauthenticated, to the held candidate of every Agent in ' + request.namespace + ' that gates on it, so writing one needs `update` on agents.assayd.dev in ' + request.namespace + ', namespace-wide (a grant limited to named Agents does not count): grant that, or ask an Agent editor in ' + request.namespace + ' to apply the suite (design 16 §1.1, Q6)'"
+      message: "the assayd operator sends the cases of an EvalSuite, unauthenticated, to the held candidate of every Agent in its namespace that gates on it, so writing one needs `update` on agents.assayd.dev in that namespace, namespace-wide (a grant limited to named Agents does not count): grant that, or ask an Agent editor there to apply the suite (design 16 §1.1, Q6)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: assayd-evalsuite-writers
+  labels:
+    {{- include "assayd.labels" . | nindent 4 }}
+spec:
+  policyName: assayd-evalsuite-writers
+  validationActions: ["Deny"]
