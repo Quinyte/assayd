@@ -168,6 +168,60 @@ func TestItCompletesASendMessageTask(t *testing.T) {
 	if out.Task.Metadata["gateway"] != "http://gw.assayd:8080" {
 		t.Errorf("ASSAYD_GATEWAY_URL was not reported back: %v", out.Task.Metadata)
 	}
+	// With neither knob set, the answer is the one it always was: no marker.
+	if m, ok := out.Task.Metadata["marker"]; ok {
+		t.Errorf("an unset ANSWER_MARKER reported a marker %q", m)
+	}
+}
+
+// The two knobs design 16 §1.1 asks of this fixture: ANSWER_PREFIX changes
+// what the answer opens with, so a revision can fail an EvalSuite that expects
+// "echo: ", and ANSWER_MARKER rides in the task's metadata, so two revisions
+// that both pass can be told apart through the gateway.
+func TestTheAnswerPrefixAndTheMarkerAreKnobs(t *testing.T) {
+	body := `{"message":{"messageId":"m","role":"ROLE_USER","parts":[{"text":"hello"}]}}`
+	answer := func(t *testing.T) (text string, meta map[string]string) {
+		t.Helper()
+		srv := httptest.NewServer(handler())
+		defer srv.Close()
+		resp := sendV1(t, srv.URL, body)
+		defer resp.Body.Close()
+		var out struct {
+			Task *struct {
+				Artifacts []struct{ Parts []struct{ Text string } }
+				Metadata  map[string]string
+			}
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Task == nil ||
+			len(out.Task.Artifacts) == 0 || len(out.Task.Artifacts[0].Parts) == 0 {
+			t.Fatalf("not a SendMessageResponse carrying a task with an artifact: err=%v %+v", err, out)
+		}
+		return out.Task.Artifacts[0].Parts[0].Text, out.Task.Metadata
+	}
+
+	t.Run("a prefix replaces echo, verbatim", func(t *testing.T) {
+		t.Setenv("ANSWER_PREFIX", "held: ")
+		if text, _ := answer(t); text != "held: hello" {
+			t.Errorf("ANSWER_PREFIX=%q answered %q, want %q", "held: ", text, "held: hello")
+		}
+	})
+	t.Run("an empty prefix is a prefix", func(t *testing.T) {
+		t.Setenv("ANSWER_PREFIX", "")
+		if text, _ := answer(t); text != "hello" {
+			t.Errorf("ANSWER_PREFIX set empty answered %q, want %q", text, "hello")
+		}
+	})
+	t.Run("the marker is reported and changes no answer", func(t *testing.T) {
+		t.Setenv("AGENT_NAME", "marked")
+		t.Setenv("ANSWER_MARKER", "third")
+		text, meta := answer(t)
+		if meta["marker"] != "third" || meta["agent"] != "marked" {
+			t.Errorf("ANSWER_MARKER=third reported metadata %v, want marker third beside agent marked", meta)
+		}
+		if text != "echo: hello" {
+			t.Errorf("a marker changed the answer to %q", text)
+		}
+	})
 }
 
 // sendV1 posts a SendMessageRequest the way an A2A 1.0 client must: with
