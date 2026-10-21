@@ -49,12 +49,13 @@ const (
 )
 
 // installEvalSuiteWriters applies the chart's assayd-evalsuite-writers under a
-// name of this test's, narrowed to namespaces carrying scope. First it holds
-// the default render to the golden fixture the chart test holds it to
+// name of this test's, narrowed to namespaces carrying scope. It holds the
+// default render to the golden fixture the chart test holds it to
 // (test/chart/testdata/evalsuite-writers-default.yaml), byte for byte with
-// comment lines dropped, so any field the fixture does not hold -- one that
-// would narrow the check, and that the narrowing added here could hide --
-// fails this test rather than passing it.
+// comment lines dropped, which catches any change. The fixture is a change
+// detector, not a specification: one regenerated with a mutation in it would
+// pass that gate. So it also refuses, on its own, every field that narrows
+// what the check reaches, and the rows of T61 hold the rest.
 func installEvalSuiteWriters(t *testing.T, scope string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -80,6 +81,35 @@ func installEvalSuiteWriters(t *testing.T, scope string) string {
 		t.Fatalf("the chart renders no policy and binding named %s", evalSuiteWriters)
 	}
 	pol, bind = pol.DeepCopy(), bind.DeepCopy()
+	// The second line, which holds whatever the fixture says: the fixture is a
+	// change detector, and these refusals with the rows below are the
+	// specification. Each field named here narrows what the check reaches,
+	// and the namespaceSelector this test adds would hide one.
+	for _, f := range []struct {
+		obj  *unstructured.Unstructured
+		path []string
+	}{
+		{pol, []string{"spec", "matchConstraints", "namespaceSelector"}},
+		{pol, []string{"spec", "matchConstraints", "objectSelector"}},
+		{pol, []string{"spec", "matchConditions"}},
+		{bind, []string{"spec", "matchResources"}},
+		{bind, []string{"spec", "paramRef"}},
+	} {
+		if _, found, _ := unstructured.NestedFieldNoCopy(f.obj.Object, f.path...); found {
+			t.Fatalf("the rendered %s %s sets %s, which exempts whatever it does not select from the check",
+				f.obj.GetKind(), evalSuiteWriters, strings.Join(f.path, "."))
+		}
+	}
+	rules, _, _ := unstructured.NestedSlice(pol.Object, "spec", "matchConstraints", "resourceRules")
+	for _, r := range rules {
+		rule, _ := r.(map[string]any)
+		for _, k := range []string{"resourceNames", "scope"} {
+			if _, found := rule[k]; found {
+				t.Fatalf("the rendered %s's resource rule sets %s, which narrows the suites it judges: %v",
+					evalSuiteWriters, k, rule)
+			}
+		}
+	}
 	if err := unstructured.SetNestedStringMap(pol.Object, map[string]string{scopeLabel: scope},
 		"spec", "matchConstraints", "namespaceSelector", "matchLabels"); err != nil {
 		t.Fatal(err)

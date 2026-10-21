@@ -73,6 +73,12 @@ func TestTheChartReservesEvalSuiteWritesToAgentEditors(t *testing.T) {
 			!reflect.DeepEqual(toStrings(r["resources"]), []string{"evalsuites"}) {
 			t.Errorf("%v: the policy matches %v, want evalsuites.assayd.dev", args, r)
 		}
+		// Exactly these keys: resourceNames or scope would narrow the suites
+		// judged, and apiVersions anything but "*" would miss a served version.
+		keys(t, args, "the policy's resource rule", r, "apiGroups", "apiVersions", "operations", "resources")
+		if got := toStrings(r["apiVersions"]); !reflect.DeepEqual(got, []string{"*"}) {
+			t.Errorf("%v: the policy matches apiVersions %v, want [*]", args, got)
+		}
 		// CREATE and UPDATE; DELETE is RBAC's, as for every other reservation.
 		if got := toStrings(r["operations"]); !reflect.DeepEqual(got, []string{"CREATE", "UPDATE"}) {
 			t.Errorf("%v: the policy judges %v, want exactly CREATE and UPDATE", args, got)
