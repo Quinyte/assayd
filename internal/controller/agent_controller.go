@@ -547,6 +547,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			return ctrl.Result{RequeueAfter: CardDriftInterval}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
 		}
 		pinWhy = why
+		// Asserted at once, so that an exit between here and the switch —
+		// a collision, a refused Service — still says the pin is admitted.
+		// The block after the switch derives it again, serving or pending.
+		if pin.Digest != status.ActiveRevisionDigest {
+			conds.set(assaydv1alpha1.CondGatesBypassed, metav1.ConditionTrue, ReasonPinnedRollback,
+				pendingPinBypass(pin, pinWhy))
+		}
 	}
 	if pin != nil {
 		// The pinned revision's material was written when it was minted and is

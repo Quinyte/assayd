@@ -97,11 +97,10 @@ func specDigestOf(ctx context.Context, reader client.Reader, agent *assaydv1alph
 	if err != nil || len(unresolved) > 0 {
 		return "", false, err
 	}
-	d, err := revision.Digest(agent.Spec, resolved)
-	if err != nil {
-		return "", false, nil
-	}
-	return d, true, nil
+	// The Agent reconciler stops on the same error before any pin step, so
+	// it is read the same way as an unresolved source.
+	d, derr := revision.Digest(agent.Spec, resolved)
+	return d, derr == nil, nil
 }
 
 // recordedTransaction is a Create or a Lock recorded in

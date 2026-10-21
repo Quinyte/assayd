@@ -123,8 +123,12 @@ func evalPassedFor(e *assaydv1alpha1.EvalStatus, digest string) bool {
 // servingPinBypass is GatesBypassed's message for a pin that names the
 // revision serving, derived from the spec and status alone, or "". It holds
 // while the gate is enforced (the caller's to check) and status.eval records
-// no Passed verdict for that revision: it then serves by pin with no verdict,
-// and the pin keeps the gate from evaluating anything in its place. No
+// no Passed verdict for that revision: it then serves by pin with no verdict
+// on record, and the pin keeps the gate from evaluating anything in its
+// place. It is a statement about the record, not a claim that the gate was
+// bypassed: status.eval holds one pair, so a revision that passed before a
+// later candidate's run replaced the record reads this too, and the message
+// says only that whether it passed is not recorded. No
 // stored condition is read, so a forged one is recomputed away, and a pass
 // that does not enforce the gate costs nothing once the gate is enforced
 // again. why is the reason the pin was admitted, on the pass that admitted
@@ -142,9 +146,10 @@ func servingPinBypass(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentS
 	if why != "" {
 		msg += "; design 16 Q5 (a) admitted the pin: " + why
 	}
-	return msg + ". It serves by pin, and its eval gate was bypassed: while the pin stands nothing is " +
-		"evaluated in its place, and GatesPassed is not asserted for it, so it keeps describing the " +
-		"revision status.eval names"
+	return msg + ". It serves by pin. status.eval holds one pair, so whether this revision passed its " +
+		"eval gate before an earlier run's record replaced it, or never had one, is not recorded. While " +
+		"the pin stands nothing is evaluated in its place, and GatesPassed is not asserted for it, so it " +
+		"keeps describing the revision status.eval names"
 }
 
 // pendingPinBypass is GatesBypassed's message for a pin admitted on this pass

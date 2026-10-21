@@ -974,3 +974,139 @@ func TestAServingPinsBypassIsDerivedAgainAfterTheCRDReturns(t *testing.T) {
 			after.Reason, after.Message, before.Reason, before.Message)
 	}
 }
+
+// A pin to the serving revision that passed its gate earlier, after a later
+// candidate's run replaced the record: status.eval holds one pair, so the
+// operator cannot say whether it passed, and the message says exactly that,
+// never that the gate was bypassed. Review 4's PR1, recorded for the
+// amendment as the shape of the human's reading 3.
+func TestAServingPinThatPassedEarlierSaysOnlyWhatIsRecorded(t *testing.T) {
+	ns := newNamespace(t)
+	sd := mustCreateSuite(t, ns, "smoke")
+	a, r := servedUngated(t, ns, "pinpassedearlier")
+	revB, dB := gatedCandidate(t, r, a, imageB, "smoke")
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: revB, RevisionDigest: dB,
+			SuiteDigest: sd, Verdict: assaydv1alpha1.EvalVerdictPassed, Score: "1/1"}
+		putCard(st, revB, dB, time.Now())
+	})
+	reconcileOnce(t, r, a)
+	if got := liveAgent(t, a).Status.ActiveRevisionDigest; got != dB {
+		t.Fatalf("setup: B did not promote (active %s)", got)
+	}
+	revC, dC := gatedCandidate(t, r, a, imageOf('c'), "smoke")
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) { st.Eval = failedRecord(revC, dC, sd) })
+	reconcileOnce(t, r, a)
+	pinTo(t, a, dB)
+	reconcileOnce(t, r, a)
+	reconcileOnce(t, r, a)
+	c := bypassed(t, a, revB, dB, pinServing)
+	if strings.Contains(c.Message, "was bypassed") || !strings.Contains(c.Message, "is not recorded") {
+		t.Errorf("GatesBypassed claims more than status records: %s", c.Message)
+	}
+	// GatesPassed is not asserted for the pinned revision: it keeps the
+	// failed candidate's verdict, which is §1.1's sticky rule.
+	condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "EvalFailed")
+}
+
+// A pending pin's GatesBypassed is withdrawn on a pass that returns before
+// the pin step — here a source of the current spec deleted — and comes back
+// on the next pass that reaches it. The exits that precede the pin step are
+// listed in reasons.yaml. Review 4's PR2.
+func TestAPendingPinsBypassIsWithdrawnOnAnExitBeforeThePinStep(t *testing.T) {
+	ns, a, r, revB, dB, _ := pinFixture(t, "pinpendingexit")
+	markAvailable(t, ns, controller.WorkloadName("pinpendingexit", revB), 0)
+	pinTo(t, a, dB)
+	reconcileOnce(t, r, a)
+	bypassed(t, a, revB, dB, pinPending)
+	cm := &corev1.ConfigMap{}
+	if err := k8s.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "cfg"}, cm); err != nil {
+		t.Fatal(err)
+	}
+	if err := k8s.Delete(context.Background(), cm); err != nil {
+		t.Fatal(err)
+	}
+	reconcileOnce(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondEnvSourceUnresolved, metav1.ConditionTrue, "Unresolved")
+	if c := condition(liveAgent(t, a), assaydv1alpha1.CondGatesBypassed); c != nil {
+		t.Errorf("a pending pin's GatesBypassed survived an exit before the pin step, which reasons.yaml "+
+			"says withdraws it: %+v", c)
+	}
+	recreated := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cfg"},
+		Data: map[string]string{"MODE": "safe"}}
+	if err := k8s.Create(context.Background(), recreated); err != nil {
+		t.Fatal(err)
+	}
+	reconcileOnce(t, r, a)
+	bypassed(t, a, revB, dB, pinPending)
+}
+
+// A pending pin's GatesBypassed is asserted as soon as it is admitted, so an
+// exit later in the same pass keeps it: here the collision guard, which a
+// candidate record under the pinned revision's name and another digest trips.
+func TestAPendingPinsBypassSurvivesAnExitAfterThePinStep(t *testing.T) {
+	ns, a, r, revB, dB, _ := pinFixture(t, "pinpendingcollide")
+	markAvailable(t, ns, controller.WorkloadName("pinpendingcollide", revB), 0)
+	pinTo(t, a, dB)
+	reconcileOnce(t, r, a)
+	bypassed(t, a, revB, dB, pinPending)
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.CandidateRevision, st.CandidateRevisionDigest = revB, strings.Repeat("e", 64)
+	})
+	reconcileOnce(t, r, a)
+	condIs(t, a, assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "RevisionHashCollision")
+	bypassed(t, a, revB, dB, pinPending)
+}
+
+// The eval controller holds a pinned candidate while it cannot compute the
+// digest the current spec mints — a source of the spec deleted — because the
+// Agent reconciler judges no pin on such a pass and the candidate may be an
+// admitted pinned rollback.
+func TestTheEvalControllerHoldsAPinnedCandidateWhileTheSpecCannotBeDigested(t *testing.T) {
+	ns, a, r, revB, dB, _ := pinFixture(t, "pinnodigest")
+	stub := newA2AStub()
+	markAvailable(t, ns, controller.WorkloadName("pinnodigest", revB), 0)
+	pinTo(t, a, dB)
+	reconcileOnce(t, r, a)
+	if got := liveAgent(t, a).Status.CandidateRevisionDigest; got != dB {
+		t.Fatalf("setup: B is not the recorded candidate (%s)", got)
+	}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "cfg"}}
+	if err := k8s.Delete(context.Background(), cm); err != nil {
+		t.Fatal(err)
+	}
+	markAvailable(t, ns, controller.WorkloadName("pinnodigest", revB), 1)
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		putCard(st, revB, dB, time.Now())
+		for i := range st.Cards {
+			if st.Cards[i].RevisionDigest == dB {
+				st.Cards[i].Digest = sha256Hex(stubCard("pinnodigest"))
+			}
+		}
+	})
+	e := newEvalController(t, stub)
+	for i := 0; i < 3; i++ {
+		evalOnce(t, e, a)
+	}
+	if n := stub.sentTo("pinnodigest", revB); n != 0 {
+		t.Errorf("the eval controller sent %d cases to a pinned candidate while the spec could not be "+
+			"digested", n)
+	}
+}
+
+// A pin that names some other revision than the recorded candidate pauses
+// nothing: here a pin to a digest no retained revision carries, which the
+// Agent reconciler refuses as unresolvable, beside a candidate whose run goes
+// on.
+func TestAPinNamingAnotherRevisionLeavesTheCandidatesRunGoing(t *testing.T) {
+	g := newEvalRig(t, "pinelsewhere", echo("a", "one"), echo("b", "two"))
+	pinTo(t, g.a, strings.Repeat("d", 64))
+	g.agentPass(t)
+	condIs(t, g.a, assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ReleasePinUnresolvable")
+	for i := 0; i < 3; i++ {
+		g.evalPass(t)
+	}
+	if n := g.stub.sentTo(g.name, g.rev); n == 0 {
+		t.Error("the candidate was sent no case beside a pin naming another revision")
+	}
+}
