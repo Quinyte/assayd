@@ -140,7 +140,8 @@ func versionless(doc string) string { return versionLabel.ReplaceAllString(doc, 
 // sets -- would render past all four. So the policy's SOURCE, from its first
 // comment to the end of its binding, which is the end of the file, carries no
 // template action but the chart's labels include, once in the policy and once
-// in the binding. It renders the same under every value set.
+// in the binding. So its spec, and its binding's, render the same under every
+// value set; only the labels change, carrying the profile and the appVersion.
 func TestTheEvalSuiteWritersTemplateIsNotConditional(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join(chartPath, "templates", "admission.yaml"))
 	if err != nil {

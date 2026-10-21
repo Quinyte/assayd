@@ -54,8 +54,11 @@ const (
 // (test/chart/testdata/evalsuite-writers-default.yaml), byte for byte with
 // comment lines dropped, which catches any change. The fixture is a change
 // detector, not a specification: one regenerated with a mutation in it would
-// pass that gate. So it also refuses, on its own, every field that narrows
-// what the check reaches, and the rows of T61 hold the rest.
+// pass that gate. So it also refuses, on its own, each field the
+// admissionregistration v1 API defines that narrows what the check reaches:
+// a policy's namespaceSelector, objectSelector, excludeResourceRules and
+// matchConditions, a resource rule's resourceNames and scope, and a binding's
+// matchResources and paramRef. The rows of T61 hold the rest.
 func installEvalSuiteWriters(t *testing.T, scope string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -91,6 +94,7 @@ func installEvalSuiteWriters(t *testing.T, scope string) string {
 	}{
 		{pol, []string{"spec", "matchConstraints", "namespaceSelector"}},
 		{pol, []string{"spec", "matchConstraints", "objectSelector"}},
+		{pol, []string{"spec", "matchConstraints", "excludeResourceRules"}},
 		{pol, []string{"spec", "matchConditions"}},
 		{bind, []string{"spec", "matchResources"}},
 		{bind, []string{"spec", "paramRef"}},

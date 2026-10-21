@@ -118,26 +118,71 @@ func keys(t *testing.T, args []string, what string, m map[string]any, want ...st
 	}
 }
 
+// evalSuiteWriterValueSets are the golden's four profiles and the value CI's
+// e2e sets beside them, `admission.toolRouteWriters.users`: every value set a
+// test here renders the whole chart under.
+func evalSuiteWriterValueSets() [][]string {
+	var sets [][]string
+	for _, p := range evalSuiteWriterProfiles {
+		sets = append(sets, p.args)
+	}
+	return append(sets, []string{"--set", "admission.toolRouteWriters.users={tool-author}"})
+}
+
 // The policy exempts no one, and the operator passes its check: the rendered
 // ClusterRole lets it update every Agent. What keeps the operator from writing
 // an EvalSuite is this RBAC, `get` and nothing else on evalsuites (design 16
-// §1.1, "What the slice depends on"), so it is pinned here.
+// §1.1, "What the slice depends on"), so it is pinned here, across every
+// Role and ClusterRole the chart renders, under every value set above.
 func TestTheOperatorOnlyReadsEvalSuites(t *testing.T) {
-	var verbs []string
-	for _, role := range kindsOf(render(t), "ClusterRole") {
-		for _, r := range toList(role["rules"]) {
-			rule, _ := r.(map[string]any)
-			for _, g := range toStrings(rule["apiGroups"]) {
-				for _, res := range toStrings(rule["resources"]) {
-					if (g == "assayd.dev" || g == "*") && (res == "evalsuites" || res == "*") {
-						verbs = append(verbs, toStrings(rule["verbs"])...)
+	for _, args := range evalSuiteWriterValueSets() {
+		docs := render(t, args...)
+		var verbs []string
+		for _, role := range append(kindsOf(docs, "ClusterRole"), kindsOf(docs, "Role")...) {
+			for _, r := range toList(role["rules"]) {
+				rule, _ := r.(map[string]any)
+				for _, g := range toStrings(rule["apiGroups"]) {
+					for _, res := range toStrings(rule["resources"]) {
+						if (g == "assayd.dev" || g == "*") && (res == "evalsuites" || res == "*") {
+							verbs = append(verbs, toStrings(rule["verbs"])...)
+						}
 					}
 				}
 			}
 		}
+		if !reflect.DeepEqual(verbs, []string{"get"}) {
+			t.Errorf("%v: the chart's roles grant %v on evalsuites, want exactly [get]: the operator passes "+
+				"assayd-evalsuite-writers' check, so RBAC alone keeps it from writing a suite", args, verbs)
+		}
 	}
-	if !reflect.DeepEqual(verbs, []string{"get"}) {
-		t.Errorf("the chart's ClusterRoles grant %v on evalsuites, want exactly [get]: the operator passes "+
-			"assayd-evalsuite-writers' check, so RBAC alone keeps it from writing a suite", verbs)
+}
+
+// Under every value set, the whole chart renders exactly one policy and
+// exactly one binding named assayd-evalsuite-writers, and the binding denies.
+// A second object of that name, rendered from any template, would replace the
+// first at install, and the golden and the template pin read only the policy's
+// own section of admission.yaml.
+func TestTheChartRendersOneEvalSuiteWritersPolicyAndBinding(t *testing.T) {
+	for _, args := range evalSuiteWriterValueSets() {
+		docs := render(t, args...)
+		for _, kind := range []string{"ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"} {
+			var named []map[string]any
+			for _, d := range kindsOf(docs, kind) {
+				if nameOf(d) == "assayd-evalsuite-writers" {
+					named = append(named, d)
+				}
+			}
+			if len(named) != 1 {
+				t.Errorf("%v: the chart renders %d %s named assayd-evalsuite-writers, want exactly 1", args, len(named), kind)
+				continue
+			}
+			if kind == "ValidatingAdmissionPolicyBinding" {
+				spec := dig(named[0], "spec")
+				if spec["policyName"] != "assayd-evalsuite-writers" ||
+					!reflect.DeepEqual(toStrings(spec["validationActions"]), []string{"Deny"}) {
+					t.Errorf("%v: the binding does not deny under assayd-evalsuite-writers: %v", args, spec)
+				}
+			}
+		}
 	}
 }
