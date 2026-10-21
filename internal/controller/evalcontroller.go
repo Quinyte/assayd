@@ -90,7 +90,7 @@ const (
 	waitRefused
 	// waitHeld: a candidate held with a final verdict, or by anything else
 	// this controller does not wait on actively — an I1 hold, no card
-	// recorded, a suite that does not exist. CardDriftInterval: the bound on
+	// recorded, a suite that does not exist, a pin naming the candidate. CardDriftInterval: the bound on
 	// noticing a suite edit, which nothing watches (A4).
 	waitHeld
 	// waitReadBack: a write did not come back. CardDriftInterval, and nothing
@@ -276,6 +276,14 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	sd, err := evalsuite.Digest(suite.Spec)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("digest EvalSuite %s/%s: %w", suite.Namespace, suite.Name, err)
+	}
+	// A pinned rollback is promoted, not evaluated (Q5 (a)). The Agent
+	// reconciler's status write when it promotes, or when the pin goes,
+	// brings the next pass.
+	if pinned, err := pinnedRollbackCandidate(ctx, r.Client, agent); err != nil {
+		return ctrl.Result{}, fmt.Errorf("decide whether the pin on %s is admitted: %w", req.NamespacedName, err)
+	} else if pinned {
+		return r.wait(waitHeld)
 	}
 	// Admission refuses a threshold this cannot read, so it can fail only on
 	// a suite stored before the rule; nothing is written for one.

@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // The send predicates (design 16 §1.1, "The two controllers"). Both
@@ -24,6 +25,9 @@ import (
 //	the EvalSuite CRD is installed              gateModeOf                  EvalSuiteInstalled
 //	a candidate is pending                      the rollout switch's        candidatePending
 //	                                            active != desired guard
+//	the candidate is not an admitted pinned     the pin step, before the    pinnedRollbackCandidate
+//	rollback                                    switch (GatesBypassed, or
+//	                                            the refusal's early return)
 //	the candidate is available                  workloadAvailableIn,        workloadAvailableIn
 //	                                            before the gate (not-ready
 //	                                            branches: EvalPaused)
@@ -51,6 +55,52 @@ import (
 func candidatePending(status *assaydv1alpha1.AgentStatus) bool {
 	return status.CandidateRevisionDigest != "" &&
 		status.CandidateRevisionDigest != status.ActiveRevisionDigest
+}
+
+// pinnedRollbackCandidate is the eval controller's reading of design 16
+// Q5 (a)'s "promotes, not evaluated": the candidate status records is a
+// pinned revision the Agent reconciler admits, so no case of it is sent. A
+// pinned revision that is not yet available is recorded as the candidate by
+// the rollout switch's not-ready branches, and is promoted by the pass after
+// it becomes available; between the two every other send predicate can hold,
+// and a run started there could fail it into status.eval.failed[].
+//
+// It derives admission as pinIneligible does, from the spec and status, and
+// reads no condition, so a forged GatesBypassed pauses nothing: the pin names
+// the recorded candidate, and that is not the revision the current spec mints
+// (specDigestOf). A pin the Agent reconciler refuses as the current candidate
+// therefore leaves the candidate's run going. Its other refusal, a pair failed
+// against the suite in force, needs no reading here: the eval controller
+// starts no run for a failed pair whatever this says. When the spec's digest cannot be computed — a
+// referenced source missing or unreadable — it reads the pin as admitted
+// and holds, since the Agent reconciler judges no pin on such a pass.
+func pinnedRollbackCandidate(ctx context.Context, reader client.Reader, agent *assaydv1alpha1.Agent) (bool, error) {
+	if agent.Spec.Release == nil {
+		return false, nil
+	}
+	d := agent.Spec.Release.TargetRevisionDigest
+	if d == "" || d != agent.Status.CandidateRevisionDigest {
+		return false, nil
+	}
+	spec, ok, err := specDigestOf(ctx, reader, agent)
+	if err != nil || !ok {
+		return true, err
+	}
+	return d != spec, nil
+}
+
+// specDigestOf is the digest the Agent's current spec mints, with the content
+// of its env sources, computed as the Agent reconciler computes it. ok is
+// false when a referenced source is missing or unreadable.
+func specDigestOf(ctx context.Context, reader client.Reader, agent *assaydv1alpha1.Agent) (string, bool, error) {
+	resolved, _, unresolved, err := resolveEnvSourcesFrom(ctx, reader, agent)
+	if err != nil || len(unresolved) > 0 {
+		return "", false, err
+	}
+	// The Agent reconciler stops on the same error before any pin step, so
+	// it is read the same way as an unresolved source.
+	d, derr := revision.Digest(agent.Spec, resolved)
+	return d, derr == nil, nil
 }
 
 // recordedTransaction is a Create or a Lock recorded in
@@ -121,9 +171,10 @@ func evalGenerationCurrent(agent *assaydv1alpha1.Agent) bool {
 // whose current -auth input does not compile keeps its route on the revision
 // it names (design 03 §3.3.1, I1). A pinned rollback is not held: -auth
 // follows the current spec, never a revision (ADR-0034, F2). That a pin
-// "selects a revision that already served" is not enforced by
-// resolveReleasePin, which checks selection only (design 16 §1.1 owes the
-// correction, and the pin rule is build step 8's).
+// "selects a revision that already served" is not enforced: resolveReleasePin
+// checks selection only, and on a gated Agent design 16 Q5 (a)'s rule
+// (pinRule) refuses the current candidate and a failure against the suite in
+// force, and admits a revision that never served otherwise.
 func i1Hold(gw GatewayConfig, status *assaydv1alpha1.AgentStatus, d authDesire, pinned bool) string {
 	if !gw.Enabled || pinned || status.Auth == nil || d.compiles() {
 		return ""

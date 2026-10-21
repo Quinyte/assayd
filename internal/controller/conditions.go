@@ -114,6 +114,11 @@ var ownedTypes = map[assaydv1alpha1.ConditionType]bool{
 	// TestEveryConditionSetBuilderAssessesTheImageSignature fails on a new
 	// builder that does not call it.
 	assaydv1alpha1.CondImageSignatureUnverified: true,
+	// Design 16 Q5 (a): a pinned rollback on a gated Agent. Owned,
+	// abnormal-true and NOT sticky: its absence means no gate is bypassed, so
+	// it clears on the first pass after the pin goes, or after the pin is
+	// refused.
+	assaydv1alpha1.CondGatesBypassed: true,
 }
 
 // stickyTypes are owned conditions that must stay in the list once set, flipped
