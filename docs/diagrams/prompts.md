@@ -117,11 +117,12 @@ Inside, top: one large rectangle with an outline in gold #C8A24B (2px), white-is
   line 1 (larger): assayd-agent-operator
   line 2: Deployment · 2 pods
   line 3 (small italic, ink-soft #2A2A33): the only assayd code in the cluster
-Below it, a row of four equal small rectangles with thin 1px ink #14141A outlines, labelled in order:
+Below it, a row of five equal small rectangles with thin 1px ink #14141A outlines, labelled in order:
   assayd-namespace-labels
   assayd-gateway-routes
   assayd-gateway-policies
   assayd-api-keys
+  assayd-evalsuite-writers
 Under that row one small caption in ink-soft italic: ValidatingAdmissionPolicy (CEL) · no webhook
 Below, one medium rectangle with a 1px ink outline labelled:
   line 1: Agent

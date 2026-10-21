@@ -177,6 +177,17 @@ Check that the operator is running:
 kubectl -n assayd-system get pods
 ```
 
+### Who may write an EvalSuite
+
+No published chart version ships the `EvalSuite` CRD yet. A chart built from this repository does, with the admission policy `assayd-evalsuite-writers` (design 16 §1.1, Q6 (c)). The policy is a template, so `helm upgrade` applies it, as it does the other four. A suite's cases go to its Agent's held candidate unauthenticated, so writing one needs what editing the Agent needs:
+
+- **It refuses an `EvalSuite` create or update**, in any namespace, from an identity the API server's authorizer does not let `update` Agents in that namespace. The grant must be namespace-wide. A Role that allows `update` on Agents only under `resourceNames` is refused, and so is one that allows `patch` but not `update`.
+- **Every update counts, metadata-only edits included.** Once the policy is installed, an existing suite cannot be edited by anyone who cannot update Agents in its namespace, even to change a label or an annotation or to add a finalizer. A GitOps controller, such as Argo CD or Flux, that applies suites needs `update` on `agents.assayd.dev` in every namespace it applies one to. The garbage collector, which removes a suite's finalizer to finish a foreground delete, passes where `kube-controller-manager` runs with `--use-service-account-credentials`, as kubeadm's does. That is unverified on k3s and on managed control planes; where it does not hold, a foreground delete of a suite stalls.
+- **The policy exempts no one, and holds no list to keep.** Every identity that may update Agents cluster-wide passes it in every namespace. The operator is one: its ClusterRole updates every Agent. RBAC alone keeps the operator from writing a suite, because the chart grants it `get` and nothing else on `evalsuites`. The chart grants an `admission.extraOperators` identity nothing: its RBAC is yours, and if it may update Agents, it passes too.
+- **Deletes are RBAC's.**
+
+The refusal names the policy and the fix: grant `update` on `agents.assayd.dev` in the namespace, or have an Agent editor there apply the suite.
+
 ## 3. API keys
 
 An Agent with no `expose` block, or with `spec.expose.a2a.auth: apikey`, is served under API keys. Callers send a key as `Authorization: Bearer <key>`. The operator's policy admits exactly one group: the name of the **Agent's own namespace**. No field names another group.
@@ -685,6 +696,7 @@ The last row needs no allowlist in place, so it cannot be seen after section 6.6
 | `PolicyApplyIncomplete`, reason `GatewayAuthPolicy` | The Gateway admits ListenerSets, or a policy of yours targets it (section 1.4). |
 | `PolicyApplyIncomplete`, reason `AuthRecordNotKept` | The Agent CRD predates `status.auth`: apply the chart's CRDs (section 4). |
 | The key set is refused, naming `assayd-api-keys` | You are not in `admission.apiKeyWriters` (section 3). |
+| An `EvalSuite` create or update is refused, naming `assayd-evalsuite-writers` | You may not `update` Agents in that namespace, namespace-wide. A grant limited to named Agents, or to `patch`, does not count, and an edit to a suite's metadata alone is judged too. Grant `update` on `agents.assayd.dev` there, or have an Agent editor apply the suite (section 2, "Who may write an EvalSuite"). |
 | `Registered=False`, reason `CardNameMismatch` | The card's `name` is not the Agent's name. `docs/agent-contract.md` lists the other card reasons. |
 | `Ready=False`, phase `Degraded`, reason `ApiKeySourceEmpty` | No `ConfigMap` in the run namespace carries `assayd.dev/api-keys: "true"`, or every one that does holds no entry under `data`, so every request gets `401`. An entry under `binaryData` is not read by agentgateway and not counted; the message says how many key sets hold entries only there. A key under `binaryData` beside any `data` entry in a labelled key set is not reported. Write a key set, with its entries under `data` (section 3); it clears on the next reconcile. The operator counts entries and does not parse them, so a key set with a wrong hash, or with keys only for another group, does not raise this. |
 | Every keyed request gets `401` | No key set in the run namespace, keys under `binaryData` instead of `data`, the wrong label, or the wrong hash. Hash the key's bytes with no trailing newline. No key set reads `ApiKeySourceEmpty` on the Agent. Keys under `binaryData` read `ApiKeySourceEmpty` only when every labelled key set holds its entries there; beside any labelled key set with a `data` entry they are reported by nothing. A key set with the wrong label is not listed at all: if it is the only one, the Agent reads `ApiKeySourceEmpty` (no key set carries the label); beside another correctly labelled key set with a `data` entry, it is reported by nothing. The wrong hash is reported by nothing. |

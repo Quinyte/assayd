@@ -63,7 +63,9 @@ Resource Types:
 
 
 EvalSuite is the set of cases a gated Agent's candidate revision must pass
-before it takes traffic (design 16 §1.1).
+before it takes traffic (design 16 §1.1). The chart's admission policy
+assayd-evalsuite-writers admits a create or update only from a principal
+that may update Agents in the suite's namespace, namespace-wide.
 
 <div class="ref-table" role="region" tabindex="0" aria-label="Fields of EvalSuite. Scroll or use the arrow keys to pan.">
 <table>
