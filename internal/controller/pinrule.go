@@ -6,9 +6,7 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strings"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
@@ -26,42 +24,21 @@ const (
 	ReasonPinnedRevisionNotEligible = "PinnedRevisionNotEligible"
 )
 
-// pinnedDigestMarker is how GatesBypassed's message names the pinned digest.
-// It is for the reader, and for one display rule (keptBypass); no decision
-// reads it.
-func pinnedDigestMarker(digest string) string { return "(digest " + digest + ")" }
-
-// keptBypass is the stored GatesBypassed=True/PinnedRollback condition, when
-// its message names this digest, or nil. It decides nothing: it lets a pass
-// that does not judge the pin — one that returns before the pin step, or one
-// whose pin names the revision serving — keep the condition while the pin
-// still names the digest it describes. A pin changed to another digest, or
-// removed, withdraws it.
-func keptBypass(conds []metav1.Condition, digest string) *metav1.Condition {
-	if digest == "" {
-		return nil
-	}
-	c := findCondition(conds, string(assaydv1alpha1.CondGatesBypassed))
-	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != ReasonPinnedRollback ||
-		!strings.Contains(c.Message, pinnedDigestMarker(digest)) {
-		return nil
-	}
-	return c
-}
-
 // pinIneligible is design 16 Q5 (a), for a pin that resolved on an Agent
 // whose gate is declared and whose EvalSuite CRD is installed. It says why
 // the pinned digest may not be served, or "" when it may. It is derived from
-// the spec and status on every pass, and reads no stored judgement, so
-// nothing can be lost or forged between passes.
+// the spec and status on every pass and reads no stored judgement and no
+// condition, so nothing can be lost or forged between passes.
 //
 //   - A pin to the revision serving has nothing to admit or refuse.
-//   - The current candidate is the revision the gate is evaluating: the one
-//     status.candidateRevisionDigest records, when the current spec also
-//     mints it (specDigest). A pinned revision that is not yet available is
-//     recorded there by the rollout switch's not-ready branches, and is not
-//     the revision the gate evaluates, so it is not refused as its own
-//     candidate.
+//   - The current candidate is the revision the gate is evaluating, which is
+//     the one the current spec mints: specDigest, computed each pass from the
+//     spec and the content of its env sources, as the rollout step computes
+//     it. So a revision the current spec mints again after it served is
+//     refused, however many writes brought the spec back to it (Q5 (a)'s
+//     stated residue); and a pinned revision the rollout recorded in
+//     status.candidateRevisionDigest while it comes up is not its own
+//     candidate, because the spec mints another.
 //   - A digest in status.eval.failed[] paired with the current suite digest is
 //     refused. With no current suite digest — the suite does not exist or
 //     cannot be read, suiteDigest is "" — only the candidate refusal applies,
@@ -75,19 +52,21 @@ func keptBypass(conds []metav1.Condition, digest string) *metav1.Condition {
 //     there a pin is never refused on it.
 //
 // A pin admitted and not yet serving is judged again on each pass, so a suite
-// edited to one it failed refuses it before it serves.
+// edited to one it failed refuses it before it serves. Because specDigest
+// follows the env sources' content, an edit to a referenced ConfigMap or
+// Secret, with no write to the Agent, mints a new candidate and lifts a
+// refusal of the old one, which is then a superseded candidate Q5 (a) admits.
 func pinIneligible(pinDigest, specDigest string, status *assaydv1alpha1.AgentStatus,
 	suiteName, suiteDigest string) string {
 	if pinDigest == status.ActiveRevisionDigest {
 		return ""
 	}
-	if pinDigest == status.CandidateRevisionDigest && specDigest == status.CandidateRevisionDigest {
+	if pinDigest == specDigest {
 		return fmt.Sprintf("it is the current candidate: the revision the current spec mints, which "+
-			"status.candidateRevisionDigest records, and it is evaluated or held for its eval gate on "+
-			"EvalSuite %q. On a gated Agent a pin does not promote the revision the gate is evaluating "+
-			"(design 16 Q5 (a)), and its run goes on while this pin stands. To serve it without a verdict, "+
-			"remove spec.gates and then pin it (design 16 Q9); otherwise clear the pin and let the gate "+
-			"decide", suiteName)
+			"the gate on EvalSuite %q evaluates before it serves. On a gated Agent a pin does not promote "+
+			"the revision the gate is evaluating (design 16 Q5 (a)), and its run goes on while this pin "+
+			"stands. To serve it without a verdict, remove spec.gates and then pin it (design 16 Q9); "+
+			"otherwise clear the pin and let the gate decide", suiteName)
 	}
 	if suiteDigest != "" && status.Eval != nil && pairFailed(status.Eval.Failed, pinDigest, suiteDigest) {
 		return fmt.Sprintf("status.eval.failed[] records it as failed against EvalSuite %q at digest "+
@@ -107,6 +86,11 @@ func pinIneligible(pinDigest, specDigest string, status *assaydv1alpha1.AgentSta
 func (r *AgentReconciler) pinRule(ctx context.Context, agent *assaydv1alpha1.Agent,
 	status *assaydv1alpha1.AgentStatus, pin *releasePin, specDigest string) (*unresolvablePinError, string) {
 	suiteName := agent.Spec.Gates[0].EvalSuiteRef
+	if pin.Digest == status.ActiveRevisionDigest {
+		// pinIneligible's own guard admits it; nothing else is checked, so
+		// the reason says only that.
+		return nil, "it names the revision serving, which a pin is never refused for"
+	}
 	// Any failure to learn the digest — NotFound, another read error, or a
 	// suite that cannot be digested — leaves no current suite digest, which
 	// Q5 (a) treats alike.
@@ -130,28 +114,43 @@ func (r *AgentReconciler) pinRule(ctx context.Context, agent *assaydv1alpha1.Age
 		"it against EvalSuite %q at its current digest %s", suiteName, suiteDigest)
 }
 
-// pinnedRollbackMessage is GatesBypassed's message, by state: serving, or
-// pending until it is available, with why the pass admitted it.
-func pinnedRollbackMessage(pin *releasePin, serving bool, why string) string {
-	msg := fmt.Sprintf("spec.release.targetRevisionDigest pins revision %s %s, which design 16 Q5 (a) "+
-		"admits: %s", pin.Revision, pinnedDigestMarker(pin.Digest), why)
-	if serving {
-		return msg + ". It serves by pin, and its eval gate was bypassed: no verdict was required for it. " +
-			"GatesPassed keeps describing the revision status.eval names"
-	}
-	return msg + ". It will be promoted once it is available, without its eval gate, and the eval " +
-		"controller sends it no case. Until then it is judged again on each pass"
+// evalPassedFor reports whether status.eval records a Passed verdict for the
+// digest.
+func evalPassedFor(e *assaydv1alpha1.EvalStatus, digest string) bool {
+	return e != nil && e.Verdict == assaydv1alpha1.EvalVerdictPassed && e.RevisionDigest == digest
 }
 
-// carryPinnedRollback keeps the stored GatesBypassed, as stored, on a pass
-// that may not judge the pin, while the gate is enforced and the pin still
-// names the digest it describes (keptBypass). A pass that judges the pin
-// replaces it; a refusal or an unresolvable pin withdraws it.
-func carryPinnedRollback(agent *assaydv1alpha1.Agent, c *conditionSet) {
-	if agent.Spec.Release == nil {
-		return
+// servingPinBypass is GatesBypassed's message for a pin that names the
+// revision serving, derived from the spec and status alone, or "". It holds
+// while the gate is enforced (the caller's to check) and status.eval records
+// no Passed verdict for that revision: it then serves by pin with no verdict,
+// and the pin keeps the gate from evaluating anything in its place. No
+// stored condition is read, so a forged one is recomputed away, and a pass
+// that does not enforce the gate costs nothing once the gate is enforced
+// again. why is the reason the pin was admitted, on the pass that admitted
+// and promoted it; "" otherwise.
+func servingPinBypass(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus, why string) string {
+	if agent.Spec.Release == nil || agent.Spec.Release.TargetRevisionDigest == "" {
+		return ""
 	}
-	if kept := keptBypass(agent.Status.Conditions, agent.Spec.Release.TargetRevisionDigest); kept != nil {
-		c.carry(*kept)
+	d := agent.Spec.Release.TargetRevisionDigest
+	if d != status.ActiveRevisionDigest || evalPassedFor(status.Eval, d) {
+		return ""
 	}
+	msg := fmt.Sprintf("spec.release.targetRevisionDigest pins revision %s (digest %s), the revision "+
+		"serving, and status.eval records no Passed verdict for it", status.ActiveRevision, d)
+	if why != "" {
+		msg += "; design 16 Q5 (a) admitted the pin: " + why
+	}
+	return msg + ". It serves by pin, and its eval gate was bypassed: while the pin stands nothing is " +
+		"evaluated in its place, and GatesPassed is not asserted for it, so it keeps describing the " +
+		"revision status.eval names"
+}
+
+// pendingPinBypass is GatesBypassed's message for a pin admitted on this pass
+// whose revision is not yet serving.
+func pendingPinBypass(pin *releasePin, why string) string {
+	return fmt.Sprintf("spec.release.targetRevisionDigest pins revision %s (digest %s), which design 16 "+
+		"Q5 (a) admits: %s. It will be promoted once it is available, without its eval gate, and the eval "+
+		"controller sends it no case. Until then it is judged again on each pass", pin.Revision, pin.Digest, why)
 }

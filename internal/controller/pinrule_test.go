@@ -33,6 +33,10 @@ func TestPinIneligibleFollowsQ5(t *testing.T) {
 		// comes up: the spec mints another, so it is not the candidate the
 		// gate evaluates.
 		{"a candidate the pin itself placed", cand, older, status(), s2, ""},
+		// The revision the spec mints is the current candidate whether or
+		// not a pass has recorded it yet: one write that reverts the spec to
+		// it and pins it is refused as two writes are.
+		{"the revision the spec mints, not yet recorded", older, older, status(), s2, "current candidate"},
 		// The revision serving is never refused, even when failed[] records
 		// it against the suite in force.
 		{"the revision serving, failed against the current suite", active, cand,

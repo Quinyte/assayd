@@ -1497,7 +1497,7 @@ point under source drift.
 
 On an Agent that declares spec.gates, with the EvalSuite CRD installed, a
 pin to the candidate the gate is evaluating — the revision the current
-spec mints, recorded in status.candidateRevisionDigest — is refused with
+spec mints, with its env sources' content — is refused with
 Degraded=True/PinnedRevisionNotEligible and nothing is rolled back. So
 is a pin to a revision status.eval.failed[] records against the suite
 in force, except while that suite is missing or cannot be read, when
@@ -1506,7 +1506,9 @@ too old to keep status.eval keeps no failed[], so there the pin is
 admitted too. Any other pin is served without evaluation, under
 GatesBypassed=True/PinnedRollback. A pin admitted and not yet serving is
 judged again on each pass, so a suite edited to one it failed refuses
-it. A pin to the revision already serving sets nothing (design 16 Q5).<br/>
+it. A pin to the revision already serving is never refused, and reads
+GatesBypassed only while status.eval records no Passed verdict for it
+(design 16 Q5).<br/>
         </td>
         <td>false</td>
       </tr></tbody>

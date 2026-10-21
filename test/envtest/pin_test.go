@@ -444,10 +444,12 @@ func TestAnAdmittedPinIsNotRefusedWhileItServes(t *testing.T) {
 	})
 }
 
-// A pin naming the revision already serving has nothing to admit or refuse,
-// and bypasses nothing: no GatesBypassed, and the failed[] clause does not
-// refuse it even when failed[] records it against the suite in force.
-func TestAPinToTheServingRevisionBypassesNothing(t *testing.T) {
+// A pin naming the revision already serving has nothing to admit or refuse:
+// the failed[] clause does not refuse it even when failed[] records it against
+// the suite in force. GatesBypassed is derived from status: it is set while
+// status.eval records no Passed verdict for the serving revision, which then
+// serves by pin with nothing evaluated in its place, and not once one does.
+func TestAPinToTheServingRevisionIsNeverRefused(t *testing.T) {
 	ns := newNamespace(t)
 	sd := mustCreateSuite(t, ns, "smoke")
 	a, r := servedUngated(t, ns, "pinserving")
@@ -463,11 +465,66 @@ func TestAPinToTheServingRevisionBypassesNothing(t *testing.T) {
 	if c := condition(got, assaydv1alpha1.CondDegraded); c != nil && c.Status == metav1.ConditionTrue {
 		t.Fatalf("a pin to the serving revision was refused: %s/%s", c.Reason, c.Message)
 	}
-	if c := condition(got, assaydv1alpha1.CondGatesBypassed); c != nil {
-		t.Errorf("a pin to the serving revision says a gate was bypassed: %+v", c)
-	}
 	if got.Status.ActiveRevisionDigest != active {
 		t.Errorf("the active revision moved to %s", got.Status.ActiveRevisionDigest)
+	}
+	c := bypassed(t, a, activeName, active, pinServing)
+	// failed[] records it against the suite in force, so the message must
+	// not say the opposite; it says the pin names the revision serving.
+	if strings.Contains(c.Message, "does not record it") || !strings.Contains(c.Message, "names the revision serving") {
+		t.Errorf("GatesBypassed misstates why a pin to the serving revision is admitted: %s", c.Message)
+	}
+
+	// A Passed verdict for the serving revision: nothing is bypassed.
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: activeName, RevisionDigest: active,
+			SuiteDigest: sd, Verdict: assaydv1alpha1.EvalVerdictPassed, Score: "1/1"}
+	})
+	reconcileOnce(t, r, a)
+	if c := condition(liveAgent(t, a), assaydv1alpha1.CondGatesBypassed); c != nil {
+		t.Errorf("a pin to a serving revision with a Passed verdict says a gate is bypassed: %+v", c)
+	}
+}
+
+// A revision the current spec mints is the current candidate, so a pin to it
+// is refused (Q5 (a)'s stated residue: "a revision that is the current
+// candidate again after serving earlier"), whether the spec is reverted to it
+// and pinned in one write or in two.
+func TestAPinToTheRevisionTheSpecMintsIsRefusedInOneWriteOrTwo(t *testing.T) {
+	for _, one := range []bool{true, false} {
+		t.Run(fmt.Sprintf("one write %v", one), func(t *testing.T) {
+			ns := newNamespace(t)
+			sd := mustCreateSuite(t, ns, "smoke")
+			a, r := servedUngated(t, ns, fmt.Sprintf("pinrevert%v", one))
+			imgA, dA := a.Spec.Runtime.Image, a.Status.ActiveRevisionDigest
+			revB, dB := gatedCandidate(t, r, a, imageB, "smoke")
+			writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+				st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: revB, RevisionDigest: dB,
+					SuiteDigest: sd, Verdict: assaydv1alpha1.EvalVerdictPassed, Score: "1/1"}
+				putCard(st, revB, dB, time.Now())
+			})
+			reconcileOnce(t, r, a)
+			if got := liveAgent(t, a).Status.ActiveRevisionDigest; got != dB {
+				t.Fatalf("setup: B did not promote (active %s)", got)
+			}
+			if one {
+				mustEdit(t, a, func(a *assaydv1alpha1.Agent) {
+					a.Spec.Runtime.Image = imgA
+					a.Spec.Release = &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: dA}
+				})
+			} else {
+				mustEdit(t, a, func(a *assaydv1alpha1.Agent) { a.Spec.Runtime.Image = imgA })
+				reconcileOnce(t, r, a)
+				reconcileOnce(t, r, a)
+				pinTo(t, a, dA)
+			}
+			reconcileOnce(t, r, a)
+			reconcileOnce(t, r, a)
+			refusedPin(t, a, dA, "current candidate")
+			if got := liveAgent(t, a).Status.ActiveRevisionDigest; got != dB {
+				t.Errorf("the refused pin moved the active revision to %s", got)
+			}
+		})
 	}
 }
 
@@ -506,6 +563,13 @@ func TestARefusedPinLeavesTheCandidatesRunGoing(t *testing.T) {
 	pinTo(t, g.a, g.dgst)
 	g.agentPass(t)
 	refusedPin(t, g.a, g.dgst, "current candidate")
+	// A forged GatesBypassed pauses nothing: the eval controller derives
+	// admission from the spec and status, and reads no condition.
+	writeAgentStatus(t, g.a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Conditions = append(st.Conditions, metav1.Condition{Type: string(assaydv1alpha1.CondGatesBypassed),
+			Status: metav1.ConditionTrue, Reason: reasonPinnedRollback, Message: "forged",
+			LastTransitionTime: metav1.Now()})
+	})
 	for i := 0; i < 3; i++ {
 		g.evalPass(t)
 	}
@@ -747,11 +811,17 @@ func TestAForgedGatesBypassedGrantsNothing(t *testing.T) {
 }
 
 // A pin changed from an admitted revision to the one serving withdraws
-// GatesBypassed: the stored condition describes the old digest, and nothing
-// is bypassed by a pin to the revision serving.
+// GatesBypassed: it is derived each pass, and a pin to a serving revision
+// that passed its gate bypasses nothing.
 func TestRePinningToTheServingRevisionWithdrawsTheBypass(t *testing.T) {
-	ns, a, r, revB, dB, _ := pinFixture(t, "pinrepin")
-	active := liveAgent(t, a).Status.ActiveRevisionDigest
+	ns, a, r, revB, dB, sd := pinFixture(t, "pinrepin")
+	live := liveAgent(t, a)
+	active, activeName := live.Status.ActiveRevisionDigest, live.Status.ActiveRevision
+	// The serving revision passed, so a pin to it bypasses nothing.
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: activeName, RevisionDigest: active,
+			SuiteDigest: sd, Verdict: assaydv1alpha1.EvalVerdictPassed, Score: "1/1"}
+	})
 	markAvailable(t, ns, controller.WorkloadName("pinrepin", revB), 0)
 	pinTo(t, a, dB)
 	reconcileOnce(t, r, a)
@@ -817,5 +887,90 @@ func TestAnUngatedPinKeepsTheOrderItHadBeforeQ5(t *testing.T) {
 	if got.Status.CandidateRevisionDigest != "" || !strings.Contains(strings.Join(got.Status.SupersededCandidates, ","), dC) {
 		t.Errorf("an ungated pin's material refusal no longer records C's supersession, as it did before "+
 			"Q5: candidate %q, superseded %v", got.Status.CandidateRevisionDigest, got.Status.SupersededCandidates)
+	}
+}
+
+// The current candidate follows the env sources' content, as the rollout
+// step's identity does: an edit to a referenced ConfigMap, with no write to
+// the Agent, mints a new candidate, and a refused pin to the old one becomes a
+// pin to a superseded candidate, which Q5 (a) admits. Recorded as a residue.
+func TestASourceContentEditLiftsACandidateRefusal(t *testing.T) {
+	ns, a, r, _, _, _ := pinFixture(t, "pincontent")
+	live := liveAgent(t, a)
+	revC, dC := live.Status.CandidateRevision, live.Status.CandidateRevisionDigest
+	pinTo(t, a, dC)
+	reconcileOnce(t, r, a)
+	refusedPin(t, a, dC, "current candidate")
+	gen := liveAgent(t, a).Generation
+	var cm corev1.ConfigMap
+	if err := k8s.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "cfg"}, &cm); err != nil {
+		t.Fatal(err)
+	}
+	cm.Data["MODE"] = "other"
+	if err := k8s.Update(context.Background(), &cm); err != nil {
+		t.Fatal(err)
+	}
+	reconcileOnce(t, r, a)
+	reconcileOnce(t, r, a)
+	got := liveAgent(t, a)
+	if got.Generation != gen {
+		t.Fatalf("setup: the Agent was written (generation %d, was %d)", got.Generation, gen)
+	}
+	if got.Status.ActiveRevisionDigest != dC {
+		t.Fatalf("after the content edit, C is no longer the revision the spec mints, and the pin to it "+
+			"was not admitted (active %s)", got.Status.ActiveRevisionDigest)
+	}
+	bypassed(t, a, revC, dC, pinServing)
+}
+
+// A forged GatesBypassed beside a pin to a serving revision that passed is
+// recomputed away, and GatesPassed goes on describing the verdict.
+func TestAForgedGatesBypassedOnAServingPinIsRecomputedAway(t *testing.T) {
+	ns := newNamespace(t)
+	sd := mustCreateSuite(t, ns, "smoke")
+	a, r := servedUngated(t, ns, "pinforgedserving")
+	revB, dB := gatedCandidate(t, r, a, imageB, "smoke")
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: revB, RevisionDigest: dB,
+			SuiteDigest: sd, Verdict: assaydv1alpha1.EvalVerdictPassed, Score: "1/1"}
+		putCard(st, revB, dB, time.Now())
+	})
+	reconcileOnce(t, r, a)
+	if got := liveAgent(t, a).Status.ActiveRevisionDigest; got != dB {
+		t.Fatalf("setup: B did not promote (active %s)", got)
+	}
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Conditions = append(st.Conditions, metav1.Condition{Type: string(assaydv1alpha1.CondGatesBypassed),
+			Status: metav1.ConditionTrue, Reason: reasonPinnedRollback, Message: "forged (digest " + dB + ")",
+			LastTransitionTime: metav1.Now()})
+	})
+	pinTo(t, a, dB)
+	reconcileOnce(t, r, a)
+	if c := condition(liveAgent(t, a), assaydv1alpha1.CondGatesBypassed); c != nil {
+		t.Errorf("a forged GatesBypassed survived a pass: %+v", c)
+	}
+	condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, "EvalPassed")
+}
+
+// A serving pinned rollback's GatesBypassed costs nothing permanent when the
+// EvalSuite CRD is undiscoverable for one pass: it is derived again on the
+// next, and GatesPassed is not asserted for the pinned revision meanwhile.
+func TestAServingPinsBypassIsDerivedAgainAfterTheCRDReturns(t *testing.T) {
+	_, a, r, revB, dB, _ := pinFixture(t, "pinderive")
+	pinTo(t, a, dB)
+	reconcileOnce(t, r, a)
+	bypassed(t, a, revB, dB, pinServing)
+	before := *gatesPassed(t, a)
+	prev := r.EvalSuiteInstalled
+	r.EvalSuiteInstalled = func() bool { return false }
+	reconcileOnce(t, r, a)
+	r.EvalSuiteInstalled = prev
+	reconcileOnce(t, r, a)
+	reconcileOnce(t, r, a)
+	bypassed(t, a, revB, dB, pinServing)
+	after := *gatesPassed(t, a)
+	if after.Reason != before.Reason || after.Message != before.Message {
+		t.Errorf("GatesPassed moved for a revision serving by pin: %s %q, was %s %q",
+			after.Reason, after.Message, before.Reason, before.Message)
 	}
 }

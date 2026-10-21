@@ -9,11 +9,11 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // The send predicates (design 16 §1.1, "The two controllers"). Both
@@ -25,7 +25,7 @@ import (
 //	the EvalSuite CRD is installed              gateModeOf                  EvalSuiteInstalled
 //	a candidate is pending                      the rollout switch's        candidatePending
 //	                                            active != desired guard
-//	the candidate is not an admitted pinned     the pin step, before the    pinNamesCandidate
+//	the candidate is not an admitted pinned     the pin step, before the    pinnedRollbackCandidate
 //	rollback                                    switch (GatesBypassed, or
 //	                                            the refusal's early return)
 //	the candidate is available                  workloadAvailableIn,        workloadAvailableIn
@@ -57,30 +57,51 @@ func candidatePending(status *assaydv1alpha1.AgentStatus) bool {
 		status.CandidateRevisionDigest != status.ActiveRevisionDigest
 }
 
-// pinNamesCandidate is the eval controller's reading of design 16 Q5 (a)'s
-// "promotes, not evaluated": an admitted pin names the candidate status
-// records, so no case of it is sent. A pinned revision that is not yet
-// available is recorded as the candidate by the rollout switch's not-ready
-// branches, and is promoted by the pass after it becomes available; between
-// the two every other send predicate can hold, and a run started there could
-// fail it into status.eval.failed[].
+// pinnedRollbackCandidate is the eval controller's reading of design 16
+// Q5 (a)'s "promotes, not evaluated": the candidate status records is a
+// pinned revision the Agent reconciler admits, so no case of it is sent. A
+// pinned revision that is not yet available is recorded as the candidate by
+// the rollout switch's not-ready branches, and is promoted by the pass after
+// it becomes available; between the two every other send predicate can hold,
+// and a run started there could fail it into status.eval.failed[].
 //
-// Admitted is read from status as the Agent reconciler leaves it:
-// GatesBypassed=True/PinnedRollback stands, which it writes in the same
-// status write that records the candidate. Only the condition's status and
-// reason are read. A refused pin carries none, so the candidate it names
-// goes on being evaluated. A forged condition can pause a run here, and
-// grants nothing in the Agent reconciler, whose rule does not read it.
-func pinNamesCandidate(agent *assaydv1alpha1.Agent) bool {
+// It derives admission as pinIneligible does, from the spec and status, and
+// reads no condition, so a forged GatesBypassed pauses nothing: the pin names
+// the recorded candidate, and that is not the revision the current spec mints
+// (specDigestOf). A pin the Agent reconciler refuses as the current candidate
+// therefore leaves the candidate's run going. Its other refusal, a pair failed
+// against the suite in force, needs no reading here: the eval controller
+// starts no run for a failed pair whatever this says. When the spec's digest cannot be computed — a
+// referenced source missing or unreadable — it reads the pin as admitted
+// and holds, since the Agent reconciler judges no pin on such a pass.
+func pinnedRollbackCandidate(ctx context.Context, reader client.Reader, agent *assaydv1alpha1.Agent) (bool, error) {
 	if agent.Spec.Release == nil {
-		return false
+		return false, nil
 	}
 	d := agent.Spec.Release.TargetRevisionDigest
 	if d == "" || d != agent.Status.CandidateRevisionDigest {
-		return false
+		return false, nil
 	}
-	c := findCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGatesBypassed))
-	return c != nil && c.Status == metav1.ConditionTrue && c.Reason == ReasonPinnedRollback
+	spec, ok, err := specDigestOf(ctx, reader, agent)
+	if err != nil || !ok {
+		return true, err
+	}
+	return d != spec, nil
+}
+
+// specDigestOf is the digest the Agent's current spec mints, with the content
+// of its env sources, computed as the Agent reconciler computes it. ok is
+// false when a referenced source is missing or unreadable.
+func specDigestOf(ctx context.Context, reader client.Reader, agent *assaydv1alpha1.Agent) (string, bool, error) {
+	resolved, _, unresolved, err := resolveEnvSourcesFrom(ctx, reader, agent)
+	if err != nil || len(unresolved) > 0 {
+		return "", false, err
+	}
+	d, err := revision.Digest(agent.Spec, resolved)
+	if err != nil {
+		return "", false, nil
+	}
+	return d, true, nil
 }
 
 // recordedTransaction is a Create or a Lock recorded in

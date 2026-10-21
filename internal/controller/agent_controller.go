@@ -523,9 +523,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// and status on every pass and reads no stored judgement:
 	//
 	//   - a pin that names the revision serving has nothing to admit or
-	//     refuse, and is not judged; a GatesBypassed that names its digest is
-	//     kept, so a pinned rollback that has promoted goes on saying so;
-	//   - any other pin is refused when it names the candidate the current
+	//     refuse (pinIneligible's own guard);
+	//   - any other pin is refused when it names the revision the current
 	//     spec mints, or a pair failed against the suite in force, through the
 	//     unresolvable-pin path, and is otherwise admitted and bypasses the
 	//     gate. A pin admitted and not yet serving is judged again each pass.
@@ -535,7 +534,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// after the supersession. An unwired reconciler's gate holds every
 	// candidate as it did. A refusal requeues on the drift interval: a suite
 	// edit can lift it, and nothing watches suites.
-	pinBypassed, pinWhy := false, ""
+	pinWhy := ""
 	if pin != nil && gating == gateEnforced {
 		if merr := r.verifyRetainedMaterial(ctx, &agent, runNS, pin.Revision, pin.Digest); merr != nil {
 			if u := (*unresolvablePinError)(nil); errors.As(merr, &u) {
@@ -543,15 +542,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			}
 			return ctrl.Result{}, merr
 		}
-		if pin.Digest == status.ActiveRevisionDigest {
-			pinBypassed = keptBypass(agent.Status.Conditions, pin.Digest) != nil
-		} else {
-			u, why := r.pinRule(ctx, &agent, status, pin, desiredDigest)
-			if u != nil {
-				return ctrl.Result{RequeueAfter: CardDriftInterval}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
-			}
-			pinBypassed, pinWhy = true, why
+		u, why := r.pinRule(ctx, &agent, status, pin, desiredDigest)
+		if u != nil {
+			return ctrl.Result{RequeueAfter: CardDriftInterval}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
 		}
+		pinWhy = why
 	}
 	if pin != nil {
 		// The pinned revision's material was written when it was minted and is
@@ -928,7 +923,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	gate := gateDecision{satisfied: true}
 	switch {
 	case status.ActiveRevisionDigest == desiredDigest:
-	case pinBypassed:
+	case pin != nil && pinWhy != "":
 		// A pinned rollback Q5 (a) admitted is promoted, not evaluated.
 	case gating == gateUnwired:
 		// assessGates said GateDetectionUnwired; hold, and say nothing more.
@@ -1075,7 +1070,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		conds.set(assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", desired))
 		switch {
-		case pinBypassed:
+		case pin != nil && gating == gateEnforced && !evalPassedFor(status.Eval, desiredDigest):
 			// GatesPassed is not asserted for a pinned rollback: it stays
 			// sticky and goes on describing the revision status.eval names
 			// (design 16 §1.1's table).
@@ -1090,15 +1085,23 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 	}
 
-	// GatesBypassed names a pin admitted on this pass, and whether it serves
-	// yet. It is owned and not sticky. assessGates keeps the stored one, on a
-	// pass that does not judge the pin, only while the pin still names the
-	// digest it describes (keptBypass), so a pin removed or changed to
-	// another digest withdraws it, and a refusal or a pin that no longer
-	// resolves withdraws it too. It decides nothing.
-	if pinWhy != "" {
-		conds.set(assaydv1alpha1.CondGatesBypassed, metav1.ConditionTrue, ReasonPinnedRollback,
-			pinnedRollbackMessage(pin, status.ActiveRevisionDigest == pin.Digest, pinWhy))
+	// GatesBypassed is derived from the spec and status on every pass that
+	// reaches here, and no stored condition is read: a pin admitted on this
+	// pass and not yet serving, or a pin naming the revision serving while
+	// status.eval records no Passed verdict for it (servingPinBypass, which
+	// assessGates also derives, before anything can return early). It is
+	// owned and not sticky, so it is withdrawn on the first pass on which
+	// neither holds, and is not asserted on a pass that does not enforce the
+	// gate.
+	if pin != nil && gating == gateEnforced {
+		if msg := servingPinBypass(&agent, status, pinWhy); msg != "" {
+			conds.set(assaydv1alpha1.CondGatesBypassed, metav1.ConditionTrue, ReasonPinnedRollback, msg)
+		} else if status.ActiveRevisionDigest != pin.Digest && pinWhy != "" {
+			conds.set(assaydv1alpha1.CondGatesBypassed, metav1.ConditionTrue, ReasonPinnedRollback,
+				pendingPinBypass(pin, pinWhy))
+		} else {
+			conds.unset(assaydv1alpha1.CondGatesBypassed)
+		}
 	}
 
 	// The ACTIVE revision's Service is READ here — never converged, never
@@ -1705,6 +1708,14 @@ func (r *AgentReconciler) revisionAvailable(ctx context.Context, agent *assaydv1
 // must stop the revision rather than produce a partial identity.
 func (r *AgentReconciler) resolveEnvSources(ctx context.Context, agent *assaydv1alpha1.Agent) (
 	revision.Resolved, map[revision.SourceRef]*sourceBuffer, []revision.SourceRef, error) {
+	return resolveEnvSourcesFrom(ctx, r.Client, agent)
+}
+
+// resolveEnvSourcesFrom is resolveEnvSources through any reader, so the eval
+// controller can compute the digest the current spec mints exactly as the
+// Agent reconciler does (specDigestOf).
+func resolveEnvSourcesFrom(ctx context.Context, reader client.Reader, agent *assaydv1alpha1.Agent) (
+	revision.Resolved, map[revision.SourceRef]*sourceBuffer, []revision.SourceRef, error) {
 	refs := revision.EnvSources(agent.Spec)
 	if len(refs) == 0 {
 		return nil, nil, nil, nil
@@ -1719,7 +1730,7 @@ func (r *AgentReconciler) resolveEnvSources(ctx context.Context, agent *assaydv1
 		switch ref.Kind {
 		case "ConfigMap":
 			var cm corev1.ConfigMap
-			if err := r.Get(ctx, key, &cm); err != nil {
+			if err := reader.Get(ctx, key, &cm); err != nil {
 				if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
 					unresolved = append(unresolved, ref)
 					continue
@@ -1731,7 +1742,7 @@ func (r *AgentReconciler) resolveEnvSources(ctx context.Context, agent *assaydv1
 			buffers[ref] = &sourceBuffer{kind: ref.Kind, data: cm.Data, binary: cm.BinaryData, digest: d}
 		case "Secret":
 			var sec corev1.Secret
-			if err := r.Get(ctx, key, &sec); err != nil {
+			if err := reader.Get(ctx, key, &sec); err != nil {
 				if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
 					unresolved = append(unresolved, ref)
 					continue
@@ -2089,9 +2100,13 @@ func (r *AgentReconciler) assessGates(agent *assaydv1alpha1.Agent, mode gateMode
 		c.set(assaydv1alpha1.CondGatesSkipped, metav1.ConditionTrue, "EvalSuiteCRDAbsent",
 			"the EvalSuite CRD is not installed, so this rollout is NOT eval-gated (design 02 §3.3, core tier)")
 	case gateEnforced:
-		// A pinned rollback's GatesBypassed survives a pass that does not
-		// judge the pin, while the pin names the same digest (design 16 Q5).
-		carryPinnedRollback(agent, c)
+		// A pin naming the revision serving, which status.eval records no
+		// Passed verdict for, bypasses the gate (design 16 Q5 (a)). Derived
+		// here too, from status as the pass found it, so a pass that returns
+		// early still says so.
+		if msg := servingPinBypass(agent, &agent.Status, ""); msg != "" {
+			c.set(assaydv1alpha1.CondGatesBypassed, metav1.ConditionTrue, ReasonPinnedRollback, msg)
+		}
 	}
 }
 
