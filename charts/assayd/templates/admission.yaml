@@ -349,17 +349,23 @@ spec:
 # in 1.30, Chart.yaml's floor): `update` on `agents.assayd.dev` in the suite's
 # namespace, asked with NO name. RBAC answers a nameless request only from a
 # rule without resourceNames, so an editor scoped to named Agents is refused --
-# it errs toward refusal, as Q6 records.
+# it errs toward refusal, as Q6 records. So is a principal granted `patch` on
+# Agents but not `update`. An authorizer that errors is a refusal too: the
+# library makes its decision not allowed(). failurePolicy covers the rest, a
+# CEL runtime error or a policy the API server cannot use.
 #
 # Cluster-wide, with no namespaceSelector: a suite lives in its Agent's
 # namespace, and those namespaces carry no label of assayd's to select on.
-# Nobody is exempt -- not the operator, which only ever `get`s a suite, and not
-# admission.extraOperators: Q6 (c) names one rule, and an exempt identity would
-# hold unauthenticated invocation of every held candidate in the cluster.
-# Every CREATE and UPDATE is judged, whatever it changes: the garbage collector
-# that removes a deletion finalizer holds `update` on every resource, so it
-# passes. DELETE is RBAC's, as for the other reservations (design 07 A6.10).
-# There is no status subresource to match.
+# The policy exempts no identity, so it holds no list to keep. Every
+# cluster-wide Agent editor passes its check in every namespace, the operator
+# included: its ClusterRole updates every Agent. What keeps the operator from
+# writing a suite is RBAC alone, `get` and nothing else on evalsuites
+# (test/chart, TestTheOperatorOnlyReadsEvalSuites). The same holds for an
+# admission.extraOperators identity that may update Agents.
+# Every CREATE and UPDATE is judged, whatever it changes, metadata-only edits
+# included: the garbage collector that removes a deletion finalizer holds
+# `update` on every resource, so it passes. DELETE is RBAC's, as for the other
+# reservations (design 07 A6.10). There is no status subresource to match.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:

@@ -5,6 +5,7 @@ package chart
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -34,6 +35,13 @@ func TestTheChartReservesEvalSuiteWritesToAgentEditors(t *testing.T) {
 		if b == nil {
 			t.Fatalf("%v: assayd-evalsuite-writers has no binding, so it validates nothing", args)
 		}
+		// Exact key sets: anything else a policy or binding can carry --
+		// matchConditions, an objectSelector, a namespaceSelector, a binding's
+		// matchResources or paramRef -- narrows what the check reaches, which
+		// exempts whoever it leaves out.
+		keys(t, args, "the binding's spec", dig(b, "spec"), "policyName", "validationActions")
+		keys(t, args, "the policy's spec", dig(p, "spec"), "failurePolicy", "matchConstraints", "validations")
+		keys(t, args, "the policy's matchConstraints", dig(p, "spec", "matchConstraints"), "resourceRules")
 		bspec := dig(b, "spec")
 		if bspec["policyName"] != "assayd-evalsuite-writers" || !reflect.DeepEqual(toStrings(bspec["validationActions"]), []string{"Deny"}) {
 			t.Errorf("%v: the binding does not deny under assayd-evalsuite-writers: %v", args, bspec)
@@ -41,8 +49,12 @@ func TestTheChartReservesEvalSuiteWritesToAgentEditors(t *testing.T) {
 
 		spec := dig(p, "spec")
 		if spec["failurePolicy"] != "Fail" {
-			t.Errorf("%v: failurePolicy is %v; an authorizer that cannot answer must refuse the suite, not admit it",
-				args, spec["failurePolicy"])
+			// An authorizer error is already a deny: the `authorizer` library
+			// turns it into a decision whose allowed() is false. failurePolicy
+			// governs the rest -- a CEL runtime error, a policy the API server
+			// cannot compile or bind -- and Ignore would admit every suite then.
+			t.Errorf("%v: failurePolicy is %v; a policy that errors or is misconfigured must refuse the suite, "+
+				"not admit it", args, spec["failurePolicy"])
 		}
 		if _, has := spec["paramKind"]; has {
 			t.Errorf("%v: the policy declares a paramKind; a params object that goes missing changes who may write", args)
@@ -83,5 +95,43 @@ func TestTheChartReservesEvalSuiteWritesToAgentEditors(t *testing.T) {
 				t.Errorf("%v: the refusal's %s does not name the fix: %q", args, field, m)
 			}
 		}
+	}
+}
+
+// keys fails unless m holds exactly the keys want.
+func keys(t *testing.T, args []string, what string, m map[string]any, want ...string) {
+	t.Helper()
+	var got []string
+	for k := range m {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("%v: %s has keys %v, want exactly %v", args, what, got, want)
+	}
+}
+
+// The policy exempts no one, and the operator passes its check: the rendered
+// ClusterRole lets it update every Agent. What keeps the operator from writing
+// an EvalSuite is this RBAC, `get` and nothing else on evalsuites (design 16
+// §1.1, "What the slice depends on"), so it is pinned here.
+func TestTheOperatorOnlyReadsEvalSuites(t *testing.T) {
+	var verbs []string
+	for _, role := range kindsOf(render(t), "ClusterRole") {
+		for _, r := range toList(role["rules"]) {
+			rule, _ := r.(map[string]any)
+			for _, g := range toStrings(rule["apiGroups"]) {
+				for _, res := range toStrings(rule["resources"]) {
+					if (g == "assayd.dev" || g == "*") && (res == "evalsuites" || res == "*") {
+						verbs = append(verbs, toStrings(rule["verbs"])...)
+					}
+				}
+			}
+		}
+	}
+	if !reflect.DeepEqual(verbs, []string{"get"}) {
+		t.Errorf("the chart's ClusterRoles grant %v on evalsuites, want exactly [get]: the operator passes "+
+			"assayd-evalsuite-writers' check, so RBAC alone keeps it from writing a suite", verbs)
 	}
 }

@@ -125,7 +125,9 @@ type EvalMetric struct {
 // +kubebuilder:object:root=true
 
 // EvalSuite is the set of cases a gated Agent's candidate revision must pass
-// before it takes traffic (design 16 §1.1).
+// before it takes traffic (design 16 §1.1). The chart's admission policy
+// assayd-evalsuite-writers admits a create or update only from a principal
+// that may update Agents in the suite's namespace, namespace-wide.
 type EvalSuite struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

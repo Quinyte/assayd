@@ -18,12 +18,17 @@ import (
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
-// Design 16 §1.1, Q6 (c), on the e2e's k3s with the chart as installed: an
+// Design 16 §1.1, Q6 (c), on a real cluster with the chart as installed: an
 // EvalSuite create or update is admitted only from a principal the authorizer
-// says may `update` Agents in the suite's namespace, namespace-wide. Q6
-// measured the `authorizer` library on envtest v1.36.2 and recorded it
-// unmeasured on this k3s; test/envtest measures the same three users against
-// the rendered policy, and this measures them against the installed one.
+// says may `update` Agents in the suite's namespace, namespace-wide.
+// test/envtest measures the same users, and more, against the rendered policy;
+// this measures three of them against the installed one.
+//
+// Which Kubernetes that is depends on the lane. Q6 names the e2e's k3s
+// v1.33.6, which is what k3d v5.8.3 defaults to and where this was first
+// measured, by `make e2e` on a workstation. CI's k3d lane pins no k3s image,
+// and its k3d v5.9.0 ran k3s v1.35.5-k3s1; its kind lane ran v1.35.0. The
+// chart's floor, 1.30, is measured nowhere.
 
 const suitesNS = "assayd-e2e-suites"
 
