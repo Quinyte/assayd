@@ -21,7 +21,7 @@ One feature at a time, through the whole loop. A feature is not done when it wor
 
 ## Test layers
 
-- **unit** (`api/`, `internal/`) — pure logic and schema properties. Assert against the *generated* artifact, never a fixture defined in the test file: a fixture-counting test proves only that the fixture is unchanged.
+- **unit** (`api/`, `internal/`, `cmd/`) — pure logic and schema properties. Assert against the *generated* artifact, never a fixture defined in the test file: a fixture-counting test proves only that the fixture is unchanged.
 - **envtest** (`test/envtest/`) — defaulting, CEL validation, status subresources, reconciler behaviour against a real API server. This is where a rule becomes true.
 - **e2e** (`test/e2e/`) — k3d. A skipped e2e is an untested feature: the runner fails loudly rather than skipping.
 
