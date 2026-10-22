@@ -74,8 +74,8 @@ var humanApprovedParts = []grant{
 var humanDecidedParts = []grant{
 	{"16", "A20", "2026-10-21"}, // design 16 §14 A20, decided as recommended on PR #117; folded by PR #124
 	{"16", "A21", "2026-10-21"}, // design 16 §14 A21, decided with A20 on PR #117 (#120 merged into it); folded by PR #124
-	{"16", "A22", "2026-10-22"}, // design 16 §14 A22, decided as recommended on PR #128; folded by this PR's fold
-	{"16", "A23", "2026-10-22"}, // design 16 §14 A23, decided with A22 on PR #132 (merged into #128); folded by this PR's fold
+	{"16", "A22", "2026-10-22"}, // design 16 §14 A22, decided as recommended on PR #128; folded by PR #136
+	{"16", "A23", "2026-10-22"}, // design 16 §14 A23, decided with A22 on PR #132 (merged into #128); folded by PR #136
 }
 
 // humanApprovals reduces humanApprovedParts to the claim each design may make
