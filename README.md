@@ -21,9 +21,10 @@ Measured on a real cluster (k3d) by `make e2e`, not asserted:
 - **An agent runs and answers.** The operator deploys it from a registry digest, mints a per-revision Service, and a request gets an answer back.
 - **Traffic traverses a real gateway.** Gateway API + agentgateway; a request reaches the agent through the Gateway's own Service, carried by a route.
 - **A disallowed principal is refused, by identity, under the policy the operator emits.** Each new API-key Agent's route is published only after an anonymous request through it gets `401`. A caller with a valid key for the wrong group gets `403` while a permitted one gets `200` on the same route — authentication and authorization are separate controls and are measured separately.
-- **The gateway can be made the only way in.** Under a hand-authored ingress rule an ordinary namespace cannot reach an agent directly, while the gateway and the operator's card fetch still can.
+- **The gateway can be made the only way in.** Under a hand-authored ingress rule an ordinary namespace cannot reach an agent directly, while the gateway and the operator's card fetch still can. The operator's eval sends use the same direct path, and are not measured under that rule.
 - **An MCP tool call goes through the gateway**, with an allowlist that removes disallowed tools from discovery entirely.
 - **The operator fetches and digests the A2A card the container serves** — the container is the source of truth, not a fixture handed to the operator.
+- **A revision is evaluated before it takes traffic.** On an Agent that declares a gate, the operator sends each case of its EvalSuite to the new revision as an A2A message, and promotes the revision only when the suite passes, except a revision an admitted pin names, which is promoted unevaluated under `GatesBypassed`, and a held candidate once the gate is removed from the Agent; a revision that fails is held while traffic stays on the one before it.
 
 ## What is NOT true today
 
@@ -33,7 +34,8 @@ Stated plainly, because a promise nothing enforces is worse than an absent featu
 - **The chart ships no gateway.** `gateway.enabled` defaults to `false`, and on install the chart tells you your agents are ungoverned.
 - **No NetworkPolicy is materialized**, so an agent Pod is directly reachable and gateway controls are bypassable by default.
 - **Card signatures are not verified**, skills are not cross-checked against grants, and the registration deadline is not counted.
-- **The knowledge-graph, eval-gate and drift work is designed, not built.** Designs are hypotheses until their Status line says otherwise.
+- **The eval gate is built only as design 16 §1.1's narrow slice**: blue/green, one suite per Agent, each case matched by substring or equality, sent to the candidate's own Service — not through the gateway, and with no credential. No runner, judge, dataset, canary or session replay exists. `AGENTS.md` lists what the slice does not do.
+- **The knowledge-graph and drift work is designed, not built.** Designs are hypotheses until their Status line says otherwise.
 
 `docs/designs/02-agent-crd-operator.md` §5 is the authoritative list. `SECURITY.md` repeats it, because someone assessing risk should not have to find it.
 

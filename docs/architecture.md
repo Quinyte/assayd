@@ -419,7 +419,7 @@ Two loops, separated: the **inner loop** (user-owned scaffold) and the **governa
 
 ## 16 · Competitive positioning
 
-> **The assayd column states the target, not what ships.** Only the gateway-path row is true today; eval-as-admission, session replay, drift controllers and the Postgres+NATS substrate are designed, not built.
+> **The assayd column states the target, not what ships.** Only the gateway-path row is true today, and the eval-gating row in part: eval-as-admission is built only as design 16 §1.1's narrow slice — blue/green, one suite of A2A cases per Agent, sent to the candidate's own Service and not through the gateway (§08). Session replay, drift controllers and the Postgres+NATS substrate are designed, not built.
 
 | | kagent (CNCF/Solo.io) | Rossoctl (ex-Kagenti, IBM) | Dapr Agents | assayd |
 |---|---|---|---|---|
