@@ -466,7 +466,7 @@ One new hazard replaces the two that were fixed, and it applies to the whole arc
 
 ### 9.4 The competitor comparison table is not published
 
-`docs/architecture.md` §16's table has six capability rows. Its own header says the assayd column "states the target, not what ships", and only the gateway-path row is true today. A comparison table on which five of six rows would render `designed` or `not-built` is not a comparison; it is the original failure with a competitor's name beside it.
+`docs/architecture.md` §16's table has six capability rows. Its own header says the assayd column "states the target, not what ships": only the gateway-path row is true today, and the eval-gating row only in part, as design 16 §1.1's narrow slice. A comparison table on which five of six rows would render `designed` or `not-built` is not a comparison; it is the original failure with a competitor's name beside it.
 
 The first-mover claim that used to close the section — "nobody ships it as a k8s primitive — 12–18-month window" — was withdrawn by PR #60, which quotes and retracts it at the close of §16 rather than deleting it. **The table itself is unchanged**, so the argument here is the one it always was: five of its six rows are not `measured`.
 
