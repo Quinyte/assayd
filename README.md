@@ -24,7 +24,7 @@ Measured on a real cluster (k3d) by `make e2e`, not asserted:
 - **The gateway can be made the only way in.** Under a hand-authored ingress rule an ordinary namespace cannot reach an agent directly, while the gateway and the operator's card fetch still can. The operator's eval sends use the same direct path, and are not measured under that rule.
 - **An MCP tool call goes through the gateway**, with an allowlist that removes disallowed tools from discovery entirely.
 - **The operator fetches and digests the A2A card the container serves** — the container is the source of truth, not a fixture handed to the operator.
-- **A revision is evaluated before it takes traffic.** On an Agent that declares a gate, the operator sends each case of its EvalSuite to the new revision as an A2A message, and promotes the revision only when the suite passes; a revision that fails is held while traffic stays on the one before it.
+- **A revision is evaluated before it takes traffic.** On an Agent that declares a gate, the operator sends each case of its EvalSuite to the new revision as an A2A message, and promotes the revision only when the suite passes, except a revision an admitted pin names, which is promoted unevaluated under `GatesBypassed`, and a held candidate once the gate is removed from the Agent; a revision that fails is held while traffic stays on the one before it.
 
 ## What is NOT true today
 
