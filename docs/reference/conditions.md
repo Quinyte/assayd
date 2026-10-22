@@ -901,7 +901,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
 - `internal/controller/agent_controller.go:1055` in `Reconcile()` — from `gate.readyReason`, one of the 4 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/exemption_test.go`, `test/envtest/gate_test.go`, `test/envtest/pin_test.go`
+**Referenced by a test:** `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/e2e/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/exemption_test.go`, `test/envtest/gate_test.go`, `test/envtest/pin_test.go`
 
 **State:** `status.eval` records a `Failed` verdict for the candidate's full digest against the digest of the suite read in this pass.
 
@@ -961,7 +961,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 - `internal/controller/agent_controller.go:2144` in `assessPromotedGate()` — constant at the call site
 
-**Referenced by a test:** `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/pin_test.go`
+**Referenced by a test:** `test/e2e/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/pin_test.go`
 
 **State:** `status.eval` records `Passed` for the revision being promoted or serving, by its full digest. For a candidate, the gate was satisfied: the verdict is for the suite digest read in this pass, and a card digest is recorded for the candidate.
 
@@ -1235,7 +1235,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/authtxn.go:2103` in `runLock()` — constant at the call site
 - `internal/controller/agent_controller.go:1286` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/e2e/gatewayhold_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authgate_test.go`, `test/envtest/authserved_test.go`
+**Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/e2e/gate_test.go`, `test/e2e/gatewayhold_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authgate_test.go`, `test/envtest/authserved_test.go`
 
 **State:** Something on the assayd Gateway could have answered the anonymous `401` the compiler is about to credit — a counting Gateway-level policy, a Gateway that admits ListenerSets, or a Gateway or policy list that cannot be read. Also W1: a served API-key Agent beside a Gateway-level policy that could widen its route.
 

@@ -54,6 +54,25 @@ var humanApprovedParts = []grant{
 	{"03", "A89", "2026-09-28"},         // design 03 §11 A89, implementing D8's (R1); a note in ADR-0034 Amendment 7
 }
 
+// humanDecidedParts is the human's other kind of decision on a part of a
+// design: an amendment to an approved slice, put to the human with a
+// recommendation for each item and decided as recommended. Design 16's A20 and
+// A21 were decided so on 2026-10-21, on PR #117, and folded into §1.1 by PR
+// #124. The documents record each as "decided by the human on DATE", never as
+// approved: design 16's Status line, its README row and the README's list of
+// approvals name no approval of either, so a row here is not a row of
+// humanApprovedParts, and design 16 stays approved in its first slice only.
+// Making one an approved part would take an ADR-0024 amendment and a change to
+// design 16's Status line and README row, which only the human's process makes.
+//
+// Changing this table is recording a human decision, as for
+// humanApprovedParts. TestADecidedAmendmentIsRecordedAsDecided holds the
+// documents to it.
+var humanDecidedParts = []grant{
+	{"16", "A20", "2026-10-21"}, // design 16 §14 A20, decided as recommended on PR #117; folded by PR #124
+	{"16", "A21", "2026-10-21"}, // design 16 §14 A21, decided with A20 on PR #117 (#120 merged into it); folded by PR #124
+}
+
 // humanApprovals reduces humanApprovedParts to the claim each design may make
 // as a whole: a design with any approved part is approved in part. No design
 // is approved whole. Every other design number is not approved.
@@ -917,4 +936,241 @@ func TestTheApprovedPartReaderFindsTheSubject(t *testing.T) {
 			t.Errorf("%s: %q reads as %v, want %v", tc.name, tc.text, got, tc.want)
 		}
 	}
+}
+
+// humanDecision and humanDecided are the two phrasings read as a claim that
+// the human decided a part of a design on a day: "<ids> … decided by the
+// human on DATE" (a comma before "on" allowed) and "the human [one word]
+// decided <ids> on DATE". Neither is an approval: humanApproval does not match
+// them, and humanApprovalClaims does not read them.
+var (
+	humanDecision = regexp.MustCompile(`(?i)\bdecided by the human,? on (\d{4}-\d{2}-\d{2})\b`)
+	humanDecided  = regexp.MustCompile(`(?i)\bthe human(?: (\w+))? decided\b`)
+)
+
+// humanDecisionClaims returns every claim in a text that the human decided an
+// amendment on a day. Its clauses end at a sentence end or a table-cell break
+// but not at a semicolon, so "A22 is no longer proposed; it was decided by the
+// human on DATE" is read as A22's.
+//
+//   - "<ids> … decided by the human on DATE": the last run of amendment ids
+//     before the phrase in its clause, every id in the run. The design is the
+//     last "design NN" before the phrase in the clause, else def.
+//   - "the human decided <ids> on DATE": the ids between the phrase and the
+//     first date after it, and only those, so "A80 specified it, and the human
+//     decided its three calls on 2026-09-21" and "the human decided on
+//     2026-09-25 to count data only" are not read as an amendment's. The design
+//     is a "design NN" in that span, else before the phrase, else def.
+//
+// What it does not read, stated because it is the limit of the test that uses
+// it: a phrase withdrawn by the word before it — "not", "never", or "be",
+// which is read as a modal ("would be decided"), so "came to be decided by
+// the human on DATE" is skipped too; a claim with no id in its clause ("That
+// was decided by the human on 2026-09-23", whose subject is a sentence
+// earlier); a claim with no date after the phrase in its clause; and every
+// other phrasing, such as "the human's decision on A22".
+func humanDecisionClaims(text, def string) []grant {
+	var out []grant
+	emit := func(g grant, ids []string) {
+		for _, id := range ids {
+			g.part = id
+			out = append(out, g)
+		}
+	}
+	for _, clause := range listBreak.Split(approvalProse(text), -1) {
+		for _, m := range humanDecision.FindAllStringSubmatchIndex(clause, -1) {
+			if withdrawnBefore.MatchString(clause[:m[0]]) {
+				continue
+			}
+			head := negatedID.ReplaceAllString(clause[:m[0]], " ")
+			runs := amendmentRun.FindAllString(head, -1)
+			if runs == nil {
+				continue
+			}
+			g := grant{design: def, date: clause[m[2]:m[3]]}
+			if d := designRef.FindAllStringSubmatch(head, -1); d != nil {
+				g.design = d[len(d)-1][1]
+			}
+			emit(g, amendmentID.FindAllString(runs[len(runs)-1], -1))
+		}
+		for _, m := range humanDecided.FindAllStringSubmatchIndex(clause, -1) {
+			if withdrawnBefore.MatchString(clause[:m[0]]) ||
+				(m[2] >= 0 && withdrawnWord[strings.ToLower(clause[m[2]:m[3]])]) {
+				continue
+			}
+			rest := clause[m[1]:]
+			d := isoDate.FindStringIndex(rest)
+			if d == nil {
+				continue
+			}
+			gap := negatedID.ReplaceAllString(rest[:d[0]], " ")
+			ids := amendmentID.FindAllString(gap, -1)
+			if ids == nil {
+				continue
+			}
+			g := grant{design: def, date: rest[d[0]:d[1]]}
+			if dr := designRef.FindAllStringSubmatch(gap, -1); dr != nil {
+				g.design = dr[len(dr)-1][1]
+			} else if dr := designRef.FindAllStringSubmatch(clause[:m[0]], -1); dr != nil {
+				g.design = dr[len(dr)-1][1]
+			}
+			emit(g, ids)
+		}
+	}
+	return out
+}
+
+// TestADecidedAmendmentIsRecordedAsDecided holds the documents to
+// humanDecidedParts. A decided part is an amendment id of a design the human
+// has approved in part, and is not also an approved part. The amendment's own
+// entry in its design opens "- **<id> (" and says, before its bold head
+// closes, "decided by the human on <date>". The design's README row, and
+// AGENTS.md and CLAUDE.md, each claim exactly the decided parts the table
+// holds, read by humanDecisionClaims. Other documents are not read: the
+// phrase is used there for decisions that are not amendments — design 03's
+// D8, answered on 2026-09-25 beside A86, is one — and the reader cannot tell
+// an amendment decided from a question answered in the amendment's sentence.
+// A claim that the human
+// APPROVED a decided part is not read here: TestNoDocumentClaimsAnApprovedPartTheHumanDidNotGive
+// fails it, because the part is not in humanApprovedParts.
+func TestADecidedAmendmentIsRecordedAsDecided(t *testing.T) {
+	approved := map[grant]bool{}
+	for _, g := range humanApprovedParts {
+		approved[grant{design: g.design, part: g.part}] = true
+	}
+	seen := map[grant]bool{}
+	byDesign := map[string][]grant{}
+	for _, g := range humanDecidedParts {
+		if seen[g] {
+			t.Errorf("humanDecidedParts holds %s twice", g)
+		}
+		seen[g] = true
+		if !designFile.MatchString(g.design+"-x.md") || !isoDate.MatchString(g.date) || amendmentID.FindString(g.part) != g.part {
+			t.Errorf("humanDecidedParts row %+v is not a two-digit design, an amendment id and a YYYY-MM-DD date", g)
+		}
+		if approved[grant{design: g.design, part: g.part}] {
+			t.Errorf("humanDecidedParts holds %s, which humanApprovedParts also holds; a part is approved or decided, not both", g)
+		}
+		if humanApprovals[g.design] == notApproved {
+			t.Errorf("humanDecidedParts holds %s, an amendment to design %s, which the human has approved no part of", g, g.design)
+		}
+		byDesign[g.design] = append(byDesign[g.design], g)
+	}
+
+	for design, gs := range byDesign {
+		paths, err := filepath.Glob(filepath.Join(docsRoot, "designs", design+"-*.md"))
+		if err != nil || len(paths) != 1 {
+			t.Errorf("design %s: want one file docs/designs/%s-*.md, found %v (%v)", design, design, paths, err)
+			continue
+		}
+		b, err := os.ReadFile(paths[0])
+		if err != nil {
+			t.Fatalf("read %s: %v", paths[0], err)
+		}
+		for _, g := range gs {
+			if err := entryRecordsDecision(string(b), g); err != nil {
+				t.Errorf("design %s: %v", design, err)
+			}
+		}
+	}
+
+	rows := indexRows(t)
+	for design, gs := range byDesign {
+		var own []grant
+		for _, g := range humanDecisionClaims(rows[design], design) {
+			if g.design == design {
+				own = append(own, g)
+			}
+		}
+		for _, d := range decisionDiff(fmt.Sprintf("design %s's README row", design), own, gs) {
+			t.Error(d)
+		}
+	}
+	for _, rel := range []string{"AGENTS.md", "CLAUDE.md"} {
+		b, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		for _, d := range decisionDiff(rel, humanDecisionClaims(string(b), ""), humanDecidedParts) {
+			t.Error(d)
+		}
+	}
+}
+
+// TestTheDecisionReaderFindsTheSubject pins humanDecisionClaims on the shapes
+// design 16's README row and its amendment entries use, and on the shapes it
+// must not read, so TestADecidedAmendmentIsRecordedAsDecided cannot pass by
+// reading nothing.
+func TestTheDecisionReaderFindsTheSubject(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		want       []grant
+	}{
+		{"the README row", "**A20 and A21 (2026-10-19) were decided by the human on 2026-10-21, every item as recommended, and folded into §1.1 (#116).**",
+			[]grant{{"16", "A20", "2026-10-21"}, {"16", "A21", "2026-10-21"}}},
+		{"a design named", "Design 16's amendments A20 and A21 were decided by the human on 2026-10-21, every item as recommended",
+			[]grant{{"16", "A20", "2026-10-21"}, {"16", "A21", "2026-10-21"}}},
+		{"another design named", "design 03's A90 was decided by the human on 2026-09-29", []grant{{"03", "A90", "2026-09-29"}}},
+		{"no id in the clause", "That was decided by the human on 2026-09-23, and it corrects ADR-0030", nil},
+		{"withdrawn", "A22 is not decided by the human on 2026-10-22", nil},
+		{"a modal", "A22 would be decided by the human on 2026-10-23", nil},
+		{"undated", "A22 and A23 are proposed and not decided by the human", nil},
+		{"approved is not decided", "A20 was approved by the human on 2026-10-21", nil},
+		{"an id ruled out", "A21, not A22, was decided by the human on 2026-10-21", []grant{{"16", "A21", "2026-10-21"}}},
+		{"a comma before the date", "A22 was decided by the human, on 2026-10-22", []grant{{"16", "A22", "2026-10-22"}}},
+		{"a pronoun after a semicolon", "A22 is no longer proposed; it was decided by the human on 2026-10-22", []grant{{"16", "A22", "2026-10-22"}}},
+		{"the human decided an id", "The human decided design 16's A22 on 2026-10-22", []grant{{"16", "A22", "2026-10-22"}}},
+		{"the human then decided a run", "the human then decided A22 and A23 on 2026-10-22", []grant{{"16", "A22", "2026-10-22"}, {"16", "A23", "2026-10-22"}}},
+		{"the human decided another design's id", "the human decided design 03's A90 on 2026-09-29", []grant{{"03", "A90", "2026-09-29"}}},
+		{"the human decided calls, not an id", "Design 03 A80 specified the re-derivation, the human decided its three calls on 2026-09-21", nil},
+		{"the human decided, then the date", "The human decided on 2026-09-25 to count data only (design 03 §9 D8, (R1)), and A89 implements it", nil},
+		{"the human never decided", "the human never decided A22 on 2026-10-22", nil},
+		{"the human would not have decided", "A22 would not be decided by the human on 2026-10-22", nil},
+		{"a stated limit: came to be", "A22 came to be decided by the human on 2026-10-22", nil},
+	} {
+		if got := humanDecisionClaims(tc.text, "16"); fmt.Sprint(got) != fmt.Sprint(tc.want) {
+			t.Errorf("%s: %q reads as %v, want %v", tc.name, tc.text, got, tc.want)
+		}
+	}
+	g := grant{"16", "A20", "2026-10-21"}
+	for _, tc := range []struct {
+		name, doc string
+		ok        bool
+	}{
+		{"decided in the head", "x\n- **A20 (2026-10-19, the drafter's; decided by the human on 2026-10-21, as recommended) — y.** z", true},
+		{"decided only after the head", "- **A20 (2026-10-19, the drafter's) — y.** decided by the human on 2026-10-21", false},
+		{"another day", "- **A20 (2026-10-19; decided by the human on 2026-10-22) — y.**", false},
+		{"no entry", "- **A21 (2026-10-19; decided by the human on 2026-10-21) — y.**", false},
+	} {
+		if err := entryRecordsDecision(tc.doc, g); (err == nil) != tc.ok {
+			t.Errorf("entry %s: %q: error %v, want ok %v", tc.name, tc.doc, err, tc.ok)
+		}
+	}
+}
+
+// entryRecordsDecision reports whether a design's amendment entry for g — the
+// line that opens "- **<id> (" — says, before its bold head closes, "decided
+// by the human on <date>".
+func entryRecordsDecision(doc string, g grant) error {
+	for _, l := range strings.Split(doc, "\n") {
+		if !strings.HasPrefix(l, "- **"+g.part+" (") {
+			continue
+		}
+		head := strings.SplitN(strings.TrimPrefix(l, "- **"), "**", 2)[0]
+		if !strings.Contains(head, "decided by the human on "+g.date) {
+			return fmt.Errorf("the entry for %s does not say, in its bold head, \"decided by the human on %s\": %q", g.part, g.date, head)
+		}
+		return nil
+	}
+	return fmt.Errorf("no amendment entry opens \"- **%s (\"", g.part)
+}
+
+// decisionDiff is grantDiff for humanDecidedParts.
+func decisionDiff(where string, got, want []grant) []string {
+	var out []string
+	for _, d := range grantDiff(where, got, want) {
+		d = strings.ReplaceAll(d, "humanApprovedParts", "humanDecidedParts")
+		out = append(out, strings.ReplaceAll(d, "an approval ", "a decision "))
+	}
+	return out
 }

@@ -111,6 +111,23 @@ func handler() http.Handler {
 	// the container without this fixture needing a gateway to exist.
 	gateway := os.Getenv("ASSAYD_GATEWAY_URL")
 
+	// The two knobs design 16 §1.1 asks of this fixture, so that an e2e can
+	// tell a revision that fails an EvalSuite from two that pass it, and the
+	// two passing ones from each other, through the gateway. Each is in the
+	// Agent's env, so changing either mints a revision.
+	//
+	// ANSWER_PREFIX replaces the "echo: " the answer opens with. It is read
+	// verbatim, never trimmed, because the default's trailing space is part
+	// of it, and an empty value is a prefix like any other; only an unset
+	// variable keeps the default. ANSWER_MARKER, when set, is reported in the
+	// task's metadata as `marker`, beside `agent`: it changes no answer text,
+	// so a suite passes with or without it.
+	prefix, ok := os.LookupEnv("ANSWER_PREFIX")
+	if !ok {
+		prefix = "echo: "
+	}
+	marker := os.Getenv("ANSWER_MARKER")
+
 	self := card{
 		Name:        name,
 		Description: "minimal HTTP responder — assayd e2e fixture",
@@ -259,15 +276,19 @@ func handler() http.Handler {
 			Artifacts: []artifact{{
 				ArtifactID: newID("artifact"),
 				Name:       "echo",
-				Parts:      []part{{Text: "echo: " + strings.Join(texts, " ")}},
+				Parts:      []part{{Text: prefix + strings.Join(texts, " ")}},
 			}},
 			// Which agent answered, and what the operator injected, ride in the
 			// task's own metadata — a `google.protobuf.Struct` the proto gives
 			// every Task for exactly this — rather than in fields A2A does not
 			// have. Naming the agent is what lets a rollout test prove WHICH
-			// revision answered; the gateway URL is REPORTED, never dialled.
+			// Agent answered, and the marker which of its revisions; the
+			// gateway URL is REPORTED, never dialled.
 			Metadata: map[string]string{"agent": name, "gateway": gateway},
 		}}
+		if marker != "" {
+			out.Task.Metadata["marker"] = marker
+		}
 		// §11.1: the HTTP+JSON binding SHOULD answer as application/a2a+json.
 		w.Header().Set("Content-Type", a2aContentType)
 		if err := json.NewEncoder(w).Encode(out); err != nil {

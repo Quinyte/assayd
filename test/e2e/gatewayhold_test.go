@@ -28,9 +28,7 @@ import (
 // PolicyApplyIncomplete=GatewayAuthPolicy, its route prepared and unpublished,
 // and is published once the policy is removed.
 //
-// The policy is scoped to the serving listener by sectionName, so the MCP
-// tests' `tools` listener never sees it, and it carries none of the
-// operator's labels, so nothing maps it to an Agent.
+// The policy is applyGatewayLevelAuthPolicy's.
 func TestAGatewayLevelAuthPolicyHoldsANewAgent(t *testing.T) {
 	requireCluster(t)
 	requireOperator(t)
@@ -40,23 +38,7 @@ func TestAGatewayLevelAuthPolicyHoldsANewAgent(t *testing.T) {
 	ensureNamespace(t, ctx, "assayd-e2e")
 	ensureAPIKeys(t, ctx)
 
-	gp, err := compiler.AuthPolicy(compiler.AuthInput{AgentName: "gwlevel", AgentNamespace: "assayd-e2e",
-		AgentUID: types.UID("e2e-gwlevel"), RunNamespace: gwNS})
-	if err != nil {
-		t.Fatal(err)
-	}
-	gp.SetName("assayd-e2e-gateway-auth")
-	gp.SetLabels(nil)
-	if err := unstructured.SetNestedSlice(gp.Object, []any{map[string]any{"group": "gateway.networking.k8s.io",
-		"kind": "Gateway", "name": gwName, "sectionName": controller.GatewayListenerName}},
-		"spec", "targetRefs"); err != nil {
-		t.Fatal(err)
-	}
-	_ = k8s.Delete(ctx, gp.DeepCopy())
-	if err := k8s.Create(ctx, gp.DeepCopy()); err != nil {
-		t.Fatalf("create the Gateway-level API-key policy: %v", err)
-	}
-	t.Cleanup(func() { _ = k8s.Delete(context.Background(), gp.DeepCopy()) })
+	gp := applyGatewayLevelAuthPolicy(t, ctx, gwNS, gwName, "assayd-e2e-gateway-auth")
 
 	const name = "gwheld"
 	a := &assaydv1alpha1.Agent{
@@ -112,6 +94,32 @@ func TestAGatewayLevelAuthPolicyHoldsANewAgent(t *testing.T) {
 	if agent, _ := completedTask(t, answer); agent != name {
 		t.Errorf("a key in the Agent's group got a 200 that is not the agent's answer: %s", answer)
 	}
+}
+
+// applyGatewayLevelAuthPolicy writes an API-key policy, under name, that
+// targets the assayd Gateway's serving listener by sectionName, so the MCP
+// tests' `tools` listener never sees it, and carries none of the operator's
+// labels, so nothing maps it to an Agent. It is deleted on cleanup.
+func applyGatewayLevelAuthPolicy(t *testing.T, ctx context.Context, gwNS, gwName, name string) *unstructured.Unstructured {
+	t.Helper()
+	gp, err := compiler.AuthPolicy(compiler.AuthInput{AgentName: "gwlevel", AgentNamespace: "assayd-e2e",
+		AgentUID: types.UID("e2e-gwlevel"), RunNamespace: gwNS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gp.SetName(name)
+	gp.SetLabels(nil)
+	if err := unstructured.SetNestedSlice(gp.Object, []any{map[string]any{"group": "gateway.networking.k8s.io",
+		"kind": "Gateway", "name": gwName, "sectionName": controller.GatewayListenerName}},
+		"spec", "targetRefs"); err != nil {
+		t.Fatal(err)
+	}
+	_ = k8s.Delete(ctx, gp.DeepCopy())
+	if err := k8s.Create(ctx, gp.DeepCopy()); err != nil {
+		t.Fatalf("create the Gateway-level API-key policy: %v", err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(context.Background(), gp.DeepCopy()) })
+	return gp
 }
 
 // waitForReason polls an Agent's condition until it carries reason, and fails
