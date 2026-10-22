@@ -62,6 +62,9 @@ var humanApprovedParts = []grant{
 // approved: design 16's Status line, its README row and the README's list of
 // approvals name no approval of either, so a row here is not a row of
 // humanApprovedParts, and design 16 stays approved in its first slice only.
+// A22 and A23 were decided the same way on 2026-10-22, on PRs #128 and #132
+// (#132 merged into #128), and folded into §1.1 by the fold that records them here; they are
+// decided, not approved, for the same reason.
 // Making one an approved part would take an ADR-0024 amendment and a change to
 // design 16's Status line and README row, which only the human's process makes.
 //
@@ -71,6 +74,8 @@ var humanApprovedParts = []grant{
 var humanDecidedParts = []grant{
 	{"16", "A20", "2026-10-21"}, // design 16 §14 A20, decided as recommended on PR #117; folded by PR #124
 	{"16", "A21", "2026-10-21"}, // design 16 §14 A21, decided with A20 on PR #117 (#120 merged into it); folded by PR #124
+	{"16", "A22", "2026-10-22"}, // design 16 §14 A22, decided as recommended on PR #128; folded by this PR's fold
+	{"16", "A23", "2026-10-22"}, // design 16 §14 A23, decided with A22 on PR #132 (merged into #128); folded by this PR's fold
 }
 
 // humanApprovals reduces humanApprovedParts to the claim each design may make
