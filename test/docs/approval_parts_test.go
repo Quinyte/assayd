@@ -938,21 +938,46 @@ func TestTheApprovedPartReaderFindsTheSubject(t *testing.T) {
 	}
 }
 
-// humanDecision is the one phrasing read as a claim that the human decided a
-// part of a design on a day. It is not an approval: humanApproval does not
-// match it, and humanApprovalClaims does not read it.
-var humanDecision = regexp.MustCompile(`(?i)\bdecided by the human on (\d{4}-\d{2}-\d{2})\b`)
+// humanDecision and humanDecided are the two phrasings read as a claim that
+// the human decided a part of a design on a day: "<ids> … decided by the
+// human on DATE" (a comma before "on" allowed) and "the human [one word]
+// decided <ids> on DATE". Neither is an approval: humanApproval does not match
+// them, and humanApprovalClaims does not read them.
+var (
+	humanDecision = regexp.MustCompile(`(?i)\bdecided by the human,? on (\d{4}-\d{2}-\d{2})\b`)
+	humanDecided  = regexp.MustCompile(`(?i)\bthe human(?: (\w+))? decided\b`)
+)
 
-// humanDecisionClaims returns every "<ids> … decided by the human on DATE" in
-// a text: the last run of amendment ids before the phrase in its clause, every
-// id in the run, with the date after it. The design is the last "design NN"
-// before the phrase in the clause, else def. A phrase withdrawn by the word
-// before it ("not decided by the human on") is skipped, and so is one with no
-// id before it in its clause, such as "That was decided by the human on
-// 2026-09-23", whose subject is a sentence earlier.
+// humanDecisionClaims returns every claim in a text that the human decided an
+// amendment on a day. Its clauses end at a sentence end or a table-cell break
+// but not at a semicolon, so "A22 is no longer proposed; it was decided by the
+// human on DATE" is read as A22's.
+//
+//   - "<ids> … decided by the human on DATE": the last run of amendment ids
+//     before the phrase in its clause, every id in the run. The design is the
+//     last "design NN" before the phrase in the clause, else def.
+//   - "the human decided <ids> on DATE": the ids between the phrase and the
+//     first date after it, and only those, so "A80 specified it, and the human
+//     decided its three calls on 2026-09-21" and "the human decided on
+//     2026-09-25 to count data only" are not read as an amendment's. The design
+//     is a "design NN" in that span, else before the phrase, else def.
+//
+// What it does not read, stated because it is the limit of the test that uses
+// it: a phrase withdrawn by the word before it — "not", "never", or "be",
+// which is read as a modal ("would be decided"), so "came to be decided by
+// the human on DATE" is skipped too; a claim with no id in its clause ("That
+// was decided by the human on 2026-09-23", whose subject is a sentence
+// earlier); a claim with no date after the phrase in its clause; and every
+// other phrasing, such as "the human's decision on A22".
 func humanDecisionClaims(text, def string) []grant {
 	var out []grant
-	for _, clause := range sentenceBreak.Split(approvalProse(text), -1) {
+	emit := func(g grant, ids []string) {
+		for _, id := range ids {
+			g.part = id
+			out = append(out, g)
+		}
+	}
+	for _, clause := range listBreak.Split(approvalProse(text), -1) {
 		for _, m := range humanDecision.FindAllStringSubmatchIndex(clause, -1) {
 			if withdrawnBefore.MatchString(clause[:m[0]]) {
 				continue
@@ -966,10 +991,30 @@ func humanDecisionClaims(text, def string) []grant {
 			if d := designRef.FindAllStringSubmatch(head, -1); d != nil {
 				g.design = d[len(d)-1][1]
 			}
-			for _, id := range amendmentID.FindAllString(runs[len(runs)-1], -1) {
-				g.part = id
-				out = append(out, g)
+			emit(g, amendmentID.FindAllString(runs[len(runs)-1], -1))
+		}
+		for _, m := range humanDecided.FindAllStringSubmatchIndex(clause, -1) {
+			if withdrawnBefore.MatchString(clause[:m[0]]) ||
+				(m[2] >= 0 && withdrawnWord[strings.ToLower(clause[m[2]:m[3]])]) {
+				continue
 			}
+			rest := clause[m[1]:]
+			d := isoDate.FindStringIndex(rest)
+			if d == nil {
+				continue
+			}
+			gap := negatedID.ReplaceAllString(rest[:d[0]], " ")
+			ids := amendmentID.FindAllString(gap, -1)
+			if ids == nil {
+				continue
+			}
+			g := grant{design: def, date: rest[d[0]:d[1]]}
+			if dr := designRef.FindAllStringSubmatch(gap, -1); dr != nil {
+				g.design = dr[len(dr)-1][1]
+			} else if dr := designRef.FindAllStringSubmatch(clause[:m[0]], -1); dr != nil {
+				g.design = dr[len(dr)-1][1]
+			}
+			emit(g, ids)
 		}
 	}
 	return out
@@ -1072,6 +1117,16 @@ func TestTheDecisionReaderFindsTheSubject(t *testing.T) {
 		{"undated", "A22 and A23 are proposed and not decided by the human", nil},
 		{"approved is not decided", "A20 was approved by the human on 2026-10-21", nil},
 		{"an id ruled out", "A21, not A22, was decided by the human on 2026-10-21", []grant{{"16", "A21", "2026-10-21"}}},
+		{"a comma before the date", "A22 was decided by the human, on 2026-10-22", []grant{{"16", "A22", "2026-10-22"}}},
+		{"a pronoun after a semicolon", "A22 is no longer proposed; it was decided by the human on 2026-10-22", []grant{{"16", "A22", "2026-10-22"}}},
+		{"the human decided an id", "The human decided design 16's A22 on 2026-10-22", []grant{{"16", "A22", "2026-10-22"}}},
+		{"the human then decided a run", "the human then decided A22 and A23 on 2026-10-22", []grant{{"16", "A22", "2026-10-22"}, {"16", "A23", "2026-10-22"}}},
+		{"the human decided another design's id", "the human decided design 03's A90 on 2026-09-29", []grant{{"03", "A90", "2026-09-29"}}},
+		{"the human decided calls, not an id", "Design 03 A80 specified the re-derivation, the human decided its three calls on 2026-09-21", nil},
+		{"the human decided, then the date", "The human decided on 2026-09-25 to count data only (design 03 §9 D8, (R1)), and A89 implements it", nil},
+		{"the human never decided", "the human never decided A22 on 2026-10-22", nil},
+		{"the human would not have decided", "A22 would not be decided by the human on 2026-10-22", nil},
+		{"a stated limit: came to be", "A22 came to be decided by the human on 2026-10-22", nil},
 	} {
 		if got := humanDecisionClaims(tc.text, "16"); fmt.Sprint(got) != fmt.Sprint(tc.want) {
 			t.Errorf("%s: %q reads as %v, want %v", tc.name, tc.text, got, tc.want)
