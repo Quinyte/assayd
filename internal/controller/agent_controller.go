@@ -1088,11 +1088,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		case gating == gateEnforced:
 			assessPromotedGate(conds, status.Eval, desired, desiredDigest)
 		case gating == gateNone && findCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGatesPassed)) != nil:
-			// A removed gate's GatesPassed, naming the revision now serving
-			// (Q9, A5); assessGates set it without one.
+			// A removed gate's GatesPassed, naming the revision now active
+			// (Q9, A5). On a pass that promotes, assessGates named the one
+			// this pass replaced; on any other, this writes its text again.
 			conds.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "NoGatesDeclared",
-				fmt.Sprintf("spec.gates was removed; revision %s (digest %s) is serving with no gate "+
-					"declared", desired, desiredDigest)+removedGateNote(status.Eval, desired, desiredDigest))
+				removedGateMessage(desired, desiredDigest, removedGateNote(status.Eval, desired, desiredDigest)))
 		}
 	}
 
@@ -2092,14 +2092,13 @@ func (r *AgentReconciler) assessGates(agent *assaydv1alpha1.Agent, mode gateMode
 			"no spec.gates are declared, so this rollout is not eval-gated"+removed)
 		// GatesPassed is sticky, so on an Agent whose gate was removed it would
 		// keep EvalFailed, say, beside a revision it no longer describes. It
-		// flips instead, naming the revision this pass converges (Q9, A5). An
-		// Agent that never had it does not get it.
+		// flips instead, naming status.activeRevision as the pass found it
+		// (Q9, A5; A20.23 declined, #121). An Agent that never had it does not
+		// get it. A pass that promotes names the revision it promotes instead,
+		// in the promotion branch, with the same text.
 		if findCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGatesPassed)) != nil {
-			// The revision is named by the promotion branch, once the pass
-			// knows which one serves; a pin, or a hold before it, can keep
-			// the spec's revision from serving.
 			c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "NoGatesDeclared",
-				"spec.gates was removed, so no revision of this Agent is eval-gated"+removed)
+				removedGateMessage(agent.Status.ActiveRevision, agent.Status.ActiveRevisionDigest, removed))
 		}
 	case gateUnwired:
 		// Gates ARE declared and we cannot tell whether the CRD is present. Hold,
@@ -2119,6 +2118,23 @@ func (r *AgentReconciler) assessGates(agent *assaydv1alpha1.Agent, mode gateMode
 			c.set(assaydv1alpha1.CondGatesBypassed, metav1.ConditionTrue, ReasonPinnedRollback, msg)
 		}
 	}
+}
+
+// removedGateMessage is GatesPassed's NoGatesDeclared message on an Agent
+// whose gate was removed (design 16 §1.1, Q9): it names the active revision,
+// or says there is none, and ends with note, removedGateNote's answer. It says
+// "the active revision" and not "serving", because a name in status does not
+// show that its workload is available, and the Ready condition says whether
+// it is. assessGates
+// passes the revision serving at the start of the pass, and the promotion
+// branch the one it promotes, so the pass after a promotion writes the same
+// text again rather than a second wording.
+func removedGateMessage(active, activeDigest, note string) string {
+	if activeDigest == "" {
+		return "spec.gates was removed; no revision of this Agent is active yet, and none is eval-gated" + note
+	}
+	return fmt.Sprintf("spec.gates was removed; revision %s (digest %s) is the active revision, and no "+
+		"gate is declared", active, activeDigest) + note
 }
 
 // removedGateNote names a Failed or Running verdict status.eval records for

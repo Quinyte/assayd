@@ -436,6 +436,24 @@ func TestRemovingTheGateNamesTheVerdictItOverrides(t *testing.T) {
 	}
 }
 
+// Q9, A20.23 declined (#121): a removed gate's GatesPassed names the
+// active revision, says so when there is none, and keeps the overridden verdict.
+func TestRemovingTheGateNamesTheActiveRevision(t *testing.T) {
+	note := ". status.eval records verdict Failed"
+	msg := removedGateMessage(gRev, gDigest, note)
+	if !strings.Contains(msg, "revision "+gRev+" (digest "+gDigest+") is the active revision") {
+		t.Errorf("the message does not name the active revision: %s", msg)
+	}
+	if !strings.HasSuffix(msg, note) {
+		t.Errorf("the message drops the verdict the removal overrode: %s", msg)
+	}
+	none := removedGateMessage("", "", note)
+	if !strings.Contains(none, "no revision of this Agent is active yet") || strings.Contains(none, "digest ") ||
+		!strings.HasSuffix(none, note) {
+		t.Errorf("with nothing serving the message must say so and keep the note: %s", none)
+	}
+}
+
 // countingSink counts the Info and Error lines a logger receives.
 type countingSink struct {
 	mu          sync.Mutex

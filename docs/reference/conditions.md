@@ -156,7 +156,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2158` in `assessPromotedGate()` — constant at the call site
+- `internal/controller/agent_controller.go:2174` in `assessPromotedGate()` — constant at the call site
 
 **Referenced by a test:** `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`
 
@@ -959,7 +959,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2144` in `assessPromotedGate()` — constant at the call site
+- `internal/controller/agent_controller.go:2160` in `assessPromotedGate()` — constant at the call site
 
 **Referenced by a test:** `test/e2e/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/pin_test.go`
 
@@ -1063,7 +1063,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2111` in `assessGates()` — constant at the call site
+- `internal/controller/agent_controller.go:2110` in `assessGates()` — constant at the call site
 
 **Referenced by a test:** `test/chart/chart_test.go`, `test/envtest/discovery_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/pin_test.go`, `test/envtest/reconciler_blockers_test.go`, `test/envtest/reconciler_test.go`
 
@@ -1207,7 +1207,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2107` in `assessGates()` — constant at the call site
+- `internal/controller/agent_controller.go:2106` in `assessGates()` — constant at the call site
 
 **Referenced by a test:** `test/envtest/reconciler_blockers_test.go`
 
@@ -1384,8 +1384,8 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1093` in `Reconcile()` — constant at the call site
-- `internal/controller/agent_controller.go:2101` in `assessGates()` — constant at the call site
+- `internal/controller/agent_controller.go:1094` in `Reconcile()` — constant at the call site
+- `internal/controller/agent_controller.go:2100` in `assessGates()` — constant at the call site
 - `internal/controller/agent_controller.go:2091` in `assessGates()` — constant at the call site
 
 **Referenced by a test:** `test/envtest/gate_test.go`, `test/envtest/reconciler_test.go`
@@ -1396,7 +1396,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
-**Note:** On an Agent that had `GatesPassed`, because its gate was removed, it also sets `GatesPassed=False` with this reason, so a sticky `EvalFailed` does not stay beside a revision it no longer describes, and the promotion branch names the revision then serving. Where `status.eval` records a `Failed` or `Running` verdict for the revision the pass converges, both messages name the verdict and its digests (design 16 Q9).
+**Note:** On an Agent that had `GatesPassed`, because its gate was removed, it also sets `GatesPassed=False` with this reason, so a sticky `EvalFailed` does not stay beside a revision it no longer describes. Its message names the active revision as the pass found it, or says there is none yet, and a pass that promotes names the revision it promotes. Where `status.eval` records a `Failed` or `Running` verdict for the revision the pass converges, both messages name the verdict and its digests (design 16 Q9).
 
 ### `NoRolloutInFlight`
 
@@ -1510,7 +1510,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/agent_controller.go:558` in `Reconcile()` — constant at the call site
 - `internal/controller/agent_controller.go:1109` in `Reconcile()` — constant at the call site
 - `internal/controller/agent_controller.go:1111` in `Reconcile()` — constant at the call site
-- `internal/controller/agent_controller.go:2119` in `assessGates()` — constant at the call site
+- `internal/controller/agent_controller.go:2118` in `assessGates()` — constant at the call site
 
 **Referenced by a test:** `test/envtest/pin_test.go`
 
@@ -1551,7 +1551,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2206` in `assessTaskState()` — constant at the call site
+- `internal/controller/agent_controller.go:2222` in `assessTaskState()` — constant at the call site
 
 **Referenced by a test:** **no — no test file in this repository names it.** Nothing here fails if it changes or stops being set.
 
@@ -1792,7 +1792,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2181` in `assessSandbox()` — constant at the call site
+- `internal/controller/agent_controller.go:2197` in `assessSandbox()` — constant at the call site
 
 **Referenced by a test:** **no — no test file in this repository names it.** Nothing here fails if it changes or stops being set.
 
