@@ -1089,8 +1089,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			assessPromotedGate(conds, status.Eval, desired, desiredDigest)
 		case gating == gateNone && findCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGatesPassed)) != nil:
 			// A removed gate's GatesPassed, naming the revision now active
-			// (Q9, A5). On a pass that promotes, assessGates named the one
-			// this pass replaced; on any other, this writes its text again.
+			// (Q9, A5). On a pass that promotes, assessGates named
+			// status.activeRevision as the pass found it, or none; on any
+			// other, this writes its text again.
 			conds.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "NoGatesDeclared",
 				removedGateMessage(desired, desiredDigest, removedGateNote(status.Eval, desired, desiredDigest)))
 		}

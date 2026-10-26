@@ -354,6 +354,7 @@ func TestRemovingTheGatePromotesAFailedCandidateAndSaysSo(t *testing.T) {
 		t.Fatalf("the pass after removing spec.gates did not promote the held candidate (active %s)",
 			promoted.Status.ActiveRevisionDigest)
 	}
+	promotedMsg := gatesPassed(t, a).Message
 	if c := gatesPassed(t, a); !strings.Contains(c.Message, "revision "+rev+" (digest "+digest+") is the active revision") ||
 		strings.Contains(c.Message, active) {
 		t.Errorf("on the promoting pass GatesPassed does not name the revision it promoted, %s, alone: %s",
@@ -389,15 +390,21 @@ func TestRemovingTheGatePromotesAFailedCandidateAndSaysSo(t *testing.T) {
 			"a sticky verdict about a gate that no longer exists", c.Status, c.Reason)
 	} else if !strings.Contains(c.Message, "no revision of this Agent is eval-gated; revision "+rev+" (digest "+digest+") is the active revision") {
 		t.Errorf("GatesPassed's removal message does not name the revision now active: %s", c.Message)
+	} else if c.Message != promotedMsg {
+		// The pass after the promotion writes the promoting pass's text
+		// again: the overridden verdict persists, and the message does not
+		// flap between the two passes.
+		t.Errorf("GatesPassed's message changed on the pass after the promotion:\n was %s\n now %s",
+			promotedMsg, c.Message)
 	}
 }
 
 // Q9, A20.23 declined (#121). A gate removed on a pass that does not promote
 // leaves GatesPassed=False/NoGatesDeclared to assessGates alone, which runs
-// before the rollout switch. Its message names the revision serving at the
-// start of the pass, never the candidate the pass converges, and still names
-// the Failed verdict the removal overrode.
-func TestRemovingTheGateOnAPassThatDoesNotPromoteNamesTheRevisionServing(t *testing.T) {
+// before the rollout switch. Its message names status.activeRevision as the
+// pass found it, never the candidate the pass converges, and still names the
+// Failed verdict the removal overrode.
+func TestRemovingTheGateOnAPassThatDoesNotPromoteNamesTheActiveRevision(t *testing.T) {
 	ns := newNamespace(t)
 	sd := mustCreateSuite(t, ns, "smoke")
 	a, r := servedUngated(t, ns, "ungateheld")
@@ -429,7 +436,7 @@ func TestRemovingTheGateOnAPassThatDoesNotPromoteNamesTheRevisionServing(t *test
 			c.Status, c.Reason)
 	}
 	if want := "revision " + active + " (digest " + activeDigest + ") is the active revision"; !strings.Contains(c.Message, want) {
-		t.Errorf("NoGatesDeclared does not name the revision serving (%q): %s", want, c.Message)
+		t.Errorf("NoGatesDeclared does not name the active revision (%q): %s", want, c.Message)
 	}
 	if strings.Contains(c.Message, "revision "+rev+" (digest "+digest+") is the active revision") {
 		t.Errorf("NoGatesDeclared names the candidate %s as the active revision; it is not: %s", rev, c.Message)
