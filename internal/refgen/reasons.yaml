@@ -993,10 +993,12 @@ reasons:
     note: >-
       On an Agent that had `GatesPassed`, because its gate was removed, it also
       sets `GatesPassed=False` with this reason, so a sticky `EvalFailed` does
-      not stay beside a revision it no longer describes, and the promotion
-      branch names the revision then serving. Where `status.eval` records a
-      `Failed` or `Running` verdict for the revision the pass converges, both
-      messages name the verdict and its digests (design 16 Q9).
+      not stay beside a revision it no longer describes. Its message names the
+      active revision as the pass found it, or says there is none yet, and a
+      pass that promotes names the revision it promotes. Where `status.eval`
+      records a `Failed` or `Running` verdict for the revision the pass
+      converges, both messages name the verdict and its digests (design 16
+      Q9).
 
   - reason: NoRolloutInFlight
     state: >-
