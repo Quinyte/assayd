@@ -358,6 +358,15 @@ func TestRemovingTheGatePromotesAFailedCandidateAndSaysSo(t *testing.T) {
 		strings.Contains(c.Message, active) {
 		t.Errorf("on the promoting pass GatesPassed does not name the revision it promoted, %s, alone: %s",
 			rev, c.Message)
+	} else {
+		// The promotion branch writes last on this pass and every pass
+		// after it, so it must name the verdict the removal overrode too.
+		for _, want := range []string{"verdict Failed", "for revision " + rev + " (digest " + digest + ")", "(digest " + sd + ")"} {
+			if !strings.Contains(c.Message, want) {
+				t.Errorf("on the promoting pass GatesPassed does not name %q, the verdict the removal "+
+					"overrode: %s", want, c.Message)
+			}
+		}
 	}
 	reconcileOnce(t, r, a)
 	got := liveAgent(t, a)
@@ -378,7 +387,7 @@ func TestRemovingTheGatePromotesAFailedCandidateAndSaysSo(t *testing.T) {
 	if c := gatesPassed(t, a); c.Status != metav1.ConditionFalse || c.Reason != "NoGatesDeclared" {
 		t.Errorf("GatesPassed is %s/%s after the gate was removed; want False/NoGatesDeclared, not "+
 			"a sticky verdict about a gate that no longer exists", c.Status, c.Reason)
-	} else if !strings.Contains(c.Message, "revision "+rev+" (digest "+digest+") is the active revision, and no gate is declared") {
+	} else if !strings.Contains(c.Message, "no revision of this Agent is eval-gated; revision "+rev+" (digest "+digest+") is the active revision") {
 		t.Errorf("GatesPassed's removal message does not name the revision now active: %s", c.Message)
 	}
 }

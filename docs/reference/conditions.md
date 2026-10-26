@@ -156,7 +156,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2174` in `assessPromotedGate()` — constant at the call site
+- `internal/controller/agent_controller.go:2178` in `assessPromotedGate()` — constant at the call site
 
 **Referenced by a test:** `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`
 
@@ -959,7 +959,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2160` in `assessPromotedGate()` — constant at the call site
+- `internal/controller/agent_controller.go:2164` in `assessPromotedGate()` — constant at the call site
 
 **Referenced by a test:** `test/e2e/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/pin_test.go`
 
@@ -1551,7 +1551,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2222` in `assessTaskState()` — constant at the call site
+- `internal/controller/agent_controller.go:2226` in `assessTaskState()` — constant at the call site
 
 **Referenced by a test:** **no — no test file in this repository names it.** Nothing here fails if it changes or stops being set.
 
@@ -1792,7 +1792,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2197` in `assessSandbox()` — constant at the call site
+- `internal/controller/agent_controller.go:2201` in `assessSandbox()` — constant at the call site
 
 **Referenced by a test:** **no — no test file in this repository names it.** Nothing here fails if it changes or stops being set.
 

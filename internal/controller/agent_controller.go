@@ -2125,16 +2125,20 @@ func (r *AgentReconciler) assessGates(agent *assaydv1alpha1.Agent, mode gateMode
 // or says there is none, and ends with note, removedGateNote's answer. It says
 // "the active revision" and not "serving", because a name in status does not
 // show that its workload is available, and the Ready condition says whether
-// it is. assessGates
-// passes the revision serving at the start of the pass, and the promotion
-// branch the one it promotes, so the pass after a promotion writes the same
-// text again rather than a second wording.
+// it is. assessGates passes status.activeRevision as the pass found it, and
+// the promotion branch the active revision it promotes, so the pass after a
+// promotion writes the same text again rather than a second wording. Whether
+// a revision is active is decided on the name, which the message prints; the
+// digest is printed beside it when status records one.
 func removedGateMessage(active, activeDigest, note string) string {
-	if activeDigest == "" {
-		return "spec.gates was removed; no revision of this Agent is active yet, and none is eval-gated" + note
+	const removed = "spec.gates was removed, so no revision of this Agent is eval-gated; "
+	switch {
+	case active == "":
+		return removed + "no revision of this Agent is active yet" + note
+	case activeDigest == "":
+		return removed + fmt.Sprintf("revision %s is the active revision", active) + note
 	}
-	return fmt.Sprintf("spec.gates was removed; revision %s (digest %s) is the active revision, and no "+
-		"gate is declared", active, activeDigest) + note
+	return removed + fmt.Sprintf("revision %s (digest %s) is the active revision", active, activeDigest) + note
 }
 
 // removedGateNote names a Failed or Running verdict status.eval records for

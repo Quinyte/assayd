@@ -450,7 +450,18 @@ func TestRemovingTheGateNamesTheActiveRevision(t *testing.T) {
 	none := removedGateMessage("", "", note)
 	if !strings.Contains(none, "no revision of this Agent is active yet") || strings.Contains(none, "digest ") ||
 		!strings.HasSuffix(none, note) {
-		t.Errorf("with nothing serving the message must say so and keep the note: %s", none)
+		t.Errorf("with nothing active the message must say so and keep the note: %s", none)
+	}
+	// Whether a revision is active is decided on the name the message
+	// prints: a name with no digest is named, a digest with no name is not.
+	nameOnly := removedGateMessage(gRev, "", note)
+	if !strings.Contains(nameOnly, "revision "+gRev+" is the active revision") ||
+		strings.Contains(nameOnly, "no revision of this Agent is active") || strings.Contains(nameOnly, "digest ") {
+		t.Errorf("a name with no digest must be named as active, with no digest: %s", nameOnly)
+	}
+	digestOnly := removedGateMessage("", gDigest, note)
+	if !strings.Contains(digestOnly, "no revision of this Agent is active yet") || strings.Contains(digestOnly, gDigest) {
+		t.Errorf("a digest with no name must read as no active revision, and print no digest: %s", digestOnly)
 	}
 }
 
