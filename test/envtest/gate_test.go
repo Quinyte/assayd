@@ -345,9 +345,31 @@ func TestRemovingTheGatePromotesAFailedCandidateAndSaysSo(t *testing.T) {
 	}
 
 	mustEdit(t, a, func(a *assaydv1alpha1.Agent) { a.Spec.Gates = nil })
-	for i := 0; i < 2; i++ {
-		reconcileOnce(t, r, a)
+	// One pass: the one that promotes. assessGates names the revision it
+	// found active, so only the promotion branch can name the candidate
+	// it promotes (#121).
+	reconcileOnce(t, r, a)
+	promoted := liveAgent(t, a)
+	if promoted.Status.ActiveRevisionDigest != digest {
+		t.Fatalf("the pass after removing spec.gates did not promote the held candidate (active %s)",
+			promoted.Status.ActiveRevisionDigest)
 	}
+	promotedMsg := gatesPassed(t, a).Message
+	if c := gatesPassed(t, a); !strings.Contains(c.Message, "revision "+rev+" (digest "+digest+") is the active revision") ||
+		strings.Contains(c.Message, active) {
+		t.Errorf("on the promoting pass GatesPassed does not name the revision it promoted, %s, alone: %s",
+			rev, c.Message)
+	} else {
+		// The promotion branch writes last on this pass and every pass
+		// after it, so it must name the verdict the removal overrode too.
+		for _, want := range []string{"verdict Failed", "for revision " + rev + " (digest " + digest + ")", "(digest " + sd + ")"} {
+			if !strings.Contains(c.Message, want) {
+				t.Errorf("on the promoting pass GatesPassed does not name %q, the verdict the removal "+
+					"overrode: %s", want, c.Message)
+			}
+		}
+	}
+	reconcileOnce(t, r, a)
 	got := liveAgent(t, a)
 	if got.Status.ActiveRevisionDigest != digest {
 		t.Fatalf("removing spec.gates did not promote the held candidate (active %s); Q9 (a) "+
@@ -366,8 +388,102 @@ func TestRemovingTheGatePromotesAFailedCandidateAndSaysSo(t *testing.T) {
 	if c := gatesPassed(t, a); c.Status != metav1.ConditionFalse || c.Reason != "NoGatesDeclared" {
 		t.Errorf("GatesPassed is %s/%s after the gate was removed; want False/NoGatesDeclared, not "+
 			"a sticky verdict about a gate that no longer exists", c.Status, c.Reason)
-	} else if !strings.Contains(c.Message, "revision "+rev+" (digest "+digest+") is serving with no gate declared") {
-		t.Errorf("GatesPassed's removal message does not name the revision now serving: %s", c.Message)
+	} else if !strings.Contains(c.Message, "no revision of this Agent is eval-gated; revision "+rev+" (digest "+digest+") is the active revision") {
+		t.Errorf("GatesPassed's removal message does not name the revision now active: %s", c.Message)
+	} else if c.Message != promotedMsg {
+		// The pass after the promotion writes the promoting pass's text
+		// again: the overridden verdict persists, and the message does not
+		// flap between the two passes.
+		t.Errorf("GatesPassed's message changed on the pass after the promotion:\n was %s\n now %s",
+			promotedMsg, c.Message)
+	}
+}
+
+// Q9, A20.23 declined (#121). A gate removed on a pass that does not promote
+// leaves GatesPassed=False/NoGatesDeclared to assessGates alone, which runs
+// before the rollout switch. Its message names status.activeRevision as the
+// pass found it, never the candidate the pass converges, and still names the
+// Failed verdict the removal overrode.
+func TestRemovingTheGateOnAPassThatDoesNotPromoteNamesTheActiveRevision(t *testing.T) {
+	ns := newNamespace(t)
+	sd := mustCreateSuite(t, ns, "smoke")
+	a, r := servedUngated(t, ns, "ungateheld")
+	active, activeDigest := a.Status.ActiveRevision, a.Status.ActiveRevisionDigest
+	rev, digest := gatedCandidate(t, r, a, imageB, "smoke")
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: rev, RevisionDigest: digest,
+			SuiteDigest: sd, Verdict: assaydv1alpha1.EvalVerdictFailed, Score: "0/1",
+			Failed: []assaydv1alpha1.EvalPair{{RevisionDigest: digest, SuiteDigest: sd}}}
+		putCard(st, rev, digest, time.Now())
+	})
+	reconcileOnce(t, r, a)
+	if c := gatesPassed(t, a); c.Reason != "EvalFailed" {
+		t.Fatalf("setup: GatesPassed is %s, want EvalFailed", c.Reason)
+	}
+	// The candidate loses its replicas, so the pass that sees the removal
+	// takes the rollout branch that keeps the revision serving.
+	markAvailable(t, ns, controller.WorkloadName("ungateheld", rev), 0)
+	mustEdit(t, a, func(a *assaydv1alpha1.Agent) { a.Spec.Gates = nil })
+	reconcileOnce(t, r, a)
+	got := liveAgent(t, a)
+	if got.Status.ActiveRevisionDigest != activeDigest || got.Status.CandidateRevisionDigest != digest {
+		t.Fatalf("setup: want %s serving and %s the candidate, got active %s, candidate %s",
+			activeDigest, digest, got.Status.ActiveRevisionDigest, got.Status.CandidateRevisionDigest)
+	}
+	c := gatesPassed(t, a)
+	if c.Status != metav1.ConditionFalse || c.Reason != "NoGatesDeclared" {
+		t.Fatalf("GatesPassed is %s/%s after the gate was removed, want False/NoGatesDeclared",
+			c.Status, c.Reason)
+	}
+	if want := "revision " + active + " (digest " + activeDigest + ") is the active revision"; !strings.Contains(c.Message, want) {
+		t.Errorf("NoGatesDeclared does not name the active revision (%q): %s", want, c.Message)
+	}
+	if strings.Contains(c.Message, "revision "+rev+" (digest "+digest+") is the active revision") {
+		t.Errorf("NoGatesDeclared names the candidate %s as the active revision; it is not: %s", rev, c.Message)
+	}
+	for _, want := range []string{"Failed", digest, sd} {
+		if !strings.Contains(c.Message, want) {
+			t.Errorf("NoGatesDeclared does not name %q, the verdict the removal overrode: %s", want, c.Message)
+		}
+	}
+}
+
+// The same, on an Agent that never served: its first, gated revision failed,
+// the gate is removed while that revision has no replicas, and nothing is
+// active. NoGatesDeclared says no revision is active, and names none.
+func TestRemovingTheGateFromANeverServedAgentSaysNoRevisionIsActive(t *testing.T) {
+	ns := newNamespace(t)
+	sd := mustCreateSuite(t, ns, "smoke")
+	a := mustCreateAgent(t, ns, "ungatefirst", func(a *assaydv1alpha1.Agent) {
+		a.Spec.Gates = []assaydv1alpha1.GateRef{{EvalSuiteRef: "smoke"}}
+	})
+	r := newReconciler(true)
+	rev, digest := revision.MustHash(a.Spec), revision.MustDigest(a.Spec)
+	settle(t, r, a)
+	markAvailable(t, ns, controller.WorkloadName("ungatefirst", rev), 1)
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		putCard(st, rev, digest, time.Now())
+		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: rev, RevisionDigest: digest,
+			SuiteDigest: sd, Verdict: assaydv1alpha1.EvalVerdictFailed, Score: "0/1"}
+	})
+	reconcileOnce(t, r, a)
+	if c := gatesPassed(t, a); c.Reason != "EvalFailed" {
+		t.Fatalf("setup: GatesPassed is %s, want EvalFailed", c.Reason)
+	}
+	markAvailable(t, ns, controller.WorkloadName("ungatefirst", rev), 0)
+	mustEdit(t, a, func(a *assaydv1alpha1.Agent) { a.Spec.Gates = nil })
+	reconcileOnce(t, r, a)
+	if got := liveAgent(t, a); got.Status.ActiveRevision != "" {
+		t.Fatalf("setup: revision %s is active; want none", got.Status.ActiveRevision)
+	}
+	c := gatesPassed(t, a)
+	if c.Status != metav1.ConditionFalse || c.Reason != "NoGatesDeclared" ||
+		!strings.Contains(c.Message, "no revision of this Agent is active yet") {
+		t.Errorf("GatesPassed is %s/%s, want False/NoGatesDeclared saying no revision is active: %s",
+			c.Status, c.Reason, c.Message)
+	}
+	if strings.Contains(c.Message, "is the active revision") {
+		t.Errorf("NoGatesDeclared names an active revision where there is none: %s", c.Message)
 	}
 }
 

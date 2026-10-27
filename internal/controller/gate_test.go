@@ -436,6 +436,37 @@ func TestRemovingTheGateNamesTheVerdictItOverrides(t *testing.T) {
 	}
 }
 
+// Q9, A20.23 declined (#121): a removed gate's GatesPassed names the
+// active revision, says so when there is none, and keeps the overridden verdict.
+func TestRemovingTheGateNamesTheActiveRevision(t *testing.T) {
+	note := ". status.eval records verdict Failed"
+	msg := removedGateMessage(gRev, gDigest, note)
+	if !strings.Contains(msg, "revision "+gRev+" (digest "+gDigest+") is the active revision") {
+		t.Errorf("the message does not name the active revision: %s", msg)
+	}
+	if !strings.HasSuffix(msg, note) {
+		t.Errorf("the message drops the verdict the removal overrode: %s", msg)
+	}
+	none := removedGateMessage("", "", note)
+	if !strings.Contains(none, "no revision of this Agent is active yet") || strings.Contains(none, "digest ") ||
+		!strings.HasSuffix(none, note) {
+		t.Errorf("with nothing active the message must say so and keep the note: %s", none)
+	}
+	// Whether a revision is active is decided on the name the message
+	// prints: a name with no digest is named, a digest with no name is not.
+	nameOnly := removedGateMessage(gRev, "", note)
+	if !strings.Contains(nameOnly, "revision "+gRev+" is the active revision") ||
+		strings.Contains(nameOnly, "no revision of this Agent is active") || strings.Contains(nameOnly, "digest ") ||
+		!strings.HasSuffix(nameOnly, note) {
+		t.Errorf("a name with no digest must be named as active, with no digest, and keep the note: %s", nameOnly)
+	}
+	digestOnly := removedGateMessage("", gDigest, note)
+	if !strings.Contains(digestOnly, "no revision of this Agent is active yet") || strings.Contains(digestOnly, gDigest) ||
+		!strings.HasSuffix(digestOnly, note) {
+		t.Errorf("a digest with no name must read as no active revision, print no digest, and keep the note: %s", digestOnly)
+	}
+}
+
 // countingSink counts the Info and Error lines a logger receives.
 type countingSink struct {
 	mu          sync.Mutex
