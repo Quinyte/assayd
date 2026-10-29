@@ -1408,65 +1408,161 @@ func TestALockAbandonedBehindAFinalizerIsClaimedBeside(t *testing.T) {
 	}
 }
 
-// A clause-5 hold on a final-verdict pass in the exempt state. §1.1's table
-// rows come after blocked in the exempt state, EvalFailed among them, and the
-// eval controller evaluates clause 5 on a held candidate's passes too, so a
-// hold that appears after a Failed verdict reads EvalWaitingForAuth, naming
-// the policy, ahead of EvalFailed; once it clears, EvalFailed again.
-//
-// Mutation: write no hold on a final-verdict pass.
-func TestAHoldAfterAFailedVerdictComesBeforeIt(t *testing.T) {
-	g, c, _ := exemptJ2With(t, "jtwofailed", 0, nil, evalCase("a", "one", "nope", ""))
-	g.evalPass(t)
-	g.agentPass(t)
-	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalFailed)
-	key := gatewayAuthPolicy(t, g.a, g.prober)
-	g.evalPass(t)
-	g.agentPass(t)
-	held := g.waitingForAuth(t, "a hold after the Failed verdict")
-	if !strings.Contains(held.Message, key.Name) ||
-		!strings.Contains(held.Message, "no case of it is claimed whether or not the hold clears") ||
-		strings.Contains(held.Message, "until it clears") {
-		t.Errorf("the hold does not name the policy, or says cases may be claimed for a failed pair: %s",
-			held.Message)
+// clause5Count is an uncached reader that counts clause 5's reads: gets of a
+// Gateway and lists of AgentgatewayPolicies.
+type clause5Count struct {
+	client.Reader
+	gatewayGets, policyLists *int
+}
+
+func (c clause5Count) Get(ctx context.Context, key client.ObjectKey, obj client.Object,
+	opts ...client.GetOption) error {
+	if _, ok := obj.(*gatewayv1.Gateway); ok {
+		*c.gatewayGets++
 	}
-	removePolicy(t, key)
+	return c.Reader.Get(ctx, key, obj, opts...)
+}
+
+func (c clause5Count) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if u, ok := list.(*unstructured.UnstructuredList); ok && strings.HasPrefix(u.GetKind(), "AgentgatewayPolicy") {
+		*c.policyLists++
+	}
+	return c.Reader.List(ctx, list, opts...)
+}
+
+// countClause5 replaces the rig's eval controller with one whose uncached
+// reads are counted, and returns a func that fails the row on any clause-5
+// read made since.
+func (g *authEvalRig) countClause5(t *testing.T) func(when string) {
+	t.Helper()
+	var gets, lists int
+	e, err := controller.NewEvalReconciler(k8s, clause5Count{Reader: k8s, gatewayGets: &gets, policyLists: &lists},
+		func() bool { return true }, g.r.Gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.A2A.HTTP, e.CardFetchTimeout = g.stub, time.Second
+	g.e = e
+	return func(when string) {
+		t.Helper()
+		if gets != 0 || lists != 0 {
+			t.Errorf("%s: the eval pass read clause 5: %d Gateway gets, %d policy lists", when, gets, lists)
+		}
+	}
+}
+
+// failedJ2 is an exempt J2 Lock whose candidate C has a Failed verdict, run
+// on its one case, and, when inFailed, has had that verdict cleared as #111's
+// clear does, leaving the pair in status.eval.failed[] alone. It returns C
+// and the GatesPassed reason the pair reads.
+func failedJ2(t *testing.T, name string, inFailed bool) (*authEvalRig, string, string) {
+	t.Helper()
+	g, c, _ := exemptJ2With(t, name, 0, nil, evalCase("a", "one", "nope", ""))
 	g.evalPass(t)
+	want := controller.ReasonEvalFailed
+	if inFailed {
+		writeAgentStatus(t, g.a, func(st *assaydv1alpha1.AgentStatus) {
+			st.Eval.Verdict, st.Eval.Cases, st.Eval.Score, st.Eval.At = "", nil, "", nil
+		})
+		want = controller.ReasonEvalPairAlreadyFailed
+	}
 	g.agentPass(t)
-	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalFailed)
+	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, want)
+	return g, c, want
+}
+
+// A Failed verdict in the exempt state comes before clause 5: beside a
+// Gateway-level policy that would hold an exempt Lock, a pass whose pair has
+// a Failed verdict reads no clause 5, writes no hold and requeues at
+// CardDriftInterval, and GatesPassed reads EvalFailed throughout (design 16
+// §1.1, "What wakes the eval controller while it waits", "The gate branch's
+// order").
+//
+// Mutations: write the hold on a final-verdict pass (blocked and the read
+// count; GatesPassed reads EvalFailed either way, since (4) answers first);
+// read clause 5 before the verdict cases (the read count).
+func TestAFailedVerdictComesBeforeAHold(t *testing.T) {
+	g, c, want := failedJ2(t, "jtwofailed", false)
+	key := gatewayAuthPolicy(t, g.a, g.prober)
+	noRead := g.countClause5(t)
+	if res := g.evalPass(t); res.RequeueAfter != controller.CardDriftInterval {
+		t.Errorf("a Failed-verdict pass requeues at %v, want CardDriftInterval", res.RequeueAfter)
+	}
+	noRead("a Failed-verdict pass beside a Gateway-level policy")
+	if e := liveAgent(t, g.a).Status.Eval; e.Blocked != nil {
+		t.Errorf("a Failed-verdict pass wrote blocked: %+v", e.Blocked)
+	}
+	g.agentPass(t)
+	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, want)
+	removePolicy(t, key)
 	if g.hits(c) != 1 {
 		t.Errorf("C was sent %d cases, want its one", g.hits(c))
 	}
 }
 
-// The failed-pair branch's hold, as the Failed-verdict row's: the pair is in
+// The failed-pair branch's, as the Failed-verdict row's: the pair is in
 // status.eval.failed[] with no verdict recorded for it (#111's clear leaves
-// that), and a hold that appears reads EvalWaitingForAuth, worded for a pair
-// that has failed, ahead of EvalPairAlreadyFailed; once it clears,
-// EvalPairAlreadyFailed again.
+// that), and beside a Gateway-level policy the pass reads no clause 5, writes
+// no hold, requeues at CardDriftInterval, and GatesPassed reads
+// EvalPairAlreadyFailed.
 //
-// Mutation: write no hold on the failed-pair branch's pass.
-func TestAHoldBesideAFailedPairComesBeforeIt(t *testing.T) {
-	g, c, _ := exemptJ2With(t, "jtwofailedpair", 0, nil, evalCase("a", "one", "nope", ""))
-	g.evalPass(t)
-	writeAgentStatus(t, g.a, func(st *assaydv1alpha1.AgentStatus) {
-		st.Eval.Verdict, st.Eval.Cases, st.Eval.Score, st.Eval.At = "", nil, "", nil
-	})
-	g.agentPass(t)
-	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalPairAlreadyFailed)
+// Mutations: write the hold on the failed-pair branch's pass (blocked and
+// the read count; GatesPassed reads EvalPairAlreadyFailed either way); read
+// clause 5 before the verdict cases (the read count).
+func TestAFailedPairComesBeforeAHold(t *testing.T) {
+	g, c, want := failedJ2(t, "jtwofailedpair", true)
 	key := gatewayAuthPolicy(t, g.a, g.prober)
-	g.evalPass(t)
-	g.agentPass(t)
-	held := g.waitingForAuth(t, "a hold beside the failed pair")
-	if !strings.Contains(held.Message, key.Name) ||
-		!strings.Contains(held.Message, "no case of it is claimed whether or not the hold clears") {
-		t.Errorf("the hold does not name the policy and the failed pair: %s", held.Message)
+	noRead := g.countClause5(t)
+	if res := g.evalPass(t); res.RequeueAfter != controller.CardDriftInterval {
+		t.Errorf("a failed-pair pass requeues at %v, want CardDriftInterval", res.RequeueAfter)
 	}
-	removePolicy(t, key)
-	g.evalPass(t)
+	noRead("a failed-pair pass beside a Gateway-level policy")
+	if e := liveAgent(t, g.a).Status.Eval; e.Blocked != nil {
+		t.Errorf("a failed-pair pass wrote blocked: %+v", e.Blocked)
+	}
 	g.agentPass(t)
-	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalPairAlreadyFailed)
+	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, want)
+	removePolicy(t, key)
 	if g.hits(c) != 1 {
 		t.Errorf("C was sent %d cases, want its one", g.hits(c))
+	}
+}
+
+// A hold stored before the code that stopped verdict passes reading clause 5
+// is cleared by the first such pass: with a hold planted beside a Failed
+// verdict, or beside a failed[] pair, one eval pass writes blocked empty, with
+// blockedFor naming the pair and the Lock, and reads no clause 5. The planted
+// blockedFor names another Lock, so the pass must rewrite it too.
+//
+// Mutations: drop the verdict cases' blocked write (the hold stands); clear
+// blocked but leave blockedFor as stored (blockedFor).
+func TestAVerdictPassClearsAStoredHold(t *testing.T) {
+	for name, inFailed := range map[string]bool{"a Failed verdict": false, "a failed[] pair": true} {
+		t.Run(name, func(t *testing.T) {
+			g, _, want := failedJ2(t, map[bool]string{false: "jtwoclearv", true: "jtwoclearp"}[inFailed], inFailed)
+			var suiteDigest string
+			writeAgentStatus(t, g.a, func(st *assaydv1alpha1.AgentStatus) {
+				st.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: controller.ReasonEvalWaitingForAuth,
+					Message: "a hold planted beside a failed pair"}
+				another := metav1.NewTime(st.Auth.Transaction.Deadline.Add(time.Hour))
+				st.Eval.BlockedFor = &assaydv1alpha1.EvalBlockedFor{RevisionDigest: st.CandidateRevisionDigest,
+					SuiteDigest: st.Eval.Failed[len(st.Eval.Failed)-1].SuiteDigest, LockDeadline: &another}
+				suiteDigest = st.Eval.BlockedFor.SuiteDigest
+			})
+			noRead := g.countClause5(t)
+			g.evalPass(t)
+			noRead("a verdict pass beside a stored hold")
+			live := liveAgent(t, g.a)
+			e, tx := live.Status.Eval, live.Status.Auth.Transaction
+			if e.Blocked != nil {
+				t.Errorf("the stored hold was not cleared: %+v", e.Blocked)
+			}
+			if bf := e.BlockedFor; bf == nil || bf.RevisionDigest != live.Status.CandidateRevisionDigest ||
+				bf.SuiteDigest != suiteDigest || bf.LockDeadline == nil || tx == nil || !bf.LockDeadline.Equal(tx.Deadline) {
+				t.Errorf("blockedFor does not name the pair and the Lock: %+v (Lock %+v)", bf, tx)
+			}
+			g.agentPass(t)
+			condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, want)
+		})
 	}
 }
