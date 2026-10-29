@@ -800,12 +800,12 @@ reasons:
       counting policy on the assayd Gateway, a Gateway that admits
       ListenerSets, a foreign traffic policy on `<agent>-serving`, or one of
       those reads failing — and `blockedFor` matches the current candidate,
-      suite and `Lock`. An unavailable candidate reads `EvalPaused` in the
-      last two cases instead, or its `Failed` verdict or `failed[]` entry. A
-      hold comes ahead of a `Failed` verdict or `failed[]` entry for as long
-      as it stands, and so does the "not yet evaluated" case; the message
-      then says no case of the pair is claimed whatever clause 5 finds, and
-      names what records the failure, the verdict or the `failed[]` entry. A refused `Adopt` never holds the eval.
+      suite and `Lock`. A `Failed` verdict for the pair, or its entry in
+      `failed[]`, is answered before this reason in both states, as
+      `EvalFailed` or `EvalPairAlreadyFailed`; and in the exempt state so is a
+      candidate that is not available, which reads `EvalPaused` in the last
+      two cases instead, while outside it a recorded transaction that is not
+      exempt comes first. A refused `Adopt` never holds the eval.
     operator: >-
       Sets `GatesPassed=False` with this reason in the gate branch, holds the
       candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
@@ -818,20 +818,19 @@ reasons:
       attribute a 401, it names the revision the route's single backendRef
       names and the exits. From `blocked`, it carries `blocked.message`, which
       the eval controller builds from the hold's policy names and error
-      classes, never an API error's text; for a pair that has already failed
-      the gate branch replaces that message's closing sentence, which says
-      when cases are claimed, with one saying none of the pair is. A hold stops new claims only: a
+      classes, never an API error's text. A hold stops new claims only: a
       case in flight finishes, and a `Passed` verdict already written still
       promotes.
     traffic: not-withdrawn
     note: >-
       The eval controller reads clause 5 — the assayd Gateway, the policies in
       its namespace and those in the run namespace — uncached, on every pass
-      of an exempt `Lock` that meets the other send predicates: about once per
-      `AuthProbeInterval` while a hold stands with no final verdict, and once
-      per `CardDriftInterval` on a candidate held with a final verdict or a
-      failed pair. The Agent reconciler makes no such read; it reads the
-      result from `status.eval.blocked`.
+      of an exempt `Lock` that meets the other send predicates, about once per
+      `AuthProbeInterval` while a hold stands. No pass whose pair has a final
+      verdict, or is in `failed[]`, reads it: such a pass writes `blocked`
+      empty, only when that changes it, and comes round once per
+      `CardDriftInterval`. The Agent reconciler makes no
+      such read; it reads the result from `status.eval.blocked`.
 
   - reason: ExternalRegistrationUnimplemented
     state: >-

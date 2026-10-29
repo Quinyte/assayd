@@ -294,13 +294,35 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	run := evalRun{agent: agent, suite: &suite, suiteDigest: sd, threshold: th, runNS: runNS,
 		revision: cand, revisionDigest: candDigest}
 
+	// A final verdict for this pair, or the pair in failed[], comes before
+	// clause 5: beside an exempt Lock too, such a pass makes no clause-5 read
+	// and writes blocked empty, only when that changes it, because the gate
+	// branch answers the pair before any row a hold could reach (§1.1, "What
+	// wakes the eval controller while it waits").
+	e := st.Eval
+	recorded := e != nil && e.RevisionDigest == candDigest && e.SuiteDigest == sd
+	switch {
+	case recorded && (e.Verdict == assaydv1alpha1.EvalVerdictPassed || e.Verdict == assaydv1alpha1.EvalVerdictFailed):
+		// The Agent reconciler promotes on a Passed verdict, whatever blocked
+		// says; a Failed one holds the candidate, and a suite edit, noticed on
+		// this requeue, gives a new pair (A4).
+		if res, done, err := r.syncBlocked(ctx, &run, nil); done || err != nil {
+			return res, err
+		}
+		return r.wait(waitHeld)
+	case pairFailed(failedOf(e), candDigest, sd):
+		// No run starts for a failed pair again (step 7, Q3 (a)).
+		if res, done, err := r.syncBlocked(ctx, &run, nil); done || err != nil {
+			return res, err
+		}
+		return r.wait(waitHeld)
+	}
+
 	// Clause 5, last, on a pass that met clauses 1 to 4 and every other send
 	// predicate. Its hold is the second reason blocked can carry; a run-start
 	// refusal outranks it, but only on a pass that would start a run, and a
 	// pass under a hold starts none, so the card is not fetched while one
 	// stands (§1.1, "`blocked`: one slot, one computation").
-	e := st.Eval
-	recorded := e != nil && e.RevisionDigest == candDigest && e.SuiteDigest == sd
 	var hold *assaydv1alpha1.EvalBlocked
 	if exempt {
 		var readErr error
@@ -315,20 +337,6 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	switch {
-	case recorded && (e.Verdict == assaydv1alpha1.EvalVerdictPassed || e.Verdict == assaydv1alpha1.EvalVerdictFailed):
-		// A final verdict for this pair. The Agent reconciler promotes on a
-		// Passed one, whatever blocked says; a Failed one holds the candidate,
-		// and a suite edit, noticed on this requeue, gives a new pair (A4).
-		if res, done, err := r.syncBlocked(ctx, &run, hold); done || err != nil {
-			return res, err
-		}
-		return r.wait(waitHeld)
-	case pairFailed(failedOf(e), candDigest, sd):
-		// No run starts for a failed pair again (step 7, Q3 (a)).
-		if res, done, err := r.syncBlocked(ctx, &run, hold); done || err != nil {
-			return res, err
-		}
-		return r.wait(waitHeld)
 	case hold != nil:
 		// Nothing is claimed, and no run starts, while the hold stands. The
 		// pass comes round at the rate design 03 probes at.

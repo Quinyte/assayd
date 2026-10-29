@@ -112,18 +112,6 @@ func clause5Hold(gw GatewayConfig, runNS, route string, above gatewayAuth, forei
 const holdClaimsTail = ". No case is claimed until it clears; a case already in flight is not stopped, " +
 	"and a Passed verdict already written still promotes"
 
-// holdFailedTail is what the gate branch puts in holdClaimsTail's place when
-// the pair has already failed: no case of it is claimed whether or not the
-// hold clears, and what records the failure stands behind the hold — a Failed
-// verdict, or, once #111's clear has taken the verdict, the pair's entry in
-// status.eval.failed[]. The gate branch words it from the pass's own state, so
-// the eval controller writes no second value when a verdict lands under a
-// standing hold.
-func holdFailedTail(behind string) string {
-	return ". This pair has already failed, so no case of it is claimed whether or not the hold clears; " +
-		behind + " stands behind this hold, and is shown again once the hold clears"
-}
-
 // readErrorClass names an API read error's class, which is stable from pass
 // to pass where its text is not.
 func readErrorClass(err error) string {

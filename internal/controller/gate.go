@@ -164,25 +164,27 @@ type gateInput struct {
 //  3. a Passed verdict for this pair: satisfied with its card recorded, and
 //     EvalAwaitingCard without it. A written Passed verdict outranks every
 //     reason a run could be waiting for, the transaction included.
+//  4. a Failed verdict for this pair (EvalFailed), then the pair in
+//     status.eval.failed[] (EvalPairAlreadyFailed): no run starts for it
+//     again, whatever clause 5 finds. EvalFailed first, which names the cases
+//     while the record still holds them (#111).
+//  5. no card recorded for the candidate (EvalAwaitingCard): a run cannot
+//     start without one. In the exempt state, before the rows below it,
+//     because blockedFor cannot come to match while no card is recorded: the
+//     eval controller evaluates clause 5 only on a pass on which the card
+//     predicate holds.
 //
 // Outside the exempt state — no Create or Lock recorded, a refused Adopt, or
 // a recorded Create or Lock that is not exempt:
 //
-//  4. a Failed verdict for this pair (EvalFailed), then the pair in
-//     status.eval.failed[] (EvalPairAlreadyFailed): no run starts for it
-//     again. EvalFailed first, which names the cases while the record still
-//     holds them (#111).
-//  5. no card recorded for the candidate (EvalAwaitingCard): a run cannot
-//     start without one.
 //  6. a recorded Create or Lock that is not exempt (EvalWaitingForAuth),
 //     naming its kind, its stage and why it holds the eval, the missing-policy
 //     wedge's exits where "When it names the exits" says, and when its
 //     deadline passed if it has: on Q12 (a) the eval keeps waiting after it.
-//  7. the candidate not available: EvalPaused (its Failed verdict and
-//     failed[] entry were answered at 4). Before blocked, as §1.1 step 8 has
-//     it — "the rollout step's not-ready branches come before the gate" — and
-//     for the same reason as in the exempt arm: the eval controller computes
-//     blocked only on a pass on which the candidate is available.
+//  7. the candidate not available: EvalPaused. Before blocked, as §1.1 step 8
+//     has it — "the rollout step's not-ready branches come before the gate" —
+//     and for the same reason as in the exempt arm: the eval controller
+//     computes blocked only on a pass on which the candidate is available.
 //  8. status.eval.blocked, applied only while status.eval.blockedFor matches
 //     the current pair and the current Lock's deadline (A12): a refusal
 //     written while an exempt Lock stood stops applying the moment it ends.
@@ -190,22 +192,20 @@ type gateInput struct {
 // In the exempt state — a J2 or K2 Lock that meets clauses 1 to 4 — §1.1's
 // "What the gate branch derives in the exempt state":
 //
-//  4. no card recorded for the candidate (EvalAwaitingCard). Before the
-//     exempt rows, because the eval controller evaluates clause 5 only on a
-//     pass on which the card predicate holds, so blockedFor could not match.
-//  5. the candidate not available: EvalFailed, then EvalPairAlreadyFailed,
-//     else EvalPaused. Before the exempt rows for the card row's reason: the
-//     eval controller evaluates clause 5 only on a pass on which the
-//     candidate is available, so a hold recorded before it went away is not
-//     re-read while it is away, and applied would name a cause that may be
-//     gone for as long as it stays away (§1.1 step 8: a candidate that is not
-//     available is EvalPaused). The next clause-5 pass after it comes back
-//     rewrites blocked.
-//  6. blockedFor does not match: EvalWaitingForAuth, saying the eval
+//  6. the candidate not available: EvalPaused. Before the exempt rows for
+//     the card row's reason: the eval controller evaluates clause 5 only on a
+//     pass on which the candidate is available, so a hold recorded before it
+//     went away is not re-read while it is away, and applied would name a
+//     cause that may be gone for as long as it stays away (§1.1 step 8: a
+//     candidate that is not available is EvalPaused). The next clause-5 pass
+//     after it comes back rewrites blocked.
+//  7. blockedFor does not match: EvalWaitingForAuth, saying the eval
 //     controller has not yet evaluated clause 5 for this Lock.
-//  7. blocked set: its reason, with blocked.message — clause 5's hold
+//  8. blocked set: its reason, with blocked.message — clause 5's hold
 //     (EvalWaitingForAuth), or a run-start refusal.
-//  8. EvalFailed, then EvalPairAlreadyFailed: blocked comes before them here.
+//
+// So both arms answer a failed pair at 4, and differ only in the exempt
+// state's not-yet-evaluated row and the other's transaction row.
 //
 // And last, in either arm — 9 in both:
 //
@@ -271,10 +271,8 @@ func decideGate(in gateInput) gateDecision {
 	if tx != nil {
 		exempt, why = exemptTransaction(in.status)
 	}
-	if !exempt {
-		if d, ok := failedRows(in, pair); ok {
-			return d
-		}
+	if d, ok := failedRows(in, pair); ok {
+		return d
 	}
 	if !hasCardFor(in.status, in.desiredDigest) {
 		return gateDecision{reason: ReasonEvalAwaitingCard, readyReason: reasonAwaitingGates,
@@ -295,30 +293,19 @@ func decideGate(in gateInput) gateDecision {
 		// In both arms, ahead of blocked: neither clause 5 nor a run-start
 		// refusal is computed on a pass whose candidate is not available, so
 		// what blocked records was evaluated before it went away (§1.1 step 8).
-		// Outside the exempt state failedRows has already been answered.
-		if d, ok := failedRows(in, pair); ok {
-			return d
-		}
 		return noVerdictRows(in, pair)
 	case exempt && !bfMatched:
 		// The exempt state, before the eval controller has evaluated clause 5
 		// for this Lock: fail-closed, never EvalRunning on a blocked that was
 		// not evaluated for the current state (§1.1, "What the gate branch
 		// derives in the exempt state").
-		claims := fmt.Sprintf("so the eval controller may claim cases of %s beside it once it has "+
-			"found no Gateway-level or foreign traffic policy holding it (design 16 §1.1, the "+
-			"exemption's clause 5). It has not yet evaluated clause 5 for this Lock — it does so on a "+
-			"pass on which every other send predicate holds — and claims nothing until it has. It "+
-			"holds at zero traffic meanwhile", pair)
-		if pairHasFailed(in) {
-			claims = fmt.Sprintf("and the eval controller has not yet evaluated clause 5 for it "+
-				"(design 16 §1.1, the exemption's clause 5). %s has already failed, so no case of it "+
-				"is claimed whatever clause 5 finds: %s stands behind this condition, and holds the "+
-				"candidate at zero traffic", pair, failedBehind(in))
-		}
 		return gateDecision{reason: ReasonEvalWaitingForAuth, readyReason: reasonAwaitingGates,
 			message: fmt.Sprintf("an -auth Lock is recorded on this Agent, in stage %s, that can finish "+
-				"only through a promotion, %s", tx.Stage, claims)}
+				"only through a promotion, so the eval controller may claim cases of %s beside it once "+
+				"it has found no Gateway-level or foreign traffic policy holding it (design 16 §1.1, the "+
+				"exemption's clause 5). It has not yet evaluated clause 5 for this Lock — it does so on a "+
+				"pass on which every other send predicate holds — and claims nothing until it has. It "+
+				"holds at zero traffic meanwhile", tx.Stage, pair)}
 	}
 	if e != nil && e.Blocked != nil && bfMatched {
 		var d gateDecision
@@ -331,22 +318,8 @@ func decideGate(in gateInput) gateDecision {
 			d = gateDecision{reason: ReasonEvalWaitingForAuth, readyReason: reasonAwaitingGates}
 		}
 		if d.reason != "" {
-			msg := e.Blocked.Message
-			if d.reason == ReasonEvalWaitingForAuth && pairHasFailed(in) {
-				// A hold outranks a Failed verdict in the exempt arm for as
-				// long as it stands, and its "until it clears" is not true of
-				// a pair that has failed.
-				msg = strings.TrimSuffix(msg, holdClaimsTail) + holdFailedTail(failedBehind(in))
-			}
 			d.message = fmt.Sprintf("the eval controller recorded for %s that no case can be sent: %s",
-				pair, msg)
-			return d
-		}
-	}
-	if exempt {
-		// In the exempt state blocked comes before the table's rows,
-		// EvalFailed and EvalPairAlreadyFailed among them.
-		if d, ok := failedRows(in, pair); ok {
+				pair, e.Blocked.Message)
 			return d
 		}
 	}
@@ -392,25 +365,6 @@ func noVerdictRows(in gateInput, pair string) gateDecision {
 		message: fmt.Sprintf("status.eval records no final verdict for %s, a run of the suite's %d "+
 			"cases; status.eval.cases[] records the outcomes it has. It holds at zero traffic until a "+
 			"verdict is written", pair, n)}
-}
-
-// pairHasFailed reports whether this pair can no longer pass: status.eval
-// records a Failed verdict for it, or failed[] holds it.
-func pairHasFailed(in gateInput) bool {
-	e := in.status.Eval
-	return e != nil && ((e.RevisionDigest == in.desiredDigest && e.SuiteDigest == in.suiteDigest &&
-		e.Verdict == assaydv1alpha1.EvalVerdictFailed) || pairFailed(e.Failed, in.desiredDigest, in.suiteDigest))
-}
-
-// failedBehind names what records a failed pair, for the messages that are
-// shown ahead of it: its Failed verdict, or, once #111's clear has taken the
-// verdict, its entry in status.eval.failed[].
-func failedBehind(in gateInput) string {
-	if e := in.status.Eval; e != nil && e.RevisionDigest == in.desiredDigest &&
-		e.SuiteDigest == in.suiteDigest && e.Verdict == assaydv1alpha1.EvalVerdictFailed {
-		return "its Failed verdict"
-	}
-	return "its entry in status.eval.failed[], for which no run of the pair is started again,"
 }
 
 // failedRows are the table's two rows for a pair that failed: a Failed

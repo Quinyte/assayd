@@ -117,13 +117,16 @@ func exemptInput(now time.Time) gateInput {
 		suite: twoCaseSuite(), now: now, available: true, status: st}
 }
 
-// The gate branch's order in the exempt state (design 16 §1.1, "What the gate
-// branch derives in the exempt state"): a Passed verdict and the card come
-// first; then a candidate that is not available, which no clause-5 pass
-// reaches (its final verdict, else EvalPaused); then an unmatched blockedFor,
-// as not yet evaluated; then blocked; and only then the table's rows,
-// EvalFailed and EvalPairAlreadyFailed among them.
-// Each row clears the previous row's cause.
+// The gate branch's order in the exempt state (design 16 §1.1, "The gate
+// branch's order"): after a Passed verdict, (4) a Failed verdict for the
+// pair, then the pair in failed[]; (5) no card recorded; (6) the candidate not
+// available; (7) an unmatched blockedFor, as not yet evaluated; (8) blocked;
+// and (9) EvalRunning. A failed pair is answered at (4), as outside the exempt
+// state, ahead of every row a clause-5 hold could reach. Each row clears the
+// previous row's cause.
+//
+// Mutation: guard the failed rows' call at (4) with !exempt, as the order
+// before A24.1 did — every row with a failed pair fails on it.
 func TestTheExemptStateTakesItsOwnPrecedence(t *testing.T) {
 	in := exemptInput(time.Now())
 	other := metav1.NewTime(in.status.Auth.Transaction.Deadline.Add(time.Hour))
@@ -142,52 +145,66 @@ func TestTheExemptStateTakesItsOwnPrecedence(t *testing.T) {
 		}
 		d := decideGate(in)
 		if d.satisfied || d.reason != want {
-			t.Fatalf("%s: decideGate gives satisfied=%v reason %q, want %q (message %q)",
+			t.Errorf("%s: decideGate gives satisfied=%v reason %q, want %q (message %q)",
 				name, d.satisfied, d.reason, want, d.message)
 		}
 		return d
 	}
-	step("no card for the candidate", ReasonEvalAwaitingCard, nil)
-	// The candidate not available: ahead of blocked and of an unmatched
-	// blockedFor, because no clause-5 pass reaches it; a final verdict first.
-	step("not available, a Failed verdict", ReasonEvalFailed, func(in *gateInput) { withCard(in.status) })
-	step("not available, the pair in failed[]", ReasonEvalPairAlreadyFailed, func(in *gateInput) {
+	step("a failed pair with no card, not available, under an unmatched blockedFor", ReasonEvalFailed, nil)
+	step("the pair in failed[] with no card", ReasonEvalPairAlreadyFailed, func(in *gateInput) {
 		in.status.Eval.Verdict = ""
 	})
+	step("no card for the candidate", ReasonEvalAwaitingCard, func(in *gateInput) { in.status.Eval.Failed = nil })
 	step("not available, beside a hold for another Lock", ReasonEvalPaused, func(in *gateInput) {
-		in.status.Eval.Failed = nil
+		withCard(in.status)
 	})
 	in.status.Eval.BlockedFor.LockDeadline = in.status.Auth.Transaction.Deadline.DeepCopy()
 	step("not available, beside a matched hold", ReasonEvalPaused, nil)
 	in.status.Eval.BlockedFor.LockDeadline = &other
-	in.status.Eval.Verdict = assaydv1alpha1.EvalVerdictFailed
-	in.status.Eval.Failed = []assaydv1alpha1.EvalPair{{RevisionDigest: gDigest, SuiteDigest: gSuite}}
 	d := step("blockedFor computed for another Lock", ReasonEvalWaitingForAuth, func(in *gateInput) {
 		in.available = true
 	})
-	// The pair has failed: the message says no case of it is claimed whatever
-	// clause 5 finds, and that the verdict stands behind this condition.
-	for _, want := range []string{"has not yet evaluated clause 5 for it", "has already failed",
-		"no case of it is claimed whatever clause 5 finds", "Failed verdict stands behind"} {
-		if !strings.Contains(d.message, want) {
-			t.Errorf("an unmatched blockedFor beside a failed pair does not say %q: %s", want, d.message)
-		}
-	}
-	if strings.Contains(d.message, "may claim cases") {
-		t.Errorf("beside a failed pair the message says cases may be claimed: %s", d.message)
+	if !strings.Contains(d.message, "has not yet evaluated clause 5 for this Lock") ||
+		!strings.Contains(d.message, "may claim cases") {
+		t.Errorf("an unmatched blockedFor does not say clause 5 is not yet evaluated: %s", d.message)
 	}
 	d = step("blocked, matched", ReasonEvalWaitingForAuth, func(in *gateInput) {
 		in.status.Eval.BlockedFor.LockDeadline = in.status.Auth.Transaction.Deadline.DeepCopy()
 	})
-	if !strings.Contains(d.message, "a hold") || !strings.Contains(d.message,
-		"no case of it is claimed whether or not the hold clears") || strings.Contains(d.message, "until it clears") {
-		t.Errorf("a hold beside a failed pair does not carry blocked's message and the verdict: %s", d.message)
+	if !strings.Contains(d.message, "a hold"+holdClaimsTail) {
+		t.Errorf("a matched hold is not carried with its own message: %s", d.message)
 	}
-	step("a Failed verdict for the pair", ReasonEvalFailed, func(in *gateInput) { in.status.Eval.Blocked = nil })
-	step("the pair in failed[]", ReasonEvalPairAlreadyFailed, func(in *gateInput) { in.status.Eval.Verdict = "" })
-	step("no verdict, the candidate available", ReasonEvalRunning, func(in *gateInput) {
-		in.status.Eval.Failed = nil
-	})
+	step("no verdict, the candidate available", ReasonEvalRunning, func(in *gateInput) { in.status.Eval.Blocked = nil })
+
+	// A failed pair is answered at (4) beside each row below it: an
+	// unavailable candidate, an unmatched blockedFor, and a matched hold.
+	for name, edit := range map[string]func(*gateInput){
+		"not available":                  func(in *gateInput) { in.available = false },
+		"beside an unmatched blockedFor": func(in *gateInput) { in.status.Eval.BlockedFor.LockDeadline = &other },
+		"beside a matched hold":          func(in *gateInput) {},
+		"beside a matched run-start refusal": func(in *gateInput) {
+			in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalBindingUnsupported,
+				Message: "no usable interface"}
+		},
+	} {
+		for want, record := range map[string]func(*assaydv1alpha1.EvalStatus){
+			ReasonEvalFailed: func(e *assaydv1alpha1.EvalStatus) {
+				e.RevisionDigest, e.SuiteDigest, e.Verdict = gDigest, gSuite, assaydv1alpha1.EvalVerdictFailed
+			},
+			ReasonEvalPairAlreadyFailed: func(e *assaydv1alpha1.EvalStatus) {
+				e.Failed = []assaydv1alpha1.EvalPair{{RevisionDigest: gDigest, SuiteDigest: gSuite}}
+			},
+		} {
+			in := exemptInput(time.Now())
+			in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalWaitingForAuth,
+				Message: "a hold" + holdClaimsTail}
+			record(in.status.Eval)
+			edit(&in)
+			if d := decideGate(in); d.satisfied || d.reason != want {
+				t.Errorf("a failed pair %s reads %q, want %q: %s", name, d.reason, want, d.message)
+			}
+		}
+	}
 
 	// A Passed verdict outranks the exempt rows, an unmatched blockedFor and a
 	// standing hold included: clause 5 stops new claims only.
@@ -338,6 +355,7 @@ func clause5Fixture(t *testing.T, reads *clause5Reads, card string) *evalFixture
 			opts ...client.GetOption) error {
 			switch o := obj.(type) {
 			case *gatewayv1.Gateway:
+				reads.gatewayGets++
 				if reads.gatewayErr != nil {
 					return reads.gatewayErr
 				}
@@ -360,6 +378,7 @@ func clause5Fixture(t *testing.T, reads *clause5Reads, card string) *evalFixture
 			if !ok {
 				return c.List(ctx, list, opts...)
 			}
+			reads.policyLists++
 			lo := &client.ListOptions{}
 			lo.ApplyOptions(opts)
 			if lo.Namespace == "gw" {
@@ -392,6 +411,66 @@ type clause5Reads struct {
 	gatewayErr, gatewayListErr, runListErr error
 	listenerSets                           bool
 	runPolicies                            []unstructured.Unstructured
+	// gatewayGets and policyLists count clause 5's reads.
+	gatewayGets, policyLists int
+}
+
+// Beside an exempt Lock, a pass whose pair has a final verdict, Passed or
+// Failed, or is in failed[], makes no clause-5 read: it writes blocked empty,
+// with blockedFor for the pair and the Lock, clearing a stored hold, and
+// returns CardDriftInterval, with no error even though every clause-5 read
+// would fail (design 16 §1.1, "What wakes the eval controller while it
+// waits").
+//
+// Mutations: read clause 5 before the verdict cases (the read counts and the
+// error); drop the verdict cases' blocked write (the stored hold stands).
+func TestAVerdictPassBesideAnExemptLockReadsNoClauseFive(t *testing.T) {
+	for name, record := range map[string]func(*assaydv1alpha1.EvalStatus){
+		"a Passed verdict": func(e *assaydv1alpha1.EvalStatus) { e.Verdict = assaydv1alpha1.EvalVerdictPassed },
+		"a Failed verdict": func(e *assaydv1alpha1.EvalStatus) { e.Verdict = assaydv1alpha1.EvalVerdictFailed },
+		"a pair in failed[]": func(e *assaydv1alpha1.EvalStatus) {
+			e.Failed = []assaydv1alpha1.EvalPair{{RevisionDigest: e.RevisionDigest, SuiteDigest: e.SuiteDigest}}
+			e.RevisionDigest, e.SuiteDigest = "", ""
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reads := &clause5Reads{listenerSets: true, gatewayErr: apierrors.NewForbidden(schema.GroupResource{
+				Group: gatewayv1.GroupName, Resource: "gateways"}, "assayd", errors.New("no"))}
+			f := clause5Fixture(t, reads, "")
+			a := f.agent(t)
+			deadline := a.Status.Auth.Transaction.Deadline
+			// The stored hold was computed for another Lock, so the pass must
+			// rewrite blockedFor as well as clear blocked.
+			another := metav1.NewTime(deadline.Add(time.Hour))
+			a.Status.Eval = &assaydv1alpha1.EvalStatus{RevisionDigest: "sha256:candidate", SuiteDigest: f.sd,
+				Blocked: &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalWaitingForAuth, Message: "a hold" + holdClaimsTail},
+				BlockedFor: &assaydv1alpha1.EvalBlockedFor{RevisionDigest: "sha256:candidate", SuiteDigest: f.sd,
+					LockDeadline: &another}}
+			record(a.Status.Eval)
+			if err := f.c.Status().Update(context.Background(), a); err != nil {
+				t.Fatal(err)
+			}
+			res, err := f.pass(t)
+			if err != nil || res.RequeueAfter != CardDriftInterval {
+				t.Errorf("the pass returned %+v, %v; want CardDriftInterval and no error", res, err)
+			}
+			if reads.gatewayGets != 0 || reads.policyLists != 0 {
+				t.Errorf("the pass read clause 5: %d Gateway gets, %d policy lists", reads.gatewayGets,
+					reads.policyLists)
+			}
+			e := f.agent(t).Status.Eval
+			if e.Blocked != nil {
+				t.Errorf("the stored hold was not cleared: %+v", e.Blocked)
+			}
+			if bf := e.BlockedFor; bf == nil || bf.RevisionDigest != "sha256:candidate" || bf.SuiteDigest != f.sd ||
+				bf.LockDeadline == nil || !bf.LockDeadline.Equal(deadline) {
+				t.Errorf("blockedFor does not name the pair and the Lock: %+v", bf)
+			}
+			if f.stub.total() != 0 || f.stub.cardGets != 0 {
+				t.Errorf("the pass sent %d cases and fetched the card %d times", f.stub.total(), f.stub.cardGets)
+			}
+		})
+	}
 }
 
 // Through Reconcile: an exempt Lock with no hold is claimed beside, and the
@@ -711,38 +790,6 @@ func TestEvalPausedBesideARefusalPromisesNoRun(t *testing.T) {
 		if d.reason != ReasonEvalPaused || !strings.Contains(d.message, "only once it is available again and the "+
 			"run-start refusal") || !strings.Contains(d.message, "no HTTP+JSON 1.0 interface") {
 			t.Errorf("%s: EvalPaused beside a refusal: %s %s", arm, d.reason, d.message)
-		}
-	}
-}
-
-// The words for a failed pair name what records the failure: a Failed
-// verdict, or, once #111's clear has taken it, the failed[] entry. Both the
-// hold's message and the not-yet-evaluated one.
-func TestAFailedPairIsNamedByWhatRecordsIt(t *testing.T) {
-	for _, tc := range []struct {
-		name, behind, not string
-		edit              func(*assaydv1alpha1.EvalStatus)
-	}{
-		{"a Failed verdict", "its Failed verdict", "failed[]", func(e *assaydv1alpha1.EvalStatus) {
-			e.RevisionDigest, e.SuiteDigest, e.Verdict = gDigest, gSuite, assaydv1alpha1.EvalVerdictFailed
-		}},
-		{"a failed[] entry", "its entry in status.eval.failed[]", "Failed verdict", func(e *assaydv1alpha1.EvalStatus) {
-			e.Failed = []assaydv1alpha1.EvalPair{{RevisionDigest: gDigest, SuiteDigest: gSuite}}
-		}},
-	} {
-		in := exemptInput(time.Now())
-		tc.edit(in.status.Eval)
-		in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalWaitingForAuth,
-			Message: "a hold" + holdClaimsTail}
-		held := decideGate(in)
-		in.status.Eval.Blocked = nil
-		in.status.Eval.BlockedFor = nil
-		unevaluated := decideGate(in)
-		for which, d := range map[string]gateDecision{"the hold": held, "not yet evaluated": unevaluated} {
-			if d.reason != ReasonEvalWaitingForAuth || !strings.Contains(d.message, tc.behind) ||
-				strings.Contains(d.message, tc.not) {
-				t.Errorf("%s, %s: want %q and not %q: %s %s", tc.name, which, tc.behind, tc.not, d.reason, d.message)
-			}
 		}
 	}
 }
