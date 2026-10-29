@@ -576,3 +576,32 @@ func TestCheckRefusesAnAddressThatIsNotAnIPAndAPort(t *testing.T) {
 		}
 	}
 }
+
+// Check's refusal names the part it refuses, so that the eval controller can
+// say which without reading the error's text (design 16 §1.1 step 3): the
+// host, which SplitHostPort's own refusal maps to, since it has no part of
+// its own; the port; or the request. A request no URL can carry is reached
+// here through a zoned IPv6 host whose zone does not survive the URL's
+// escaping; a Service's ClusterIP never carries a zone.
+func TestCheckNamesThePartItRefuses(t *testing.T) {
+	for addr, want := range map[string]Part{
+		"":                   PartHost,
+		"10.43.0.9":          PartHost,
+		"None:8080":          PartHost,
+		":8080":              PartHost,
+		"agent.example:80":   PartHost,
+		"10.43.0.9:0":        PartPort,
+		"10.43.0.9:65536":    PartPort,
+		"10.43.0.9:http":     PartPort,
+		"[fe80::1%a/b]:8080": PartRequest,
+	} {
+		ref := Check(Case{Address: addr, Path: "/a2a/message:send"})
+		if ref == nil {
+			t.Errorf("%q: Check admitted it", addr)
+			continue
+		}
+		if ref.Part != want {
+			t.Errorf("%q: Check refused part %q, want %q (%v)", addr, ref.Part, want, ref)
+		}
+	}
+}

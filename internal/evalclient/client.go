@@ -201,28 +201,56 @@ func (c *Client) Send(ctx context.Context, cs Case) (Outcome, error) {
 	return score(raw, cs.Expect), nil
 }
 
+// Part is the part of a case's address that Check refuses, so that a caller
+// can say which without reading the error's text (design 16 §1.1 step 3).
+type Part string
+
+const (
+	// PartHost: the address's host is not an IP address, or the address does
+	// not split into a host and a port, which has no part of its own.
+	PartHost Part = "host"
+	// PartPort: the port is not one from 1 to 65535.
+	PartPort Part = "port"
+	// PartRequest: no request can be built from the address and the path.
+	PartRequest Part = "request"
+)
+
+// Refusal is Check's refusal of a case: the part refused, and the error.
+type Refusal struct {
+	Part Part
+	err  error
+}
+
+func (r *Refusal) Error() string { return r.err.Error() }
+
+func (r *Refusal) Unwrap() error { return r.err }
+
 // Check reports whether cs can be sent, without sending it: its Address is an
 // IP address and a port from 1 to 65535, and a request can be built from it
-// and its Path. Send fails on exactly the cases Check refuses.
+// and its Path. Send fails on exactly the cases Check refuses. It returns the
+// refusal as its own type, nil when it admits cs; a caller that keeps it in
+// an error variable compares that with nil only after checking this one.
 //
 // It is the one validator of the address the operator derives (#105 item
 // 12). Anything else would dial somewhere the operator did not choose — an
 // empty host dials loopback, a missing port dials 80, a name resolves
 // through whatever DNS the operator's Pod has — or fail as Unreachable,
 // recording the operator's own fault against the candidate.
-func Check(cs Case) error {
+func Check(cs Case) *Refusal {
 	host, p, err := net.SplitHostPort(cs.Address)
 	if err != nil {
-		return fmt.Errorf("candidate address %q: %w", cs.Address, err)
+		return &Refusal{Part: PartHost, err: fmt.Errorf("candidate address %q: %w", cs.Address, err)}
 	}
 	if _, err := netip.ParseAddr(host); err != nil {
-		return fmt.Errorf("candidate address %q: the host is not an IP address: %w", cs.Address, err)
+		return &Refusal{Part: PartHost, err: fmt.Errorf("candidate address %q: the host is not an IP address: %w",
+			cs.Address, err)}
 	}
 	if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
-		return fmt.Errorf("candidate address %q: the port is not one from 1 to 65535", cs.Address)
+		return &Refusal{Part: PartPort, err: fmt.Errorf("candidate address %q: the port is not one from 1 to 65535",
+			cs.Address)}
 	}
 	if _, err := http.NewRequest(http.MethodPost, cs.target(), nil); err != nil {
-		return fmt.Errorf("build the request for this case: %w", err)
+		return &Refusal{Part: PartRequest, err: fmt.Errorf("build the request for this case: %w", err)}
 	}
 	return nil
 }

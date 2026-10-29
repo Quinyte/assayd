@@ -337,24 +337,147 @@ func TestTheEvalControllerRequiresAnUncachedReader(t *testing.T) {
 }
 
 // A Service with no usable ClusterIP is the operator's fault: the pass
-// returns an error and claims, sends and records nothing.
+// fetches no card and claims, sends and records nothing, and it returns the
+// error (design 16 A24.20). It writes the fourth blocked reason, with
+// blockedFor for the pair, which creates status.eval (A24.4).
 func TestAnUnusableAddressClaimsNothing(t *testing.T) {
 	f := newEvalFixture(t, nil, echoCase("a", "one"))
-	var svc corev1.Service
-	key := types.NamespacedName{Namespace: RunNamespaceName("team"), Name: WorkloadName("gated", "cand000001")}
-	if err := f.c.Get(context.Background(), key, &svc); err != nil {
-		t.Fatal(err)
-	}
-	svc.Spec.ClusterIP = "None"
-	if err := f.c.Update(context.Background(), &svc); err != nil {
-		t.Fatal(err)
-	}
+	breakCandidateService(t, f, "headless")
 	if _, err := f.pass(t); err == nil {
 		t.Error("a headless candidate Service gave no error")
 	}
-	if e := f.agent(t).Status.Eval; e != nil || f.stub.total() != 0 || f.stub.cardGets != 0 {
-		t.Errorf("an unusable address wrote %+v, fetched the card %d times and sent %d", e,
-			f.stub.cardGets, f.stub.total())
+	if f.stub.total() != 0 || f.stub.cardGets != 0 {
+		t.Errorf("an unusable address fetched the card %d times and sent %d", f.stub.cardGets, f.stub.total())
+	}
+	e := f.agent(t).Status.Eval
+	if e == nil {
+		t.Fatal("an unusable address wrote no status.eval; it writes the fourth blocked reason")
+	}
+	if len(e.Cases) != 0 || e.Verdict != "" || e.EndpointPath != "" || len(e.Failed) != 0 {
+		t.Errorf("an unusable address recorded a case, a verdict or a run: %+v", e)
+	}
+	if e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+		t.Errorf("blocked is %+v, want %s", e.Blocked, ReasonEvalCandidateUnaddressable)
+	}
+	if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != "sha256:candidate" || e.BlockedFor.SuiteDigest != f.sd {
+		t.Errorf("blockedFor %+v does not name the pair", e.BlockedFor)
+	}
+}
+
+// candidateServiceKey is newEvalFixture's candidate Service.
+var candidateServiceKey = types.NamespacedName{Namespace: RunNamespaceName("team"),
+	Name: WorkloadName("gated", "cand000001")}
+
+// breakCandidateService makes the candidate's address underivable: "missing"
+// deletes its Service, "headless" stores it with ClusterIP None, and "port"
+// gives the Agent a port no address can carry. The fake client validates
+// none of them, as the API server would the last.
+func breakCandidateService(t *testing.T, f *evalFixture, how string) {
+	t.Helper()
+	ctx := context.Background()
+	var svc corev1.Service
+	if err := f.c.Get(ctx, candidateServiceKey, &svc); err != nil {
+		t.Fatal(err)
+	}
+	switch how {
+	case "missing":
+		if err := f.c.Delete(ctx, &svc); err != nil {
+			t.Fatal(err)
+		}
+	case "headless":
+		svc.Spec.ClusterIP = corev1.ClusterIPNone
+		if err := f.c.Update(ctx, &svc); err != nil {
+			t.Fatal(err)
+		}
+	case "port":
+		a := f.agent(t)
+		a.Spec.Runtime.Port = 70000
+		if err := f.c.Update(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatalf("breakCandidateService: unknown %q", how)
+	}
+}
+
+// Design 16 A24.4, A24.5 and A24.7: a pass that would start a run, or claim
+// a case, and cannot derive the candidate's address writes
+// EvalCandidateUnaddressable to blocked, with blockedFor for the pair, for a
+// Service that is missing, headless or cannot be read, and for a port no
+// address carries; its message names the fault by its class or the part
+// refused, never by an error's text; and the gate branch reads it rather
+// than EvalRunning. Every such pass still returns the error (A24.20).
+//
+// Mutations: skip the write (blocked stays empty or as the run start left
+// it); write nothing on a read error that is not NotFound (the failing-read
+// rows); drop the case from decideGate's switch (EvalRunning).
+func TestAnUnaddressableCandidateIsNamed(t *testing.T) {
+	for _, phase := range []string{"run start", "mid-run"} {
+		for how, fault := range map[string]string{
+			"missing":  `the candidate's Service ` + candidateServiceKey.String() + ` was not found`,
+			"headless": `the candidate's Service ` + candidateServiceKey.String() + `: its ClusterIP "None" is not an IP address`,
+			"unreadable": `the candidate's Service ` + candidateServiceKey.String() +
+				` could not be read (a server error)`,
+			"port": `the candidate's Service ` + candidateServiceKey.String() +
+				`: spec.runtime.port 70000 is not from 1 to 65535`,
+		} {
+			t.Run(phase+", "+how, func(t *testing.T) {
+				var failRead bool
+				funcs := &interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+					obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*corev1.Service); ok && failRead {
+						return apierrors.NewServiceUnavailable("injected: the raw text of a read error")
+					}
+					return c.Get(ctx, key, obj, opts...)
+				}}
+				f := newEvalFixture(t, funcs, echoCase("a", "one"), echoCase("b", "two"))
+				if phase == "mid-run" {
+					if _, err := f.pass(t); err != nil {
+						t.Fatal(err)
+					}
+					if c := caseRecord(f.agent(t).Status.Eval.Cases, "a"); c == nil || !outcomeRecorded(c.Outcome) {
+						t.Fatalf("setup: the first case was not recorded: %+v", f.agent(t).Status.Eval)
+					}
+				}
+				if how == "unreadable" {
+					failRead = true
+				} else {
+					breakCandidateService(t, f, how)
+				}
+				cardGets := f.stub.cardGets
+				if _, err := f.pass(t); err == nil {
+					t.Error("the pass returned no error; an address fault is returned (A24.20)")
+				}
+				if f.stub.count("two") != 0 || f.stub.cardGets != cardGets {
+					t.Errorf("the pass sent %d or fetched %d cards", f.stub.count("two"), f.stub.cardGets-cardGets)
+				}
+				a := f.agent(t)
+				e := a.Status.Eval
+				if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+					t.Fatalf("status.eval is %+v; want blocked %s", e, ReasonEvalCandidateUnaddressable)
+				}
+				if !strings.Contains(e.Blocked.Message, "cannot derive an address to send a case to: "+fault+".") {
+					t.Errorf("the message does not name the fault %q: %s", fault, e.Blocked.Message)
+				}
+				if strings.Contains(e.Blocked.Message, "injected") {
+					t.Errorf("the message carries an error's text: %s", e.Blocked.Message)
+				}
+				if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != "sha256:candidate" ||
+					e.BlockedFor.SuiteDigest != f.sd || e.BlockedFor.LockDeadline != nil {
+					t.Errorf("blockedFor %+v does not name the pair and no Lock", e.BlockedFor)
+				}
+				if c := caseRecord(e.Cases, "b"); c != nil {
+					t.Errorf("a case was claimed or recorded: %+v", c)
+				}
+				d := decideGate(gateInput{desired: a.Status.CandidateRevision,
+					desiredDigest: a.Status.CandidateRevisionDigest, suiteName: f.suite.Name, suiteDigest: f.sd,
+					suite: f.suite, available: true, now: time.Now(), status: &a.Status, agent: a})
+				if d.reason != ReasonEvalCandidateUnaddressable || d.readyReason != reasonAwaitingGates ||
+					!strings.Contains(d.message, fault) {
+					t.Errorf("the gate branch reads %s/%s: %s", d.reason, d.readyReason, d.message)
+				}
+			})
+		}
 	}
 }
 
@@ -587,8 +710,9 @@ func TestRunningNamesNAndPausedNamesKOfN(t *testing.T) {
 		!strings.Contains(before.message, "status.eval.cases[]") {
 		t.Errorf("EvalRunning does not name the pair, N and where progress is: %s", before.message)
 	}
-	// It claims nothing about sending: the eval controller may be unable to
-	// reach the candidate at all, and nothing tells this branch (#113).
+	// It claims nothing about sending: between a candidate's Service going
+	// and the next eval pass, which writes EvalCandidateUnaddressable, this
+	// row can be shown while nothing can be sent (design 16 A24.6).
 	for _, claim := range []string{"is sent", "evaluating", "sending"} {
 		if strings.Contains(before.message, claim) {
 			t.Errorf("EvalRunning asserts progress (%q): %s", claim, before.message)

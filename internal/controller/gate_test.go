@@ -116,6 +116,12 @@ func TestTheGateBranchsReasonsTakeTheirPrecedence(t *testing.T) {
 		in.status.Eval.BlockedFor.LockDeadline = nil
 	})
 	step("blocked, matched", ReasonEvalBindingUnsupported, func(in *gateInput) { in.available = true })
+	// The fourth reason is blocked's too, at (8), and is shown rather than
+	// EvalRunning (design 16 A24.6).
+	step("blocked, matched, the address underivable", ReasonEvalCandidateUnaddressable, func(in *gateInput) {
+		in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalCandidateUnaddressable,
+			Message: "no address"}
+	})
 	step("no verdict, the candidate available", ReasonEvalRunning, func(in *gateInput) {
 		in.status.Eval.Blocked = nil
 	})
