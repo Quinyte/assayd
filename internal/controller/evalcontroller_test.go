@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -337,24 +338,165 @@ func TestTheEvalControllerRequiresAnUncachedReader(t *testing.T) {
 }
 
 // A Service with no usable ClusterIP is the operator's fault: the pass
-// returns an error and claims, sends and records nothing.
+// fetches no card and claims, sends and records nothing, and it returns the
+// error (design 16 A24.20). It writes the fourth blocked reason, with
+// blockedFor for the pair, which creates status.eval (A24.4).
 func TestAnUnusableAddressClaimsNothing(t *testing.T) {
 	f := newEvalFixture(t, nil, echoCase("a", "one"))
-	var svc corev1.Service
-	key := types.NamespacedName{Namespace: RunNamespaceName("team"), Name: WorkloadName("gated", "cand000001")}
-	if err := f.c.Get(context.Background(), key, &svc); err != nil {
-		t.Fatal(err)
-	}
-	svc.Spec.ClusterIP = "None"
-	if err := f.c.Update(context.Background(), &svc); err != nil {
-		t.Fatal(err)
-	}
+	breakCandidateService(t, f, "headless")
 	if _, err := f.pass(t); err == nil {
 		t.Error("a headless candidate Service gave no error")
 	}
-	if e := f.agent(t).Status.Eval; e != nil || f.stub.total() != 0 || f.stub.cardGets != 0 {
-		t.Errorf("an unusable address wrote %+v, fetched the card %d times and sent %d", e,
-			f.stub.cardGets, f.stub.total())
+	if f.stub.total() != 0 || f.stub.cardGets != 0 {
+		t.Errorf("an unusable address fetched the card %d times and sent %d", f.stub.cardGets, f.stub.total())
+	}
+	e := f.agent(t).Status.Eval
+	if e == nil {
+		t.Fatal("an unusable address wrote no status.eval; it writes the fourth blocked reason")
+	}
+	if len(e.Cases) != 0 || e.Verdict != "" || e.EndpointPath != "" || len(e.Failed) != 0 {
+		t.Errorf("an unusable address recorded a case, a verdict or a run: %+v", e)
+	}
+	if e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+		t.Errorf("blocked is %+v, want %s", e.Blocked, ReasonEvalCandidateUnaddressable)
+	}
+	if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != "sha256:candidate" || e.BlockedFor.SuiteDigest != f.sd {
+		t.Errorf("blockedFor %+v does not name the pair", e.BlockedFor)
+	}
+}
+
+// candidateServiceKey is newEvalFixture's candidate Service.
+var candidateServiceKey = types.NamespacedName{Namespace: RunNamespaceName("team"),
+	Name: WorkloadName("gated", "cand000001")}
+
+// breakCandidateService makes the candidate's address underivable: "missing"
+// deletes its Service, "headless" stores it with ClusterIP None, "zoned"
+// stores it with a zoned IPv6 ClusterIP whose escaped zone no request can
+// carry, and "port" gives the Agent a port no address can carry. The fake
+// client validates none of these writes. A real API server refuses the
+// in-place ClusterIP changes, so there the Service would have to be
+// re-created to reach those states; it would accept the port, since
+// spec.runtime.port declares no bounds.
+func breakCandidateService(t *testing.T, f *evalFixture, how string) {
+	t.Helper()
+	ctx := context.Background()
+	var svc corev1.Service
+	if err := f.c.Get(ctx, candidateServiceKey, &svc); err != nil {
+		t.Fatal(err)
+	}
+	switch how {
+	case "missing":
+		if err := f.c.Delete(ctx, &svc); err != nil {
+			t.Fatal(err)
+		}
+	case "headless", "zoned":
+		svc.Spec.ClusterIP = corev1.ClusterIPNone
+		if how == "zoned" {
+			svc.Spec.ClusterIP = "fe80::1%a/b"
+		}
+		if err := f.c.Update(ctx, &svc); err != nil {
+			t.Fatal(err)
+		}
+	case "port":
+		a := f.agent(t)
+		a.Spec.Runtime.Port = 70000
+		if err := f.c.Update(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatalf("breakCandidateService: unknown %q", how)
+	}
+}
+
+// Design 16 A24.4, A24.5 and A24.7: a pass that would start a run, or claim
+// a case, and cannot derive the candidate's address writes
+// EvalCandidateUnaddressable to blocked, with blockedFor for the pair, for a
+// Service that is missing, headless or cannot be read, and for a port no
+// address carries; its message names the fault by its class or the part
+// refused, never by an error's text; and the gate branch reads it rather
+// than EvalRunning. Every such pass still returns the error (A24.20).
+//
+// Mutations: skip the write (blocked stays empty or as the run start left
+// it); write nothing on a read error that is not NotFound (the failing-read
+// rows); drop the case from decideGate's switch (EvalRunning).
+func TestAnUnaddressableCandidateIsNamed(t *testing.T) {
+	for _, phase := range []string{"run start", "mid-run"} {
+		for how, fault := range map[string]string{
+			"missing":  `the candidate's Service ` + candidateServiceKey.String() + ` was not found`,
+			"headless": `the candidate's Service ` + candidateServiceKey.String() + `: its ClusterIP "None" is not an IP address`,
+			"unreadable": `the candidate's Service ` + candidateServiceKey.String() +
+				` could not be read (a server error)`,
+			"port": `the candidate's Service ` + candidateServiceKey.String() +
+				`: spec.runtime.port 70000 is not from 1 to 65535`,
+			// The request part: the path named is the card path at run
+			// start and the recorded endpoint mid-run.
+			"zoned": `the candidate's Service ` + candidateServiceKey.String() +
+				`: no request can be built for the path `,
+		} {
+			if how == "zoned" {
+				if phase == "run start" {
+					fault += `"/.well-known/agent-card.json"`
+				} else {
+					fault += `"/a2a/message:send"`
+				}
+			}
+			t.Run(phase+", "+how, func(t *testing.T) {
+				var failRead bool
+				funcs := &interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+					obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*corev1.Service); ok && failRead {
+						return apierrors.NewServiceUnavailable("injected: the raw text of a read error")
+					}
+					return c.Get(ctx, key, obj, opts...)
+				}}
+				f := newEvalFixture(t, funcs, echoCase("a", "one"), echoCase("b", "two"))
+				if phase == "mid-run" {
+					if _, err := f.pass(t); err != nil {
+						t.Fatal(err)
+					}
+					if c := caseRecord(f.agent(t).Status.Eval.Cases, "a"); c == nil || !outcomeRecorded(c.Outcome) {
+						t.Fatalf("setup: the first case was not recorded: %+v", f.agent(t).Status.Eval)
+					}
+				}
+				if how == "unreadable" {
+					failRead = true
+				} else {
+					breakCandidateService(t, f, how)
+				}
+				cardGets := f.stub.cardGets
+				if _, err := f.pass(t); err == nil {
+					t.Error("the pass returned no error; an address fault is returned (A24.20)")
+				}
+				if f.stub.count("two") != 0 || f.stub.cardGets != cardGets {
+					t.Errorf("the pass sent %d or fetched %d cards", f.stub.count("two"), f.stub.cardGets-cardGets)
+				}
+				a := f.agent(t)
+				e := a.Status.Eval
+				if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+					t.Fatalf("status.eval is %+v; want blocked %s", e, ReasonEvalCandidateUnaddressable)
+				}
+				if !strings.Contains(e.Blocked.Message, "cannot derive an address to send a case to: "+fault+".") {
+					t.Errorf("the message does not name the fault %q: %s", fault, e.Blocked.Message)
+				}
+				if strings.Contains(e.Blocked.Message, "injected") {
+					t.Errorf("the message carries an error's text: %s", e.Blocked.Message)
+				}
+				if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != "sha256:candidate" ||
+					e.BlockedFor.SuiteDigest != f.sd || e.BlockedFor.LockDeadline != nil {
+					t.Errorf("blockedFor %+v does not name the pair and no Lock", e.BlockedFor)
+				}
+				if c := caseRecord(e.Cases, "b"); c != nil {
+					t.Errorf("a case was claimed or recorded: %+v", c)
+				}
+				d := decideGate(gateInput{desired: a.Status.CandidateRevision,
+					desiredDigest: a.Status.CandidateRevisionDigest, suiteName: f.suite.Name, suiteDigest: f.sd,
+					suite: f.suite, available: true, now: time.Now(), status: &a.Status, agent: a})
+				if d.reason != ReasonEvalCandidateUnaddressable || d.readyReason != reasonAwaitingGates ||
+					!strings.Contains(d.message, fault) {
+					t.Errorf("the gate branch reads %s/%s: %s", d.reason, d.readyReason, d.message)
+				}
+			})
+		}
 	}
 }
 
@@ -587,8 +729,9 @@ func TestRunningNamesNAndPausedNamesKOfN(t *testing.T) {
 		!strings.Contains(before.message, "status.eval.cases[]") {
 		t.Errorf("EvalRunning does not name the pair, N and where progress is: %s", before.message)
 	}
-	// It claims nothing about sending: the eval controller may be unable to
-	// reach the candidate at all, and nothing tells this branch (#113).
+	// It claims nothing about sending: between a candidate's Service going
+	// and the next eval pass, which writes EvalCandidateUnaddressable, this
+	// row can be shown while nothing can be sent (design 16 A24.6).
 	for _, claim := range []string{"is sent", "evaluating", "sending"} {
 		if strings.Contains(before.message, claim) {
 			t.Errorf("EvalRunning asserts progress (%q): %s", claim, before.message)
@@ -852,5 +995,174 @@ func TestAFailedFetchNamesItsOwnClass(t *testing.T) {
 	if e == nil || e.Blocked == nil || !strings.Contains(e.Blocked.Message, "refused or failed") ||
 		strings.Contains(e.Blocked.Message, "not JSON") {
 		t.Errorf("a refused run-start fetch: blocked %+v; want it to name the refused connection", e)
+	}
+}
+
+// The message is A24.7's, whole: the fault, then what is not done and why,
+// then the hedged repair.
+func TestTheUnaddressableMessageIsTheDecidedOne(t *testing.T) {
+	got := unaddressable("FAULT").Message
+	want := "the eval controller cannot derive an address to send a case to: FAULT. Nothing is fetched, " +
+		"claimed or sent, and no outcome is recorded, because the fault is not the candidate's. The Agent " +
+		"reconciler re-creates a missing Service, and replaces a headless one it recorded, on a pass that " +
+		"reaches its Service step; its own conditions say when it does not"
+	if got != want {
+		t.Errorf("the message is\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A24.4's table, "run start, address derived": a run-start pass whose Service
+// read fails in nextCase, after the run-start patch, writes nothing more and
+// returns the error; the next pass, a mid-run one, writes the fourth reason.
+//
+// Mutation: make nextCase write blocked on a run-start pass too (two writes).
+func TestARunStartPassWritesNothingAfterItsPatch(t *testing.T) {
+	svcGets := 0
+	funcs := &interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+		obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*corev1.Service); ok {
+			svcGets++
+			if svcGets >= 2 {
+				return apierrors.NewServiceUnavailable("injected")
+			}
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}}
+	f := newEvalFixture(t, funcs, echoCase("a", "one"))
+	before, _ := strconv.Atoi(f.agent(t).ResourceVersion)
+	if _, err := f.pass(t); err == nil {
+		t.Error("the run-start pass returned no error")
+	}
+	after, _ := strconv.Atoi(f.agent(t).ResourceVersion)
+	e := f.agent(t).Status.Eval
+	if after-before != 1 || e == nil || e.Verdict != assaydv1alpha1.EvalVerdictRunning || e.Blocked != nil {
+		t.Errorf("run-start pass: resourceVersion %d → %d, eval %+v; want the run-start patch alone",
+			before, after, e)
+	}
+	if f.stub.total() != 0 {
+		t.Errorf("the run-start pass sent %d cases", f.stub.total())
+	}
+	if _, err := f.pass(t); err == nil {
+		t.Error("the next pass returned no error")
+	}
+	if e := f.agent(t).Status.Eval; e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+		t.Errorf("the next pass did not write the fourth reason: %+v", e.Blocked)
+	}
+}
+
+// A24.4's table, "mid-run, records Interrupted": beside an orphaned claim the
+// pass derives no address, records Interrupted, returns no error, and clears
+// a stored fourth reason once; the next pass, which has a case to claim,
+// writes it again.
+//
+// Mutations: derive the address on the orphan's pass; skip the blocked write
+// beside an orphan.
+func TestAnOrphanedClaimIsRecordedBesideAnUnaddressableCandidate(t *testing.T) {
+	svcGets := 0
+	funcs := &interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+		obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*corev1.Service); ok {
+			svcGets++
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}}
+	f := newEvalFixture(t, funcs, echoCase("a", "one"), echoCase("b", "two"), echoCase("c", "three"))
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	a := f.agent(t)
+	a.Status.Eval.Cases = append(a.Status.Eval.Cases, assaydv1alpha1.EvalCaseRecord{ID: "b",
+		Outcome: assaydv1alpha1.EvalCaseSending, Claim: "orphan"})
+	a.Status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalCandidateUnaddressable, Message: "stale"}
+	if err := f.c.Status().Update(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	breakCandidateService(t, f, "headless")
+	svcGets = 0
+	_, err := f.pass(t)
+	e := f.agent(t).Status.Eval
+	if c := caseRecord(e.Cases, "b"); err != nil || c == nil || c.Reason != string(evalclient.ReasonInterrupted) {
+		t.Errorf("the orphan's pass: error %v, case b %+v; want Interrupted recorded and no error", err, c)
+	}
+	if e.Blocked != nil {
+		t.Errorf("the orphan's pass left blocked %+v; want it cleared", e.Blocked)
+	}
+	if svcGets != 0 {
+		t.Errorf("the orphan's pass read the Service %d times; it derives no address", svcGets)
+	}
+	if _, err := f.pass(t); err == nil {
+		t.Error("the next pass returned no error")
+	}
+	if e := f.agent(t).Status.Eval; e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+		t.Errorf("the next pass did not write the fourth reason again: %+v", e.Blocked)
+	}
+}
+
+// A24.20: a pass whose fourth-reason write is lost to Conflict still returns
+// the address error, at run start and mid-run.
+//
+// Mutation: return no error when the mid-run write is lost to Conflict.
+func TestALostWriteOfTheFourthReasonStillReturnsTheError(t *testing.T) {
+	for _, phase := range []string{"run start", "mid-run"} {
+		t.Run(phase, func(t *testing.T) {
+			conflict := false
+			funcs := &interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string,
+				obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if conflict {
+					return apierrors.NewConflict(schema.GroupResource{Group: "assayd.dev", Resource: "agents"},
+						obj.GetName(), errors.New("injected"))
+				}
+				return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			}}
+			f := newEvalFixture(t, funcs, echoCase("a", "one"), echoCase("b", "two"))
+			if phase == "mid-run" {
+				if _, err := f.pass(t); err != nil {
+					t.Fatal(err)
+				}
+			}
+			breakCandidateService(t, f, "headless")
+			conflict = true
+			if _, err := f.pass(t); err == nil || apierrors.IsConflict(err) {
+				t.Errorf("a pass whose write was lost returned %v; want the address error", err)
+			}
+		})
+	}
+}
+
+// A24.4's table, "mid-run, a case to claim": once the address can be
+// derived again, the mid-run pass writes blocked empty, clearing a stored
+// EvalCandidateUnaddressable, before it claims the next case.
+//
+// Mutation: skip the mid-run write when the address derives (the reviewer's
+// M12).
+func TestARepairedAddressClearsTheFourthReasonBeforeTheClaim(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"), echoCase("b", "two"))
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	breakCandidateService(t, f, "headless")
+	if _, err := f.pass(t); err == nil {
+		t.Fatal("setup: a pass to a headless Service returned no error")
+	}
+	if e := f.agent(t).Status.Eval; e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+		t.Fatalf("setup: the fourth reason was not written: %+v", e.Blocked)
+	}
+	var svc corev1.Service
+	if err := f.c.Get(context.Background(), candidateServiceKey, &svc); err != nil {
+		t.Fatal(err)
+	}
+	svc.Spec.ClusterIP = "10.43.0.9"
+	if err := f.c.Update(context.Background(), &svc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	e := f.agent(t).Status.Eval
+	if e.Blocked != nil {
+		t.Errorf("the fourth reason outlived the repair: %+v", e.Blocked)
+	}
+	if c := caseRecord(e.Cases, "b"); c == nil || !outcomeRecorded(c.Outcome) || f.stub.count("two") != 1 {
+		t.Errorf("the repaired pass did not claim and send case b: %+v, %d sends", c, f.stub.count("two"))
 	}
 }

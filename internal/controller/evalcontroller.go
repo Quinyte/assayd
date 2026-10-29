@@ -319,10 +319,11 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	// Clause 5, last, on a pass that met clauses 1 to 4 and every other send
-	// predicate. Its hold is the second reason blocked can carry; a run-start
-	// refusal outranks it, but only on a pass that would start a run, and a
-	// pass under a hold starts none, so the card is not fetched while one
-	// stands (§1.1, "`blocked`: one slot, one computation").
+	// predicate. EvalCandidateUnaddressable and a run-start refusal come
+	// before its hold in blocked's list, but only on a pass that would start a
+	// run or claim a case, and a pass under a hold does neither, so no Service
+	// is read and no card fetched while one stands (§1.1, "`blocked`: one
+	// slot, one computation"; A24.17).
 	var hold *assaydv1alpha1.EvalBlocked
 	if exempt {
 		var readErr error
@@ -353,12 +354,12 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		if res, done, err := r.startRun(ctx, &run); done || err != nil {
 			return res, err
 		}
-	default:
-		if res, done, err := r.syncBlocked(ctx, &run, nil); done || err != nil {
-			return res, err
-		}
+		// The run-start patch was this pass's one blocked write.
+		return r.nextCase(ctx, &run, true)
 	}
-	return r.nextCase(ctx, &run)
+	// A run in progress: nextCase writes blocked, once, after it has found
+	// the next case and derived the address it would claim it for.
+	return r.nextCase(ctx, &run, false)
 }
 
 // evalRun is one pass's view of the run it acts on.
@@ -443,9 +444,12 @@ func (r *EvalReconciler) clearSuperseded(ctx context.Context, agent *assaydv1alp
 
 // syncBlocked writes status.eval.blocked and blockedFor when the value this
 // pass computed differs from the stored one, and reads both back (step 11).
-// blocked is the pass's one computation, in §1.1's precedence: a run-start
-// refusal on a pass that would start a run (startRun), otherwise clause 5's
-// hold on an exempt Lock, otherwise empty. It is called only on a pass on
+// blocked is the pass's one computation, in §1.1's precedence: clause 5's
+// hold on an exempt Lock, on a pass that therefore neither starts a run nor
+// claims a case; otherwise EvalCandidateUnaddressable on a pass that would
+// start a run or claim a case and cannot derive the candidate's address
+// (candidateAddress); otherwise a run-start refusal on a pass that would
+// start a run (startRun); otherwise empty. It is called only on a pass on
 // which every shared send predicate holds, the transaction predicate with its
 // exemption included, so the stored value is replaced only by one evaluated
 // for the current pair. A pass that waits on a transaction that is not exempt
@@ -522,20 +526,15 @@ func (r *EvalReconciler) readBackFailed(ctx context.Context, what string) (ctrl.
 // replaces the previous pair's record. done is true when the pass must return
 // res; otherwise the run has started and the pass goes on to its first case.
 func (r *EvalReconciler) startRun(ctx context.Context, run *evalRun) (ctrl.Result, bool, error) {
-	addr, err := r.candidateAddress(ctx, run, cardPath(run.agent))
+	addr, fault, err := r.candidateAddress(ctx, run, cardPath(run.agent))
 	if err != nil {
-		// Every other way out of a run start writes blocked once, with the
-		// pass's own value. This one would write nothing, and a clause-5 hold
-		// this pass found gone would go on naming a cause that is gone for as
-		// long as the address cannot be used; so it is cleared here, the
-		// pass's one blocked write.
-		if e := run.agent.Status.Eval; e != nil && e.Blocked != nil && e.Blocked.Reason == ReasonEvalWaitingForAuth {
-			if res, done, serr := r.syncBlocked(ctx, run, nil); done || serr != nil {
-				if serr == nil {
-					serr = err
-				}
-				return res, true, serr
-			}
+		// The pass's one blocked write is the fourth reason, which replaces
+		// whatever is stored — a clause-5 hold this pass found gone, or a
+		// run-start refusal — and the pass returns the error whatever the
+		// write did, so the per-item backoff governs it (design 16 A24.4,
+		// A24.20).
+		if _, _, serr := r.syncBlocked(ctx, run, fault); serr != nil {
+			return ctrl.Result{}, true, serr
 		}
 		return ctrl.Result{}, true, err
 	}
@@ -588,25 +587,54 @@ func (r *EvalReconciler) startRun(ctx context.Context, run *evalRun) (ctrl.Resul
 // revision's Service, by its ClusterIP and spec.runtime.port, as the card
 // fetch derives it (step 3). evalclient.Check, the one validator of it, must
 // admit it with path before anything is fetched or claimed (#105 item 12): an
-// address that is not an IP and a port is the operator's fault, not the
-// candidate's, so it records no outcome — failed[] would make one final — and
-// the pass returns the error for controller-runtime's backoff. No condition
-// says so; that is owed to design 16's amendment (#113).
-func (r *EvalReconciler) candidateAddress(ctx context.Context, run *evalRun, path string) (string, error) {
+// address that is not an IP and a port is not the candidate's fault, so it
+// records no outcome — failed[] would make one final — and the pass returns
+// the error for controller-runtime's backoff (A24.20). Beside the error it
+// returns the fourth blocked reason, EvalCandidateUnaddressable, for the pass
+// to write (A24.4, A24.5): built from the Service's name and the class of the
+// read's failure or the part Check refused, never from an error's text, so a
+// fault that persists computes the same value and writes once.
+func (r *EvalReconciler) candidateAddress(ctx context.Context, run *evalRun, path string) (
+	string, *assaydv1alpha1.EvalBlocked, error) {
 	var svc corev1.Service
 	key := types.NamespacedName{Namespace: run.runNS, Name: WorkloadName(run.agent.Name, run.revision)}
 	if err := r.Get(ctx, key, &svc); err != nil {
 		log.FromContext(ctx).Error(err, "the candidate's Service cannot be read; nothing is fetched, "+
 			"claimed or sent", "service", key)
-		return "", fmt.Errorf("read the candidate's Service %s: %w", key, err)
+		fault := fmt.Sprintf("the candidate's Service %s was not found", key)
+		if !apierrors.IsNotFound(err) {
+			fault = fmt.Sprintf("the candidate's Service %s could not be read (%s)", key, readErrorClass(err))
+		}
+		return "", unaddressable(fault), fmt.Errorf("read the candidate's Service %s: %w", key, err)
 	}
-	addr := net.JoinHostPort(svc.Spec.ClusterIP, strconv.Itoa(int(port(run.agent.Spec.Runtime))))
-	if err := evalclient.Check(evalclient.Case{Address: addr, Path: path}); err != nil {
-		log.FromContext(ctx).Error(err, "the candidate's address is not one a case can be sent to; "+
+	p := port(run.agent.Spec.Runtime)
+	addr := net.JoinHostPort(svc.Spec.ClusterIP, strconv.Itoa(int(p)))
+	if ref := evalclient.Check(evalclient.Case{Address: addr, Path: path}); ref != nil {
+		log.FromContext(ctx).Error(ref, "the candidate's address is not one a case can be sent to; "+
 			"nothing is fetched, claimed or sent", "service", key)
-		return "", err
+		var part string
+		switch ref.Part {
+		case evalclient.PartPort:
+			part = fmt.Sprintf("spec.runtime.port %d is not from 1 to 65535", p)
+		case evalclient.PartRequest:
+			part = fmt.Sprintf("no request can be built for the path %q", path)
+		default:
+			part = fmt.Sprintf("its ClusterIP %q is not an IP address", svc.Spec.ClusterIP)
+		}
+		return "", unaddressable(fmt.Sprintf("the candidate's Service %s: %s", key, part)), ref
 	}
-	return addr, nil
+	return addr, nil, nil
+}
+
+// unaddressable is the fourth blocked reason, for fault (design 16 A24.7).
+// The repair sentence is hedged: the Agent reconciler does not reach its
+// Service step while a pin refusal stands or a source is unresolved.
+func unaddressable(fault string) *assaydv1alpha1.EvalBlocked {
+	return &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalCandidateUnaddressable, Message: "the eval " +
+		"controller cannot derive an address to send a case to: " + fault + ". Nothing is fetched, " +
+		"claimed or sent, and no outcome is recorded, because the fault is not the candidate's. The Agent " +
+		"reconciler re-creates a missing Service, and replaces a headless one it recorded, on a pass " +
+		"that reaches its Service step; its own conditions say when it does not"}
 }
 
 // runStartCard fetches the candidate's card through the eval client and
@@ -744,51 +772,80 @@ func (r *EvalReconciler) fetchCard(ctx context.Context, addr, path string) ([]by
 // nextCase is step 10 from the claim on: record Interrupted for a claim found
 // with no outcome, or claim the next case by id, send it, and record its
 // outcome, with the verdict in the last case's record (step 7).
-func (r *EvalReconciler) nextCase(ctx context.Context, run *evalRun) (ctrl.Result, error) {
+//
+// written is whether this pass has already made its one blocked write, the
+// run-start patch. On any other pass nextCase makes it, once (design 16
+// A24.4): empty when it records Interrupted or finds every case recorded,
+// deriving no address; and, when there is a case to claim, after deriving the
+// address it would claim it for, EvalCandidateUnaddressable if that cannot be
+// derived and empty otherwise. A run-start pass whose address fails here
+// writes nothing more, and returns the error; the next pass, a mid-run one,
+// writes the reason.
+func (r *EvalReconciler) nextCase(ctx context.Context, run *evalRun, written bool) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	key := client.ObjectKeyFromObject(run.agent)
 	ids := suiteIDs(run.suite)
 	cases := run.agent.Status.Eval.Cases
 
+	var orphan *assaydv1alpha1.EvalCaseRecord
+	for _, id := range ids {
+		if c := caseRecord(cases, id); c != nil && c.Outcome == assaydv1alpha1.EvalCaseSending {
+			orphan = c.DeepCopy()
+			break
+		}
+	}
+	var next *assaydv1alpha1.EvalCase
+	if orphan == nil {
+		for _, id := range ids {
+			if caseRecord(cases, id) == nil {
+				next = suiteCase(run.suite, id)
+				break
+			}
+		}
+	}
+	// Check before the claim, inside candidateAddress: a claim followed by
+	// Send's error would be left with no outcome and recorded Interrupted,
+	// failing the candidate for the operator's fault.
+	var addr string
+	var fault *assaydv1alpha1.EvalBlocked
+	var addrErr error
+	if next != nil {
+		addr, fault, addrErr = r.candidateAddress(ctx, run, run.agent.Status.Eval.EndpointPath)
+	}
+	if !written {
+		if res, done, err := r.syncBlocked(ctx, run, fault); err != nil {
+			return res, err
+		} else if done && addrErr == nil {
+			return res, nil
+		}
+	}
+	if addrErr != nil {
+		return ctrl.Result{}, addrErr
+	}
+
 	// A claim found with no outcome: the eval controller stopped between
 	// claiming and recording without a graceful stop, or the claim's response
 	// was lost. Nobody knows whether the candidate received it, so it is never
 	// sent again (Q11 (a)).
-	for _, id := range ids {
-		if c := caseRecord(cases, id); c != nil && c.Outcome == assaydv1alpha1.EvalCaseSending {
-			err := r.patchEval(ctx, run.agent, func(e *assaydv1alpha1.EvalStatus) *assaydv1alpha1.EvalStatus {
-				return run.withOutcome(e, id, c.Claim, assaydv1alpha1.EvalCaseFailed, string(evalclient.ReasonInterrupted))
-			})
-			if apierrors.IsConflict(err) {
-				return ctrl.Result{}, nil
-			}
-			if err != nil {
-				return ctrl.Result{}, fmt.Errorf("record case %s as Interrupted: %w", id, err)
-			}
-			logger.Info("a claimed case had no outcome; it is recorded Interrupted and not sent again",
-				"case", id)
-			return r.wait(waitSent)
+	if orphan != nil {
+		err := r.patchEval(ctx, run.agent, func(e *assaydv1alpha1.EvalStatus) *assaydv1alpha1.EvalStatus {
+			return run.withOutcome(e, orphan.ID, orphan.Claim, assaydv1alpha1.EvalCaseFailed,
+				string(evalclient.ReasonInterrupted))
+		})
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{}, nil
 		}
-	}
-
-	var next *assaydv1alpha1.EvalCase
-	for _, id := range ids {
-		if caseRecord(cases, id) == nil {
-			next = suiteCase(run.suite, id)
-			break
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("record case %s as Interrupted: %w", orphan.ID, err)
 		}
+		logger.Info("a claimed case had no outcome; it is recorded Interrupted and not sent again",
+			"case", orphan.ID)
+		return r.wait(waitSent)
 	}
 	if next == nil {
 		// Every case has an outcome, and the record that wrote the last one
 		// wrote the verdict with it; nothing is left to send.
 		return ctrl.Result{}, nil
-	}
-	// Check before the claim, inside candidateAddress: a claim followed by
-	// Send's error would be left with no outcome and recorded Interrupted,
-	// failing the candidate for the operator's fault.
-	addr, err := r.candidateAddress(ctx, run, run.agent.Status.Eval.EndpointPath)
-	if err != nil {
-		return ctrl.Result{}, err
 	}
 	cs := evalclient.Case{Address: addr, Path: run.agent.Status.Eval.EndpointPath, Message: next.Message,
 		Expect: next.Expect, TimeoutSeconds: run.suite.Spec.CaseTimeoutSeconds}
@@ -806,7 +863,7 @@ func (r *EvalReconciler) nextCase(ctx context.Context, run *evalRun) (ctrl.Resul
 
 	nonce := newClaimNonce()
 	claimCtx, cancel := context.WithTimeout(bg, evalWriteBound)
-	err = r.patchEval(claimCtx, run.agent, func(e *assaydv1alpha1.EvalStatus) *assaydv1alpha1.EvalStatus {
+	err := r.patchEval(claimCtx, run.agent, func(e *assaydv1alpha1.EvalStatus) *assaydv1alpha1.EvalStatus {
 		e.Cases = withCase(e.Cases, assaydv1alpha1.EvalCaseRecord{ID: next.ID,
 			Outcome: assaydv1alpha1.EvalCaseSending, Claim: nonce})
 		return e

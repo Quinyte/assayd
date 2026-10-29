@@ -12,7 +12,7 @@ description: "Every condition the assayd operator writes and every reason string
 > committed differs from a fresh generation.
 
 The operator never degrades silently: every guarantee it cannot provide surfaces as a condition on
-the Agent (NFR-8). This page is the whole vocabulary — 39 condition types, and the 89 reason
+the Agent (NFR-8). This page is the whole vocabulary — 39 condition types, and the 90 reason
 strings the operator can set on them — extracted from the code rather than written beside it.
 
 **How this page is produced.** The condition types, their owned and sticky classification, the
@@ -68,7 +68,7 @@ absence is indistinguishable from "never evaluated". Both are read from `ownedTy
 | `EnvSourceProtectionUnavailable` | no | yes | no | — |
 | `EnvSourceUnresolved` | 1 site(s) | yes | no | [`Unresolved`](#unresolved) |
 | `GatesBypassed` | 4 site(s) | yes | no | [`PinnedRollback`](#pinnedrollback) |
-| `GatesPassed` | 7 site(s) | yes | yes | [`ActiveRevisionNotEvaluated`](#activerevisionnotevaluated), [`EvalAwaitingCard`](#evalawaitingcard), [`EvalBindingUnsupported`](#evalbindingunsupported), [`EvalFailed`](#evalfailed), [`EvalHeldForAuth`](#evalheldforauth), [`EvalPairAlreadyFailed`](#evalpairalreadyfailed), [`EvalPassed`](#evalpassed), [`EvalPaused`](#evalpaused), [`EvalRecordNotKept`](#evalrecordnotkept), [`EvalRecordUnverifiable`](#evalrecordunverifiable), [`EvalRunning`](#evalrunning), [`EvalSuiteNotFound`](#evalsuitenotfound), [`EvalSuiteUnreadable`](#evalsuiteunreadable), [`EvalWaitingForAuth`](#evalwaitingforauth), [`GateDetectionUnwired`](#gatedetectionunwired), [`NoGatesDeclared`](#nogatesdeclared) |
+| `GatesPassed` | 7 site(s) | yes | yes | [`ActiveRevisionNotEvaluated`](#activerevisionnotevaluated), [`EvalAwaitingCard`](#evalawaitingcard), [`EvalBindingUnsupported`](#evalbindingunsupported), [`EvalCandidateUnaddressable`](#evalcandidateunaddressable), [`EvalFailed`](#evalfailed), [`EvalHeldForAuth`](#evalheldforauth), [`EvalPairAlreadyFailed`](#evalpairalreadyfailed), [`EvalPassed`](#evalpassed), [`EvalPaused`](#evalpaused), [`EvalRecordNotKept`](#evalrecordnotkept), [`EvalRecordUnverifiable`](#evalrecordunverifiable), [`EvalRunning`](#evalrunning), [`EvalSuiteNotFound`](#evalsuitenotfound), [`EvalSuiteUnreadable`](#evalsuiteunreadable), [`EvalWaitingForAuth`](#evalwaitingforauth), [`GateDetectionUnwired`](#gatedetectionunwired), [`NoGatesDeclared`](#nogatesdeclared) |
 | `GatesSkipped` | 2 site(s) | yes | no | [`EvalSuiteCRDAbsent`](#evalsuitecrdabsent), [`NoGatesDeclared`](#nogatesdeclared) |
 | `GatewayIncompatible` | no | no | no | — |
 | `GovernanceSkipped` | 22 site(s) | yes | yes | [`AuthLockPending`](#authlockpending), [`AuthOptedOut`](#authoptedout), [`AuthPolicyMissing`](#authpolicymissing), [`AuthPolicyNotAttached`](#authpolicynotattached), [`AuthVerifiedOnOneReplica`](#authverifiedononereplica), [`CompilerUpgradeUnsupported`](#compilerupgradeunsupported), [`ForeignTrafficPolicy`](#foreigntrafficpolicy), [`GatewayAuthPolicy`](#gatewayauthpolicy), [`GatewayDisabled`](#gatewaydisabled), [`Governed`](#governed) |
@@ -152,7 +152,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonActiveRevisionNotEvaluated` (`internal/controller/gate.go:48`)
+**Constant:** `ReasonActiveRevisionNotEvaluated` (`internal/controller/gate.go:49`)
 
 **Set at:**
 
@@ -858,7 +858,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/pin_test.go`
 
@@ -878,7 +878,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `internal/evalclient/endpoint_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/exemption_test.go`
 
@@ -890,15 +890,35 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Note:** Not withdrawn where an earlier revision is active. Where the Agent has never served, no route is published at all, so there is no traffic to withdraw.
 
+### `EvalCandidateUnaddressable`
+
+**Conditions:** `GatesPassed=False`
+
+**Constant:** `ReasonEvalCandidateUnaddressable` (`internal/controller/gate.go:44`)
+
+**Set at:**
+
+- `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
+
+**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`
+
+**State:** `status.eval.blocked` records that the eval controller cannot derive an address to send the candidate a case to, and `status.eval.blockedFor` matches the current candidate, suite and `Lock`. The eval controller writes it on a pass that would start a run or claim a case, and is not held by clause 5, when the candidate's Service is not found or cannot be read, or when `evalclient.Check` refuses the address derived from it: a ClusterIP that is not an IP address (`None`, or empty, as an `ExternalName` Service has), a `spec.runtime.port` not from 1 to 65535, or a path no request can be built for. A run-start pass that started the run writes nothing more, so a fault found after its run-start patch is written by the next pass. A fault that persists does not rewrite it, because the message names a read failure by its class and a refusal by the part refused, never by an error's text; but a pass that writes `blocked` for another cause replaces it, and the next pass that would claim a case writes it again — a pass that records `Interrupted` for an orphaned claim writes `blocked` empty, and a clause-5 hold that forms beside it takes the slot until it clears.
+
+**What the operator does:** Fetches, claims and sends nothing, records no outcome, and returns the error, so controller-runtime's per-item backoff (5 ms growing to 1000 s) governs the retry. The Agent reconciler sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. `Ready` stays `True` where an earlier revision serves, and goes `False/AwaitingGates` where none does. The message carries `blocked.message`, which says the Agent reconciler re-creates a missing Service, and replaces a headless one it recorded, on a pass that reaches its Service step.
+
+**Traffic:** **not withdrawn** — the route goes on serving; only status changes.
+
+**Note:** Neither controller watches Services. The operator's own repair of a Service writes Agent status, which brings the next eval pass at once; a repair that writes none, or a pass that reads the cache before the re-created Service reaches it, leaves the reason standing until the backoff's next retry, up to about 1000 s. Sends stay fail-closed meanwhile, because the address is derived before every claim. Not withdrawn where an earlier revision is active; where the Agent has never served, no route is published at all.
+
 ### `EvalFailed`
 
 **Conditions:** `GatesPassed=False`, `Ready=False`
 
-**Constant:** `ReasonEvalFailed` (`internal/controller/gate.go:45`)
+**Constant:** `ReasonEvalFailed` (`internal/controller/gate.go:46`)
 
 **Set at:**
 
-- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 - `internal/controller/agent_controller.go:1055` in `Reconcile()` — from `gate.readyReason`, one of the 4 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/e2e/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/exemption_test.go`, `test/envtest/gate_test.go`, `test/envtest/pin_test.go`
@@ -915,7 +935,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonEvalHeldForAuth` (`internal/controller/gate.go:47`)
+**Constant:** `ReasonEvalHeldForAuth` (`internal/controller/gate.go:48`)
 
 **Set at:**
 
@@ -935,11 +955,11 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=False`
 
-**Constant:** `ReasonEvalPairAlreadyFailed` (`internal/controller/gate.go:44`)
+**Constant:** `ReasonEvalPairAlreadyFailed` (`internal/controller/gate.go:45`)
 
 **Set at:**
 
-- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/exemption_test.go`
 
@@ -955,7 +975,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesPassed=True`
 
-**Constant:** `ReasonEvalPassed` (`internal/controller/gate.go:46`)
+**Constant:** `ReasonEvalPassed` (`internal/controller/gate.go:47`)
 
 **Set at:**
 
@@ -979,13 +999,13 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/exemption_test.go`
 
-**State:** A gated candidate with its suite and its card has no final verdict, and it is not available, so the eval controller sends it nothing. A run already under way keeps its recorded outcomes and resumes at the next case by id once the candidate is available again; nothing times a paused run out. It comes before `status.eval.blocked`, whichever reason that records: nothing writes `blocked` on a pass whose candidate is not available. Where `blocked` records a clause-5 hold on an exempt `Lock`, the run resumes only once the candidate is available and that hold, re-read then, has cleared.
+**State:** A gated candidate with its suite and its card has no final verdict, and it is not available, so the eval controller sends it nothing. A run already under way keeps its recorded outcomes and resumes at the next case by id once the candidate is available again; nothing times a paused run out. It comes before `status.eval.blocked`, whichever reason that records: nothing writes `blocked` on a pass whose candidate is not available. Where `blocked` records a clause-5 hold on an exempt `Lock`, the run resumes only once the candidate is available and that hold, re-read then, has cleared; where it records `EvalCandidateUnaddressable`, only once the candidate is available and its address, derived again then, can be derived.
 
-**What the operator does:** Sets `GatesPassed=False` with this reason in the not-ready branches, which leave phase, `Progressing` and `Ready` as they set them, and hold the candidate at zero traffic. The message names how many of the suite's cases have an outcome, k of N, or says no run has started, and when a clause-5 hold is recorded for the current `Lock`, that it must clear too, or, beside a matched run-start refusal, names the refusal and says no run starts until it is answered.
+**What the operator does:** Sets `GatesPassed=False` with this reason in the not-ready branches, which leave phase, `Progressing` and `Ready` as they set them, and hold the candidate at zero traffic. The message names how many of the suite's cases have an outcome, k of N, or says no run has started, and when a clause-5 hold is recorded for the current `Lock`, that it must clear too; beside a matched run-start refusal, names the refusal and says no run starts until it is answered; and beside a matched `EvalCandidateUnaddressable`, names the fault and says a run starts or resumes only once the address can be derived.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
@@ -999,7 +1019,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 - `internal/controller/agent_controller.go:1055` in `Reconcile()` — from `gate.readyReason`, one of the 4 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/gate_test.go`
@@ -1020,7 +1040,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 - `internal/controller/agent_controller.go:1055` in `Reconcile()` — from `gate.readyReason`, one of the 4 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/gate_test.go`
@@ -1043,17 +1063,17 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/exemption_test.go`, `test/envtest/gate_test.go`, `test/envtest/reconciler_test.go`
 
-**State:** A gated, available candidate with its suite and its card has no final verdict for the pair of its full digest and the suite read in this pass, no `Create` or `Lock` is recorded, and no `status.eval.blocked` applies. A `Running` record counts as no verdict. It does not establish that a case is being sent: the eval controller may be unable to derive the candidate's address (see the note).
+**State:** A gated, available candidate with its suite and its card has no final verdict for the pair of its full digest and the suite read in this pass, no `Create` or `Lock` is recorded, and no `status.eval.blocked` applies. A `Running` record counts as no verdict. It does not establish that a case is being sent (see the note).
 
 **What the operator does:** Sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. `Ready` stays `True` where an earlier revision serves, and goes `False/AwaitingGates` where none does. The message names the pair and the suite's number of cases and says progress is in `status.eval.cases[]`; it never says how many are done, so a case's record leaves the Agent reconciler's status write a no-op, and it does not say a case is being sent.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
-**Note:** The eval controller gives no condition of its own when it cannot read the candidate's Service or derive an address from it: it logs the Service and the fault, fetches, claims and sends nothing, and retries under controller-runtime's backoff, while this reason stands. A reason of its own needs a design 16 amendment (#113).
+**Note:** A candidate whose address the eval controller cannot derive reads `EvalCandidateUnaddressable` once the eval controller has written it to `status.eval.blocked`. Neither controller watches Services, so between the candidate's Service going and the next eval pass this reason can be shown while nothing can be sent.
 
 ### `EvalSuiteCRDAbsent`
 
@@ -1083,7 +1103,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/gate_test.go`, `test/envtest/pin_test.go`
 
@@ -1103,7 +1123,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/gate_test.go`
 
@@ -1123,7 +1143,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/gate.go:112` in `report()` — from `d.reason`, one of the 11 reasons that field can hold
+- `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/exemption_test.go`, `test/envtest/gate_test.go`, `test/envtest/service_test.go`
 
@@ -2015,7 +2035,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 ## Reasons no test in this repository names
 
-15 of the 89 reasons the operator can set are named by no test file
+15 of the 90 reasons the operator can set are named by no test file
 anywhere under `internal/`, `api/` or `test/`. Each is a string this operator will put on a user's
 object, and no test in this repository fails if it changes, stops being set, or is set for the
 wrong state. That is not a claim that the BEHAVIOUR is untested — a test can exercise a path and
@@ -2077,5 +2097,5 @@ their own section above. This page reports them; it does not settle them.
 
 **Every reason set is closed.** Each struct reason field the page reads had all of its writes folded, so a `field` row lists every reason that field can hold.
 
-**Coverage of the test reference scan.** 74 of 89 reasons are named by at least one test file. The scan matches the reason string or its `Reason*` identifier on a word boundary, across every `_test.go` under `internal/` and `api/` and every Go file under `test/`. `internal/refgen` is excluded: its tests name reasons to check that the GENERATOR resolves them, and counting those would let this page shrink its own unpinned list.
+**Coverage of the test reference scan.** 75 of 90 reasons are named by at least one test file. The scan matches the reason string or its `Reason*` identifier on a word boundary, across every `_test.go` under `internal/` and `api/` and every Go file under `test/`. `internal/refgen` is excluded: its tests name reasons to check that the GENERATOR resolves them, and counting those would let this page shrink its own unpinned list.
 

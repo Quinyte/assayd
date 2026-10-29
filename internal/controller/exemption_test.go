@@ -12,13 +12,11 @@ import (
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -173,6 +171,13 @@ func TestTheExemptStateTakesItsOwnPrecedence(t *testing.T) {
 	})
 	if !strings.Contains(d.message, "a hold"+holdClaimsTail) {
 		t.Errorf("a matched hold is not carried with its own message: %s", d.message)
+	}
+	d = step("blocked, matched, the address underivable", ReasonEvalCandidateUnaddressable, func(in *gateInput) {
+		in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalCandidateUnaddressable,
+			Message: "no address"}
+	})
+	if !strings.Contains(d.message, "that no case can be sent: no address") {
+		t.Errorf("a matched fourth reason is not carried with its own message: %s", d.message)
 	}
 	step("no verdict, the candidate available", ReasonEvalRunning, func(in *gateInput) { in.status.Eval.Blocked = nil })
 
@@ -693,11 +698,69 @@ func TestEvalPausedSaysAHoldMustClearToo(t *testing.T) {
 	}
 }
 
-// A stale hold is cleared on a run-start pass that clause 5 found clear,
-// even when that pass then stops before the card fetch because the
-// candidate's address cannot be used: startRun returns before it writes
-// blocked, and the hold would otherwise go on naming a cause that is gone.
-func TestAHoldFoundGoneIsClearedBeforeARunStartThatStopsShort(t *testing.T) {
+// EvalPaused beside a matched fourth reason, in both arms, says a run starts
+// or resumes only once the candidate's address can be derived, and names the
+// fault, as it names a matched hold or run-start refusal: otherwise "one
+// starts once it is available again" is a promise the standing reason denies
+// (design 16 A24.6).
+//
+// Mutation: drop the case from noVerdictRows's switch.
+func TestEvalPausedNamesAnUnaddressableCandidate(t *testing.T) {
+	for _, arm := range []string{"exempt", "outside the exempt state"} {
+		for _, running := range []bool{false, true} {
+			in := exemptInput(time.Now())
+			if arm != "exempt" {
+				in.status.Auth = nil
+				in.status.Eval.BlockedFor.LockDeadline = nil
+			}
+			if running {
+				in.status.Eval.RevisionDigest, in.status.Eval.SuiteDigest = gDigest, gSuite
+				in.status.Eval.Verdict = assaydv1alpha1.EvalVerdictRunning
+			}
+			in.available = false
+			in.status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalCandidateUnaddressable,
+				Message: "the candidate's Service was not found"}
+			d := decideGate(in)
+			if d.reason != ReasonEvalPaused || !strings.Contains(d.message, "only once it is available again "+
+				"and its address can be derived") || !strings.Contains(d.message, "the candidate's Service was not found") {
+				t.Errorf("%s, running %v: EvalPaused beside the fourth reason: %s %s", arm, running, d.reason, d.message)
+			}
+		}
+	}
+}
+
+// Clause 5's hold outranks the fourth reason (design 16 A24.17): a pass that
+// clause 5 holds neither starts a run nor claims a case, so it derives no
+// address, and a candidate whose Service is gone reads the hold, not
+// EvalCandidateUnaddressable, until the hold clears.
+//
+// Mutation: derive the address on a held pass and write its fault in place
+// of the hold.
+func TestAHoldOutranksAnUnaddressableCandidate(t *testing.T) {
+	reads := &clause5Reads{listenerSets: true}
+	f := clause5Fixture(t, reads, "")
+	breakCandidateService(t, f, "missing")
+	if _, err := f.pass(t); err != nil {
+		t.Fatalf("a held pass returned %v; it derives no address", err)
+	}
+	if e := f.agent(t).Status.Eval; e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalWaitingForAuth {
+		t.Fatalf("blocked is %+v, want clause 5's hold", e)
+	}
+	reads.listenerSets = false
+	if _, err := f.pass(t); err == nil {
+		t.Error("once the hold cleared, a pass to a missing Service returned no error")
+	}
+	if e := f.agent(t).Status.Eval; e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+		t.Errorf("once the hold cleared, blocked is %+v, want %s", e.Blocked, ReasonEvalCandidateUnaddressable)
+	}
+}
+
+// A stale hold is replaced on a run-start pass that clause 5 found clear and
+// that then stops before the card fetch because the candidate's address
+// cannot be derived: that pass's one blocked write is the fourth reason, with
+// blockedFor for the pair and the Lock, so the hold does not go on naming a
+// cause that is gone (design 16 A24.4).
+func TestAHoldFoundGoneIsReplacedWhenARunStartStopsShort(t *testing.T) {
 	reads := &clause5Reads{listenerSets: true}
 	f := clause5Fixture(t, reads, "")
 	if _, err := f.pass(t); err != nil {
@@ -707,20 +770,18 @@ func TestAHoldFoundGoneIsClearedBeforeARunStartThatStopsShort(t *testing.T) {
 		t.Fatalf("setup: no hold recorded: %+v", e)
 	}
 	reads.listenerSets = false
-	var svc corev1.Service
-	key := types.NamespacedName{Namespace: RunNamespaceName("team"), Name: WorkloadName("gated", "cand000001")}
-	if err := f.c.Get(context.Background(), key, &svc); err != nil {
-		t.Fatal(err)
-	}
-	svc.Spec.ClusterIP = "None"
-	if err := f.c.Update(context.Background(), &svc); err != nil {
-		t.Fatal(err)
-	}
+	breakCandidateService(t, f, "headless")
 	if _, err := f.pass(t); err == nil {
 		t.Fatal("setup: a pass to an unusable address returned no error")
 	}
-	if e := f.agent(t).Status.Eval; e.Blocked != nil {
-		t.Errorf("a hold clause 5 found gone outlived a run start that stopped short: %+v", e.Blocked)
+	a := f.agent(t)
+	e := a.Status.Eval
+	if e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+		t.Errorf("a hold clause 5 found gone was not replaced by the fourth reason: %+v", e.Blocked)
+	}
+	if e.BlockedFor == nil || e.BlockedFor.LockDeadline == nil ||
+		!e.BlockedFor.LockDeadline.Equal(a.Status.Auth.Transaction.Deadline) {
+		t.Errorf("blockedFor %+v does not name the Lock", e.BlockedFor)
 	}
 	if f.stub.total() != 0 || f.stub.cardGets != 0 {
 		t.Errorf("a pass to an unusable address sent or fetched something")
@@ -729,22 +790,24 @@ func TestAHoldFoundGoneIsClearedBeforeARunStartThatStopsShort(t *testing.T) {
 
 // A pass makes at most one blocked write (§1.1, "computes it once per
 // pass"): a hold whose cause is gone, on a run-start pass whose card fetch is
-// refused, is replaced by the refusal in one write, and a run-start pass
-// that stops at an unusable address clears it in one write.
+// refused, is replaced by the refusal in one write; a run-start pass that
+// stops at an unusable address replaces it with the fourth reason in one
+// write; and so does a mid-run pass that would claim a case, with a
+// non-empty blocked stored first, without which a write of empty before the
+// fourth reason would store no change (design 16 A24.4).
+//
+// Mutations: write blocked empty before deriving the address mid-run (two
+// writes, or the fourth reason never written); skip the fourth reason's
+// write (the hold or the stale refusal stands).
 func TestARunStartPassWritesBlockedOnce(t *testing.T) {
-	for name, stopShort := range map[string]func(*testing.T, *evalFixture){
-		"a refused run-start fetch": func(_ *testing.T, f *evalFixture) { f.stub.refuse = true },
-		"an unusable address": func(t *testing.T, f *evalFixture) {
-			var svc corev1.Service
-			key := types.NamespacedName{Namespace: RunNamespaceName("team"), Name: WorkloadName("gated", "cand000001")}
-			if err := f.c.Get(context.Background(), key, &svc); err != nil {
-				t.Fatal(err)
-			}
-			svc.Spec.ClusterIP = "None"
-			if err := f.c.Update(context.Background(), &svc); err != nil {
-				t.Fatal(err)
-			}
-		},
+	for name, tc := range map[string]struct {
+		stopShort func(*testing.T, *evalFixture)
+		want      string
+	}{
+		"a refused run-start fetch": {func(_ *testing.T, f *evalFixture) { f.stub.refuse = true },
+			ReasonEvalAwaitingCard},
+		"an unusable address": {func(t *testing.T, f *evalFixture) { breakCandidateService(t, f, "headless") },
+			ReasonEvalCandidateUnaddressable},
 	} {
 		t.Run(name, func(t *testing.T) {
 			reads := &clause5Reads{listenerSets: true}
@@ -756,7 +819,7 @@ func TestARunStartPassWritesBlockedOnce(t *testing.T) {
 				t.Fatalf("setup: no hold recorded: %+v", e)
 			}
 			reads.listenerSets = false
-			stopShort(t, f)
+			tc.stopShort(t, f)
 			before, err := strconv.Atoi(f.agent(t).ResourceVersion)
 			if err != nil {
 				t.Fatal(err)
@@ -766,11 +829,38 @@ func TestARunStartPassWritesBlockedOnce(t *testing.T) {
 			if after-before != 1 {
 				t.Errorf("the pass moved the resourceVersion %d → %d; it makes one blocked write", before, after)
 			}
-			if e := f.agent(t).Status.Eval; e.Blocked != nil && e.Blocked.Reason == ReasonEvalWaitingForAuth {
-				t.Errorf("the hold whose cause is gone still stands: %+v", e.Blocked)
+			if e := f.agent(t).Status.Eval; e.Blocked == nil || e.Blocked.Reason != tc.want {
+				t.Errorf("blocked is %+v, want %s", e.Blocked, tc.want)
 			}
 		})
 	}
+	t.Run("a mid-run pass that would claim a case", func(t *testing.T) {
+		f := newEvalFixture(t, nil, echoCase("a", "one"), echoCase("b", "two"))
+		if _, err := f.pass(t); err != nil {
+			t.Fatal(err)
+		}
+		a := f.agent(t)
+		if a.Status.Eval == nil || a.Status.Eval.Verdict != assaydv1alpha1.EvalVerdictRunning {
+			t.Fatalf("setup: no run in progress: %+v", a.Status.Eval)
+		}
+		a.Status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalAwaitingCard, Message: "stale"}
+		if err := f.c.Status().Update(context.Background(), a); err != nil {
+			t.Fatal(err)
+		}
+		breakCandidateService(t, f, "headless")
+		before, err := strconv.Atoi(f.agent(t).ResourceVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = f.pass(t)
+		after, _ := strconv.Atoi(f.agent(t).ResourceVersion)
+		if after-before != 1 {
+			t.Errorf("the pass moved the resourceVersion %d → %d; it makes one blocked write", before, after)
+		}
+		if e := f.agent(t).Status.Eval; e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+			t.Errorf("blocked is %+v, want %s", e.Blocked, ReasonEvalCandidateUnaddressable)
+		}
+	})
 }
 
 // EvalPaused beside a matched run-start refusal, in both arms, does not

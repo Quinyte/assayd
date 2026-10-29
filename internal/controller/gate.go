@@ -41,6 +41,7 @@ const (
 	ReasonEvalAwaitingCard           = "EvalAwaitingCard"
 	ReasonEvalBindingUnsupported     = "EvalBindingUnsupported"
 	ReasonEvalWaitingForAuth         = "EvalWaitingForAuth"
+	ReasonEvalCandidateUnaddressable = "EvalCandidateUnaddressable"
 	ReasonEvalPairAlreadyFailed      = "EvalPairAlreadyFailed"
 	ReasonEvalFailed                 = "EvalFailed"
 	ReasonEvalPassed                 = "EvalPassed"
@@ -188,6 +189,9 @@ type gateInput struct {
 //  8. status.eval.blocked, applied only while status.eval.blockedFor matches
 //     the current pair and the current Lock's deadline (A12): a refusal
 //     written while an exempt Lock stood stops applying the moment it ends.
+//     Its reason is one of four: EvalCandidateUnaddressable, a run-start
+//     refusal (EvalBindingUnsupported or EvalAwaitingCard), or clause 5's
+//     hold (EvalWaitingForAuth).
 //
 // In the exempt state — a J2 or K2 Lock that meets clauses 1 to 4 — §1.1's
 // "What the gate branch derives in the exempt state":
@@ -202,7 +206,8 @@ type gateInput struct {
 //  7. blockedFor does not match: EvalWaitingForAuth, saying the eval
 //     controller has not yet evaluated clause 5 for this Lock.
 //  8. blocked set: its reason, with blocked.message — clause 5's hold
-//     (EvalWaitingForAuth), or a run-start refusal.
+//     (EvalWaitingForAuth), EvalCandidateUnaddressable, or a run-start
+//     refusal.
 //
 // So both arms answer a failed pair at 4, and differ only in the exempt
 // state's not-yet-evaluated row and the other's transaction row.
@@ -310,6 +315,8 @@ func decideGate(in gateInput) gateDecision {
 	if e != nil && e.Blocked != nil && bfMatched {
 		var d gateDecision
 		switch e.Blocked.Reason {
+		case ReasonEvalCandidateUnaddressable:
+			d = gateDecision{reason: ReasonEvalCandidateUnaddressable, readyReason: reasonAwaitingGates}
 		case ReasonEvalBindingUnsupported:
 			d = gateDecision{reason: ReasonEvalBindingUnsupported, readyReason: reasonAwaitingGates}
 		case ReasonEvalAwaitingCard:
@@ -345,6 +352,12 @@ func noVerdictRows(in gateInput, pair string) gateDecision {
 			when = "once it is available again and the clause-5 hold " +
 				"the eval controller recorded for this Lock before it went away has cleared, which it " +
 				"re-reads then"
+		case matched && e.Blocked.Reason == ReasonEvalCandidateUnaddressable:
+			// The address is derived again on the first pass after the
+			// candidate is available, before anything is claimed.
+			when = fmt.Sprintf("only once it is available again and its address can be derived, which the "+
+				"eval controller recorded it could not, and derives again then (%s: %s)",
+				e.Blocked.Reason, e.Blocked.Message)
 		case matched && (e.Blocked.Reason == ReasonEvalBindingUnsupported ||
 			e.Blocked.Reason == ReasonEvalAwaitingCard):
 			when = fmt.Sprintf("only once it is available again and the run-start refusal the eval "+
