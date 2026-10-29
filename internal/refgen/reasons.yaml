@@ -522,7 +522,8 @@ reasons:
       `status.eval.blocked` records that the eval controller's run-start
       card fetch failed or did not match the recorded digest, and
       `status.eval.blockedFor` matches the current candidate, suite and
-      `Lock`.
+      `Lock`; in either case with no `Failed` verdict for the pair and no
+      entry in `failed[]`, which are answered first.
     operator: >-
       Sets `GatesPassed=False` with this reason in the gate branch, holds the
       candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
