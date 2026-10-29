@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -976,5 +977,136 @@ func TestAFailedFetchNamesItsOwnClass(t *testing.T) {
 	if e == nil || e.Blocked == nil || !strings.Contains(e.Blocked.Message, "refused or failed") ||
 		strings.Contains(e.Blocked.Message, "not JSON") {
 		t.Errorf("a refused run-start fetch: blocked %+v; want it to name the refused connection", e)
+	}
+}
+
+// The message is A24.7's, whole: the fault, then what is not done and why,
+// then the hedged repair.
+func TestTheUnaddressableMessageIsTheDecidedOne(t *testing.T) {
+	got := unaddressable("FAULT").Message
+	want := "the eval controller cannot derive an address to send a case to: FAULT. Nothing is fetched, " +
+		"claimed or sent, and no outcome is recorded, because the fault is not the candidate's. The Agent " +
+		"reconciler re-creates a missing Service, and replaces a headless one it recorded, on a pass that " +
+		"reaches its Service step; its own conditions say when it does not"
+	if got != want {
+		t.Errorf("the message is\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A24.4's table, "run start, address derived": a run-start pass whose Service
+// read fails in nextCase, after the run-start patch, writes nothing more and
+// returns the error; the next pass, a mid-run one, writes the fourth reason.
+//
+// Mutation: make nextCase write blocked on a run-start pass too (two writes).
+func TestARunStartPassWritesNothingAfterItsPatch(t *testing.T) {
+	svcGets := 0
+	funcs := &interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+		obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*corev1.Service); ok {
+			svcGets++
+			if svcGets >= 2 {
+				return apierrors.NewServiceUnavailable("injected")
+			}
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}}
+	f := newEvalFixture(t, funcs, echoCase("a", "one"))
+	before, _ := strconv.Atoi(f.agent(t).ResourceVersion)
+	if _, err := f.pass(t); err == nil {
+		t.Error("the run-start pass returned no error")
+	}
+	after, _ := strconv.Atoi(f.agent(t).ResourceVersion)
+	e := f.agent(t).Status.Eval
+	if after-before != 1 || e == nil || e.Verdict != assaydv1alpha1.EvalVerdictRunning || e.Blocked != nil {
+		t.Errorf("run-start pass: resourceVersion %d → %d, eval %+v; want the run-start patch alone",
+			before, after, e)
+	}
+	if f.stub.total() != 0 {
+		t.Errorf("the run-start pass sent %d cases", f.stub.total())
+	}
+	if _, err := f.pass(t); err == nil {
+		t.Error("the next pass returned no error")
+	}
+	if e := f.agent(t).Status.Eval; e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+		t.Errorf("the next pass did not write the fourth reason: %+v", e.Blocked)
+	}
+}
+
+// A24.4's table, "mid-run, records Interrupted": beside an orphaned claim the
+// pass derives no address, records Interrupted, returns no error, and clears
+// a stored fourth reason once; the next pass, which has a case to claim,
+// writes it again.
+//
+// Mutations: derive the address on the orphan's pass; skip the blocked write
+// beside an orphan.
+func TestAnOrphanedClaimIsRecordedBesideAnUnaddressableCandidate(t *testing.T) {
+	svcGets := 0
+	funcs := &interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+		obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*corev1.Service); ok {
+			svcGets++
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}}
+	f := newEvalFixture(t, funcs, echoCase("a", "one"), echoCase("b", "two"), echoCase("c", "three"))
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	a := f.agent(t)
+	a.Status.Eval.Cases = append(a.Status.Eval.Cases, assaydv1alpha1.EvalCaseRecord{ID: "b",
+		Outcome: assaydv1alpha1.EvalCaseSending, Claim: "orphan"})
+	a.Status.Eval.Blocked = &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalCandidateUnaddressable, Message: "stale"}
+	if err := f.c.Status().Update(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	breakCandidateService(t, f, "headless")
+	svcGets = 0
+	_, err := f.pass(t)
+	e := f.agent(t).Status.Eval
+	if c := caseRecord(e.Cases, "b"); err != nil || c == nil || c.Reason != string(evalclient.ReasonInterrupted) {
+		t.Errorf("the orphan's pass: error %v, case b %+v; want Interrupted recorded and no error", err, c)
+	}
+	if e.Blocked != nil {
+		t.Errorf("the orphan's pass left blocked %+v; want it cleared", e.Blocked)
+	}
+	if svcGets != 0 {
+		t.Errorf("the orphan's pass read the Service %d times; it derives no address", svcGets)
+	}
+	if _, err := f.pass(t); err == nil {
+		t.Error("the next pass returned no error")
+	}
+	if e := f.agent(t).Status.Eval; e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+		t.Errorf("the next pass did not write the fourth reason again: %+v", e.Blocked)
+	}
+}
+
+// A24.20: a pass whose fourth-reason write is lost to Conflict still returns
+// the address error, at run start and mid-run.
+//
+// Mutation: return no error when the mid-run write is lost to Conflict.
+func TestALostWriteOfTheFourthReasonStillReturnsTheError(t *testing.T) {
+	for _, phase := range []string{"run start", "mid-run"} {
+		t.Run(phase, func(t *testing.T) {
+			conflict := false
+			funcs := &interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string,
+				obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if conflict {
+					return apierrors.NewConflict(schema.GroupResource{Group: "assayd.dev", Resource: "agents"},
+						obj.GetName(), errors.New("injected"))
+				}
+				return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			}}
+			f := newEvalFixture(t, funcs, echoCase("a", "one"), echoCase("b", "two"))
+			if phase == "mid-run" {
+				if _, err := f.pass(t); err != nil {
+					t.Fatal(err)
+				}
+			}
+			breakCandidateService(t, f, "headless")
+			conflict = true
+			if _, err := f.pass(t); err == nil || apierrors.IsConflict(err) {
+				t.Errorf("a pass whose write was lost returned %v; want the address error", err)
+			}
+		})
 	}
 }
