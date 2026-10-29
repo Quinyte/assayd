@@ -585,10 +585,13 @@ reasons:
       `spec.runtime.port` not from 1 to 65535, or a path no request can be
       built for. A run-start pass that started the run writes nothing more,
       so a fault found after its run-start patch is written by the next
-      pass. It is written once when the fault begins and cleared once when it
-      ends; the message names a read failure by its class and a refusal by
-      the part refused, never by an error's text, so a fault that persists
-      does not rewrite it.
+      pass. A fault that persists does not rewrite it, because the message
+      names a read failure by its class and a refusal by the part refused,
+      never by an error's text; but a pass that writes `blocked` for another
+      cause replaces it, and the next pass that would claim a case writes it
+      again — a pass that records `Interrupted` for an orphaned claim writes
+      `blocked` empty, and a clause-5 hold that forms beside it takes the
+      slot until it clears.
     operator: >-
       Fetches, claims and sends nothing, records no outcome, and returns the
       error, so controller-runtime's per-item backoff (5 ms growing to

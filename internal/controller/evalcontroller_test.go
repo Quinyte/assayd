@@ -370,9 +370,13 @@ var candidateServiceKey = types.NamespacedName{Namespace: RunNamespaceName("team
 	Name: WorkloadName("gated", "cand000001")}
 
 // breakCandidateService makes the candidate's address underivable: "missing"
-// deletes its Service, "headless" stores it with ClusterIP None, and "port"
-// gives the Agent a port no address can carry. The fake client validates
-// none of them, as the API server would the last.
+// deletes its Service, "headless" stores it with ClusterIP None, "zoned"
+// stores it with a zoned IPv6 ClusterIP whose escaped zone no request can
+// carry, and "port" gives the Agent a port no address can carry. The fake
+// client validates none of these writes. A real API server refuses the
+// in-place ClusterIP changes, so there the Service would have to be
+// re-created to reach those states; it would accept the port, since
+// spec.runtime.port declares no bounds.
 func breakCandidateService(t *testing.T, f *evalFixture, how string) {
 	t.Helper()
 	ctx := context.Background()
@@ -385,8 +389,11 @@ func breakCandidateService(t *testing.T, f *evalFixture, how string) {
 		if err := f.c.Delete(ctx, &svc); err != nil {
 			t.Fatal(err)
 		}
-	case "headless":
+	case "headless", "zoned":
 		svc.Spec.ClusterIP = corev1.ClusterIPNone
+		if how == "zoned" {
+			svc.Spec.ClusterIP = "fe80::1%a/b"
+		}
 		if err := f.c.Update(ctx, &svc); err != nil {
 			t.Fatal(err)
 		}
@@ -421,7 +428,18 @@ func TestAnUnaddressableCandidateIsNamed(t *testing.T) {
 				` could not be read (a server error)`,
 			"port": `the candidate's Service ` + candidateServiceKey.String() +
 				`: spec.runtime.port 70000 is not from 1 to 65535`,
+			// The request part: the path named is the card path at run
+			// start and the recorded endpoint mid-run.
+			"zoned": `the candidate's Service ` + candidateServiceKey.String() +
+				`: no request can be built for the path `,
 		} {
+			if how == "zoned" {
+				if phase == "run start" {
+					fault += `"/.well-known/agent-card.json"`
+				} else {
+					fault += `"/a2a/message:send"`
+				}
+			}
 			t.Run(phase+", "+how, func(t *testing.T) {
 				var failRead bool
 				funcs := &interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
@@ -1108,5 +1126,43 @@ func TestALostWriteOfTheFourthReasonStillReturnsTheError(t *testing.T) {
 				t.Errorf("a pass whose write was lost returned %v; want the address error", err)
 			}
 		})
+	}
+}
+
+// A24.4's table, "mid-run, a case to claim": once the address can be
+// derived again, the mid-run pass writes blocked empty, clearing a stored
+// EvalCandidateUnaddressable, before it claims the next case.
+//
+// Mutation: skip the mid-run write when the address derives (the reviewer's
+// M12).
+func TestARepairedAddressClearsTheFourthReasonBeforeTheClaim(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"), echoCase("b", "two"))
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	breakCandidateService(t, f, "headless")
+	if _, err := f.pass(t); err == nil {
+		t.Fatal("setup: a pass to a headless Service returned no error")
+	}
+	if e := f.agent(t).Status.Eval; e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
+		t.Fatalf("setup: the fourth reason was not written: %+v", e.Blocked)
+	}
+	var svc corev1.Service
+	if err := f.c.Get(context.Background(), candidateServiceKey, &svc); err != nil {
+		t.Fatal(err)
+	}
+	svc.Spec.ClusterIP = "10.43.0.9"
+	if err := f.c.Update(context.Background(), &svc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	e := f.agent(t).Status.Eval
+	if e.Blocked != nil {
+		t.Errorf("the fourth reason outlived the repair: %+v", e.Blocked)
+	}
+	if c := caseRecord(e.Cases, "b"); c == nil || !outcomeRecorded(c.Outcome) || f.stub.count("two") != 1 {
+		t.Errorf("the repaired pass did not claim and send case b: %+v, %d sends", c, f.stub.count("two"))
 	}
 }
