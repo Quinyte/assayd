@@ -1158,15 +1158,22 @@ reasons:
       `Degraded=True` with this reason and phase `Degraded`, leaves `Ready` as
       it was, and returns. A refused pin never names the revision serving, so no `GatesBypassed` is derived for it. Nothing is rolled
       back and the current release, its recorded candidate included, is left
-      as it was. The refusal does not stop the recorded candidate's run: when
-      one write reverts the spec to a retained revision and pins it, that
-      recorded candidate is still the revision an earlier spec minted, and the
-      eval controller can run it to a verdict while the refusal stands, though
-      nothing promotes until the pin is cleared, which supersedes it. A pin
-      refused on `failed[]` after the rollout had recorded it as the candidate
-      while it came up is still the recorded candidate, and the eval
-      controller holds it: nothing is evaluated, and that pair has failed
-      already. Like every refusal on this path, the early return also
+      as it was. While the pin is set, the eval controller holds a recorded
+      candidate that the current spec does not mint — when one write reverts
+      the spec to a retained revision and pins it, for example, or when the
+      pin names a candidate the spec has left and that is refused on
+      `failed[]` — and sends it no case; where the spec mints the recorded
+      candidate, nothing is held and its run goes on. On a gated Agent with a
+      candidate pending, the message then carries one more sentence, which
+      names the recorded candidate and says that, as of that pass, it is
+      held until a change to the spec or its env sources ends the hold, and
+      that clearing the pin supersedes it unless the next pass stops first on
+      a missing env source, an unavailable run namespace or a revision-name
+      collision. The sentence is derived on each Agent pass, and every eval
+      status write brings one, so it goes stale only while the eval
+      controller writes nothing: after a hold change beside a final verdict
+      or a failed pair, it stands until the next Agent event or this reason's
+      requeue. Like every refusal on this path, the early return also
       skips the serving revision's route, `-auth` and drift convergence for as
       long as it stands. The message names the digest, why it is not eligible
       — the current candidate, or the failed pair and the suite digest — and
@@ -1261,12 +1268,24 @@ reasons:
     state: >-
       `spec.release` pins a revision digest that no retained revision carries —
       collected, or never minted. A digest is a full SHA-256, so a typo reads the
-      same as a collected revision.
+      same as a collected revision. Or it pins a retained revision whose
+      immutable copies cannot be served: a copy is missing or unreadable, or
+      was made from a source other than the one the current spec has at its
+      position (`verifyRetainedMaterial`).
     operator: >-
       Sets `Degraded=True` and phase `Degraded` and returns without retrying.
       DELIBERATELY NOT `Ready=False`: the current release is untouched, and
       failing the canonical condition would page the on-call for a typo while the
-      agent serves normally.
+      agent serves normally. On a gated Agent with a candidate pending, while
+      the pin is set and the current spec does not mint the recorded
+      candidate, the eval controller holds that candidate, and the message
+      carries one more sentence, which names it and says that, as of that
+      pass, it is held until a change to the spec or its env sources ends the
+      hold, and that clearing the pin supersedes it unless the next pass stops
+      first on a missing env source, an unavailable run namespace or a
+      revision-name collision. The sentence is derived on each Agent pass, and
+      every eval status write brings one, so it goes stale only while the
+      eval controller writes nothing, until the next Agent event.
     traffic: not-withdrawn
 
   - reason: RevisionHashCollision
