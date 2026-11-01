@@ -28,23 +28,22 @@ import (
 // `test/responder` and `test/mcpserver` carried unit tests that neither ran
 // (#129): `hack/e2e.sh` built the fixtures and ran none of their tests.
 //
-// This is a change detector for package lists, and claims no more. It walks
-// the tree for `*_test.go` files and reads the literal `./x` and `./x/...`
-// arguments of the `go test` lines in the recipes of `make test`'s
-// prerequisites, in the recipes of the targets ci.yml invokes with a `make`
-// that starts a line, and in the hack/ scripts those recipes name; a `#` that
-// starts a word ends a line. It also asserts that no directory's tests are all
-// excluded from a linux/amd64 build — CI's runners — by `//go:build`,
-// `// +build` or a filename suffix, and that `make race` names what
-// `make unit` names. It refuses a `go test` line carrying make's `-` prefix.
+// This is a change detector over package lists, built on simple text rules;
+// it is not a shell or Make parser. It reads the literal `./x` and `./x/...`
+// arguments of `go test` lines in the recipes `make test` and ci.yml's `make`
+// lines reach, and in the hack/ scripts those recipes name. It also checks that
+// `make race` names what `make unit` names, and that no directory's tests are
+// all excluded from a linux/amd64 build with cgo on, as CI builds them. Its
+// rules: a `#` after the line's start, whitespace or a shell metacharacter
+// ends a line; a recipe line that runs `go test` or a script with make's `-`
+// prefix is refused; a target may have one recipe.
 //
-// It does not read test flags such as `-run`, shell logic such as `||`, `cd`,
-// pipes or variables, environment variables such as `E2E_RUN`, a recursive
-// `$(MAKE)`, a script a script calls, `.IGNORE` or `make -i`/`-k`, or CI
-// conditions such as a step's or a job's `if:` and `continue-on-error`. Those
-// are reviewed by hand. Nor does it run a tagged file: `test/conformance`'s
-// `cluster` files run only in `make conformance-cluster`, which CI does not
-// run; that package passes here because its untagged files are named.
+// Shell and Make syntax beyond those rules — quoting, metacharacters, `cd`,
+// `||`, pipes, variables, recursive make, `.IGNORE`, `-i`/`-k` — is not
+// modelled, and neither are test flags, environment variables or CI
+// conditions. Changes to the Makefile, ci.yml and hack/ scripts are reviewed
+// by hand. `test/conformance`'s `cluster` files run only in
+// `make conformance-cluster`, which CI does not run.
 func TestEveryTestedPackageRunsInMakeTestAndCI(t *testing.T) {
 	problems, err := inventory(os.DirFS(repoRoot), exemptions{
 		notInMakeTest: map[string]string{
@@ -124,9 +123,33 @@ func TestTheWhatRunsCheckReadsWhatItSays(t *testing.T) {
 		name:  "a trailing comment that names a script calls nothing",
 		files: map[string]string{"Makefile": "test: unit\nunit:\n\tgo test ./internal/... # see ./hack/ghost.sh\nrace:\n\tgo test ./internal/...\n"},
 	}, {
+		name:  "a comment after a shell metacharacter names nothing",
+		files: map[string]string{"test/x/x_test.go": untagged, "Makefile": "test: unit\nunit:\n\tgo test ./internal/... -count=1;# ./test/x/...\nrace:\n\tgo test ./internal/... ./test/x/...\n"},
+		want:  []string{"test/x holds tests that no `go test` line `make test`", "test/x holds tests that no `go test` line a CI"},
+	}, {
 		name:    "a go test line with make's ignore-errors prefix is refused",
 		files:   map[string]string{"Makefile": "test: unit\nunit:\n\t-go test ./internal/...\nrace:\n\tgo test ./internal/...\n"},
 		wantErr: "make's `-` prefix",
+	}, {
+		name:    "the ignore-errors prefix after @ is refused",
+		files:   map[string]string{"Makefile": "test: unit\nunit:\n\t@-go test ./internal/...\nrace:\n\tgo test ./internal/...\n"},
+		wantErr: "make's `-` prefix",
+	}, {
+		name:    "the ignore-errors prefix after @ and a space is refused",
+		files:   map[string]string{"Makefile": "test: unit\nunit:\n\t@ -go test ./internal/...\nrace:\n\tgo test ./internal/...\n"},
+		wantErr: "make's `-` prefix",
+	}, {
+		name:    "a script call with the ignore-errors prefix is refused",
+		files:   map[string]string{"Makefile": unitAndRace + "x:\n\t-./hack/x.sh\n", ".github/workflows/ci.yml": ciUnit + "      - run: make x\n", "hack/x.sh": "go test ./test/x/...\n"},
+		wantErr: "make's `-` prefix",
+	}, {
+		name:  "a script line is not a recipe line",
+		files: map[string]string{"test/x/x_test.go": untagged, "Makefile": unitAndRace + "x:\n\t./hack/x.sh\n", ".github/workflows/ci.yml": ciUnit + "      - run: make x\n", "hack/x.sh": "  - go test ./test/x/...\n"},
+		want:  []string{"test/x holds tests that no `go test` line `make test` reaches"},
+	}, {
+		name:    "a target with two recipes is refused",
+		files:   map[string]string{"Makefile": unitAndRace + "unit:\n\tgo test ./test/x/...\n"},
+		wantErr: "more than one recipe",
 	}, {
 		name:  "a recursive pattern does not name a sibling sharing its prefix",
 		files: map[string]string{"internal/ab/ab_test.go": untagged, "Makefile": "test: unit\nunit:\n\tgo test ./internal/a/...\nrace:\n\tgo test ./internal/a/...\n"},
@@ -156,6 +179,9 @@ func TestTheWhatRunsCheckReadsWhatItSays(t *testing.T) {
 	}, {
 		name:  "an indented make in a run block is read",
 		files: map[string]string{".github/workflows/ci.yml": "jobs:\n  j:\n    steps:\n      - run: |\n          if true; then\n            make unit\n          fi\n"},
+	}, {
+		name:  "a comment on a CI make line names no target",
+		files: map[string]string{".github/workflows/ci.yml": "jobs:\n  j:\n    steps:\n      - run: |\n          make unit # ghost\n"},
 	}, {
 		name:    "a workflow that invokes no make target is refused",
 		files:   map[string]string{".github/workflows/ci.yml": "jobs:\n  j:\n    steps:\n      - run: echo make unit\n"},
@@ -201,6 +227,17 @@ func TestTheWhatRunsCheckReadsWhatItSays(t *testing.T) {
 		name:  "a directory whose tests are all for another GOOS is reported",
 		files: map[string]string{"internal/b/b_windows_test.go": untagged},
 		want:  []string{"internal/b holds only tests a linux/amd64 build excludes"},
+	}, {
+		name:  "two excluded files leave the directory excluded",
+		files: map[string]string{"internal/b/a_test.go": tagged, "internal/b/b_windows_test.go": untagged},
+		want:  []string{"internal/b holds only tests a linux/amd64 build excludes"},
+	}, {
+		name:    "a malformed constraint is refused",
+		files:   map[string]string{"internal/b/b_test.go": "//go:build (\n\npackage x\n"},
+		wantErr: "match internal/b/b_test.go against linux/amd64",
+	}, {
+		name:  "a cgo-constrained test builds on CI's runners",
+		files: map[string]string{"internal/b/b_test.go": "//go:build cgo\n\npackage x\n"},
 	}, {
 		name:  "a linux test file builds on CI's runners",
 		files: map[string]string{"internal/b/b_linux_amd64_test.go": untagged},
@@ -289,7 +326,10 @@ func inventory(fsys fs.FS, ex exemptions, minDirs int) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read Makefile: %w", err)
 	}
-	recipes := parseRecipes(string(mk))
+	recipes, err := parseRecipes(string(mk))
+	if err != nil {
+		return nil, err
+	}
 	prereqs, err := makeTestPrerequisites(string(mk))
 	if err != nil {
 		return nil, err
@@ -430,6 +470,7 @@ func testDirs(fsys fs.FS) (map[string]bool, error) {
 func ciBuild(fsys fs.FS) *build.Context {
 	ctx := build.Default
 	ctx.GOOS, ctx.GOARCH, ctx.BuildTags = "linux", "amd64", nil
+	ctx.CgoEnabled = true // CI's ubuntu runners build with cgo on
 	ctx.JoinPath = path.Join
 	ctx.OpenFile = func(name string) (io.ReadCloser, error) { return fsys.Open(name) }
 	return &ctx
@@ -438,8 +479,8 @@ func ciBuild(fsys fs.FS) *build.Context {
 var (
 	makeTargetLine = regexp.MustCompile(`^([a-z][a-z0-9-]*):`)
 	goTestLine     = regexp.MustCompile(`\bgo test\b(.*)`)
-	shellComment   = regexp.MustCompile(`(^|\s)#.*$`)
-	makeIgnoreErr  = regexp.MustCompile(`^\s*[@+]*-`)
+	shellComment   = regexp.MustCompile(`(^|[\s;&|()<>])#.*$`)
+	makeIgnoreErr  = regexp.MustCompile(`^[\s@+]*-`)
 	hackScript     = regexp.MustCompile(`hack/[A-Za-z0-9_-]+\.sh`)
 	packagePattern = regexp.MustCompile(`^\./(\.\.\.|[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*(/\.\.\.)?)$`)
 	ciMakeLine     = regexp.MustCompile(`^make\s+(.*)$`)
@@ -463,17 +504,26 @@ func logicalLines(text string) []string {
 	return out
 }
 
-// parseRecipes maps each target to its tab-indented recipe lines.
-func parseRecipes(makefile string) map[string]string {
+// parseRecipes maps each target to its tab-indented recipe lines. It refuses
+// a target given more than one recipe, which make would resolve by warning and
+// taking the last.
+func parseRecipes(makefile string) (map[string]string, error) {
 	recipes := map[string]string{}
-	current := ""
+	blocks := map[string]int{}
+	current, inBlock := "", false
 	for _, line := range logicalLines(makefile) {
 		if m := makeTargetLine.FindStringSubmatch(line); m != nil {
-			current = m[1]
+			current, inBlock = m[1], false
 			recipes[current] += ""
 			continue
 		}
 		if strings.HasPrefix(line, "\t") && current != "" {
+			if !inBlock {
+				inBlock = true
+				if blocks[current]++; blocks[current] > 1 {
+					return nil, fmt.Errorf("the Makefile gives target %s more than one recipe", current)
+				}
+			}
 			recipes[current] += line + "\n"
 			continue
 		}
@@ -481,7 +531,7 @@ func parseRecipes(makefile string) map[string]string {
 			current = ""
 		}
 	}
-	return recipes
+	return recipes, nil
 }
 
 // makeTestPrerequisites returns the targets `make test` depends on.
@@ -498,15 +548,21 @@ func makeTestPrerequisites(makefile string) ([]string, error) {
 }
 
 // recipePatterns returns the literal package patterns of the `go test` lines
-// in a recipe and in the hack/ scripts it names. A `#` that starts a word ends
-// the line.
+// in a recipe and in the hack/ scripts it names. It refuses a recipe line that
+// runs either with make's `-` prefix, which ignores its failure.
 func recipePatterns(fsys fs.FS, target, recipe string) ([]string, error) {
 	out, err := goTestPatterns(target, recipe)
 	if err != nil {
 		return nil, err
 	}
 	for _, line := range logicalLines(recipe) {
-		for _, script := range hackScript.FindAllString(uncommented(line), -1) {
+		line = uncommented(line)
+		scripts := hackScript.FindAllString(line, -1)
+		if (goTestLine.MatchString(line) || len(scripts) > 0) && makeIgnoreErr.MatchString(line) {
+			return nil, fmt.Errorf("%s: a recipe line carries make's `-` prefix, so its failure would "+
+				"not fail the gate: %q", target, strings.TrimSpace(line))
+		}
+		for _, script := range scripts {
 			b, err := fs.ReadFile(fsys, script)
 			if err != nil {
 				return nil, fmt.Errorf("target %s calls %s, which cannot be read: %w", target, script, err)
@@ -529,10 +585,6 @@ func goTestPatterns(where, text string) ([]string, error) {
 		if m == nil {
 			continue
 		}
-		if makeIgnoreErr.MatchString(line) {
-			return nil, fmt.Errorf("%s: a `go test` line carries make's `-` prefix, so its failure would "+
-				"not fail the gate: %q", where, strings.TrimSpace(line))
-		}
 		found := false
 		for _, field := range strings.Fields(m[1]) {
 			if packagePattern.MatchString(field) {
@@ -548,7 +600,8 @@ func goTestPatterns(where, text string) ([]string, error) {
 	return out, nil
 }
 
-// uncommented cuts a line at the first `#` that starts a word.
+// uncommented cuts a line at the first `#` that follows the line's start,
+// whitespace or a shell metacharacter.
 func uncommented(line string) string {
 	return shellComment.ReplaceAllString(line, "")
 }
@@ -571,7 +624,7 @@ func ciMakeTargets(ciYAML []byte) ([]string, error) {
 	for _, job := range wf.Jobs {
 		for _, step := range job.Steps {
 			for _, line := range logicalLines(step.Run) {
-				m := ciMakeLine.FindStringSubmatch(strings.TrimSpace(line))
+				m := ciMakeLine.FindStringSubmatch(strings.TrimSpace(uncommented(line)))
 				if m == nil {
 					continue
 				}
