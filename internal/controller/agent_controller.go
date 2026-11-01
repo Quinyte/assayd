@@ -1082,9 +1082,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			fmt.Sprintf("revision %s is serving", desired))
 		switch {
 		case pin != nil && gating == gateEnforced && !evalPassedFor(status.Eval, desiredDigest):
-			// GatesPassed is not asserted for a pinned rollback: it stays
-			// sticky and goes on describing the revision status.eval names
-			// (design 16 §1.1's table).
+			// GatesPassed is not asserted for a pinned rollback whose
+			// revision status.eval's pair records no Passed verdict for: it
+			// stays sticky and, where it is set, keeps its last reading
+			// (design 16 §1.1's table). status.eval.passed[] is not read here
+			// (A25.5).
 		case gating == gateEnforced:
 			assessPromotedGate(conds, status.Eval, desired, desiredDigest)
 		case gating == gateNone && findCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGatesPassed)) != nil:
@@ -1100,7 +1102,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// GatesBypassed is derived from the spec and status on every pass that
 	// reaches here, and no stored condition is read: a pin admitted on this
 	// pass and not yet serving, or a pin naming the revision serving while
-	// status.eval records no Passed verdict for it (servingPinBypass, which
+	// status.eval's pair records no Passed verdict for it (servingPinBypass, which
 	// assessGates also derives, before anything can return early). It is
 	// owned and not sticky, so it is withdrawn on the first pass on which
 	// neither holds, and is not asserted on a pass that does not enforce the
@@ -1113,6 +1115,17 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				pendingPinBypass(pin, pinWhy))
 		} else {
 			conds.unset(assaydv1alpha1.CondGatesBypassed)
+		}
+	}
+	// The unpassed statement, derived again from the status this pass
+	// leaves, so a promotion of a revision with a recorded Passed verdict
+	// withdraws it on the pass that promotes (design 16 A25.1).
+	if gating == gateEnforced {
+		if msg := activeRevisionPassUnrecorded(&agent, status); msg != "" {
+			conds.set(assaydv1alpha1.CondActiveRevisionPassUnrecorded, metav1.ConditionTrue,
+				ReasonNoPassedVerdictRecorded, msg)
+		} else {
+			conds.unset(assaydv1alpha1.CondActiveRevisionPassUnrecorded)
 		}
 	}
 
@@ -2111,12 +2124,20 @@ func (r *AgentReconciler) assessGates(agent *assaydv1alpha1.Agent, mode gateMode
 		c.set(assaydv1alpha1.CondGatesSkipped, metav1.ConditionTrue, "EvalSuiteCRDAbsent",
 			"the EvalSuite CRD is not installed, so this rollout is NOT eval-gated (design 02 §3.3, core tier)")
 	case gateEnforced:
-		// A pin naming the revision serving, which status.eval records no
-		// Passed verdict for, bypasses the gate (design 16 Q5 (a)). Derived
+		// A pin naming the revision serving, which status.eval's pair records
+		// no Passed verdict for, bypasses the gate (design 16 Q5 (a)). Derived
 		// here too, from status as the pass found it, so a pass that returns
 		// early still says so.
 		if msg := servingPinBypass(agent, &agent.Status, ""); msg != "" {
 			c.set(assaydv1alpha1.CondGatesBypassed, metav1.ConditionTrue, ReasonPinnedRollback, msg)
+		}
+		// The unpassed statement, from status as the pass found it, so a
+		// pass that returns early, a refused pin's included, still carries it
+		// (design 16 A25.1). The block after the rollout switch derives it
+		// again from the status the pass leaves.
+		if msg := activeRevisionPassUnrecorded(agent, &agent.Status); msg != "" {
+			c.set(assaydv1alpha1.CondActiveRevisionPassUnrecorded, metav1.ConditionTrue,
+				ReasonNoPassedVerdictRecorded, msg)
 		}
 	}
 }
@@ -2156,10 +2177,13 @@ func removedGateNote(e *assaydv1alpha1.EvalStatus, desired, desiredDigest string
 }
 
 // assessPromotedGate sets GatesPassed in the promotion branch of a gated
-// Agent. EvalPassed is asserted only when status.eval records Passed for the
-// revision being promoted, never merely because this branch ran. A revision
-// serving with no such verdict is not re-evaluated, because gates are policy
-// surface (design 16 §1.1).
+// Agent. EvalPassed is asserted only when status.eval's pair records Passed
+// for the revision being promoted, or status.eval.passed[] holds an entry for
+// it, never merely because this branch ran. A revision serving with no such
+// verdict is not re-evaluated, because gates are policy surface (design 16
+// §1.1). It is the one gate reader that reads passed[] (A25.5), so a revert
+// to a revision that passed reads EvalPassed after a later run start has
+// replaced the pair; passed[] keeps no score, and the message says so.
 func assessPromotedGate(c *conditionSet, e *assaydv1alpha1.EvalStatus, desired, desiredDigest string) {
 	if e != nil && e.Verdict == assaydv1alpha1.EvalVerdictPassed && e.RevisionDigest == desiredDigest {
 		c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, ReasonEvalPassed,
@@ -2167,14 +2191,21 @@ func assessPromotedGate(c *conditionSet, e *assaydv1alpha1.EvalStatus, desired, 
 				desired, desiredDigest, e.Suite, e.SuiteDigest, e.Score))
 		return
 	}
+	if p := passedEntry(e, desiredDigest); p != nil {
+		c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, ReasonEvalPassed,
+			fmt.Sprintf("revision %s (digest %s) passed against suite digest %s, as status.eval.passed[] "+
+				"records; passed[] keeps no score", desired, desiredDigest, p.SuiteDigest))
+		return
+	}
 	// Say what status.eval records, not why: a gate added after the revision
 	// began serving is one cause, and a revert to a revision whose own Passed
-	// record a later candidate's run replaced is another.
-	recorded := "status.eval records no verdict"
+	// record a later candidate's run replaced, outside what status.eval.passed[]
+	// holds, is another.
+	recorded := "status.eval records no verdict, and status.eval.passed[] holds no entry for it"
 	if e != nil && e.RevisionDigest != "" {
-		recorded = fmt.Sprintf("status.eval records %s for revision %s (digest %s) against suite %s "+
-			"(digest %s), not a Passed verdict for this one", cmp.Or(string(e.Verdict), "no verdict"),
-			e.Revision, e.RevisionDigest, e.Suite, e.SuiteDigest)
+		recorded = fmt.Sprintf("status.eval's pair records %s for revision %s (digest %s) against suite %s "+
+			"(digest %s), not a Passed verdict for this one, and status.eval.passed[] holds no entry for it",
+			cmp.Or(string(e.Verdict), "no verdict"), e.Revision, e.RevisionDigest, e.Suite, e.SuiteDigest)
 	}
 	c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, ReasonActiveRevisionNotEvaluated,
 		fmt.Sprintf("revision %s (digest %s) is serving, and %s. A gate does not re-evaluate the "+

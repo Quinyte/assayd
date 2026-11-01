@@ -553,14 +553,25 @@ func (r *EvalReconciler) startRun(ctx context.Context, run *evalRun) (ctrl.Resul
 	}
 	// One patch accounts for every field: the new pair's record is set;
 	// score, at and cases[], which the previous pair's run produced, are
-	// cleared; failed[] is kept; blocked is computed empty for a run that
-	// starts, and blockedFor names what it was computed for. Nothing in it
-	// changes from pass to pass, so on a CRD that prunes it a repeated write
-	// stores no change and enqueues nothing (step 11).
+	// cleared; failed[] is kept; passed[] is kept, and gains the replaced
+	// record's pair when that record holds a Passed verdict, since this is
+	// the one write that replaces a Passed record (design 16 A25.4 (b2));
+	// blocked is computed empty for a run that starts, and blockedFor names
+	// what it was computed for. passed[]'s eviction reads the active revision
+	// digest from the object the patch is made against, under the same
+	// optimistic lock. Nothing in it changes from pass to pass, so on a CRD
+	// that prunes it a repeated write stores no change and enqueues nothing
+	// (step 11).
+	active := run.agent.Status.ActiveRevisionDigest
 	err = r.patchEval(ctx, run.agent, func(e *assaydv1alpha1.EvalStatus) *assaydv1alpha1.EvalStatus {
 		next := want.DeepCopy()
 		if e != nil {
 			next.Failed = e.Failed
+			next.Passed = e.Passed
+			if e.Verdict == assaydv1alpha1.EvalVerdictPassed && e.RevisionDigest != "" {
+				next.Passed = appendPassed(e.Passed, assaydv1alpha1.EvalPair{RevisionDigest: e.RevisionDigest,
+					SuiteDigest: e.SuiteDigest}, active)
+			}
 		}
 		return next
 	})
@@ -948,8 +959,10 @@ func (r *EvalReconciler) record(bg context.Context, run *evalRun, id, nonce stri
 }
 
 // withOutcome is e with case id's entry recorded, and, when every suite id
-// then has an outcome, the verdict, score and time written in the same patch
-// and a Failed pair appended to failed[] (step 7).
+// then has an outcome, the verdict, score and time written in the same patch,
+// and, on a Failed verdict, the pair appended to failed[] and the revision's
+// entry removed from passed[], so that passed[] holds the revisions whose
+// last verdict was Passed (step 7; design 16 A25.11 (b)).
 func (run *evalRun) withOutcome(e *assaydv1alpha1.EvalStatus, id, claim string,
 	outcome assaydv1alpha1.EvalCaseOutcome, reason string) *assaydv1alpha1.EvalStatus {
 	e.Cases = withCase(e.Cases, assaydv1alpha1.EvalCaseRecord{ID: id, Outcome: outcome, Reason: reason,
@@ -974,6 +987,7 @@ func (run *evalRun) withOutcome(e *assaydv1alpha1.EvalStatus, id, claim string,
 		e.Verdict = assaydv1alpha1.EvalVerdictFailed
 		e.Failed = appendFailed(e.Failed, assaydv1alpha1.EvalPair{RevisionDigest: run.revisionDigest,
 			SuiteDigest: run.suiteDigest})
+		e.Passed = removePassed(e.Passed, run.revisionDigest)
 	}
 	return e
 }
@@ -986,6 +1000,43 @@ func appendFailed(failed []assaydv1alpha1.EvalPair, p assaydv1alpha1.EvalPair) [
 	out := append(append([]assaydv1alpha1.EvalPair(nil), failed...), p)
 	if len(out) > maxFailedPairs {
 		out = out[len(out)-maxFailedPairs:]
+	}
+	return out
+}
+
+// maxPassedPairs is passed[]'s cap, the CRD's MaxItems, as failed[]'s is
+// (design 16 A25.4).
+const maxPassedPairs = 10
+
+// appendPassed is passed[] with p as its newest entry. It is keyed by
+// revision digest, which is what every reader matches on: p replaces the
+// revision's existing entry, so at most one entry names any revision. When
+// that leaves more than the cap, the oldest entry whose revision digest is
+// not active is evicted; at most one entry names the active revision, so one
+// can always be evicted, and the active revision's entry never is.
+func appendPassed(passed []assaydv1alpha1.EvalPair, p assaydv1alpha1.EvalPair, active string) []assaydv1alpha1.EvalPair {
+	out := append(removePassed(passed, p.RevisionDigest), p)
+	for len(out) > maxPassedPairs {
+		for i := range out {
+			if out[i].RevisionDigest != active {
+				out = append(out[:i:i], out[i+1:]...)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// removePassed is passed[] without the revision's entry, in a new slice.
+func removePassed(passed []assaydv1alpha1.EvalPair, revisionDigest string) []assaydv1alpha1.EvalPair {
+	out := make([]assaydv1alpha1.EvalPair, 0, len(passed)+1)
+	for _, x := range passed {
+		if x.RevisionDigest != revisionDigest {
+			out = append(out, x)
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

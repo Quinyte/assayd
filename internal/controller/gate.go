@@ -236,6 +236,17 @@ func decideGate(in gateInput) gateDecision {
 					"record: %v. %s holds at zero traffic until it can be: a verdict the API server "+
 					"prunes would be lost, and its case claims with it (design 16 §1.1 step 11)",
 				in.recordErr, rev)}
+	case len(in.missing) == 1 && in.missing[0] == "passed":
+		// Only passed[] is pruned: verdicts are kept, and what is lost is the
+		// Passed record a later run start replaces (A25.6).
+		return gateDecision{reason: ReasonEvalRecordNotKept, readyReason: ReasonEvalRecordNotKept,
+			message: fmt.Sprintf(
+				"the installed Agent CRD does not carry status.eval.passed, so the API server prunes it "+
+					"from every write, without an error, and a Passed record that a later run start "+
+					"replaces is lost. %s holds at zero traffic until this release's CRDs are applied: "+
+					"`helm upgrade` never updates a chart's crds/, so apply this release's "+
+					"charts/assayd/crds/ with kubectl. Meanwhile ActiveRevisionPassUnrecorded may name "+
+					"an active revision that passed (design 16 §1.1 step 11)", rev)}
 	case len(in.missing) > 0:
 		return gateDecision{reason: ReasonEvalRecordNotKept, readyReason: ReasonEvalRecordNotKept,
 			message: fmt.Sprintf(
@@ -590,9 +601,12 @@ func (r *AgentReconciler) gateFor(ctx context.Context, agent *assaydv1alpha1.Age
 
 // evalRecordFields are the status.eval fields design 16 §1.1 adds, which the
 // installed Agent CRD must carry for a verdict to be kept. blockedFor is in
-// the set because the fail-closed reading of blocked rests on it (A13).
+// the set because the fail-closed reading of blocked rests on it (A13), and
+// passed because a CRD that prunes it loses every Passed record a run start
+// replaces (A25.6). The eval controller does not read passed[] back, so this
+// check is the guard for it.
 var evalRecordFields = []string{"suiteDigest", "endpointPath", "cardDigest", "blocked", "blockedFor",
-	"verdict", "cases", "failed"}
+	"verdict", "cases", "failed", "passed"}
 
 // evalRecordMissingFrom names each eval-record field the CRD's v1alpha1
 // schema does not carry under status.eval, and cases' claim, in that order.

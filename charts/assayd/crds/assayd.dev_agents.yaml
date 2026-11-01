@@ -665,8 +665,8 @@ spec:
                       GatesBypassed=True/PinnedRollback. A pin admitted and not yet serving is
                       judged again on each pass, so a suite edited to one it failed refuses
                       it. A pin to the revision already serving is never refused, and reads
-                      GatesBypassed only while status.eval records no Passed verdict for it
-                      (design 16 Q5).
+                      GatesBypassed only while status.eval's pair records no Passed verdict
+                      for it (design 16 Q5, A25.5).
                     pattern: ^[0-9a-f]{64}$
                     type: string
                 type: object
@@ -1508,6 +1508,28 @@ spec:
                       Failed records pairs whose run failed, so that neither an automatic
                       re-run nor an edit-free one evaluates them again. At most 10; the
                       oldest is evicted.
+                    items:
+                      description: EvalPair is a revision digest and the suite digest
+                        it was evaluated against.
+                      properties:
+                        revisionDigest:
+                          type: string
+                        suiteDigest:
+                          type: string
+                      required:
+                      - revisionDigest
+                      - suiteDigest
+                      type: object
+                    maxItems: 10
+                    type: array
+                  passed:
+                    description: |-
+                      Passed records pairs whose Passed record a run start replaced, at most
+                      one per revision digest: a new entry for a revision replaces its old
+                      one at the newest place. A Failed verdict removes the revision's entry.
+                      At most 10; when full, the oldest whose revision digest is not
+                      status.activeRevisionDigest is evicted. It is read to say whether a
+                      Passed verdict is recorded for a revision, never by the gate.
                     items:
                       description: EvalPair is a revision digest and the suite digest
                         it was evaluated against.

@@ -992,10 +992,12 @@ func TestAServingPinsBypassIsDerivedAgainAfterTheCRDReturns(t *testing.T) {
 }
 
 // A pin to the serving revision that passed its gate earlier, after a later
-// candidate's run replaced the record: status.eval holds one pair, so the
-// operator cannot say whether it passed, and the message says exactly that,
-// never that the gate was bypassed. Review 4's PR1, recorded for the
-// amendment as the shape of the human's reading 3.
+// candidate's run replaced the record. The run start that replaced it moved
+// B's pass into status.eval.passed[] (design 16 A25.4 (b2)), so the record is
+// written here as a real run start leaves it, and the message names that
+// entry rather than saying whether B passed is not recorded, and never says
+// the gate was bypassed. Review 4's PR1, recorded for the amendment as the
+// shape of the human's reading 3; rewritten by design 16 A25.5.
 func TestAServingPinThatPassedEarlierSaysOnlyWhatIsRecorded(t *testing.T) {
 	ns := newNamespace(t)
 	sd := mustCreateSuite(t, ns, "smoke")
@@ -1011,14 +1013,21 @@ func TestAServingPinThatPassedEarlierSaysOnlyWhatIsRecorded(t *testing.T) {
 		t.Fatalf("setup: B did not promote (active %s)", got)
 	}
 	revC, dC := gatedCandidate(t, r, a, imageOf('c'), "smoke")
-	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) { st.Eval = failedRecord(revC, dC, sd) })
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Eval = failedRecord(revC, dC, sd)
+		st.Eval.Passed = []assaydv1alpha1.EvalPair{{RevisionDigest: dB, SuiteDigest: sd}}
+	})
 	reconcileOnce(t, r, a)
 	pinTo(t, a, dB)
 	reconcileOnce(t, r, a)
 	reconcileOnce(t, r, a)
 	c := bypassed(t, a, revB, dB, pinServing)
-	if strings.Contains(c.Message, "was bypassed") || !strings.Contains(c.Message, "is not recorded") {
-		t.Errorf("GatesBypassed claims more than status records: %s", c.Message)
+	if strings.Contains(c.Message, "was bypassed") || strings.Contains(c.Message, "is not recorded") ||
+		!strings.Contains(c.Message, "status.eval.passed[] records a Passed verdict for it against suite digest "+sd) {
+		t.Errorf("GatesBypassed does not say what status records, and only that: %s", c.Message)
+	}
+	if u := condition(liveAgent(t, a), assaydv1alpha1.CondActiveRevisionPassUnrecorded); u != nil {
+		t.Errorf("B, in status.eval.passed[], is named unpassed: %+v", u)
 	}
 	// GatesPassed is not asserted for the pinned revision: it keeps the
 	// failed candidate's verdict, which is §1.1's sticky rule.

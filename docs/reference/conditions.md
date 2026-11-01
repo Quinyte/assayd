@@ -12,7 +12,7 @@ description: "Every condition the assayd operator writes and every reason string
 > committed differs from a fresh generation.
 
 The operator never degrades silently: every guarantee it cannot provide surfaces as a condition on
-the Agent (NFR-8). This page is the whole vocabulary — 39 condition types, and the 90 reason
+the Agent (NFR-8). This page is the whole vocabulary — 40 condition types, and the 91 reason
 strings the operator can set on them — extracted from the code rather than written beside it.
 
 **How this page is produced.** The condition types, their owned and sticky classification, the
@@ -60,6 +60,7 @@ absence is indistinguishable from "never evaluated". Both are read from `ownedTy
 
 | Condition | Written here | Owned | Sticky | Reasons |
 |---|---|---|---|---|
+| `ActiveRevisionPassUnrecorded` | 2 site(s) | yes | no | [`NoPassedVerdictRecorded`](#nopassedverdictrecorded) |
 | `BudgetEnforcementDegraded` | no | no | no | — |
 | `BudgetExhausted` | no | no | no | — |
 | `CapabilityUnavailable` | no | no | no | — |
@@ -68,7 +69,7 @@ absence is indistinguishable from "never evaluated". Both are read from `ownedTy
 | `EnvSourceProtectionUnavailable` | no | yes | no | — |
 | `EnvSourceUnresolved` | 1 site(s) | yes | no | [`Unresolved`](#unresolved) |
 | `GatesBypassed` | 4 site(s) | yes | no | [`PinnedRollback`](#pinnedrollback) |
-| `GatesPassed` | 7 site(s) | yes | yes | [`ActiveRevisionNotEvaluated`](#activerevisionnotevaluated), [`EvalAwaitingCard`](#evalawaitingcard), [`EvalBindingUnsupported`](#evalbindingunsupported), [`EvalCandidateUnaddressable`](#evalcandidateunaddressable), [`EvalFailed`](#evalfailed), [`EvalHeldForAuth`](#evalheldforauth), [`EvalPairAlreadyFailed`](#evalpairalreadyfailed), [`EvalPassed`](#evalpassed), [`EvalPaused`](#evalpaused), [`EvalRecordNotKept`](#evalrecordnotkept), [`EvalRecordUnverifiable`](#evalrecordunverifiable), [`EvalRunning`](#evalrunning), [`EvalSuiteNotFound`](#evalsuitenotfound), [`EvalSuiteUnreadable`](#evalsuiteunreadable), [`EvalWaitingForAuth`](#evalwaitingforauth), [`GateDetectionUnwired`](#gatedetectionunwired), [`NoGatesDeclared`](#nogatesdeclared) |
+| `GatesPassed` | 8 site(s) | yes | yes | [`ActiveRevisionNotEvaluated`](#activerevisionnotevaluated), [`EvalAwaitingCard`](#evalawaitingcard), [`EvalBindingUnsupported`](#evalbindingunsupported), [`EvalCandidateUnaddressable`](#evalcandidateunaddressable), [`EvalFailed`](#evalfailed), [`EvalHeldForAuth`](#evalheldforauth), [`EvalPairAlreadyFailed`](#evalpairalreadyfailed), [`EvalPassed`](#evalpassed), [`EvalPaused`](#evalpaused), [`EvalRecordNotKept`](#evalrecordnotkept), [`EvalRecordUnverifiable`](#evalrecordunverifiable), [`EvalRunning`](#evalrunning), [`EvalSuiteNotFound`](#evalsuitenotfound), [`EvalSuiteUnreadable`](#evalsuiteunreadable), [`EvalWaitingForAuth`](#evalwaitingforauth), [`GateDetectionUnwired`](#gatedetectionunwired), [`NoGatesDeclared`](#nogatesdeclared) |
 | `GatesSkipped` | 2 site(s) | yes | no | [`EvalSuiteCRDAbsent`](#evalsuitecrdabsent), [`NoGatesDeclared`](#nogatesdeclared) |
 | `GatewayIncompatible` | no | no | no | — |
 | `GovernanceSkipped` | 22 site(s) | yes | yes | [`AuthLockPending`](#authlockpending), [`AuthOptedOut`](#authoptedout), [`AuthPolicyMissing`](#authpolicymissing), [`AuthPolicyNotAttached`](#authpolicynotattached), [`AuthVerifiedOnOneReplica`](#authverifiedononereplica), [`CompilerUpgradeUnsupported`](#compilerupgradeunsupported), [`ForeignTrafficPolicy`](#foreigntrafficpolicy), [`GatewayAuthPolicy`](#gatewayauthpolicy), [`GatewayDisabled`](#gatewaydisabled), [`Governed`](#governed) |
@@ -106,6 +107,7 @@ absence is indistinguishable from "never evaluated". Both are read from `ownedTy
 
 The doc comment attached to each type's declaration in `api/v1alpha1`, verbatim. For the first constant of a group that is sometimes the comment introducing the GROUP rather than that one type — the generator reproduces what is attached and does not re-attribute it.
 
+- **`ActiveRevisionPassUnrecorded`** — CondActiveRevisionPassUnrecorded says that, while a gate is enforced, no Passed verdict is recorded for the active revision, in status.eval or status.eval.passed[], pinned or not (design 16 A25).
 - **`EnvSourceProtectionUnavailable`** — CondEnvSourceProtectionUnavailable is NO LONGER RAISED. It announced the env-source bypass while A20, A35 and A42 were design; A42's run namespace closed the last of it (design 02 A61) and a real-cluster test proves it. The type stays in §3.1's closed vocabulary so an operator built after A42 can still CLEAR a stale True left by one built before; removing it from the API is a later, separate amendment.
 - **`ImageSignatureUnverified`** — CondImageSignatureUnverified is set True, reason SignatureVerificationNotBuilt, from each exit that builds a pass's conditions: assayd verifies no image signature and does not detect an admission verifier installed outside it, and the message says whether a sha256 digest pins spec.runtime.image. It is an announcement, not an incident, and touches neither Ready nor Degraded (design 02 A78, the human's decision of 2026-09-29; design 07 A2).
 - **`PolicyCompileFailed`** — Thirteen conditions design 02 §3.1 declares that had no constant here. Nine predate the round that added this comment; the vocabulary drifted unnoticed because the closure test asserted a hard-coded count and never compared a single name. Grouped by the design that raises each.
@@ -118,7 +120,7 @@ The doc comment attached to each type's declaration in `api/v1alpha1`, verbatim.
 
 ### Declared, and not written by this operator
 
-21 of the 39 condition types in the closed vocabulary have no call site in `internal/controller`.
+21 of the 40 condition types in the closed vocabulary have no call site in `internal/controller`.
 They belong to designs that are not built, or to controllers this repository does not ship. An
 Agent in this build never carries one unless something else wrote it.
 
@@ -156,13 +158,13 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2179` in `assessPromotedGate()` — constant at the call site
+- `internal/controller/agent_controller.go:2210` in `assessPromotedGate()` — constant at the call site
 
-**Referenced by a test:** `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`
+**Referenced by a test:** `internal/controller/passunrecorded_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/passunrecorded_test.go`
 
-**State:** The Agent declares a gate, the EvalSuite CRD is installed, and the revision being served is the desired one, but `status.eval` records no `Passed` verdict for its digest. A gate added after the revision began serving is one cause; a revert to a revision whose own `Passed` record a later candidate's record has replaced is another, and the reason does not tell them apart.
+**State:** The Agent declares a gate, the EvalSuite CRD is installed, and the revision being served is the desired one, but `status.eval`'s pair records no `Passed` verdict for its digest and `status.eval.passed[]` holds no entry for it. A gate added after the revision began serving is one cause; a revert to a revision whose own `Passed` record a later candidate's record has replaced, where `passed[]` no longer holds it — a run start before the upgrade that built `passed[]`, a run start on a CRD that does not keep `passed`, an eviction, or a later `Failed` verdict for it — is another, and the reason does not tell them apart.
 
-**What the operator does:** Sets `GatesPassed=False` with this reason in the promotion branch and changes nothing else: the revision keeps serving, phase `Ready`. The message says what `status.eval` records instead, and that the revision serving is not re-evaluated, because `gates` is policy surface; the next revision the spec mints is held for its gate.
+**What the operator does:** Sets `GatesPassed=False` with this reason in the promotion branch and changes nothing else: the revision keeps serving, phase `Ready`. The message says what `status.eval`'s pair records instead, that `status.eval.passed[]` holds no entry for it, and that the revision serving is not re-evaluated, because `gates` is policy surface; the next revision the spec mints is held for its gate.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
@@ -174,8 +176,8 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1138` in `Reconcile()` — constant at the call site
-- `internal/controller/agent_controller.go:1136` in `Reconcile()` — constant at the call site
+- `internal/controller/agent_controller.go:1151` in `Reconcile()` — constant at the call site
+- `internal/controller/agent_controller.go:1149` in `Reconcile()` — constant at the call site
 
 **Referenced by a test:** **no — no test file in this repository names it.** Nothing here fails if it changes or stops being set.
 
@@ -199,10 +201,10 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 - `internal/controller/authtxn.go:630` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
 - `internal/controller/authtxn.go:632` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/conformance/slice_keysource_cluster_test.go`, `test/e2e/keysource_test.go`, `test/envtest/authkeysource_test.go`
 
@@ -224,9 +226,9 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 - `internal/controller/authtxn.go:1077` in `abandonWaiting()` — constant at the call site
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `test/envtest/authabandonlive_test.go`, `test/envtest/authlockreview_test.go`, `test/envtest/authreview3_test.go`, `test/envtest/exemption_test.go`
 
@@ -248,8 +250,8 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `test/envtest/authcheck_test.go`, `test/envtest/authcreate_test.go`
 
@@ -271,9 +273,9 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 - `internal/controller/authtxn.go:1512` in `runCreate()` — constant at the call site
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authcreate_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authreview3_test.go`
 
@@ -295,10 +297,10 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 - `internal/controller/authtxn.go:822` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
 - `internal/controller/authtxn.go:851` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authtxn_test.go`, `internal/controller/conditions_test.go`, `test/envtest/authcreate_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authrecreate_test.go`, `test/envtest/authreview3_test.go`
 
@@ -359,10 +361,10 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 - `internal/controller/authtxn.go:2094` in `runLock()` — constant at the call site
 - `internal/controller/httproute.go:727` in `assessGovernance()` — constant at the call site
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/conformance/slice_cluster_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authlockrace_test.go`, `test/envtest/authlockreview_test.go`, `test/envtest/authreview4_test.go`, `test/envtest/exemption_test.go`
 
@@ -404,12 +406,12 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 - `internal/controller/authtxn.go:2077` in `runLock()` — constant at the call site
 - `internal/controller/httproute.go:739` in `assessGovernance()` — constant at the call site
 - `internal/controller/authtxn.go:2082` in `runLock()` — constant at the call site
 - `internal/controller/httproute.go:740` in `assessGovernance()` — constant at the call site
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `internal/controller/httproute_unit_test.go`, `test/envtest/admission_reservation_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authcheck_test.go`, `test/envtest/authgate_test.go`, `test/envtest/authrace_test.go`, `test/envtest/authrecreate_test.go`, `test/envtest/authserved_test.go`, `test/envtest/authtransient_test.go`, `test/envtest/exemption_test.go`, `test/envtest/service_test.go`
 
@@ -429,11 +431,11 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 - `internal/controller/authserved.go:899` in `appendGovernance()` — from the local `reason`, which folds to this one reason
 - `internal/controller/authtxn.go:630` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
 - `internal/controller/authtxn.go:632` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/conformance/ancestor.go`, `test/conformance/slice_attach_cluster_test.go`, `test/conformance/slice_keysource_cluster_test.go`, `test/envtest/authkeysource_test.go`, `test/envtest/authserved_test.go`, `test/envtest/service_reads_test.go`, `test/envtest/service_test.go`
 
@@ -455,10 +457,10 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1186` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
+- `internal/controller/agent_controller.go:1199` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
 - `internal/controller/authtxn.go:630` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
 - `internal/controller/authtxn.go:632` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
-- `internal/controller/agent_controller.go:1172` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
+- `internal/controller/agent_controller.go:1185` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
 
 **Referenced by a test:** `test/envtest/authkeysource_test.go`, `test/envtest/authreview_test.go`, `test/envtest/authserved_test.go`
 
@@ -478,10 +480,10 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1186` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
+- `internal/controller/agent_controller.go:1199` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
 - `internal/controller/authtxn.go:630` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
 - `internal/controller/authtxn.go:632` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
-- `internal/controller/agent_controller.go:1172` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
+- `internal/controller/agent_controller.go:1185` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
 
 **Referenced by a test:** `test/envtest/authreview_test.go`
 
@@ -499,10 +501,10 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 - `internal/controller/authtxn.go:822` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
 - `internal/controller/authtxn.go:851` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authtxn_test.go`, `test/envtest/authcreate_test.go`
 
@@ -573,7 +575,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Referenced by a test:** `test/envtest/gate_test.go`, `test/envtest/reconciler_blockers_test.go`
 
-**State:** The Agent declares gates, the desired revision has not satisfied them, and its digest differs from the active one. `GatesPassed` names why. The operator's eval controller runs the suite and writes the verdict to `status.eval`; a gate is satisfied only by a `Passed` verdict there for the candidate's full digest and the suite read in this pass, with its card recorded.
+**State:** The Agent declares gates, the desired revision has not satisfied them, and its digest differs from the active one. `GatesPassed` names why. The operator's eval controller runs the suite and writes the verdict to `status.eval`; a gate is satisfied only by a `Passed` verdict in `status.eval`'s pair for the candidate's full digest and the suite read in this pass, with its card recorded. `status.eval.passed[]` never satisfies a gate.
 
 **What the operator does:** Records the candidate, holds the promotion at zero traffic and sets phase `Held` and `Progressing=True` with this reason. `Ready` stays `True` where an earlier revision is active and goes `False` where none is, with this reason unless `GatesPassed`'s reason names a cause of its own: `EvalRecordNotKept`, `EvalRecordUnverifiable`, or `EvalFailed` for a failed or already-failed pair.
 
@@ -795,10 +797,10 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 - `internal/controller/authtxn.go:822` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
 - `internal/controller/authtxn.go:851` in `authStep()` — from `fails[0].reason`, one of the 3 reasons that field can hold
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authtxn_test.go`
 
@@ -818,7 +820,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1693` in `reportCollision()` — from the local `c.reason(…)`, one of 3 reasons it folds to
+- `internal/controller/agent_controller.go:1706` in `reportCollision()` — from the local `c.reason(…)`, one of 3 reasons it folds to
 
 **Referenced by a test:** `test/envtest/collision_test.go`, `test/envtest/service_record_test.go`, `test/envtest/service_test.go`
 
@@ -838,7 +840,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1796` in `reportUnresolvedSources()` — constant at the call site
+- `internal/controller/agent_controller.go:1809` in `reportUnresolvedSources()` — constant at the call site
 
 **Referenced by a test:** **no — no test file in this repository names it.** Nothing here fails if it changes or stops being set.
 
@@ -979,13 +981,14 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2165` in `assessPromotedGate()` — constant at the call site
+- `internal/controller/agent_controller.go:2189` in `assessPromotedGate()` — constant at the call site
+- `internal/controller/agent_controller.go:2195` in `assessPromotedGate()` — constant at the call site
 
-**Referenced by a test:** `test/e2e/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/pin_test.go`
+**Referenced by a test:** `internal/controller/passunrecorded_test.go`, `test/e2e/gate_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/passunrecorded_test.go`, `test/envtest/pin_test.go`
 
-**State:** `status.eval` records `Passed` for the revision being promoted or serving, by its full digest. For a candidate, the gate was satisfied: the verdict is for the suite digest read in this pass, and a card digest is recorded for the candidate.
+**State:** `status.eval`'s pair records `Passed` for the revision being promoted or serving, by its full digest; or, for a revision the spec mints that is already active, `status.eval.passed[]` holds an entry for it, as after a revert to a revision that passed once a later run start has replaced its record (design 16 A25.5). For a candidate, the gate was satisfied: the verdict in the pair is for the suite digest read in this pass, and a card digest is recorded for the candidate.
 
-**What the operator does:** Sets `GatesPassed=True` with this reason in the promotion branch, naming both digests and the score, and promotes as `RolloutComplete` does. It is set only when that record exists, never merely because the promotion branch ran.
+**What the operator does:** Sets `GatesPassed=True` with this reason in the promotion branch, and promotes as `RolloutComplete` does. From the pair it names both digests and the score; from a `passed[]` entry it names the entry's suite digest and says `passed[]` keeps no score. It is set only when that record exists, never merely because the promotion branch ran.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
@@ -1022,11 +1025,11 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 - `internal/controller/agent_controller.go:1055` in `Reconcile()` — from `gate.readyReason`, one of the 4 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/gate_test.go`
+**Referenced by a test:** `internal/controller/gate_test.go`, `internal/controller/passunrecorded_test.go`, `test/envtest/gate_test.go`, `test/envtest/passunrecorded_test.go`
 
-**State:** A gated candidate's pass reads the installed `agents.assayd.dev` CRD, through the uncached reader behind a 30 s cache, and its `v1alpha1` schema lacks one of `status.eval`'s `suiteDigest`, `endpointPath`, `cardDigest`, `blocked`, `blockedFor`, `verdict`, `cases` (with `claim`) or `failed`. Such a CRD prunes them from every write without an error. It is what an upgraded install has, because `helm upgrade` never updates a chart's `crds/`.
+**State:** A gated candidate's pass reads the installed `agents.assayd.dev` CRD, through the uncached reader behind a 30 s cache, and its `v1alpha1` schema lacks one of `status.eval`'s `suiteDigest`, `endpointPath`, `cardDigest`, `blocked`, `blockedFor`, `verdict`, `cases` (with `claim`), `failed` or `passed`. Such a CRD prunes them from every write without an error. It is what an upgraded install has, because `helm upgrade` never updates a chart's `crds/`. Where only `passed` is missing, verdicts are kept and what is lost is each `Passed` record a later run start replaces; the eval controller still starts runs and records verdicts, because it does not read `passed[]` back, so the hold stops promotion, not evaluation.
 
-**What the operator does:** Sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. For a candidate not available yet, or no longer, the not-ready branches before the gate set the same reason and leave phase, `Progressing` and `Ready` as they set them. `Ready` stays `True` where an earlier revision serves, and goes `False` with this reason where none does. Checked before any of `status.eval` is read. The message names the missing fields and the remedy: apply this release's `charts/assayd/crds/` with `kubectl`.
+**What the operator does:** Sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. For a candidate not available yet, or no longer, the not-ready branches before the gate set the same reason and leave phase, `Progressing` and `Ready` as they set them. `Ready` stays `True` where an earlier revision serves, and goes `False` with this reason where none does. Checked before any of `status.eval` is read. The message names the missing fields and the remedy: apply this release's `charts/assayd/crds/` with `kubectl`. Where only `passed` is missing it says instead that a `Passed` record a later run start replaces is lost, that the candidate holds until this release's CRDs are applied, and that `ActiveRevisionPassUnrecorded` beside it may name an active revision that passed.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
@@ -1083,7 +1086,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2111` in `assessGates()` — constant at the call site
+- `internal/controller/agent_controller.go:2124` in `assessGates()` — constant at the call site
 
 **Referenced by a test:** `test/chart/chart_test.go`, `test/envtest/discovery_test.go`, `test/envtest/evalmanager_test.go`, `test/envtest/pin_test.go`, `test/envtest/reconciler_blockers_test.go`, `test/envtest/reconciler_test.go`
 
@@ -1163,7 +1166,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1323` in `reconcileExternal()` — constant at the call site
+- `internal/controller/agent_controller.go:1336` in `reconcileExternal()` — constant at the call site
 
 **Referenced by a test:** `test/envtest/imagesignature_test.go`
 
@@ -1183,7 +1186,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1693` in `reportCollision()` — from the local `c.reason(…)`, one of 3 reasons it folds to
+- `internal/controller/agent_controller.go:1706` in `reportCollision()` — from the local `c.reason(…)`, one of 3 reasons it folds to
 
 **Referenced by a test:** `test/envtest/collision_test.go`, `test/envtest/service_record_test.go`, `test/envtest/service_test.go`
 
@@ -1203,11 +1206,11 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 - `internal/controller/authtxn.go:681` in `reportForeign()` — constant at the call site
 - `internal/controller/authtxn.go:630` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
 - `internal/controller/authtxn.go:632` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/conformance/slice_cluster_test.go`, `test/envtest/authabandonlive_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authkeysource_test.go`, `test/envtest/authlock_test.go`, `test/envtest/authlockrace_test.go`, `test/envtest/authlockreview_test.go`, `test/envtest/authreview3_test.go`, `test/envtest/authreview4_test.go`, `test/envtest/authreview_test.go`, `test/envtest/authserved_test.go`
 
@@ -1227,7 +1230,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2107` in `assessGates()` — constant at the call site
+- `internal/controller/agent_controller.go:2120` in `assessGates()` — constant at the call site
 
 **Referenced by a test:** `test/envtest/reconciler_blockers_test.go`
 
@@ -1247,13 +1250,13 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 - `internal/controller/authtxn.go:427` in `reportAboveServed()` — constant at the call site
 - `internal/controller/authtxn.go:435` in `reportAboveServed()` — constant at the call site
 - `internal/controller/authtxn.go:630` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
 - `internal/controller/authtxn.go:632` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
 - `internal/controller/authtxn.go:2103` in `runLock()` — constant at the call site
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/e2e/gate_test.go`, `test/e2e/gatewayhold_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authgate_test.go`, `test/envtest/authserved_test.go`
 
@@ -1404,9 +1407,9 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1095` in `Reconcile()` — constant at the call site
-- `internal/controller/agent_controller.go:2101` in `assessGates()` — constant at the call site
-- `internal/controller/agent_controller.go:2092` in `assessGates()` — constant at the call site
+- `internal/controller/agent_controller.go:1097` in `Reconcile()` — constant at the call site
+- `internal/controller/agent_controller.go:2114` in `assessGates()` — constant at the call site
+- `internal/controller/agent_controller.go:2105` in `assessGates()` — constant at the call site
 
 **Referenced by a test:** `test/envtest/gate_test.go`, `test/envtest/reconciler_test.go`
 
@@ -1417,6 +1420,29 @@ One section per reason string the operator can set, in alphabetical order.
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
 **Note:** On an Agent that had `GatesPassed`, because its gate was removed, it also sets `GatesPassed=False` with this reason, so a sticky `EvalFailed` does not stay beside a revision it no longer describes. Its message names the active revision as the pass found it, or says there is none yet, and a pass that promotes names the revision it promotes. Where `status.eval` records a `Failed` or `Running` verdict for the revision the pass converges, both messages name the verdict and its digests (design 16 Q9).
+
+### `NoPassedVerdictRecorded`
+
+**Conditions:** `ActiveRevisionPassUnrecorded=True`
+
+**Constant:** `ReasonNoPassedVerdictRecorded` (`internal/controller/pinrule.go:138`)
+
+> ReasonNoPassedVerdictRecorded is ActiveRevisionPassUnrecorded's one reason (design 16 A25.7 (a)).
+
+**Set at:**
+
+- `internal/controller/agent_controller.go:1125` in `Reconcile()` — constant at the call site
+- `internal/controller/agent_controller.go:2139` in `assessGates()` — constant at the call site
+
+**Referenced by a test:** `internal/controller/passunrecorded_test.go`, `test/envtest/passunrecorded_test.go`
+
+**State:** The Agent declares a gate, the EvalSuite CRD is installed, `status.activeRevisionDigest` is set, and no `Passed` verdict is recorded for it: `status.eval`'s pair records none for that digest, and `status.eval.passed[]` holds no entry for it. That is so pinned or not, and for a revision that was active before the gate was added. It is derived from the spec and status alone, reads no stored condition and no `EvalSuite`, so a revision that passed an earlier suite and never ran the suite in force, or whose later run was superseded before a verdict, reads as passed (design 16 A25.11). A revision that passed, after a run start on a CRD that does not keep `passed`, or whose record was replaced before the upgrade that built `passed[]`, reads as unpassed.
+
+**What the operator does:** Sets `ActiveRevisionPassUnrecorded=True` with this reason, in `assessGates`, from status as the pass found it, so a pass that returns early, a refused pin's included, still carries it; and again after the rollout switch, from the status the pass leaves. It moves no `Ready`, `Progressing`, `Degraded` or phase, holds nothing and requeues nothing, and the gate never reads it. The message names the active revision and its digest and no `status.eval` pair, so a run start, a claim and a case record leave it unchanged, and closes with a sentence on whether `spec.release.targetRevisionDigest` is set. It is owned and not sticky: withdrawn on the first pass on which it no longer derives — a `Passed` verdict recorded for the active revision, the promotion of a revision that has one, or the gate removed or not enforced. A pin removed, refused or changed does not withdraw it.
+
+**Traffic:** **not withdrawn** — the route goes on serving; only status changes.
+
+**Note:** A pinned active revision with no recorded pass carries both this and `GatesBypassed`'s serving form. An operator rolled back to a release that does not own this type leaves it standing, and an older operator's whole-status write erases `status.eval.passed[]`.
 
 ### `NoRolloutInFlight`
 
@@ -1464,8 +1490,8 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1308` in `reportUnreconcilable()` — constant at the call site
-- `internal/controller/agent_controller.go:1311` in `reportUnreconcilable()` — constant at the call site
+- `internal/controller/agent_controller.go:1321` in `reportUnreconcilable()` — constant at the call site
+- `internal/controller/agent_controller.go:1324` in `reportUnreconcilable()` — constant at the call site
 
 **Referenced by a test:** `internal/controller/unreconcilable_test.go`
 
@@ -1528,15 +1554,15 @@ One section per reason string the operator can set, in alphabetical order.
 **Set at:**
 
 - `internal/controller/agent_controller.go:558` in `Reconcile()` — constant at the call site
-- `internal/controller/agent_controller.go:1110` in `Reconcile()` — constant at the call site
 - `internal/controller/agent_controller.go:1112` in `Reconcile()` — constant at the call site
-- `internal/controller/agent_controller.go:2119` in `assessGates()` — constant at the call site
+- `internal/controller/agent_controller.go:1114` in `Reconcile()` — constant at the call site
+- `internal/controller/agent_controller.go:2132` in `assessGates()` — constant at the call site
 
 **Referenced by a test:** `test/envtest/pin_test.go`
 
-**State:** The Agent declares a gate and the EvalSuite CRD is installed, and either `spec.release.targetRevisionDigest` names a retained revision, not yet serving, that design 16 Q5 (a) admits on this pass — it is not the revision the current spec mints, and `status.eval.failed[]` does not record it against the suite in force, or there is no current suite digest to check it against — or the pin names the revision serving and `status.eval` records no `Passed` verdict for it. The second form is a statement about the record, not a claim that the gate was bypassed: its message says only what `status.eval` holds — no run; a run of another revision, in which case whether this one passed is not recorded, and, when `failed[]` names no pair of it either, whether it ever ran; a `Failed` verdict for it, naming the suite digest; a run of it with no verdict yet; or its pair with the verdict cleared — and how many pairs `failed[]` records for it.
+**State:** The Agent declares a gate and the EvalSuite CRD is installed, and either `spec.release.targetRevisionDigest` names a retained revision, not yet serving, that design 16 Q5 (a) admits on this pass — it is not the revision the current spec mints, and `status.eval.failed[]` does not record it against the suite in force, or there is no current suite digest to check it against — or the pin names the revision serving and `status.eval`'s pair records no `Passed` verdict for it; `status.eval.passed[]` does not enter that test. The second form is a statement about the record, not a claim that the gate was bypassed: its message says only what `status.eval` holds — no run; a run of another revision, in which case, where `passed[]` holds no entry for it, whether this one passed is not recorded, and, when `failed[]` names no pair of it either, whether it ever ran; a `Failed` verdict for it, naming the suite digest; a run of it with no verdict yet; or its pair with the verdict cleared — then the `passed[]` entry for it, naming its suite digest, where there is one, and how many pairs `failed[]` records for it.
 
-**What the operator does:** Sets `GatesBypassed=True` with this reason, naming the pinned revision and its digest. For a revision not yet serving the message says it will be promoted once available without its gate, that the eval controller sends it no case, and why the pin was admitted, and it is judged again on each pass until it serves, and it is asserted as soon as the pin is admitted, so an exit later in the same pass keeps it. For the revision serving it says it serves by pin and what the record holds about it; while that holds the promotion branch does not assert `GatesPassed`, which keeps describing the revision `status.eval` names. The condition is derived from the spec and status on every pass, `assessGates` included, and no stored condition is read, so a forged one is recomputed away. It is owned and not sticky, and is withdrawn on the first pass on which it no longer derives: the pin removed, or changed to a digest that is neither admitted nor serving unevaluated; a `Passed` verdict recorded for the serving pinned revision; the pin refused; or a pin not yet serving that no longer resolves. A pending pin's form is also withdrawn on a pass that returns before the pin step — the run namespace unavailable, or a source of the current spec unresolved — because only the serving form is derived before it; it comes back on the next pass that reaches the pin step. A serving pinned revision whose retained material is then collected keeps it, beside `ReleasePinUnresolvable`, because it still serves by pin. On a pass that does not enforce the gate — `spec.gates` removed, or the EvalSuite CRD undiscoverable — it is not asserted, so it is withdrawn there and derived again on the first pass that enforces the gate.
+**What the operator does:** Sets `GatesBypassed=True` with this reason, naming the pinned revision and its digest. For a revision not yet serving the message says it will be promoted once available without its gate, that the eval controller sends it no case, and why the pin was admitted, and it is judged again on each pass until it serves, and it is asserted as soon as the pin is admitted, so an exit later in the same pass keeps it. For the revision serving it says it serves by pin and what the record holds about it; while that holds the promotion branch does not assert `GatesPassed` again, so where it is set it keeps its last reading. The condition is derived from the spec and status on every pass, `assessGates` included, and no stored condition is read, so a forged one is recomputed away. It is owned and not sticky, and is withdrawn on the first pass on which it no longer derives: the pin removed, or changed to a digest that is neither admitted nor serving unevaluated; a `Passed` verdict recorded in `status.eval`'s pair for the serving pinned revision; the pin refused; or a pin not yet serving that no longer resolves. A pending pin's form is also withdrawn on a pass that returns before the pin step — the run namespace unavailable, or a source of the current spec unresolved — because only the serving form is derived before it; it comes back on the next pass that reaches the pin step. A serving pinned revision whose retained material is then collected keeps it, beside `ReleasePinUnresolvable`, because it still serves by pin. On a pass that does not enforce the gate — `spec.gates` removed, or the EvalSuite CRD undiscoverable — it is not asserted, so it is withdrawn there and derived again on the first pass that enforces the gate.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
@@ -1548,10 +1574,10 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1186` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
+- `internal/controller/agent_controller.go:1199` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
 - `internal/controller/authtxn.go:630` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
 - `internal/controller/authtxn.go:632` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
-- `internal/controller/agent_controller.go:1172` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
+- `internal/controller/agent_controller.go:1185` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
 
 **Referenced by a test:** `test/envtest/authserved_test.go`
 
@@ -1571,7 +1597,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2227` in `assessTaskState()` — constant at the call site
+- `internal/controller/agent_controller.go:2258` in `assessTaskState()` — constant at the call site
 
 **Referenced by a test:** **no — no test file in this repository names it.** Nothing here fails if it changes or stops being set.
 
@@ -1609,8 +1635,8 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1700` in `reportCollision()` — constant at the call site
-- `internal/controller/agent_controller.go:1694` in `reportCollision()` — constant at the call site
+- `internal/controller/agent_controller.go:1713` in `reportCollision()` — constant at the call site
+- `internal/controller/agent_controller.go:1707` in `reportCollision()` — constant at the call site
 
 **Referenced by a test:** `internal/controller/conditions_test.go`, `test/envtest/collision_test.go`, `test/envtest/pin_test.go`, `test/envtest/service_record_test.go`, `test/envtest/service_test.go`
 
@@ -1767,10 +1793,10 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1186` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
+- `internal/controller/agent_controller.go:1199` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
 - `internal/controller/authtxn.go:630` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
 - `internal/controller/authtxn.go:632` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
-- `internal/controller/agent_controller.go:1172` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
+- `internal/controller/agent_controller.go:1185` in `Reconcile()` — from the local `reason`, one of 4 reasons it folds to
 
 **Referenced by a test:** `internal/controller/httproute_unit_test.go`, `test/envtest/httproute_test.go`, `test/envtest/service_test.go`
 
@@ -1812,7 +1838,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:2202` in `assessSandbox()` — constant at the call site
+- `internal/controller/agent_controller.go:2233` in `assessSandbox()` — constant at the call site
 
 **Referenced by a test:** **no — no test file in this repository names it.** Nothing here fails if it changes or stops being set.
 
@@ -1855,10 +1881,10 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1289` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1302` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 - `internal/controller/authtxn.go:630` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
 - `internal/controller/authtxn.go:632` in `raiseIncomplete()` — from the local `reason`, one of 9 reasons it folds to
-- `internal/controller/agent_controller.go:1287` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
+- `internal/controller/agent_controller.go:1300` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
 **Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/envtest/authkeysource_test.go`, `test/envtest/authserved_test.go`, `test/envtest/service_precedence_test.go`
 
@@ -1941,7 +1967,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1795` in `reportUnresolvedSources()` — constant at the call site
+- `internal/controller/agent_controller.go:1808` in `reportUnresolvedSources()` — constant at the call site
 
 **Referenced by a test:** `test/envtest/pin_test.go`
 
@@ -1959,7 +1985,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/agent_controller.go:1693` in `reportCollision()` — from the local `c.reason(…)`, one of 3 reasons it folds to
+- `internal/controller/agent_controller.go:1706` in `reportCollision()` — from the local `c.reason(…)`, one of 3 reasons it folds to
 
 **Referenced by a test:** `test/envtest/collision_test.go`, `test/envtest/service_record_test.go`, `test/envtest/service_test.go`
 
@@ -2035,7 +2061,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 ## Reasons no test in this repository names
 
-15 of the 90 reasons the operator can set are named by no test file
+15 of the 91 reasons the operator can set are named by no test file
 anywhere under `internal/`, `api/` or `test/`. Each is a string this operator will put on a user's
 object, and no test in this repository fails if it changes, stops being set, or is set for the
 wrong state. That is not a claim that the BEHAVIOUR is untested — a test can exercise a path and
@@ -2069,7 +2095,7 @@ local, and the three are not equally strong:
 
 | Resolution | Sites | What it means |
 |---|---|---|
-| `constant` | 70 | A string literal or a `Reason*` constant at the call site. Exact. |
+| `constant` | 73 | A string literal or a `Reason*` constant at the call site. Exact. |
 | `field` | 8 | A struct field (`failure.reason` and its siblings). The listed reasons are every constant written into that field, narrowed to the function that built the value where the generator could follow it. One pass sets ONE of them; which one is not claimed. |
 | `local` | 18 | A local whose assignments — and, one hop, the in-package function they call — all fold to constants. |
 | `carried` | 6 | The reason is read back off a condition an earlier pass stored. It introduces no new reason and appears in no reason's site list. |
@@ -2097,5 +2123,5 @@ their own section above. This page reports them; it does not settle them.
 
 **Every reason set is closed.** Each struct reason field the page reads had all of its writes folded, so a `field` row lists every reason that field can hold.
 
-**Coverage of the test reference scan.** 75 of 90 reasons are named by at least one test file. The scan matches the reason string or its `Reason*` identifier on a word boundary, across every `_test.go` under `internal/` and `api/` and every Go file under `test/`. `internal/refgen` is excluded: its tests name reasons to check that the GENERATOR resolves them, and counting those would let this page shrink its own unpinned list.
+**Coverage of the test reference scan.** 76 of 91 reasons are named by at least one test file. The scan matches the reason string or its `Reason*` identifier on a word boundary, across every `_test.go` under `internal/` and `api/` and every Go file under `test/`. `internal/refgen` is excluded: its tests name reasons to check that the GENERATOR resolves them, and counting those would let this page shrink its own unpinned list.
 

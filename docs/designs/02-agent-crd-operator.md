@@ -97,7 +97,7 @@ status:
   conditions: [Registered, CardUnsigned, IdentityIssued, IdPUnavailable,
                OnBehalfOfUnavailable, IdentityBootstrapIncomplete,
                KnowledgeBound, GatesPassed, GatesSkipped, GatesBypassed,
-               SandboxDowngraded, TaskStateUnverified, ScratchpadDegraded,
+               ActiveRevisionPassUnrecorded, SandboxDowngraded, TaskStateUnverified, ScratchpadDegraded,
                BudgetExhausted, BudgetEnforcementDegraded, PricingStale,
                ReceiptsDegraded, Killed, Ready, Progressing, Degraded,
                PolicyCompileFailed, PolicyApplyIncomplete, GatewayIncompatible,
@@ -1185,3 +1185,5 @@ A29 (2026-08-29, from `reviews/03-codex-review-r5.md` MAJOR 5, 6, 7) — **three
   | Give an external Agent the pinned wording | the external unit and envtest cases |
   | Give an external Agent the ordinary "nothing clears it yet" tail | the external unit and envtest cases |
   | Say "no image signature is checked" again | every unit and envtest case |
+
+- **A79 (2026-11-01, carried by the design 16 code PR for #133, under design 16 A25.3 (a), which the human decided on 2026-11-01) — `ActiveRevisionPassUnrecorded` joins §3.1's condition list.** Design 16 §1.1 defines it.

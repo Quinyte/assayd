@@ -1507,8 +1507,8 @@ admitted too. Any other pin is served without evaluation, under
 GatesBypassed=True/PinnedRollback. A pin admitted and not yet serving is
 judged again on each pass, so a suite edited to one it failed refuses
 it. A pin to the revision already serving is never refused, and reads
-GatesBypassed only while status.eval records no Passed verdict for it
-(design 16 Q5).<br/>
+GatesBypassed only while status.eval's pair records no Passed verdict
+for it (design 16 Q5, A25.5).<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -3139,6 +3139,18 @@ oldest is evicted.<br/>
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b><a href="#agentstatusevalpassedindex">passed</a></b></td>
+        <td>[]object</td>
+        <td>
+          Passed records pairs whose Passed record a run start replaced, at most
+one per revision digest: a new entry for a revision replaces its old
+one at the newest place. A Failed verdict removes the revision's entry.
+At most 10; when full, the oldest whose revision digest is not
+status.activeRevisionDigest is evicted. It is read to say whether a
+Passed verdict is recorded for a revision, never by the gate.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b>revision</b></td>
         <td>string</td>
         <td>
@@ -3340,6 +3352,42 @@ Failed.<br/>
 EvalPair is a revision digest and the suite digest it was evaluated against.
 
 <div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status.eval.failed[index]. Scroll or use the arrow keys to pan.">
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>revisionDigest</b></td>
+        <td>string</td>
+        <td>
+          <br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>suiteDigest</b></td>
+        <td>string</td>
+        <td>
+          <br/>
+        </td>
+        <td>true</td>
+      </tr></tbody>
+</table>
+</div>
+
+
+#### Agent.status.eval.passed[index]
+<sup><sup>[↩ Parent](#agentstatuseval)</sup></sup>
+
+
+
+EvalPair is a revision digest and the suite digest it was evaluated against.
+
+<div class="ref-table" role="region" tabindex="0" aria-label="Fields of Agent.status.eval.passed[index]. Scroll or use the arrow keys to pan.">
 <table>
     <thead>
         <tr>
