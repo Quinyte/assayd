@@ -74,6 +74,16 @@ type stubProber struct {
 	afterProbe  map[string]func()
 	// once is an answer the next probe of an Agent gets, whatever else holds.
 	once map[string]int
+	// reads, when set, is what the stub reads the Agent, its policies and its
+	// route through, in place of k8s.
+	reads client.Reader
+}
+
+func (s *stubProber) reader() client.Reader {
+	if s.reads != nil {
+		return s.reads
+	}
+	return k8s
 }
 
 func newStubProber() *stubProber {
@@ -188,7 +198,7 @@ func (s *stubProber) Probe(ctx context.Context, req controller.AuthProbeRequest)
 
 func (s *stubProber) answer(ctx context.Context, name, ns, path string) (int, string, error) {
 	var a assaydv1alpha1.Agent
-	if err := k8s.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &a); err != nil {
+	if err := s.reader().Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &a); err != nil {
 		return 0, "", err
 	}
 	golden, err := compiler.AuthPolicy(compiler.AuthInput{AgentName: a.Name, AgentNamespace: a.Namespace,
@@ -213,19 +223,19 @@ func (s *stubProber) answer(ctx context.Context, name, ns, path string) (int, st
 		return 401, "", nil
 	}
 	for _, key := range above {
-		if err := k8s.Get(ctx, key, controller.NewAgentgatewayPolicy()); err == nil {
+		if err := s.reader().Get(ctx, key, controller.NewAgentgatewayPolicy()); err == nil {
 			return 401, "", nil
 		}
 	}
 	stored := controller.NewAgentgatewayPolicy()
-	if err := k8s.Get(ctx, client.ObjectKeyFromObject(golden), stored); err == nil {
+	if err := s.reader().Get(ctx, client.ObjectKeyFromObject(golden), stored); err == nil {
 		if d, err := compiler.Digest(stored); err == nil && d == want && !held {
 			return 401, "", nil
 		}
 	}
 	routeName, _ := compiler.ServingRouteName(name)
 	var rt gatewayv1.HTTPRoute
-	if err := k8s.Get(ctx, types.NamespacedName{Namespace: runNS(ns), Name: routeName}, &rt); err != nil {
+	if err := s.reader().Get(ctx, types.NamespacedName{Namespace: runNS(ns), Name: routeName}, &rt); err != nil {
 		return 404, "", nil
 	}
 	if len(rt.Spec.Rules) == 0 || len(rt.Spec.Rules[0].BackendRefs) == 0 {

@@ -6,12 +6,16 @@ package envtest
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -485,11 +489,30 @@ func TestAFailedForeignListHoldsTheExemptLock(t *testing.T) {
 // over 10 s of eval and Agent passes the Agent's resourceVersion does not
 // change.
 //
+// Every read the two controllers and the probe oracle make in the window goes
+// through steadyReads, which retries a read the API server did not answer.
+// Without it the row was load-sensitive (#126). The Agent reconciler reports
+// a Gateway or EvalSuite read that failed, as it must (Ready=False naming the
+// unread Gateway, or GatesPassed=False naming the unread suite), and retracts
+// the report on the next pass, so one dropped connection moves the
+// resourceVersion twice with no loop in either controller. A loop needs no
+// failed read, so the row still sees one. Each pass that writes is named in
+// the failure, with what it changed, so a write in the window says which
+// controller made it.
+//
 // Mutations: clear blocked whenever clause 5 finds no hold (the
 // resourceVersion bound); or show EvalRunning when blocked is not the hold
 // (the reason).
 func TestAnExemptLocksUnusableBindingWritesNoLoop(t *testing.T) {
 	g, c, cd := exemptJ2(t, "jtwobind", 0, nil)
+	steady := steadyReads{Client: k8s}
+	g.r.Client, g.r.Reader, g.prober.reads = steady, steady, steady
+	e, err := controller.NewEvalReconciler(steady, steady, func() bool { return true }, g.r.Gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.A2A.HTTP, e.CardFetchTimeout = g.stub, time.Second
+	g.e = e
 	jsonrpc := strings.Replace(stubCard(g.name), "HTTP+JSON", "JSONRPC", 1)
 	g.stub.setCard(g.name, jsonrpc)
 	writeAgentStatus(t, g.a, func(st *assaydv1alpha1.AgentStatus) {
@@ -502,20 +525,115 @@ func TestAnExemptLocksUnusableBindingWritesNoLoop(t *testing.T) {
 	g.evalPass(t)
 	g.agentPass(t)
 	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalBindingUnsupported)
-	rv := liveAgent(t, g.a).ResourceVersion
+	start := liveAgent(t, g.a)
+	prev := start
+	var writes []string
+	pass := func(who string, run func(*testing.T)) {
+		run(t)
+		cur := liveAgent(t, g.a)
+		if cur.ResourceVersion != prev.ResourceVersion {
+			writes = append(writes, fmt.Sprintf("the %s pass at %s wrote %s -> %s: %s", who,
+				time.Now().Format(time.RFC3339Nano), prev.ResourceVersion, cur.ResourceVersion,
+				statusChange(&prev.Status, &cur.Status)))
+		}
+		prev = cur
+	}
 	end := time.Now().Add(10 * time.Second)
 	for time.Now().Before(end) {
-		g.evalPass(t)
-		g.agentPass(t)
+		pass("eval", func(t *testing.T) { g.evalPass(t) })
+		pass("Agent", g.agentPass)
 		time.Sleep(500 * time.Millisecond)
 	}
-	if got := liveAgent(t, g.a).ResourceVersion; got != rv {
-		t.Errorf("the Agent's resourceVersion moved from %s to %s over 10 s: a write loop", rv, got)
+	if got := liveAgent(t, g.a).ResourceVersion; got != start.ResourceVersion {
+		if len(writes) > 3 {
+			writes = append(writes[:3], fmt.Sprintf("and %d more passes wrote", len(writes)-3))
+		}
+		t.Errorf("the Agent's resourceVersion moved from %s to %s over 10 s: a write loop. %s",
+			start.ResourceVersion, got, strings.Join(writes, "; "))
 	}
 	if g.hits(c) != 0 {
 		t.Errorf("a card with no usable interface was sent %d cases", g.hits(c))
 	}
 	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalBindingUnsupported)
+}
+
+// steadyReads is a client whose reads are retried while the API server does
+// not answer them: a transport error, or a timeout, throttle or 5xx status.
+// An answer, NotFound and Forbidden included, is returned as it came, and
+// writes are not retried. A row that bounds writes uses it to keep a load
+// artefact out of the bound (#126).
+type steadyReads struct{ client.Client }
+
+func (s steadyReads) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	return retryUnanswered(ctx, func() error { return s.Client.Get(ctx, key, obj, opts...) })
+}
+
+func (s steadyReads) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	return retryUnanswered(ctx, func() error { return s.Client.List(ctx, list, opts...) })
+}
+
+func retryUnanswered(ctx context.Context, read func() error) error {
+	var err error
+	for i := 0; i < 20; i++ {
+		if err = read(); !unanswered(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return err
+}
+
+func unanswered(err error) bool {
+	var ue *url.Error
+	return err != nil && (errors.As(err, &ue) || apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) ||
+		apierrors.IsTooManyRequests(err) || apierrors.IsInternalError(err) ||
+		apierrors.IsServiceUnavailable(err) || apierrors.IsUnexpectedServerError(err))
+}
+
+// statusChange names what a status write changed: the conditions whose
+// status, reason or message moved, and phase and status.eval.blocked.
+func statusChange(a, b *assaydv1alpha1.AgentStatus) string {
+	var out []string
+	for _, nc := range b.Conditions {
+		oc := meta.FindStatusCondition(a.Conditions, nc.Type)
+		if oc == nil || oc.Status != nc.Status || oc.Reason != nc.Reason || oc.Message != nc.Message {
+			out = append(out, fmt.Sprintf("%s=%s/%s", nc.Type, nc.Status, nc.Reason))
+		}
+	}
+	for _, oc := range a.Conditions {
+		if meta.FindStatusCondition(b.Conditions, oc.Type) == nil {
+			out = append(out, oc.Type+" removed")
+		}
+	}
+	if a.Phase != b.Phase {
+		out = append(out, fmt.Sprintf("phase %s -> %s", a.Phase, b.Phase))
+	}
+	var ab, bb *assaydv1alpha1.EvalBlocked
+	if a.Eval != nil {
+		ab = a.Eval.Blocked
+	}
+	if b.Eval != nil {
+		bb = b.Eval.Blocked
+	}
+	if !reflect.DeepEqual(ab, bb) {
+		out = append(out, fmt.Sprintf("status.eval.blocked %s -> %s", blockedReason(ab), blockedReason(bb)))
+	}
+	if len(out) == 0 {
+		return "no condition, phase or blocked differs between the reads before and after it, so it " +
+			"wrote another field, or wrote and restored one"
+	}
+	return strings.Join(out, ", ")
+}
+
+func blockedReason(b *assaydv1alpha1.EvalBlocked) string {
+	if b == nil {
+		return "empty"
+	}
+	return b.Reason
 }
 
 // T58: a stale hold. A J2 Lock in the Gateway-level row's state has blocked
