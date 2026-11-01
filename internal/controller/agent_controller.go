@@ -446,6 +446,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// mint the same hash as never having referenced it.
 		return ctrl.Result{}, r.reportUnresolvedSources(ctx, &agent, unresolved, cmp.Or(herr, derr))
 	}
+	// The digest the current spec mints, kept after a pin puts the pinned
+	// revision's digest in desiredDigest: a pin refusal's message judges the
+	// pinned-rollback hold against it (design 16 A26.3).
+	specDigest := desiredDigest
 	logger = logger.WithValues("revision", desired)
 
 	status := agent.Status.DeepCopy()
@@ -510,7 +514,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	pin, perr := r.resolveReleasePin(ctx, &agent, runNS)
 	if perr != nil {
 		if u := (*unresolvablePinError)(nil); errors.As(perr, &u) {
-			return ctrl.Result{}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
+			return ctrl.Result{}, r.reportUnresolvablePin(ctx, &agent, status, conds, u, gating, specDigest)
 		}
 		return ctrl.Result{}, perr
 	}
@@ -538,7 +542,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if pin != nil && gating == gateEnforced {
 		if merr := r.verifyRetainedMaterial(ctx, &agent, runNS, pin.Revision, pin.Digest); merr != nil {
 			if u := (*unresolvablePinError)(nil); errors.As(merr, &u) {
-				return ctrl.Result{}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
+				return ctrl.Result{}, r.reportUnresolvablePin(ctx, &agent, status, conds, u, gating, specDigest)
 			}
 			return ctrl.Result{}, merr
 		}
@@ -549,7 +553,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		if pin.Digest != status.ActiveRevisionDigest {
 			u, why := r.pinRule(ctx, &agent, status, pin, desiredDigest)
 			if u != nil {
-				return ctrl.Result{RequeueAfter: CardDriftInterval}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
+				return ctrl.Result{RequeueAfter: CardDriftInterval}, r.reportUnresolvablePin(ctx, &agent, status, conds, u, gating, specDigest)
 			}
 			pinWhy = why
 			// Asserted at once, so that an exit between here and the switch —
@@ -617,7 +621,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// revision whose material is gone or whose spec has changed shape.
 		merr = r.verifyRetainedMaterial(ctx, &agent, runNS, desired, desiredDigest)
 		if u := (*unresolvablePinError)(nil); merr != nil && errors.As(merr, &u) {
-			return ctrl.Result{}, r.reportUnresolvablePin(ctx, &agent, status, conds, u)
+			return ctrl.Result{}, r.reportUnresolvablePin(ctx, &agent, status, conds, u, gating, specDigest)
 		}
 	default:
 		material, merr = r.ensureRevisionMaterial(ctx, &agent, runNS, desired, desiredDigest, buffers)

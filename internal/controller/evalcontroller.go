@@ -277,9 +277,12 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("digest EvalSuite %s/%s: %w", suite.Namespace, suite.Name, err)
 	}
-	// A pinned rollback is promoted, not evaluated (Q5 (a)). The Agent
-	// reconciler's status write when it promotes, or when the pin goes,
-	// brings the next pass.
+	// While a pin is set, a recorded candidate the current spec does not mint
+	// is held (Q5 (a); design 16 A26.1, A26.5 (a)): an admitted pinned
+	// rollback is promoted, not evaluated, and beside a refused pin the
+	// candidate is one nothing will promote. The Agent reconciler's status
+	// write when it promotes, when the pin goes, or when a refusal's message
+	// changes, brings the next pass.
 	if pinned, err := pinnedRollbackCandidate(ctx, r.Client, agent); err != nil {
 		return ctrl.Result{}, fmt.Errorf("decide whether the pin on %s is admitted: %w", req.NamespacedName, err)
 	} else if pinned {

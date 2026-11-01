@@ -6,6 +6,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -113,10 +114,22 @@ func (r *AgentReconciler) resolveReleasePin(ctx context.Context, agent *assaydv1
 }
 
 // reportUnresolvablePin puts the refusal on the object. It is Degraded rather
-// than a bare error: the request failed, the user needs to see why, and
-// retrying forever against a digest that will never appear writes nothing.
+// than a bare error: the request failed and the user needs to see why. A
+// ReleasePinUnresolvable refusal returns without a requeue, so it is judged
+// again only on the next Agent event; a PinnedRevisionNotEligible refusal
+// requeues at CardDriftInterval (the pin step's caller), because a suite edit
+// can lift it and nothing watches suites.
+//
+// It is the one writer of the sentence that names a pinned-rollback hold
+// (design 16 A26.3): on a pass that enforces the gate, with a candidate
+// pending in the pass's own status, the message also says the recorded
+// candidate is held exactly when pinnedRollbackHolds does, against
+// specDigest, the digest the current spec mints as this pass computed it —
+// never the pin's, which the pin step later puts in its place. It reads
+// nothing: every pass that reaches a pin refusal has computed specDigest.
 func (r *AgentReconciler) reportUnresolvablePin(ctx context.Context, agent *assaydv1alpha1.Agent,
-	status *assaydv1alpha1.AgentStatus, conds *conditionSet, e *unresolvablePinError) error {
+	status *assaydv1alpha1.AgentStatus, conds *conditionSet, e *unresolvablePinError,
+	gating gateMode, specDigest string) error {
 	// Degraded, not Ready=False. The message says the current release is
 	// untouched and it is — so setting the canonical condition False would page
 	// the on-call for a typo in a 64-character digest while the agent serves
@@ -127,11 +140,45 @@ func (r *AgentReconciler) reportUnresolvablePin(ctx context.Context, agent *assa
 	if e.ineligible {
 		reason = ReasonPinnedRevisionNotEligible
 	}
-	conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, reason, e.Error())
+	msg := withHoldSentence(e.Error(), pinHoldSentence(agent, status, gating, specDigest))
+	conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, reason, msg)
 	status.Phase = assaydv1alpha1.PhaseDegraded
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation
 	return r.writeStatus(ctx, agent, status)
+}
+
+// withHoldSentence appends the held sentence to a refusal's message with one
+// separator: a full stop where the message does not already end in one, then
+// a space. With no sentence the message is unchanged.
+func withHoldSentence(msg, held string) string {
+	if held == "" {
+		return msg
+	}
+	if !strings.HasSuffix(msg, ".") {
+		msg += "."
+	}
+	return msg + " " + held
+}
+
+// pinHoldSentence is the sentence a pin refusal's Degraded message carries
+// while the recorded candidate is held beside the pin, or "" (design 16
+// A26.3). It holds exactly when the gate is enforced — only then does the eval
+// controller run —, a candidate is pending in status, and pinnedRollbackHolds
+// holds for the pin, that candidate and specDigest.
+func pinHoldSentence(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus, gating gateMode,
+	specDigest string) string {
+	if gating != gateEnforced || !candidatePending(status) || agent.Spec.Release == nil ||
+		!pinnedRollbackHolds(agent.Spec.Release.TargetRevisionDigest, status.CandidateRevisionDigest,
+			specDigest, true) {
+		return ""
+	}
+	return fmt.Sprintf("As of this pass, the recorded candidate, revision %s (digest %s), which the "+
+		"current spec does not mint, is held: the eval controller sends it no case until a change to "+
+		"the spec or its env sources ends the hold, and none after that while its pair has a final "+
+		"verdict or is in failed[]; clearing the pin supersedes it, unless the next pass stops first on "+
+		"a missing env source, an unavailable run namespace or a revision-name collision, each of which "+
+		"leaves it recorded.", status.CandidateRevision, status.CandidateRevisionDigest)
 }
 
 // verifyRetainedMaterial checks that a PINNED revision's immutable copies are

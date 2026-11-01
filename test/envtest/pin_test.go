@@ -571,14 +571,16 @@ func TestAPinToACandidateTheSpecHasLeftIsAdmitted(t *testing.T) {
 	bypassed(t, a, revB, dB, pinServing)
 }
 
-// A refused pin pauses nothing: the eval controller goes on evaluating the
-// candidate it names, since only an admitted pin's candidate is not
-// evaluated.
+// A26.1's R6a. A pin refused as the current candidate, beside a recorded
+// candidate that is the spec's revision, holds nothing: pinnedRollbackCandidate
+// holds only while the current spec does not mint the recorded candidate, so
+// the eval controller goes on evaluating it, and the refusal names no hold.
 func TestARefusedPinLeavesTheCandidatesRunGoing(t *testing.T) {
 	g := newEvalRig(t, "pinrefusedrun", echo("a", "one"), echo("b", "two"))
 	pinTo(t, g.a, g.dgst)
 	g.agentPass(t)
 	refusedPin(t, g.a, g.dgst, "current candidate")
+	wantHold(t, g.a, 0)
 	// A forged GatesBypassed pauses nothing: the eval controller derives
 	// admission from the spec and status, and reads no condition.
 	writeAgentStatus(t, g.a, func(st *assaydv1alpha1.AgentStatus) {
@@ -1119,15 +1121,17 @@ func TestTheEvalControllerHoldsAPinnedCandidateWhileTheSpecCannotBeDigested(t *t
 	}
 }
 
-// A pin that names some other revision than the recorded candidate pauses
-// nothing: here a pin to a digest no retained revision carries, which the
-// Agent reconciler refuses as unresolvable, beside a candidate whose run goes
-// on.
+// A26.1's R6b. A pin that names some other revision than the recorded
+// candidate, beside a candidate that is the spec's revision, pauses nothing:
+// here a pin to a digest no retained revision carries, which the Agent
+// reconciler refuses as unresolvable and whose refusal names no hold, beside
+// a candidate whose run goes on.
 func TestAPinNamingAnotherRevisionLeavesTheCandidatesRunGoing(t *testing.T) {
 	g := newEvalRig(t, "pinelsewhere", echo("a", "one"), echo("b", "two"))
 	pinTo(t, g.a, strings.Repeat("d", 64))
 	g.agentPass(t)
 	condIs(t, g.a, assaydv1alpha1.CondDegraded, metav1.ConditionTrue, "ReleasePinUnresolvable")
+	wantHold(t, g.a, 0)
 	for i := 0; i < 3; i++ {
 		g.evalPass(t)
 	}

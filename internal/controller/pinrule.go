@@ -66,9 +66,8 @@ func pinIneligible(pinDigest, specDigest string, status *assaydv1alpha1.AgentSta
 		return fmt.Sprintf("it is the current candidate: the revision the current spec mints, which "+
 			"the gate on EvalSuite %q evaluates before it serves. On a gated Agent a pin does not promote "+
 			"the revision the gate is evaluating (design 16 Q5 (a)). While this pin stands the release, "+
-			"its recorded candidate included, is left as it was, and the refusal does not stop the "+
-			"recorded candidate's run. To serve it without a verdict, remove spec.gates and then pin it (design 16 Q9); "+
-			"otherwise clear the pin and let the gate decide", suiteName)
+			"its recorded candidate included, is left as it was. To serve it without a verdict, remove "+
+			"spec.gates and then pin it (design 16 Q9); otherwise clear the pin and let the gate decide", suiteName)
 	}
 	if suiteDigest != "" && status.Eval != nil && pairFailed(status.Eval.Failed, pinDigest, suiteDigest) {
 		return fmt.Sprintf("status.eval.failed[] records it as failed against EvalSuite %q at digest "+

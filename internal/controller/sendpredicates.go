@@ -25,9 +25,11 @@ import (
 //	the EvalSuite CRD is installed              gateModeOf                  EvalSuiteInstalled
 //	a candidate is pending                      the rollout switch's        candidatePending
 //	                                            active != desired guard
-//	the candidate is not an admitted pinned     the pin step, before the    pinnedRollbackCandidate
-//	rollback                                    switch (GatesBypassed, or
-//	                                            the refusal's early return)
+//	the candidate is not held beside a pin      the pin step, before the    pinnedRollbackCandidate
+//	(a pinned rollback)                         switch (GatesBypassed, or
+//	                                            the refusal's early return,
+//	                                            whose Degraded names the
+//	                                            hold: pinnedRollbackHolds)
 //	the candidate is available                  workloadAvailableIn,        workloadAvailableIn
 //	                                            before the gate (not-ready
 //	                                            branches: EvalPaused)
@@ -58,35 +60,53 @@ func candidatePending(status *assaydv1alpha1.AgentStatus) bool {
 }
 
 // pinnedRollbackCandidate is the eval controller's reading of design 16
-// Q5 (a)'s "promotes, not evaluated": the candidate status records is a
-// pinned revision the Agent reconciler admits, so no case of it is sent. A
-// pinned revision that is not yet available is recorded as the candidate by
-// the rollout switch's not-ready branches, and is promoted by the pass after
-// it becomes available; between the two every other send predicate can hold,
-// and a run started there could fail it into status.eval.failed[].
+// Q5 (a)'s "promotes, not evaluated", widened by A26 (A22.33 (b), A26.5 (a)):
+// while a pin is set, the recorded candidate is held unless the current spec
+// mints it. A pinned revision that is not yet available is recorded as the
+// candidate by the rollout switch's not-ready branches, and is promoted by the
+// pass after it becomes available; between the two every other send
+// predicate can hold, and a run started there could fail it into
+// status.eval.failed[]. And a pin the Agent reconciler refuses — as the
+// current candidate, on failed[], or as unresolvable — leaves the recorded
+// candidate a revision the current spec does not mint, so every case sent to
+// it would be a real request to a revision nothing will promote.
 //
-// It derives admission as pinIneligible does, from the spec and status, and
-// reads no condition, so a forged GatesBypassed pauses nothing: the pin names
-// the recorded candidate, and that is not the revision the current spec mints
-// (specDigestOf). A pin the Agent reconciler refuses as the current candidate
-// therefore leaves the candidate's run going. Its other refusal, a pair failed
-// against the suite in force, needs no reading here: the eval controller
-// starts no run for a failed pair whatever this says. When the spec's digest cannot be computed — a
-// referenced source missing or unreadable — it reads the pin as admitted
-// and holds, since the Agent reconciler judges no pin on such a pass.
+// It reads no condition, so a forged GatesBypassed pauses nothing, and which
+// refusal, if any, the Agent reconciler gives for the pin does not enter it.
+// It computes the spec's digest (specDigestOf) on every pass with a pin set,
+// reading every env source of the spec uncached. A read error is returned,
+// and nothing is sent on that pass. pinnedRollbackHolds is the rule, which
+// the Agent reconciler's refusal message evaluates too (reportUnresolvablePin).
 func pinnedRollbackCandidate(ctx context.Context, reader client.Reader, agent *assaydv1alpha1.Agent) (bool, error) {
-	if agent.Spec.Release == nil {
-		return false, nil
-	}
-	d := agent.Spec.Release.TargetRevisionDigest
-	if d == "" || d != agent.Status.CandidateRevisionDigest {
+	if agent.Spec.Release == nil || agent.Spec.Release.TargetRevisionDigest == "" {
 		return false, nil
 	}
 	spec, ok, err := specDigestOf(ctx, reader, agent)
-	if err != nil || !ok {
+	if err != nil {
 		return true, err
 	}
-	return d != spec, nil
+	return pinnedRollbackHolds(agent.Spec.Release.TargetRevisionDigest,
+		agent.Status.CandidateRevisionDigest, spec, ok), nil
+}
+
+// pinnedRollbackHolds is the pinned-rollback hold as a pure function of the
+// pin, the recorded candidate's digest, the current spec's digest and whether
+// that digest was computed (design 16 A26.1, A26.2 (b), A26.5 (a)). With a pin
+// set it holds when the current spec does not mint the candidate. Where the
+// spec's digest cannot be computed — a referenced source missing or
+// unreadable, or a digest error — it holds only when the pin names the
+// candidate, since the Agent reconciler judges no pin on such a pass and the
+// candidate may be an admitted pinned rollback (A22.7); beside a pin that
+// names another revision it does not hold (A26.2 (b)). Whether a candidate is
+// pending is the caller's to check.
+func pinnedRollbackHolds(pin, candidate, spec string, computed bool) bool {
+	if pin == "" {
+		return false
+	}
+	if !computed {
+		return pin == candidate
+	}
+	return spec != candidate
 }
 
 // specDigestOf is the digest the Agent's current spec mints, with the content
