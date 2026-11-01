@@ -437,8 +437,8 @@ type ReleaseSpec struct {
 	// GatesBypassed=True/PinnedRollback. A pin admitted and not yet serving is
 	// judged again on each pass, so a suite edited to one it failed refuses
 	// it. A pin to the revision already serving is never refused, and reads
-	// GatesBypassed only while status.eval records no Passed verdict for it
-	// (design 16 Q5).
+	// GatesBypassed only while status.eval's pair records no Passed verdict
+	// for it (design 16 Q5, A25.5).
 	// +optional
 	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
 	TargetRevisionDigest string `json:"targetRevisionDigest,omitempty"`
@@ -539,6 +539,10 @@ const (
 	// 03 exists — or as Ready=False on an agent that is serving normally, which
 	// trips every alert keyed on the canonical condition.
 	CondProgressing = ConditionType("Progressing")
+	// CondActiveRevisionPassUnrecorded says that, while a gate is enforced,
+	// no Passed verdict is recorded for the active revision, in status.eval
+	// or status.eval.passed[], pinned or not (design 16 A25).
+	CondActiveRevisionPassUnrecorded = ConditionType("ActiveRevisionPassUnrecorded")
 
 	// Thirteen conditions design 02 §3.1 declares that had no constant here.
 	// Nine predate the round that added this comment; the vocabulary drifted
@@ -838,6 +842,15 @@ type EvalStatus struct {
 	// +kubebuilder:validation:MaxItems=10
 	// +optional
 	Failed []EvalPair `json:"failed,omitempty"`
+	// Passed records pairs whose Passed record a run start replaced, at most
+	// one per revision digest: a new entry for a revision replaces its old
+	// one at the newest place. A Failed verdict removes the revision's entry.
+	// At most 10; when full, the oldest whose revision digest is not
+	// status.activeRevisionDigest is evicted. It is read to say whether a
+	// Passed verdict is recorded for a revision, never to decide a promotion.
+	// +kubebuilder:validation:MaxItems=10
+	// +optional
+	Passed []EvalPair `json:"passed,omitempty"`
 }
 
 // EvalVerdict is a run's state.
@@ -1174,6 +1187,7 @@ func designConditions() []ConditionType {
 		CondGatesPassed,
 		CondGatesSkipped,
 		CondGatesBypassed,
+		CondActiveRevisionPassUnrecorded,
 		CondSandboxDowngraded,
 		CondTaskStateUnverified,
 		CondScratchpadDegraded,

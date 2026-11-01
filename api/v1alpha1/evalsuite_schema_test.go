@@ -124,7 +124,7 @@ func TestStatusEvalCarriesTheSlicesRecord(t *testing.T) {
 	eval := descend(t, agentSchema(t), "status.eval")
 	props := eval["properties"].(map[string]any)
 	for _, f := range []string{"suiteDigest", "endpointPath", "cardDigest", "blocked",
-		"blockedFor", "verdict", "cases", "failed"} {
+		"blockedFor", "verdict", "cases", "failed", "passed"} {
 		if _, ok := props[f]; !ok {
 			t.Errorf("status.eval carries no %q", f)
 		}
@@ -134,6 +134,7 @@ func TestStatusEvalCarriesTheSlicesRecord(t *testing.T) {
 		"status.eval.blockedFor": {"revisionDigest", "suiteDigest", "lockDeadline"},
 		"status.eval.cases":      {"id", "outcome", "reason", "claim"},
 		"status.eval.failed":     {"revisionDigest", "suiteDigest"},
+		"status.eval.passed":     {"revisionDigest", "suiteDigest"},
 	} {
 		node := descend(t, agentSchema(t), path)
 		p, _ := node["properties"].(map[string]any)
@@ -147,7 +148,7 @@ func TestStatusEvalCarriesTheSlicesRecord(t *testing.T) {
 	if got := verdict["enum"]; !sameStrings(got, []string{"Running", "Passed", "Failed"}) {
 		t.Errorf("status.eval.verdict enum is %v, want Running, Passed, Failed", got)
 	}
-	for f, want := range map[string]string{"cases": "20", "failed": "10"} {
+	for f, want := range map[string]string{"cases": "20", "failed": "10", "passed": "10"} {
 		if got := fmt.Sprint(props[f].(map[string]any)["maxItems"]); got != want {
 			t.Errorf("status.eval.%s maxItems is %v, want %v", f, got, want)
 		}

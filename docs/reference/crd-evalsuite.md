@@ -110,8 +110,8 @@ namespace; the suite names no Agent.
 
 The operator's eval controller sends each case to a gated candidate and
 writes the verdict to the Agent's status.eval. The Agent reconciler reads
-the suite a gate names and promotes a candidate only once status.eval
-records a Passed verdict for it against this suite's digest, with its card
+the suite a gate names and promotes a candidate only once status.eval's
+pair records a Passed verdict for it against this suite's digest, with its card
 recorded; until then it holds, under GatesPassed=False/EvalRunning while the
 run goes on.<br/>
         </td>
@@ -138,8 +138,8 @@ namespace; the suite names no Agent.
 
 The operator's eval controller sends each case to a gated candidate and
 writes the verdict to the Agent's status.eval. The Agent reconciler reads
-the suite a gate names and promotes a candidate only once status.eval
-records a Passed verdict for it against this suite's digest, with its card
+the suite a gate names and promotes a candidate only once status.eval's
+pair records a Passed verdict for it against this suite's digest, with its card
 recorded; until then it holds, under GatesPassed=False/EvalRunning while the
 run goes on.
 

@@ -332,8 +332,8 @@ func generatedAgentCRD(t *testing.T) *apiextensionsv1.CustomResourceDefinition {
 }
 
 // The schema check against the GENERATED Agent CRD: it finds nothing missing
-// there, and names each of the eight fields, and cases' claim, when the CRD
-// lacks it.
+// there, and names each of the nine fields, and cases' claim, when the CRD
+// lacks it. passed is the ninth (design 16 A25.6).
 func TestTheSchemaCheckReadsTheGeneratedAgentCRD(t *testing.T) {
 	if missing := evalRecordMissingFrom(generatedAgentCRD(t)); len(missing) != 0 {
 		t.Fatalf("the generated Agent CRD reads as missing %v; it carries every eval-record field", missing)
@@ -348,7 +348,7 @@ func TestTheSchemaCheckReadsTheGeneratedAgentCRD(t *testing.T) {
 		root.Properties["status"] = st
 	}
 	for _, f := range []string{"suiteDigest", "endpointPath", "cardDigest", "blocked", "blockedFor",
-		"verdict", "cases", "failed"} {
+		"verdict", "cases", "failed", "passed"} {
 		crd := generatedAgentCRD(t)
 		ev := evalOf(crd)
 		delete(ev.Properties, f)
@@ -368,8 +368,8 @@ func TestTheSchemaCheckReadsTheGeneratedAgentCRD(t *testing.T) {
 	}
 	crd = generatedAgentCRD(t)
 	crd.Spec.Versions[0].Name = "v1beta1"
-	if got := evalRecordMissingFrom(crd); len(got) != 8 {
-		t.Errorf("a CRD with no v1alpha1 version reads as missing %v; want all eight", got)
+	if got := evalRecordMissingFrom(crd); len(got) != 9 {
+		t.Errorf("a CRD with no v1alpha1 version reads as missing %v; want all nine", got)
 	}
 }
 

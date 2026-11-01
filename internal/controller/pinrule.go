@@ -111,16 +111,72 @@ func (r *AgentReconciler) pinRule(ctx context.Context, agent *assaydv1alpha1.Age
 		"it against EvalSuite %q at its current digest %s", suiteName, suiteDigest)
 }
 
-// evalPassedFor reports whether status.eval records a Passed verdict for the
-// digest.
+// evalPassedFor reports whether status.eval's pair records a Passed verdict
+// for the digest. It reads the pair alone, never status.eval.passed[]: the
+// promotion branch's pinned skip and the serving form's predicate share it,
+// and design 16 A25.5 keeps both on the pair.
 func evalPassedFor(e *assaydv1alpha1.EvalStatus, digest string) bool {
 	return e != nil && e.Verdict == assaydv1alpha1.EvalVerdictPassed && e.RevisionDigest == digest
 }
 
+// passedEntry is status.eval.passed[]'s entry for the digest, or nil. The
+// eval controller keeps at most one per revision digest (design 16 A25.4).
+func passedEntry(e *assaydv1alpha1.EvalStatus, digest string) *assaydv1alpha1.EvalPair {
+	if e == nil || digest == "" {
+		return nil
+	}
+	for i := range e.Passed {
+		if e.Passed[i].RevisionDigest == digest {
+			return &e.Passed[i]
+		}
+	}
+	return nil
+}
+
+// ReasonNoPassedVerdictRecorded is ActiveRevisionPassUnrecorded's one reason
+// (design 16 A25.7 (a)).
+const ReasonNoPassedVerdictRecorded = "NoPassedVerdictRecorded"
+
+// activeRevisionPassUnrecorded is the unpassed statement's message, derived
+// from the spec and status alone, or "" (design 16 A25.1, A25.9). It holds
+// while the gate is enforced (the caller's to check), status records an
+// active revision digest, and no Passed verdict is recorded for that digest,
+// in status.eval's pair or in status.eval.passed[], pinned or not. It reads
+// no stored condition, and its own test is written here rather than through
+// evalPassedFor, which the pinned skip and the serving form keep on the pair.
+//
+// The message names only the active revision and no status.eval pair, so a
+// run start, a claim and a case record leave it unchanged; it says nothing
+// of why no pass is recorded, because the record does not say. Its closing
+// sentence changes only with whether spec.release.targetRevisionDigest is
+// set.
+func activeRevisionPassUnrecorded(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentStatus) string {
+	d := status.ActiveRevisionDigest
+	if d == "" {
+		return ""
+	}
+	e := status.Eval
+	if (e != nil && e.Verdict == assaydv1alpha1.EvalVerdictPassed && e.RevisionDigest == d) ||
+		passedEntry(e, d) != nil {
+		return ""
+	}
+	msg := fmt.Sprintf("revision %s (digest %s) is the active revision, and no Passed verdict is "+
+		"recorded for it in status.eval or status.eval.passed[]. A gate evaluates each new revision "+
+		"this spec mints before it takes traffic, not the revision already active. This condition is "+
+		"withdrawn when a revision with a recorded Passed verdict is promoted. ", status.ActiveRevision, d)
+	if agent.Spec.Release == nil || agent.Spec.Release.TargetRevisionDigest == "" {
+		return msg + "The next revision this spec mints is held for its gate before it takes traffic."
+	}
+	return msg + "While spec.release.targetRevisionDigest is set, no revision this spec mints is " +
+		"promoted; GatesBypassed or Degraded says what the pin does, except on a pass that stops " +
+		"earlier, such as one on an unresolved env source."
+}
+
 // servingPinBypass is GatesBypassed's message for a pin that names the
 // revision serving, derived from the spec and status alone, or "". It holds
-// while the gate is enforced (the caller's to check) and status.eval records
-// no Passed verdict for that revision. No stored condition is read, so a
+// while the gate is enforced (the caller's to check) and status.eval's pair
+// records no Passed verdict for that revision; status.eval.passed[] does not
+// enter the predicate (design 16 A25.5). No stored condition is read, so a
 // forged one is recomputed away, and a pass that does not enforce the gate
 // costs nothing once the gate is enforced again.
 //
@@ -143,17 +199,20 @@ func servingPinBypass(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentS
 		msg += "; design 16 Q5 (a) admitted the pin: " + why
 	}
 	return msg + ". " + servingRecord(status.Eval, d) + " While the pin stands nothing is evaluated " +
-		"in its place, and GatesPassed is not asserted for it, so it keeps describing the revision " +
-		"status.eval names"
+		"in its place, and GatesPassed is not asserted again, so where it is set it keeps its last reading"
 }
 
 // servingRecord is what status.eval records about digest d, which has no
-// Passed verdict there, chosen from a fixed set of sentences by the record
-// alone: status.eval's one pair, and the failed[] pairs for d. Only when the
-// pair names another revision does it say that whether d passed is not
-// recorded, because then the pair says nothing about d; and it adds "or
+// Passed verdict in its pair, chosen from a fixed set of sentences by the
+// record alone: status.eval's one pair, status.eval.passed[]'s entry for d,
+// and the failed[] pairs for d. Where passed[] holds no entry for d, only
+// when the pair names another revision does it say that whether d passed is
+// not recorded, because then the pair says nothing about d; and it adds "or
 // never ran" only when failed[] holds no pair for d either, since a failed[]
-// pair records a run of it.
+// pair records a run of it. Where passed[] holds an entry for d, the first
+// sentence speaks of status.eval's pair, drops the not-recorded clause, and
+// is followed by the entry; it says nothing of how the entry came (design 16
+// A25.5).
 func servingRecord(e *assaydv1alpha1.EvalStatus, d string) string {
 	var suites []string
 	if e != nil {
@@ -164,7 +223,12 @@ func servingRecord(e *assaydv1alpha1.EvalStatus, d string) string {
 		}
 	}
 	var out string
+	entry := passedEntry(e, d)
 	switch {
+	case entry != nil && e.RevisionDigest == "":
+		out = "status.eval's pair records no run."
+	case entry != nil && e.RevisionDigest != d:
+		out = fmt.Sprintf("status.eval's pair records a run of another revision (digest %s).", e.RevisionDigest)
 	case e == nil || e.RevisionDigest == "":
 		out = "status.eval records no run."
 	case e.RevisionDigest != d && len(suites) > 0:
@@ -180,6 +244,10 @@ func servingRecord(e *assaydv1alpha1.EvalStatus, d string) string {
 			e.SuiteDigest)
 	default:
 		out = fmt.Sprintf("status.eval names it against suite digest %s with its verdict cleared.", e.SuiteDigest)
+	}
+	if entry != nil {
+		out += fmt.Sprintf(" status.eval.passed[] records a Passed verdict for it against suite digest %s.",
+			entry.SuiteDigest)
 	}
 	if len(suites) > 0 {
 		out += fmt.Sprintf(" status.eval.failed[] records %d failed pair(s) for it, against suite digest(s) %s.",

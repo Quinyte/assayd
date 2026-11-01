@@ -32,15 +32,20 @@ reasons:
   - reason: ActiveRevisionNotEvaluated
     state: >-
       The Agent declares a gate, the EvalSuite CRD is installed, and the
-      revision being served is the desired one, but `status.eval` records no
-      `Passed` verdict for its digest. A gate added after the revision began
-      serving is one cause; a revert to a revision whose own `Passed` record a
-      later candidate's record has replaced is another, and the reason does not
-      tell them apart.
+      revision being served is the desired one, but `status.eval`'s pair
+      records no `Passed` verdict for its digest and `status.eval.passed[]`
+      holds no entry for it. A gate added after the revision began serving is
+      one cause; a revert to a revision whose own `Passed` record a later
+      candidate's record has replaced, where `passed[]` no longer holds it —
+      a run start before the upgrade that built `passed[]`, a run start on a
+      CRD that does not keep `passed`, an eviction, or a later `Failed`
+      verdict for it — is another, and the reason does not tell
+      them apart.
     operator: >-
       Sets `GatesPassed=False` with this reason in the promotion branch and
       changes nothing else: the revision keeps serving, phase `Ready`. The
-      message says what `status.eval` records instead, and that the revision
+      message says what `status.eval`'s pair records instead, that
+      `status.eval.passed[]` holds no entry for it, and that the revision
       serving is not re-evaluated, because `gates` is policy surface; the next
       revision the spec mints is held for its gate.
     traffic: not-withdrawn
@@ -340,9 +345,10 @@ reasons:
       The Agent declares gates, the desired revision has not satisfied them, and
       its digest differs from the active one. `GatesPassed` names why. The
       operator's eval controller runs the suite and writes the verdict to
-      `status.eval`; a gate is satisfied only by a `Passed` verdict there for
-      the candidate's full digest and the suite read in this pass, with its card
-      recorded.
+      `status.eval`; a gate is satisfied only by a `Passed` verdict in
+      `status.eval`'s pair for the candidate's full digest and the suite read
+      in this pass, with its card recorded. `status.eval.passed[]` never
+      satisfies a gate.
     operator: >-
       Records the candidate, holds the promotion at zero traffic and sets phase
       `Held` and `Progressing=True` with this reason. `Ready` stays `True` where
@@ -673,15 +679,19 @@ reasons:
 
   - reason: EvalPassed
     state: >-
-      `status.eval` records `Passed` for the revision being promoted or
-      serving, by its full digest. For a candidate, the gate was
-      satisfied: the verdict is for the suite digest read in this pass,
-      and a card digest is recorded for the candidate.
+      `status.eval`'s pair records `Passed` for the revision being promoted
+      or serving, by its full digest; or, for a revision the spec mints that
+      is already active, `status.eval.passed[]` holds an entry for it, as
+      after a revert to a revision that passed once a later run start has
+      replaced its record (design 16 A25.5). For a candidate, the gate was
+      satisfied: the verdict in the pair is for the suite digest read in this
+      pass, and a card digest is recorded for the candidate.
     operator: >-
-      Sets `GatesPassed=True` with this reason in the promotion branch,
-      naming both digests and the score, and promotes as `RolloutComplete`
-      does. It is set only when that record exists, never merely because
-      the promotion branch ran.
+      Sets `GatesPassed=True` with this reason in the promotion branch, and
+      promotes as `RolloutComplete` does. From the pair it names both digests
+      and the score; from a `passed[]` entry it names the entry's suite digest
+      and says `passed[]` keeps no score. It is set only when that record
+      exists, never merely because the promotion branch ran.
     traffic: not-withdrawn
 
   - reason: EvalPaused
@@ -719,9 +729,13 @@ reasons:
       CRD, through the uncached reader behind a 30 s cache, and its
       `v1alpha1` schema lacks one of `status.eval`'s `suiteDigest`,
       `endpointPath`, `cardDigest`, `blocked`, `blockedFor`, `verdict`,
-      `cases` (with `claim`) or `failed`. Such a CRD prunes them from
-      every write without an error. It is what an upgraded install has,
-      because `helm upgrade` never updates a chart's `crds/`.
+      `cases` (with `claim`), `failed` or `passed`. Such a CRD prunes them
+      from every write without an error. It is what an upgraded install has,
+      because `helm upgrade` never updates a chart's `crds/`. Where only
+      `passed` is missing, verdicts are kept and what is lost is each
+      `Passed` record a later run start replaces; the eval controller still
+      starts runs and records verdicts, because it does not read `passed[]`
+      back, so the hold stops promotion, not evaluation.
     operator: >-
       Sets `GatesPassed=False` with this reason in the gate branch, holds the
       candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
@@ -730,7 +744,11 @@ reasons:
       `Ready` as they set them. `Ready` stays `True` where an earlier revision
       serves, and goes `False` with this reason where none does. Checked before
       any of `status.eval` is read. The message names the missing fields and the
-      remedy: apply this release's `charts/assayd/crds/` with `kubectl`.
+      remedy: apply this release's `charts/assayd/crds/` with `kubectl`. Where
+      only `passed` is missing it says instead that a `Passed` record a later
+      run start replaces is lost, that the candidate holds until this
+      release's CRDs are applied, and that `ActiveRevisionPassUnrecorded`
+      beside it may name an active revision that passed.
     traffic: not-withdrawn
     note: >-
       Not withdrawn where an earlier revision is active. Where the Agent has
@@ -1045,6 +1063,40 @@ reasons:
       converges, both messages name the verdict and its digests (design 16
       Q9).
 
+  - reason: NoPassedVerdictRecorded
+    state: >-
+      The Agent declares a gate, the EvalSuite CRD is installed,
+      `status.activeRevisionDigest` is set, and no `Passed` verdict is
+      recorded for it: `status.eval`'s pair records none for that digest, and
+      `status.eval.passed[]` holds no entry for it. That is so pinned or not,
+      and for a revision that was active before the gate was added. It is
+      derived from the spec and status alone, reads no stored condition and
+      no `EvalSuite`, so a revision that passed an earlier suite and never ran
+      the suite in force, or whose later run was superseded before a verdict,
+      reads as passed (design 16 A25.11). A revision that passed, after a run
+      start on a CRD that does not keep `passed`, or whose record was
+      replaced before the upgrade that built `passed[]`, reads as unpassed.
+    operator: >-
+      Sets `ActiveRevisionPassUnrecorded=True` with this reason, in
+      `assessGates`, from status as the pass found it, so a pass that returns
+      early, a refused pin's included, still carries it; and again after the
+      rollout switch, from the status the pass leaves. It moves no `Ready`,
+      `Progressing`, `Degraded` or phase, holds nothing and requeues nothing,
+      and the gate never reads it. The message names the active revision and
+      its digest and no `status.eval` pair, so a run start, a claim and a case
+      record leave it unchanged, and closes with a sentence on whether
+      `spec.release.targetRevisionDigest` is set. It is owned and not sticky:
+      withdrawn on the first pass on which it no longer derives — a `Passed`
+      verdict recorded for the active revision, the promotion of a revision
+      that has one, or the gate removed or not enforced. A pin removed,
+      refused or changed does not withdraw it.
+    traffic: not-withdrawn
+    note: >-
+      A pinned active revision with no recorded pass carries both this and
+      `GatesBypassed`'s serving form. An operator rolled back to a release
+      that does not own this type leaves it standing, and an older operator's
+      whole-status write erases `status.eval.passed[]`.
+
   - reason: NoRolloutInFlight
     state: >-
       The desired revision is not available and no other healthy revision is
@@ -1141,13 +1193,16 @@ reasons:
       revision the current spec mints, and `status.eval.failed[]` does not
       record it against the suite in force, or there is no current suite
       digest to check it against — or the pin names the revision serving and
-      `status.eval` records no `Passed` verdict for it. The second form is a
+      `status.eval`'s pair records no `Passed` verdict for it;
+      `status.eval.passed[]` does not enter that test. The second form is a
       statement about the record, not a claim that the gate was bypassed: its
       message says only what `status.eval` holds — no run; a run of another
-      revision, in which case whether this one passed is not recorded, and,
-      when `failed[]` names no pair of it either, whether it ever ran; a `Failed` verdict for it, naming the suite digest; a run of
-      it with no verdict yet; or its pair with the verdict cleared — and how
-      many pairs `failed[]` records for it.
+      revision, in which case, where `passed[]` holds no entry for it, whether
+      this one passed is not recorded, and, when `failed[]` names no pair of it
+      either, whether it ever ran; a `Failed` verdict for it, naming the suite
+      digest; a run of it with no verdict yet; or its pair with the verdict
+      cleared — then the `passed[]` entry for it, naming its suite digest,
+      where there is one, and how many pairs `failed[]` records for it.
     operator: >-
       Sets `GatesBypassed=True` with this reason, naming the pinned revision
       and its digest. For a revision not yet serving the message says it will
@@ -1156,14 +1211,13 @@ reasons:
       on each pass until it serves, and it is asserted as soon as the pin is
       admitted, so an exit later in the same pass keeps it. For the revision
       serving it says it serves by pin and what the record holds about it;
-      while that holds the promotion branch
-      does not assert `GatesPassed`, which keeps describing the revision
-      `status.eval` names. The condition is derived from the spec and status
+      while that holds the promotion branch does not assert `GatesPassed`
+      again, so where it is set it keeps its last reading. The condition is derived from the spec and status
       on every pass, `assessGates` included, and no stored condition is read,
       so a forged one is recomputed away. It is owned and not sticky, and is
       withdrawn on the first pass on which it no longer derives: the pin
       removed, or changed to a digest that is neither admitted nor serving
-      unevaluated; a `Passed` verdict recorded for the serving pinned
+      unevaluated; a `Passed` verdict recorded in `status.eval`'s pair for the serving pinned
       revision; the pin refused; or a pin not yet serving that no longer
       resolves. A pending pin's form is also withdrawn on a pass that returns
       before the pin step — the run namespace unavailable, or a source of the

@@ -104,6 +104,40 @@ func TestServingRecordSaysOnlyWhatStatusEvalHolds(t *testing.T) {
 			"status.eval records a run of another revision (digest sha256:other), so whether this revision " +
 				"passed its gate is not recorded. status.eval.failed[] records 1 failed pair(s) " +
 				"for it, against suite digest(s) sha256:s1."},
+		// Where status.eval.passed[] holds an entry for it, the not-recorded
+		// clause is dropped, the first sentence speaks of the pair, and the
+		// entry is named before the failed[] sentence (design 16 A25.5).
+		{"passed[] holds it, the pair records no run", &assaydv1alpha1.EvalStatus{
+			Passed: failed(assaydv1alpha1.EvalPair{RevisionDigest: other, SuiteDigest: s2},
+				assaydv1alpha1.EvalPair{RevisionDigest: d, SuiteDigest: s1})},
+			"status.eval's pair records no run. status.eval.passed[] records a Passed verdict for it " +
+				"against suite digest sha256:s1."},
+		{"passed[] holds it, another revision's pair", &assaydv1alpha1.EvalStatus{RevisionDigest: other,
+			SuiteDigest: s2, Verdict: assaydv1alpha1.EvalVerdictRunning,
+			Passed: failed(assaydv1alpha1.EvalPair{RevisionDigest: d, SuiteDigest: s1})},
+			"status.eval's pair records a run of another revision (digest sha256:other). status.eval.passed[] " +
+				"records a Passed verdict for it against suite digest sha256:s1."},
+		{"passed[] holds it, another revision's pair, failed[] naming its own", &assaydv1alpha1.EvalStatus{
+			RevisionDigest: other, SuiteDigest: s2, Verdict: assaydv1alpha1.EvalVerdictFailed,
+			Failed: failed(assaydv1alpha1.EvalPair{RevisionDigest: d, SuiteDigest: s2}),
+			Passed: failed(assaydv1alpha1.EvalPair{RevisionDigest: d, SuiteDigest: s1})},
+			"status.eval's pair records a run of another revision (digest sha256:other). status.eval.passed[] " +
+				"records a Passed verdict for it against suite digest sha256:s1. status.eval.failed[] records 1 " +
+				"failed pair(s) for it, against suite digest(s) sha256:s2."},
+		{"passed[] holds it, its own run with no verdict", &assaydv1alpha1.EvalStatus{RevisionDigest: d,
+			SuiteDigest: s2, Verdict: assaydv1alpha1.EvalVerdictRunning,
+			Passed: failed(assaydv1alpha1.EvalPair{RevisionDigest: d, SuiteDigest: s1})},
+			"status.eval records a run of it against suite digest sha256:s2 with no verdict yet. " +
+				"status.eval.passed[] records a Passed verdict for it against suite digest sha256:s1."},
+		{"passed[] holds it, its own pair, verdict cleared", &assaydv1alpha1.EvalStatus{RevisionDigest: d,
+			SuiteDigest: s2, Passed: failed(assaydv1alpha1.EvalPair{RevisionDigest: d, SuiteDigest: s1})},
+			"status.eval names it against suite digest sha256:s2 with its verdict cleared. " +
+				"status.eval.passed[] records a Passed verdict for it against suite digest sha256:s1."},
+		{"passed[] holds another revision only", &assaydv1alpha1.EvalStatus{RevisionDigest: other,
+			SuiteDigest: s1, Verdict: assaydv1alpha1.EvalVerdictFailed,
+			Passed: failed(assaydv1alpha1.EvalPair{RevisionDigest: other, SuiteDigest: s1})},
+			"status.eval records a run of another revision (digest sha256:other), so whether this revision " +
+				"passed its gate or never ran is not recorded."},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -123,8 +157,8 @@ func TestServingPinBypassIsTheRecordAndNothingElse(t *testing.T) {
 	st := &assaydv1alpha1.AgentStatus{ActiveRevision: "rev", ActiveRevisionDigest: d,
 		Eval: &assaydv1alpha1.EvalStatus{RevisionDigest: d, SuiteDigest: "sha256:s1",
 			Verdict: assaydv1alpha1.EvalVerdictFailed}}
-	tail := " While the pin stands nothing is evaluated in its place, and GatesPassed is not asserted for " +
-		"it, so it keeps describing the revision status.eval names"
+	tail := " While the pin stands nothing is evaluated in its place, and GatesPassed is not asserted " +
+		"again, so where it is set it keeps its last reading"
 	head := "spec.release.targetRevisionDigest pins revision rev (digest sha256:pinned), the revision serving, " +
 		"and it serves by pin"
 	rec := ". status.eval records a Failed verdict for it against suite digest sha256:s1."
@@ -137,5 +171,15 @@ func TestServingPinBypassIsTheRecordAndNothingElse(t *testing.T) {
 	st.Eval.Verdict = assaydv1alpha1.EvalVerdictPassed
 	if got := servingPinBypass(agent, st, ""); got != "" {
 		t.Errorf("a pinned revision with a Passed verdict still reads a serving form: %q", got)
+	}
+	// A passed[] entry does not enter the predicate: the serving form keeps
+	// the pair (design 16 A25.5), and names the entry.
+	st.Eval = &assaydv1alpha1.EvalStatus{RevisionDigest: "sha256:other", SuiteDigest: "sha256:s2",
+		Verdict: assaydv1alpha1.EvalVerdictRunning,
+		Passed:  []assaydv1alpha1.EvalPair{{RevisionDigest: d, SuiteDigest: "sha256:s1"}}}
+	rec = ". status.eval's pair records a run of another revision (digest sha256:other). status.eval.passed[] " +
+		"records a Passed verdict for it against suite digest sha256:s1."
+	if got, want := servingPinBypass(agent, st, ""), head+rec+tail; got != want {
+		t.Errorf("a passed[] entry for the pinned revision\n got %q\nwant %q", got, want)
 	}
 }

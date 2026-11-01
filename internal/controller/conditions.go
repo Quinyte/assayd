@@ -119,6 +119,10 @@ var ownedTypes = map[assaydv1alpha1.ConditionType]bool{
 	// it clears on the first pass after the pin goes, or after the pin is
 	// refused.
 	assaydv1alpha1.CondGatesBypassed: true,
+	// Design 16 A25: the unpassed statement. Owned, abnormal-true and NOT
+	// sticky: it is derived from the spec and status on every pass, so it is
+	// withdrawn on the first pass on which it no longer derives.
+	assaydv1alpha1.CondActiveRevisionPassUnrecorded: true,
 }
 
 // stickyTypes are owned conditions that must stay in the list once set, flipped
