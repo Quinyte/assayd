@@ -140,18 +140,25 @@ func (r *AgentReconciler) reportUnresolvablePin(ctx context.Context, agent *assa
 	if e.ineligible {
 		reason = ReasonPinnedRevisionNotEligible
 	}
-	msg := e.Error()
-	if held := pinHoldSentence(agent, status, gating, specDigest); held != "" {
-		if !strings.HasSuffix(msg, ".") {
-			msg += "."
-		}
-		msg += " " + held
-	}
+	msg := withHoldSentence(e.Error(), pinHoldSentence(agent, status, gating, specDigest))
 	conds.set(assaydv1alpha1.CondDegraded, metav1.ConditionTrue, reason, msg)
 	status.Phase = assaydv1alpha1.PhaseDegraded
 	status.Conditions = conds.merge(agent.Status.Conditions)
 	status.ObservedGeneration = agent.Generation
 	return r.writeStatus(ctx, agent, status)
+}
+
+// withHoldSentence appends the held sentence to a refusal's message with one
+// separator: a full stop where the message does not already end in one, then
+// a space. With no sentence the message is unchanged.
+func withHoldSentence(msg, held string) string {
+	if held == "" {
+		return msg
+	}
+	if !strings.HasSuffix(msg, ".") {
+		msg += "."
+	}
+	return msg + " " + held
 }
 
 // pinHoldSentence is the sentence a pin refusal's Degraded message carries

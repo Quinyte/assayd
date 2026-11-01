@@ -4,8 +4,14 @@
 package controller
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
@@ -72,6 +78,71 @@ func TestThePinHoldSentenceIsScopedToAnEnforcedGateAndAPendingCandidate(t *testi
 		}
 		if got != "" && (!strings.Contains(got, "c0ffee") || !strings.Contains(got, cand)) {
 			t.Errorf("%s: the sentence does not name the recorded candidate: %s", c.name, got)
+		}
+	}
+}
+
+// A26.3's sentence, word for word, with failed[] written plainly as other
+// condition messages write it.
+func TestThePinHoldSentenceIsA26sDecidedSentence(t *testing.T) {
+	a := &assaydv1alpha1.Agent{Spec: assaydv1alpha1.AgentSpec{
+		Release: &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: "sha256:spec"}}}
+	st := &assaydv1alpha1.AgentStatus{ActiveRevisionDigest: "sha256:active", CandidateRevision: "c0ffee",
+		CandidateRevisionDigest: "sha256:cand"}
+	const want = "As of this pass, the recorded candidate, revision c0ffee (digest sha256:cand), which the " +
+		"current spec does not mint, is held: the eval controller sends it no case until a change to the spec " +
+		"or its env sources ends the hold, and none after that while its pair has a final verdict or is in " +
+		"failed[]; clearing the pin supersedes it, unless the next pass stops first on a missing env source, " +
+		"an unavailable run namespace or a revision-name collision, each of which leaves it recorded."
+	if got := pinHoldSentence(a, st, gateEnforced, "sha256:spec"); got != want {
+		t.Errorf("the held sentence is\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A26.3's one separator: a refusal text that ends in a full stop gets a
+// space, and one that does not gets a full stop and a space.
+func TestTheHoldSentenceIsAppendedWithOneSeparator(t *testing.T) {
+	for _, c := range []struct{ msg, held, want string }{
+		{"refused.", "Held.", "refused. Held."},
+		{"refused", "Held.", "refused. Held."},
+		{"refused", "", "refused"},
+	} {
+		if got := withHoldSentence(c.msg, c.held); got != c.want {
+			t.Errorf("withHoldSentence(%q, %q) = %q, want %q", c.msg, c.held, got, c.want)
+		}
+	}
+}
+
+// failingReader fails every Get with err, as an unavailable API server does.
+type failingReader struct{ err error }
+
+func (f failingReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
+	return f.err
+}
+
+func (f failingReader) List(context.Context, client.ObjectList, ...client.ListOption) error {
+	return f.err
+}
+
+// A read error of an env source other than NotFound or Forbidden, on a pass
+// with a pin set, is returned and holds the pass, so nothing is sent on it —
+// beside a pin that names the recorded candidate or not.
+func TestATransientEnvSourceReadErrorHoldsAPinnedPass(t *testing.T) {
+	unavailable := apierrors.NewServiceUnavailable("the API server is restarting")
+	for _, pin := range []string{"sha256:cand", "sha256:other"} {
+		a := &assaydv1alpha1.Agent{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "a"},
+			Spec: assaydv1alpha1.AgentSpec{
+				Runtime: &assaydv1alpha1.AgentRuntime{Image: "ghcr.io/acme/agent@sha256:" + strings.Repeat("a", 64),
+					Env: []corev1.EnvVar{{Name: "MODE", ValueFrom: &corev1.EnvVarSource{
+						ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "cfg"}, Key: "MODE"}}}}},
+				Release: &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: pin}},
+			Status: assaydv1alpha1.AgentStatus{CandidateRevisionDigest: "sha256:cand"},
+		}
+		held, err := pinnedRollbackCandidate(context.Background(), failingReader{unavailable}, a)
+		if !held || !apierrors.IsServiceUnavailable(err) {
+			t.Errorf("pin %s: pinnedRollbackCandidate = (%v, %v), want (true, the read error)", pin, held, err)
 		}
 	}
 }
