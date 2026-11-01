@@ -44,6 +44,19 @@ type candidateStub struct {
 	cardGets int
 	// refuse fails the card fetch at the connection.
 	refuse bool
+	// hang holds the card fetch, before its headers, until its request's
+	// context ends, or for hangFor, after which the card is served: a fetch
+	// with no bound of its own then starts a run rather than hanging the
+	// test. stallBody holds it the same way after the headers, at the first
+	// read of the body.
+	hang, stallBody bool
+	hangFor         time.Duration
+	// cardBody, when set, is the card's body in place of card.
+	cardBody io.Reader
+	// deadline is the last card fetch's request deadline, and hasDeadline
+	// whether it had one.
+	deadline    time.Time
+	hasDeadline bool
 }
 
 func newCandidateStub(card string) *candidateStub {
@@ -57,12 +70,25 @@ func (s *candidateStub) Do(req *http.Request) (*http.Response, error) {
 	}
 	if req.Method == http.MethodGet {
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		s.cardGets++
-		if s.refuse {
+		s.deadline, s.hasDeadline = req.Context().Deadline()
+		refuse, hang, stall, hangFor, card, cardBody := s.refuse, s.hang, s.stallBody, s.hangFor, s.card, s.cardBody
+		s.mu.Unlock()
+		if refuse {
 			return nil, errors.New("connection refused")
 		}
-		return answer(http.StatusOK, s.card)
+		if hang {
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-time.After(hangFor):
+			}
+		}
+		if cardBody == nil {
+			cardBody = strings.NewReader(card)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Request: req,
+			Body: io.NopCloser(&contextBody{ctx: req.Context(), r: cardBody, stall: stall, stallFor: hangFor})}, nil
 	}
 	var m struct {
 		Message struct {
@@ -84,6 +110,43 @@ func (s *candidateStub) Do(req *http.Request) (*http.Response, error) {
 		"status":    map[string]any{"state": "TASK_STATE_COMPLETED"},
 		"artifacts": []any{map[string]any{"artifactId": "a", "parts": []any{map[string]any{"text": "echo: " + text}}}}}})
 	return answer(http.StatusOK, string(out))
+}
+
+// contextBody is a card body read as net/http's transport reads one: tied to
+// the request's context, so a read after that context ends fails with its
+// error. stall holds the first read until the context ends or stallFor
+// passes.
+type contextBody struct {
+	ctx      context.Context
+	r        io.Reader
+	stall    bool
+	stallFor time.Duration
+}
+
+func (b *contextBody) Read(p []byte) (int, error) {
+	if b.stall {
+		b.stall = false
+		select {
+		case <-b.ctx.Done():
+		case <-time.After(b.stallFor):
+		}
+	}
+	if err := b.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return b.r.Read(p)
+}
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
 }
 
 func (s *candidateStub) count(text string) int {
@@ -260,6 +323,11 @@ func TestEachWaitingPassReturnsItsInterval(t *testing.T) {
 		"a body that does not parse": {card: "not json", want: CardRetryInterval},
 		"a refusal that read a card": {card: strings.Replace(evalCard, "HTTP+JSON", "JSONRPC", 1),
 			want: CardDriftInterval},
+		// A card that does not match the one status.cards[] records is a
+		// refusal that read a card too, not a failed fetch.
+		"a card whose digest is not the recorded one": {edit: func(a *assaydv1alpha1.Agent, _ *evalFixture) {
+			a.Status.Cards[0].Digest = digestOfCard("another card")
+		}, want: CardDriftInterval},
 		"a final verdict": {edit: func(a *assaydv1alpha1.Agent, f *evalFixture) {
 			a.Status.Eval = &assaydv1alpha1.EvalStatus{RevisionDigest: a.Status.CandidateRevisionDigest,
 				SuiteDigest: f.sd, Verdict: assaydv1alpha1.EvalVerdictFailed}
@@ -550,9 +618,16 @@ func TestTheEndpointPathIsBounded(t *testing.T) {
 	}
 }
 
-// The run-start refusals through Reconcile: a tenanted interface (#108), and
-// a relative card URL whose path has no leading "/" (#105 item 9), each write
-// EvalBindingUnsupported to blocked and start no run.
+// The run-start refusals through Reconcile: a tenanted interface (#108), a
+// relative card URL whose path has no leading "/" (#105 item 9), a path that
+// is too long, not UTF-8, or holds an escaped slash, and a wrongly typed
+// interface field (#115 item 1) each write
+// EvalBindingUnsupported to blocked, start no run, and requeue at
+// CardDriftInterval, as a run-start refusal that read a card does (§1.1,
+// "What wakes the eval controller while it waits").
+//
+// Mutation (#115 item 1): requeue the wrongly typed interface field's refusal
+// at CardRetryInterval, as a failed fetch.
 func TestARunStartRefusalIsWrittenToBlocked(t *testing.T) {
 	for name, card := range map[string]string{
 		"a tenanted interface": strings.Replace(evalCard, `"protocolVersion":"1.0"`,
@@ -582,12 +657,16 @@ func TestARunStartRefusalIsWrittenToBlocked(t *testing.T) {
 			if err := f.c.Status().Update(context.Background(), a); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := f.pass(t); err != nil {
+			res, err := f.pass(t)
+			if err != nil {
 				t.Fatal(err)
 			}
 			e := f.agent(t).Status.Eval
 			if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalBindingUnsupported {
 				t.Fatalf("status.eval is %+v; want blocked EvalBindingUnsupported", e)
+			}
+			if res.RequeueAfter != CardDriftInterval {
+				t.Errorf("a refusal that read a card requeued at %v, want CardDriftInterval", res.RequeueAfter)
 			}
 			if e.Verdict != "" || e.EndpointPath != "" || f.stub.total() != 0 {
 				t.Errorf("a refused card started a run: %+v, %d sends", e, f.stub.total())
@@ -995,6 +1074,201 @@ func TestAFailedFetchNamesItsOwnClass(t *testing.T) {
 	if e == nil || e.Blocked == nil || !strings.Contains(e.Blocked.Message, "refused or failed") ||
 		strings.Contains(e.Blocked.Message, "not JSON") {
 		t.Errorf("a refused run-start fetch: blocked %+v; want it to name the refused connection", e)
+	}
+}
+
+// The run-start card fetch reads at most 1 MiB + 1 byte (§1.1 step 2): a card
+// of exactly 1 MiB starts a run, and one a byte longer is a fetch that did not
+// succeed, EvalAwaitingCard naming the bound, retried at CardRetryInterval.
+// The recorded digest is the whole body's, so a fetch that read past the
+// bound would match it and start the run. Of a 4 MiB body, at most 1 MiB + 1
+// byte is read, as evalclient's TestTheBodyCap measures for an answer.
+//
+// Mutations (#115 item 2): delete the length check after the LimitReader;
+// read the body with no LimitReader.
+func TestTheRunStartCardFetchIsBoundedAtOneMiB(t *testing.T) {
+	for name, tc := range map[string]struct {
+		size   int
+		starts bool
+	}{
+		"exactly 1 MiB":    {size: evalclient.MaxBodyBytes, starts: true},
+		"1 MiB and a byte": {size: evalclient.MaxBodyBytes + 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newEvalFixture(t, nil, echoCase("a", "one"), echoCase("b", "two"))
+			// Trailing whitespace keeps the card JSON at any size.
+			card := evalCard + strings.Repeat(" ", tc.size-len(evalCard))
+			f.stub.card = card
+			a := f.agent(t)
+			a.Status.Cards[0].Digest = digestOfCard(card)
+			if err := f.c.Status().Update(context.Background(), a); err != nil {
+				t.Fatal(err)
+			}
+			res, err := f.pass(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := f.agent(t).Status.Eval
+			if tc.starts {
+				if e == nil || e.Verdict != assaydv1alpha1.EvalVerdictRunning || e.Blocked != nil {
+					t.Errorf("a card of exactly 1 MiB: status.eval %+v; want a started run", e)
+				}
+				return
+			}
+			if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalAwaitingCard ||
+				!strings.Contains(e.Blocked.Message, "the body is over 1 MiB") {
+				t.Fatalf("a card over 1 MiB: status.eval %+v; want EvalAwaitingCard naming the bound", e)
+			}
+			if e.Verdict != "" || f.stub.total() != 0 || res.RequeueAfter != CardRetryInterval {
+				t.Errorf("a card over 1 MiB: verdict %q, %d sends, requeue %v; want no run, no send, "+
+					"CardRetryInterval", e.Verdict, f.stub.total(), res.RequeueAfter)
+			}
+		})
+	}
+	t.Run("4 MiB, of which at most 1 MiB + 1 byte is read", func(t *testing.T) {
+		f := newEvalFixture(t, nil, echoCase("a", "one"))
+		body := &countingReader{r: strings.NewReader(evalCard + strings.Repeat(" ", 4*evalclient.MaxBodyBytes))}
+		f.stub.cardBody = body
+		if _, err := f.pass(t); err != nil {
+			t.Fatal(err)
+		}
+		if body.n > evalclient.MaxBodyBytes+1 {
+			t.Errorf("%d bytes of the card were read; at most 1 MiB + 1 (%d) may be", body.n, evalclient.MaxBodyBytes+1)
+		}
+		if e := f.agent(t).Status.Eval; e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalAwaitingCard ||
+			!strings.Contains(e.Blocked.Message, "the body is over 1 MiB") {
+			t.Errorf("a 4 MiB card: status.eval %+v; want EvalAwaitingCard naming the bound", e)
+		}
+	})
+}
+
+// The run-start card fetch is bounded by CardFetchTimeout: a candidate that
+// never answers is a fetch that did not succeed, naming the bound, retried at
+// CardRetryInterval, and the pass returns once the bound is spent. The stub
+// serves the card after hangFor, so a fetch with no bound starts a run.
+//
+// Mutation (#115 item 2): derive the fetch's context with WithCancel in place
+// of WithTimeout.
+func TestTheRunStartCardFetchTimesOut(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"))
+	f.r.CardFetchTimeout = 50 * time.Millisecond
+	f.stub.hang, f.stub.hangFor = true, 3*time.Second
+	start := time.Now()
+	res, err := f.pass(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took >= f.stub.hangFor {
+		t.Errorf("the pass took %v; the fetch was not bounded at 50ms", took)
+	}
+	e := f.agent(t).Status.Eval
+	if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalAwaitingCard ||
+		!strings.Contains(e.Blocked.Message, "no answer within 50ms") {
+		t.Fatalf("a candidate that never answers: status.eval %+v; want EvalAwaitingCard naming the bound", e)
+	}
+	if e.Verdict != "" || f.stub.total() != 0 || res.RequeueAfter != CardRetryInterval {
+		t.Errorf("a timed-out fetch: verdict %q, %d sends, requeue %v; want no run, no send, "+
+			"CardRetryInterval", e.Verdict, f.stub.total(), res.RequeueAfter)
+	}
+}
+
+// The bound covers the body too: a candidate that sends its headers and then
+// stalls the body ends the fetch within CardFetchTimeout. The class it
+// reports is "the body was cut short", not "no answer within", because the
+// read, not the request, is what the deadline ends; this row pins that class
+// as the code reports it; whether it should name the bound instead is #154.
+// The body is tied to the request's context, as net/http's is, so a fetch that
+// ends that context once the headers arrive reads no card at all: that
+// mutation (cancel the context as soon as Do returns) is killed by every
+// run-start row here, not by this one, which reports the same class under it.
+//
+// Mutation (#115 item 2): derive the fetch's context with WithCancel in place
+// of WithTimeout.
+func TestTheRunStartCardFetchTimesOutMidBody(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"))
+	f.r.CardFetchTimeout = 50 * time.Millisecond
+	f.stub.stallBody, f.stub.hangFor = true, 3*time.Second
+	start := time.Now()
+	res, err := f.pass(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took >= f.stub.hangFor {
+		t.Errorf("the pass took %v; the body read was not bounded at 50ms", took)
+	}
+	e := f.agent(t).Status.Eval
+	if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalAwaitingCard ||
+		!strings.Contains(e.Blocked.Message, "the body was cut short") {
+		t.Fatalf("a stalled body: status.eval %+v; want EvalAwaitingCard, the body cut short", e)
+	}
+	if e.Verdict != "" || f.stub.total() != 0 || res.RequeueAfter != CardRetryInterval {
+		t.Errorf("a stalled body: verdict %q, %d sends, requeue %v; want no run, no send, "+
+			"CardRetryInterval", e.Verdict, f.stub.total(), res.RequeueAfter)
+	}
+}
+
+// At its zero value CardFetchTimeout is 5 s, as §1.1 step 2 gives the
+// run-start fetch: the request the candidate is sent carries a deadline 5 s
+// after the pass began it.
+//
+// Mutation (#115 item 2): default the bound to another interval.
+func TestTheRunStartCardFetchDefaultsToFiveSeconds(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"))
+	before := time.Now()
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	after := time.Now()
+	if !f.stub.hasDeadline {
+		t.Fatal("the run-start card fetch carried no deadline")
+	}
+	if d := f.stub.deadline; d.Before(before.Add(5*time.Second)) || d.After(after.Add(5*time.Second)) {
+		t.Errorf("the fetch's deadline is %v after the pass began; want 5s", d.Sub(before))
+	}
+}
+
+// The run-start patch writes blocked empty (A20.25, taken): a refusal stored
+// by an earlier pass does not stand beside the run that starts once the card
+// is repaired, and blockedFor names the run's pair, not the one stored, which
+// is seeded with another suite digest.
+//
+// Mutations (#115 item 3): keep the stored blocked in the run-start patch,
+// alone and with the read-back's blocked check removed; keep the stored
+// blockedFor, alone and with the read-back's blockedFor check removed.
+func TestARunStartWritesBlockedEmpty(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"), echoCase("b", "two"))
+	tenanted := strings.Replace(evalCard, `"protocolVersion":"1.0"`, `"protocolVersion":"1.0","tenant":"t1"`, 1)
+	f.stub.card = tenanted
+	a := f.agent(t)
+	a.Status.Cards[0].Digest = digestOfCard(tenanted)
+	if err := f.c.Status().Update(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	if e := f.agent(t).Status.Eval; e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalBindingUnsupported {
+		t.Fatalf("setup: the tenanted card was not refused: %+v", e)
+	}
+	f.stub.card = evalCard
+	a = f.agent(t)
+	a.Status.Cards[0].Digest = digestOfCard(evalCard)
+	a.Status.Eval.BlockedFor.SuiteDigest = "another-suite-digest"
+	if err := f.c.Status().Update(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pass(t); err != nil {
+		t.Fatal(err)
+	}
+	e := f.agent(t).Status.Eval
+	if e == nil || e.Verdict != assaydv1alpha1.EvalVerdictRunning || e.Blocked != nil {
+		t.Fatalf("the run-start pass left status.eval %+v; want a run started and blocked empty", e)
+	}
+	if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != "sha256:candidate" || e.BlockedFor.SuiteDigest != f.sd {
+		t.Errorf("blockedFor %+v does not name the pair the run started for", e.BlockedFor)
+	}
+	if f.stub.count("one") != 1 {
+		t.Errorf("the run-start pass sent %v; want its first case", f.stub.hits)
 	}
 }
 
