@@ -3147,7 +3147,7 @@ one per revision digest: a new entry for a revision replaces its old
 one at the newest place. A Failed verdict removes the revision's entry.
 At most 10; when full, the oldest whose revision digest is not
 status.activeRevisionDigest is evicted. It is read to say whether a
-Passed verdict is recorded for a revision, never by the gate.<br/>
+Passed verdict is recorded for a revision, never to decide a promotion.<br/>
         </td>
         <td>false</td>
       </tr><tr>

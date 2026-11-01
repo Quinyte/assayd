@@ -540,7 +540,10 @@ func TestThePassedRecordOutlivesTheNextRunBesideTheAgentReconciler(t *testing.T)
 		e := liveAgent(t, a).Status.Eval
 		return e != nil && e.RevisionDigest == dB && e.Verdict == assaydv1alpha1.EvalVerdictFailed
 	})
-	time.Sleep(time.Second) // the Agent reconciler's pass on the verdict
+	eventually(t, "the Agent reconciler's pass on B's verdict", func() bool {
+		c := condition(liveAgent(t, a), assaydv1alpha1.CondGatesPassed)
+		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "EvalFailed"
+	})
 	noUnpassed(t, a, "B failed")
 	if got := liveAgent(t, a).Status.ActiveRevisionDigest; got != dA {
 		t.Errorf("A is no longer active (%s)", got)

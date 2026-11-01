@@ -847,7 +847,7 @@ type EvalStatus struct {
 	// one at the newest place. A Failed verdict removes the revision's entry.
 	// At most 10; when full, the oldest whose revision digest is not
 	// status.activeRevisionDigest is evicted. It is read to say whether a
-	// Passed verdict is recorded for a revision, never by the gate.
+	// Passed verdict is recorded for a revision, never to decide a promotion.
 	// +kubebuilder:validation:MaxItems=10
 	// +optional
 	Passed []EvalPair `json:"passed,omitempty"`

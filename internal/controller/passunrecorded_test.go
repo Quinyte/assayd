@@ -157,6 +157,11 @@ func TestTheUnpassedStatementSaysOnlyWhatIsRecorded(t *testing.T) {
 	if got := activeRevisionPassUnrecorded(agent, st); got != unpinned {
 		t.Errorf("a case record changed the statement: %q", got)
 	}
+	// release: {} sets no pin.
+	agent.Spec.Release = &assaydv1alpha1.ReleaseSpec{}
+	if got := activeRevisionPassUnrecorded(agent, st); got != unpinned {
+		t.Errorf("an empty spec.release\n got %q\nwant %q", got, unpinned)
+	}
 	agent.Spec.Release = &assaydv1alpha1.ReleaseSpec{TargetRevisionDigest: "sha256:pinned"}
 	pinned := head + "While spec.release.targetRevisionDigest is set, no revision this spec mints is " +
 		"promoted; GatesBypassed or Degraded says what the pin does, except on a pass that stops earlier, " +
@@ -207,6 +212,17 @@ func TestAPassedEntryReadsEvalPassedWithNoScore(t *testing.T) {
 		"passed[] keeps no score"
 	if got.Status != metav1.ConditionTrue || got.Reason != ReasonEvalPassed || got.Message != want {
 		t.Errorf("GatesPassed is %s/%s %q; want True/EvalPassed %q", got.Status, got.Reason, got.Message, want)
+	}
+	// The pair outranks an entry: a Passed pair for b under S2 is named,
+	// with its score, beside b's older entry under S1.
+	c = newConditionSet(1)
+	assessPromotedGate(c, &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: "b", RevisionDigest: "sha256:b",
+		SuiteDigest: "s2", Verdict: assaydv1alpha1.EvalVerdictPassed, Score: "1/1",
+		Passed: []assaydv1alpha1.EvalPair{pair("sha256:b", "s1")}}, "b", "sha256:b")
+	got, _ = c.get(assaydv1alpha1.CondGatesPassed)
+	if got.Reason != ReasonEvalPassed || !strings.Contains(got.Message, "(digest s2), score 1/1") ||
+		strings.Contains(got.Message, "s1") {
+		t.Errorf("the pair did not outrank the entry: %s %q", got.Reason, got.Message)
 	}
 	e.Passed = nil
 	c = newConditionSet(1)
