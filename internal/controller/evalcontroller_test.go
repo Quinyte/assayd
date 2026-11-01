@@ -618,8 +618,10 @@ func TestTheEndpointPathIsBounded(t *testing.T) {
 	}
 }
 
-// The run-start refusals through Reconcile: a tenanted interface (#108), and
-// a relative card URL whose path has no leading "/" (#105 item 9), each write
+// The run-start refusals through Reconcile: a tenanted interface (#108), a
+// relative card URL whose path has no leading "/" (#105 item 9), a path that
+// is too long, not UTF-8, or holds an escaped slash, and a wrongly typed
+// interface field (#115 item 1) each write
 // EvalBindingUnsupported to blocked, start no run, and requeue at
 // CardDriftInterval, as a run-start refusal that read a card does (§1.1,
 // "What wakes the eval controller while it waits").
@@ -1174,12 +1176,14 @@ func TestTheRunStartCardFetchTimesOut(t *testing.T) {
 // stalls the body ends the fetch within CardFetchTimeout. The class it
 // reports is "the body was cut short", not "no answer within", because the
 // read, not the request, is what the deadline ends; this row pins that class
-// as the code reports it. The body is tied to the request's context, as
-// net/http's is, so a fetch that ends that context once the headers arrive
-// reads no card at all, and every run-start row here fails with it.
+// as the code reports it; whether it should name the bound instead is #154.
+// The body is tied to the request's context, as net/http's is, so a fetch that
+// ends that context once the headers arrive reads no card at all: that
+// mutation (cancel the context as soon as Do returns) is killed by every
+// run-start row here, not by this one, which reports the same class under it.
 //
-// Mutations (#115 item 2): derive the fetch's context with WithCancel in place
-// of WithTimeout; cancel it as soon as Do returns.
+// Mutation (#115 item 2): derive the fetch's context with WithCancel in place
+// of WithTimeout.
 func TestTheRunStartCardFetchTimesOutMidBody(t *testing.T) {
 	f := newEvalFixture(t, nil, echoCase("a", "one"))
 	f.r.CardFetchTimeout = 50 * time.Millisecond
