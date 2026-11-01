@@ -6,272 +6,213 @@ package docs
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
-	"os/exec"
-	"path/filepath"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"go.yaml.in/yaml/v3"
 )
 
-// Every package that holds an untagged test is named by a `go test` line that
+// Every directory holding a test file is named by a package pattern that
 // `make test` runs and by one that CI runs.
 //
 // `test/responder` and `test/mcpserver` carried unit tests that neither ran
-// (#129): the fixtures were built and pushed by `hack/e2e.sh`, so their own
-// rows — among them the one pinning the `ANSWER_PREFIX` and `ANSWER_MARKER`
-// knobs an e2e depends on — were compiled by nothing and failed for no one.
+// (#129): `hack/e2e.sh` built the fixtures and ran none of their tests.
 //
-// What this checks, exactly. The tested packages are those `go list` reports
-// with an untagged test file. A package counts as run when a package argument
-// of a `go test` line — in the recipe of one of `make test`'s prerequisites, or
-// of a target a step of `.github/workflows/ci.yml` invokes, or in a hack/
-// script such a recipe calls — matches it. It also requires every package
-// `make unit` names to be named by `make race` too, since the race run is
-// review evidence.
+// This is a change detector for package lists, and claims no more. It walks
+// the tree for `*_test.go` files and reads the literal `./x` and `./x/...`
+// arguments of the `go test` lines in the recipes of `make test`'s
+// prerequisites, in the recipes of the targets ci.yml invokes with a `make`
+// that starts a line, and in the hack/ scripts those recipes name. It asserts
+// that each such directory is named by both, that no directory's tests all
+// carry a `//go:build` line, and that `make race` names what `make unit`
+// names.
 //
-// What it does not read, and so cannot catch. Build-tagged test files in a
-// package that also holds untagged tests are invisible to it:
-// `test/conformance`'s `cluster` files run only in `make conformance-cluster`,
-// which CI does not run. A package whose every test is tagged is refused
-// rather than missed. It does not follow a
-// recursive `$(MAKE)`, a target's prerequisites, or a script called from a
-// script, and it reads no step's `if:` and no workflow trigger. Where reading
-// would be guesswork it refuses instead of guessing: a `go test` line with
-// `-run`, a shell substitution, a make variable in package position, or any
-// argument it cannot classify fails the test and names the argument, and so
-// does a gating CI step or job marked `continue-on-error`.
+// It does not read test flags such as `-run`, shell logic such as `||`, pipes
+// or variables, environment variables such as `E2E_RUN`, a recursive
+// `$(MAKE)`, a script a script calls, or CI conditions such as a step's or a
+// job's `if:` and `continue-on-error`. Those are reviewed by hand. Nor does it run a tagged
+// file: `test/conformance`'s `cluster` files run only in
+// `make conformance-cluster`, which CI does not run; that package passes here
+// because its untagged files are named.
 func TestEveryTestedPackageRunsInMakeTestAndCI(t *testing.T) {
-	tested := testedPackages(t, "./...")
-	if len(tested) < 10 {
-		t.Fatalf("only %d tested packages found; the listing is broken and this gate would "+
-			"pass by having nothing to check", len(tested))
-	}
-
-	mk := readRepoFile(t, "Makefile")
-	ci := readRepoFile(t, ".github/workflows/ci.yml")
-	g, err := readGates(mk, ci, func(path string) (string, error) {
-		b, err := os.ReadFile(filepath.Join(repoRoot, path))
-		return string(b), err
-	})
+	problems, err := inventory(os.DirFS(repoRoot), exemptions{
+		notInMakeTest: map[string]string{
+			"test/e2e": "needs a real cluster; `make e2e` runs it through hack/e2e.sh",
+		},
+		allTagged: map[string]string{},
+	}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// A package `make test` may not reach, and why. Each entry must still be
-	// needed and must still be reached by CI, so the list cannot rot into a
-	// silent allowance.
-	notInMakeTest := map[string]string{
-		"test/e2e": "needs a real cluster; `make e2e` runs it through hack/e2e.sh",
-	}
-
-	byMakeTest := resolvePatterns(t, g.makeTest)
-	byCI := resolvePatterns(t, g.ci)
-
-	for _, pkg := range tested {
-		if !byCI[pkg] {
-			t.Errorf("%s holds tests that no target in .github/workflows/ci.yml runs; "+
-				"add it to a `go test` line of a target CI invokes", pkg)
-		}
-		_, exempt := notInMakeTest[pkg]
-		switch ran := byMakeTest[pkg]; {
-		case !ran && !exempt:
-			t.Errorf("%s holds tests that `make test` does not run; add it to a `go test` "+
-				"line of one of the test target's prerequisites (%s)", pkg, strings.Join(g.testPrereqs, " "))
-		case ran && exempt:
-			t.Errorf("%s is exempted from `make test` (%q) but `make test` runs it; "+
-				"drop the exemption", pkg, notInMakeTest[pkg])
-		}
-	}
-	for pkg := range notInMakeTest {
-		if !contains(tested, pkg) {
-			t.Errorf("%s is exempted from `make test` but holds no tests; drop the exemption", pkg)
-		}
-	}
-
-	// A package whose every test carries a build tag is invisible to the
-	// listing above, so it is refused here rather than passed silently.
-	for _, pkg := range onlyTaggedTestPackages(t) {
-		t.Errorf("%s holds tests only in files a build tag excludes, which this check cannot "+
-			"see; give it an untagged test that `make test` and CI run", pkg)
-	}
-
-	byUnit := resolvePatterns(t, g.unit)
-	if len(byUnit) == 0 {
-		t.Fatal("`make unit` names no tested package; the parse is broken")
-	}
-	byRace := resolvePatterns(t, g.race)
-	for _, pkg := range tested {
-		if byUnit[pkg] && !byRace[pkg] {
-			t.Errorf("%s runs in `make unit` but not in `make race`; the race run is review "+
-				"evidence, so name it in both", pkg)
-		}
+	for _, p := range problems {
+		t.Error(p)
 	}
 }
 
-// The parser above is held to synthetic text here, so a change that lets it
-// read too much — and pass everything — fails without the live Makefile ever
-// having to break.
-func TestTheWhatRunsParserReadsOnlyWhatRuns(t *testing.T) {
-	const ciUnit = "jobs:\n  j:\n    steps:\n      - run: make unit\n"
-	const unitTest = "test: unit\nunit:\n\tgo test ./internal/... -count=1\nrace:\n\tgo test -race ./internal/...\n"
-	noScripts := func(path string) (string, error) { return "", fmt.Errorf("no script %s", path) }
+// The check above is held here to synthetic trees, so each of its branches has
+// a row that fails without it.
+func TestTheWhatRunsCheckReadsWhatItSays(t *testing.T) {
+	const (
+		unitAndRace = "test: unit ## the gate\nunit:\n\tgo test ./internal/... -count=1\nrace:\n\tgo test -race ./internal/...\n"
+		ciUnit      = "jobs:\n  j:\n    steps:\n      - run: make unit\n"
+		untagged    = "package x\n"
+		tagged      = "//go:build cluster\n\npackage x\n"
+	)
+	tree := func(extra map[string]string) fstest.MapFS {
+		fsys := fstest.MapFS{
+			"Makefile":                 {Data: []byte(unitAndRace)},
+			".github/workflows/ci.yml": {Data: []byte(ciUnit)},
+			"internal/a/a_test.go":     {Data: []byte(untagged)},
+		}
+		for name, data := range extra {
+			if data == "" {
+				delete(fsys, name)
+				continue
+			}
+			fsys[name] = &fstest.MapFile{Data: []byte(data)}
+		}
+		return fsys
+	}
+	none := exemptions{notInMakeTest: map[string]string{}, allTagged: map[string]string{}}
 
 	for _, tc := range []struct {
-		name     string
-		makefile string
-		ci       string
-		scripts  map[string]string
-		makeTest []string
-		ciRuns   []string
-		wantErr  string
+		name    string
+		files   map[string]string
+		ex      *exemptions
+		want    []string // one substring per expected problem
+		wantErr string
 	}{{
-		name:     "a plain recipe is read",
-		makefile: unitTest,
-		ci:       ciUnit,
-		makeTest: []string{"./internal/..."},
-		ciRuns:   []string{"./internal/..."},
+		name: "a tree every gate names is clean",
 	}, {
-		name:     "a comment that mentions go test runs nothing",
-		makefile: "test: unit\nunit:\n\t# go test ./ghost/...\n\tgo test ./internal/...\n",
-		ci:       ciUnit,
-		makeTest: []string{"./internal/..."},
-		ciRuns:   []string{"./internal/..."},
+		name:  "a directory no pattern names is reported to both gates",
+		files: map[string]string{"test/x/x_test.go": untagged},
+		want:  []string{"test/x holds tests that no `go test` line `make test` reaches names", "test/x holds tests that no `go test` line a CI target reaches names"},
 	}, {
-		name:     "a comment that names a script calls nothing",
-		makefile: "test: unit\nunit:\n\t# see ./hack/ghost.sh\n\tgo test ./internal/...\n",
-		ci:       ciUnit,
-		makeTest: []string{"./internal/..."},
-		ciRuns:   []string{"./internal/..."},
+		name:  "a directory only CI names is reported to make test",
+		files: map[string]string{"test/x/x_test.go": untagged, "Makefile": unitAndRace + "x:\n\tgo test ./test/x/...\n", ".github/workflows/ci.yml": ciUnit + "      - run: make x\n"},
+		want:  []string{"test/x holds tests that no `go test` line `make test` reaches"},
 	}, {
-		name:     "an echo that mentions go test runs nothing",
-		makefile: "test: unit\nunit:\n\t@echo go test ./ghost/...\n\tgo test ./internal/...\n",
-		ci:       ciUnit,
-		makeTest: []string{"./internal/..."},
-		ciRuns:   []string{"./internal/..."},
+		name:  "an exact pattern names its directory and not a child",
+		files: map[string]string{"internal/a/b/b_test.go": untagged, "Makefile": "test: unit\nunit:\n\tgo test ./internal/a\nrace:\n\tgo test ./internal/a\n"},
+		want:  []string{"internal/a/b holds tests that no `go test` line `make test`", "internal/a/b holds tests that no `go test` line a CI"},
 	}, {
-		name:     "a CI step that only echoes make runs nothing",
-		makefile: unitTest + "docs:\n\tgo test ./test/docs/...\n",
-		ci:       "jobs:\n  j:\n    steps:\n      - run: make docs\n      - run: echo \"skip make unit\"\n",
-		makeTest: []string{"./internal/..."},
-		ciRuns:   []string{"./test/docs/..."},
+		name:  "./... names everything",
+		files: map[string]string{"test/x/x_test.go": untagged, "Makefile": "test: unit\nunit:\n\tgo test ./...\nrace:\n\tgo test ./...\n"},
 	}, {
-		name:     "a CI make call after && is read",
-		makefile: unitTest,
-		ci:       "jobs:\n  j:\n    steps:\n      - run: |\n          set -e && make unit\n",
-		makeTest: []string{"./internal/..."},
-		ciRuns:   []string{"./internal/..."},
+		name:  "a backslash-continued go test line is joined",
+		files: map[string]string{"test/x/x_test.go": untagged, "Makefile": "test: unit\nunit:\n\tgo test ./internal/... \\\n\t\t./test/x/...\nrace:\n\tgo test ./internal/... ./test/x/...\n"},
 	}, {
-		name:     "a CI variable override is not a target",
-		makefile: unitTest,
-		ci:       "jobs:\n  j:\n    steps:\n      - run: make COUNT=3 unit\n",
-		makeTest: []string{"./internal/..."},
-		ciRuns:   []string{"./internal/..."},
+		name:  "a comment line names nothing",
+		files: map[string]string{"test/x/x_test.go": untagged, "Makefile": "test: unit\nunit:\n\t# go test ./test/x/...\n\tgo test ./internal/...\nrace:\n\tgo test ./internal/...\n"},
+		want:  []string{"test/x holds tests that no `go test` line `make test`", "test/x holds tests that no `go test` line a CI"},
 	}, {
-		name:     "a CI make flag is refused",
-		makefile: unitTest,
-		ci:       "jobs:\n  j:\n    steps:\n      - run: make -C sub unit\n",
-		wantErr:  "passes -C",
+		name:  "a rule after a recipe ends it",
+		files: map[string]string{"test/x/x_test.go": untagged, "Makefile": "test: unit\nunit:\n\tgo test ./internal/...\n$(TOOL):\n\tgo test ./test/x/...\nrace:\n\tgo test ./internal/...\n"},
+		want:  []string{"test/x holds tests that no `go test` line `make test`", "test/x holds tests that no `go test` line a CI"},
 	}, {
-		name:     "$(GO) test is read when the Makefile defines GO",
-		makefile: "GO := go\ntest: unit\nunit:\n\t$(GO) test ./internal/...\n",
-		ci:       ciUnit,
-		makeTest: []string{"./internal/..."},
-		ciRuns:   []string{"./internal/..."},
+		name:  "a script a recipe names is read",
+		files: map[string]string{"test/x/x_test.go": untagged, "Makefile": unitAndRace + "x:\n\tbash hack/x.sh\n", ".github/workflows/ci.yml": ciUnit + "      - run: make x\n", "hack/x.sh": "#!/bin/bash\nFOO=1 go test ./test/x/... -v\n"},
+		want:  []string{"test/x holds tests that no `go test` line `make test` reaches"},
 	}, {
-		name:     "$(GO) test is refused when the Makefile defines no GO",
-		makefile: "test: unit\nunit:\n\t$(GO) test ./internal/...\n",
-		ci:       ciUnit,
-		wantErr:  "defines no GO",
+		name:    "a script that cannot be read is refused",
+		files:   map[string]string{"Makefile": unitAndRace + "x:\n\t./hack/ghost.sh\n", ".github/workflows/ci.yml": ciUnit + "      - run: make x\n"},
+		wantErr: "hack/ghost.sh, which cannot be read",
 	}, {
-		name:     "a backslash-continued recipe is joined",
-		makefile: "test: unit\nunit:\n\tgo test ./internal/... \\\n\t\t./api/... -count=1\n",
-		ci:       ciUnit,
-		makeTest: []string{"./internal/...", "./api/..."},
-		ciRuns:   []string{"./internal/...", "./api/..."},
+		name:  "a comment that names a script calls nothing",
+		files: map[string]string{"Makefile": "test: unit\nunit:\n\t# see ./hack/ghost.sh\n\tgo test ./internal/...\nrace:\n\tgo test ./internal/...\n"},
 	}, {
-		name:     "a script called through bash is read",
-		makefile: "test: unit\nunit:\n\tbash hack/x.sh\n",
-		ci:       ciUnit,
-		scripts:  map[string]string{"hack/x.sh": "#!/bin/bash\n# go test ./ghost/...\nFOO=1 go test ./test/x/... -v\n"},
-		makeTest: []string{"./test/x/..."},
-		ciRuns:   []string{"./test/x/..."},
+		name:    "a go test line with no literal pattern is refused",
+		files:   map[string]string{"Makefile": "test: unit\nunit:\n\tgo test $(PKGS)\nrace:\n\tgo test ./internal/...\n"},
+		wantErr: "names no literal package pattern",
 	}, {
-		name:     "a script called by path is read",
-		makefile: "test: unit\nunit:\n\t./hack/x.sh\n",
-		ci:       ciUnit,
-		scripts:  map[string]string{"hack/x.sh": "go test ./test/x/... 2>&1 | tee log\n"},
-		makeTest: []string{"./test/x/..."},
-		ciRuns:   []string{"./test/x/..."},
+		name:  "a CI make that does not start a line runs nothing",
+		files: map[string]string{".github/workflows/ci.yml": "jobs:\n  j:\n    steps:\n      - run: make unit\n      - run: echo make ghost\n"},
 	}, {
-		name:     "a shell-computed package list is refused",
-		makefile: "test: unit\nunit:\n\tgo test ./internal/... $$(go list ./cmd/... | grep -v operator)\n",
-		ci:       ciUnit,
-		wantErr:  `unparsed ` + "`go test`" + ` argument "$$(go"`,
+		name:    "a workflow that invokes no make target is refused",
+		files:   map[string]string{".github/workflows/ci.yml": "jobs:\n  j:\n    steps:\n      - run: echo make unit\n"},
+		wantErr: "invokes no make target",
 	}, {
-		name:     "a shell-computed package list ahead of the paths is refused",
-		makefile: "test: unit\nunit:\n\tgo test $$(go list ./internal/... | grep -v controller) ./api/...\n",
-		ci:       ciUnit,
-		wantErr:  `"$$(go"`,
+		name:  "a CI variable override is not a target",
+		files: map[string]string{".github/workflows/ci.yml": "jobs:\n  j:\n    steps:\n      - run: make COUNT=3 unit\n"},
 	}, {
-		name:     "a make variable in package position is refused",
-		makefile: "test: unit\nunit:\n\tgo test $(UNIT_PKGS) -count=1\n",
-		ci:       ciUnit,
-		wantErr:  `"$(UNIT_PKGS)"`,
+		name:    "a CI target with no recipe is refused",
+		files:   map[string]string{".github/workflows/ci.yml": ciUnit + "      - run: make ghost\n"},
+		wantErr: "`make ghost`, and the Makefile has no recipe",
 	}, {
-		name:     "-run is refused",
-		makefile: "test: unit\nunit:\n\tgo test ./internal/... -run \"^$$\"\n",
-		ci:       ciUnit,
-		wantErr:  "-run",
+		name:    "a Makefile with no test rule is refused",
+		files:   map[string]string{"Makefile": "unit:\n\tgo test ./internal/...\nrace:\n\tgo test ./internal/...\n"},
+		wantErr: "no `test:` rule",
 	}, {
-		name:     "-run= is refused",
-		makefile: "test: unit\nunit:\n\tgo test ./internal/... -run=Nothing\n",
-		ci:       ciUnit,
-		wantErr:  "-run",
+		name:  "race must name what unit names",
+		files: map[string]string{"test/x/x_test.go": untagged, "Makefile": "test: unit\nunit:\n\tgo test ./internal/... ./test/x/...\nrace:\n\tgo test -race ./internal/...\n"},
+		want:  []string{"test/x is named by `make unit` but not by `make race`"},
 	}, {
-		name:     "a conditional -run CI never sets is empty in CI",
-		makefile: "test: unit\nunit:\n\t./hack/x.sh\n",
-		ci:       ciUnit,
-		scripts:  map[string]string{"hack/x.sh": "go test ./test/x/... -v ${X_RUN:+-run \"${X_RUN}\"}\n"},
-		makeTest: []string{"./test/x/..."},
-		ciRuns:   []string{"./test/x/..."},
+		name:    "a missing race target is refused",
+		files:   map[string]string{"Makefile": "test: unit\nunit:\n\tgo test ./internal/...\n"},
+		wantErr: "no `race` target",
 	}, {
-		name:     "a conditional -run CI mentions is refused",
-		makefile: "test: unit\nunit:\n\t./hack/x.sh\n",
-		ci:       "jobs:\n  j:\n    steps:\n      - run: make unit\n        env:\n          X_RUN: Nothing\n",
-		scripts:  map[string]string{"hack/x.sh": "go test ./test/x/... ${X_RUN:+-run \"${X_RUN}\"}\n"},
-		wantErr:  "X_RUN",
+		name:    "a missing unit target is refused",
+		files:   map[string]string{"Makefile": "test: docs\ndocs:\n\tgo test ./internal/...\nrace:\n\tgo test ./internal/...\n", ".github/workflows/ci.yml": "jobs:\n  j:\n    steps:\n      - run: make docs\n"},
+		wantErr: "no `unit` target",
 	}, {
-		name:     "continue-on-error on a gating step is refused",
-		makefile: unitTest,
-		ci:       "jobs:\n  j:\n    steps:\n      - run: make unit\n        continue-on-error: true\n",
-		wantErr:  "continue-on-error",
+		name:  "a directory whose tests are all tagged is reported",
+		files: map[string]string{"internal/b/b_test.go": tagged},
+		want:  []string{"internal/b holds only build-tagged tests"},
 	}, {
-		name:     "continue-on-error on a gating job is refused",
-		makefile: unitTest,
-		ci:       "jobs:\n  j:\n    continue-on-error: true\n    steps:\n      - run: make unit\n",
-		wantErr:  "continue-on-error",
+		name:  "one untagged file is enough",
+		files: map[string]string{"internal/b/a_test.go": untagged, "internal/b/b_test.go": tagged},
 	}, {
-		name:     "a CI target with no recipe is refused",
-		makefile: unitTest,
-		ci:       "jobs:\n  j:\n    steps:\n      - run: make unit\n      - run: make ghost\n",
-		wantErr:  "ghost",
+		name:  "a tag after the package clause is not a constraint",
+		files: map[string]string{"internal/b/b_test.go": "package x\n\n//go:build cluster\n"},
+	}, {
+		name:  "a named all-tagged directory passes",
+		files: map[string]string{"internal/b/b_test.go": tagged},
+		ex:    &exemptions{notInMakeTest: map[string]string{}, allTagged: map[string]string{"internal/b": "a reason"}},
+	}, {
+		name:  "a stale all-tagged entry is reported",
+		files: map[string]string{"internal/b/b_test.go": untagged},
+		ex:    &exemptions{notInMakeTest: map[string]string{}, allTagged: map[string]string{"internal/b": "a reason"}},
+		want:  []string{"internal/b is listed as holding only tagged tests"},
+	}, {
+		name:  "a make test exemption covers a CI-only directory",
+		files: map[string]string{"test/e/e_test.go": untagged, "Makefile": unitAndRace + "e:\n\tgo test ./test/e/...\n", ".github/workflows/ci.yml": ciUnit + "      - run: make e\n"},
+		ex:    &exemptions{notInMakeTest: map[string]string{"test/e": "a reason"}, allTagged: map[string]string{}},
+	}, {
+		name: "an exemption make test does not need is reported",
+		ex:   &exemptions{notInMakeTest: map[string]string{"internal/a": "a reason"}, allTagged: map[string]string{}},
+		want: []string{"internal/a is exempt from `make test`"},
+	}, {
+		name: "an exemption for a directory with no tests is reported",
+		ex:   &exemptions{notInMakeTest: map[string]string{"test/gone": "a reason"}, allTagged: map[string]string{}},
+		want: []string{"test/gone is exempt from `make test` but holds no tests"},
+	}, {
+		name: "an all-tagged entry for a directory with no tests is reported",
+		ex:   &exemptions{notInMakeTest: map[string]string{}, allTagged: map[string]string{"test/gone": "a reason"}},
+		want: []string{"test/gone is listed as holding only tagged tests but holds no tests"},
+	}, {
+		name: "testdata, vendor, _ and . directories and nested modules are not walked",
+		files: map[string]string{
+			"test/testdata/t_test.go": untagged, "vendor/v/v_test.go": untagged,
+			"_old/o_test.go": untagged, ".tool/t_test.go": untagged,
+			"sub/go.mod": "module sub\n", "sub/s_test.go": untagged,
+		},
+	}, {
+		name:    "too few test directories is refused",
+		files:   map[string]string{"internal/a/a_test.go": ""},
+		wantErr: "only 0 directories",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
-			script := noScripts
-			if tc.scripts != nil {
-				script = func(path string) (string, error) {
-					s, ok := tc.scripts[path]
-					if !ok {
-						return "", fmt.Errorf("no script %s", path)
-					}
-					return s, nil
-				}
+			ex := none
+			if tc.ex != nil {
+				ex = *tc.ex
 			}
-			g, err := readGates(tc.makefile, tc.ci, script)
+			problems, err := inventory(tree(tc.files), ex, 1)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("got error %v, want one containing %q", err, tc.wantErr)
@@ -281,48 +222,60 @@ func TestTheWhatRunsParserReadsOnlyWhatRuns(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if !sameSet(g.makeTest, tc.makeTest) {
-				t.Errorf("make test runs %q, want %q", g.makeTest, tc.makeTest)
+			if len(problems) != len(tc.want) {
+				t.Fatalf("got %d problems, want %d:\n  %s", len(problems), len(tc.want), strings.Join(problems, "\n  "))
 			}
-			if !sameSet(g.ci, tc.ciRuns) {
-				t.Errorf("CI runs %q, want %q", g.ci, tc.ciRuns)
+			for i, w := range tc.want {
+				if !strings.Contains(problems[i], w) {
+					t.Errorf("problem %d is %q, want it to contain %q", i, problems[i], w)
+				}
 			}
 		})
 	}
 }
 
-// gates holds the `go test` package patterns each gate runs.
-type gates struct {
-	testPrereqs []string
-	makeTest    []string
-	ci          []string
-	unit        []string
-	race        []string
+// exemptions are the named, reasoned exceptions to the check.
+type exemptions struct {
+	notInMakeTest map[string]string // directories only CI runs
+	allTagged     map[string]string // directories whose tests may all be tagged
 }
 
-// readGates derives, from the Makefile's text, ci.yml's text and the hack/
-// scripts the recipes call, the package patterns each gate runs. It refuses
-// what it cannot read rather than guessing at it.
-func readGates(makefile, ciYAML string, script func(path string) (string, error)) (gates, error) {
-	var g gates
-	recipes, definesGO := parseMakefile(makefile)
-	prereqs, err := makeTestPrerequisites(makefile)
+// inventory reads fsys — a module root holding the Makefile and ci.yml — and
+// returns what the check finds wrong. An error means it could not read what
+// it needs, and a check that read nothing would pass.
+func inventory(fsys fs.FS, ex exemptions, minDirs int) ([]string, error) {
+	dirs, err := testDirs(fsys)
 	if err != nil {
-		return g, err
+		return nil, err
 	}
-	g.testPrereqs = prereqs
-	ciTargets, err := ciMakeTargets(ciYAML)
+	if len(dirs) < minDirs {
+		return nil, fmt.Errorf("only %d directories hold a test; the walk is broken", len(dirs))
+	}
+	mk, err := fs.ReadFile(fsys, "Makefile")
 	if err != nil {
-		return g, err
+		return nil, fmt.Errorf("read Makefile: %w", err)
 	}
-	collect := func(gate string, targets []string) ([]string, error) {
+	recipes := parseRecipes(string(mk))
+	prereqs, err := makeTestPrerequisites(string(mk))
+	if err != nil {
+		return nil, err
+	}
+	ci, err := fs.ReadFile(fsys, ".github/workflows/ci.yml")
+	if err != nil {
+		return nil, fmt.Errorf("read ci.yml: %w", err)
+	}
+	ciTargets, err := ciMakeTargets(ci)
+	if err != nil {
+		return nil, err
+	}
+	patternsOf := func(gate string, targets []string) ([]string, error) {
 		var out []string
 		for _, target := range targets {
 			recipe, ok := recipes[target]
 			if !ok {
 				return nil, fmt.Errorf("%s calls `make %s`, and the Makefile has no recipe for it", gate, target)
 			}
-			p, err := recipePatterns(target, recipe, definesGO, ciYAML, script)
+			p, err := recipePatterns(fsys, target, recipe)
 			if err != nil {
 				return nil, err
 			}
@@ -330,38 +283,132 @@ func readGates(makefile, ciYAML string, script func(path string) (string, error)
 		}
 		return out, nil
 	}
-	if g.makeTest, err = collect("`make test`", prereqs); err != nil {
-		return g, err
+	byMakeTest, err := patternsOf("`make test`", prereqs)
+	if err != nil {
+		return nil, err
 	}
-	if g.ci, err = collect("ci.yml", ciTargets); err != nil {
-		return g, err
+	byCI, err := patternsOf("ci.yml", ciTargets)
+	if err != nil {
+		return nil, err
 	}
-	if _, ok := recipes["race"]; ok {
-		if g.unit, err = collect("the race parity check", []string{"unit"}); err != nil {
-			return g, err
+	for _, target := range []string{"unit", "race"} {
+		if _, ok := recipes[target]; !ok {
+			return nil, fmt.Errorf("the Makefile has no `%s` target, so the race parity check cannot run", target)
 		}
-		if g.race, err = collect("the race parity check", []string{"race"}); err != nil {
-			return g, err
+	}
+	byUnit, err := patternsOf("the race parity check", []string{"unit"})
+	if err != nil {
+		return nil, err
+	}
+	byRace, err := patternsOf("the race parity check", []string{"race"})
+	if err != nil {
+		return nil, err
+	}
+
+	var problems []string
+	names := make([]string, 0, len(dirs))
+	for dir := range dirs {
+		names = append(names, dir)
+	}
+	sort.Strings(names)
+	for _, dir := range names {
+		_, exempt := ex.notInMakeTest[dir]
+		inMakeTest := matchesAny(byMakeTest, dir)
+		if !inMakeTest && !exempt {
+			problems = append(problems, fmt.Sprintf("%s holds tests that no `go test` line `make test` reaches names; "+
+				"add it to one in a prerequisite of `test` (%s)", dir, strings.Join(prereqs, " ")))
+		}
+		if inMakeTest && exempt {
+			problems = append(problems, fmt.Sprintf("%s is exempt from `make test` (%q) but `make test` names it; "+
+				"drop the exemption", dir, ex.notInMakeTest[dir]))
+		}
+		if !matchesAny(byCI, dir) {
+			problems = append(problems, fmt.Sprintf("%s holds tests that no `go test` line a CI target reaches names; "+
+				"add it to one in a target .github/workflows/ci.yml invokes", dir))
+		}
+		_, listed := ex.allTagged[dir]
+		if dirs[dir] && !listed {
+			problems = append(problems, fmt.Sprintf("%s holds only build-tagged tests, which no gate here runs; "+
+				"give it an untagged test, or name it with a reason", dir))
+		}
+		if !dirs[dir] && listed {
+			problems = append(problems, fmt.Sprintf("%s is listed as holding only tagged tests (%q) but holds an "+
+				"untagged one; drop the entry", dir, ex.allTagged[dir]))
+		}
+		if matchesAny(byUnit, dir) && !matchesAny(byRace, dir) {
+			problems = append(problems, fmt.Sprintf("%s is named by `make unit` but not by `make race`; the race "+
+				"run is review evidence, so name it in both", dir))
 		}
 	}
-	return g, nil
+	for _, list := range []struct {
+		entries map[string]string
+		what    string
+	}{{ex.notInMakeTest, "is exempt from `make test`"}, {ex.allTagged, "is listed as holding only tagged tests"}} {
+		for dir := range list.entries {
+			if _, ok := dirs[dir]; !ok {
+				problems = append(problems, fmt.Sprintf("%s %s but holds no tests; drop the entry", dir, list.what))
+			}
+		}
+	}
+	return problems, nil
+}
+
+// testDirs maps each directory holding a `*_test.go` file to whether every
+// such file in it carries a `//go:build` line ahead of its package clause. It
+// skips testdata, vendor, `_` and `.` directories, and nested modules.
+func testDirs(fsys fs.FS) (map[string]bool, error) {
+	dirs := map[string]bool{}
+	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if p == "." {
+				return nil
+			}
+			name := d.Name()
+			if name == "testdata" || name == "vendor" || strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
+				return fs.SkipDir
+			}
+			if _, err := fs.Stat(fsys, path.Join(p, "go.mod")); err == nil {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		b, err := fs.ReadFile(fsys, p)
+		if err != nil {
+			return err
+		}
+		dir := path.Dir(p)
+		allTagged, seen := dirs[dir]
+		dirs[dir] = hasBuildConstraint(string(b)) && (!seen || allTagged)
+		return nil
+	})
+	return dirs, err
+}
+
+func hasBuildConstraint(src string) bool {
+	for _, line := range strings.Split(src, "\n") {
+		if strings.HasPrefix(line, "//go:build") {
+			return true
+		}
+		if strings.HasPrefix(line, "package ") {
+			return false
+		}
+	}
+	return false
 }
 
 var (
-	makeTargetLine = regexp.MustCompile(`^([a-z][a-z0-9-]*):(.*)$`)
-	makeDefinesGO  = regexp.MustCompile(`(?m)^GO\s*(:=|\?=|=)`)
-	// A `go test` at command position: after optional make prefixes and
-	// environment assignments, a quoted value being one word.
-	goTestCommand = regexp.MustCompile(`^[@-]*\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+)*(go|\$\(GO\))\s+test(?:\s+(.*))?$`)
-	// `./hack/x.sh`, `bash hack/x.sh` or `sh hack/x.sh`.
-	hackScript = regexp.MustCompile(`(?:^|\s)(?:\./|bash\s+|sh\s+)(hack/[A-Za-z0-9_-]+\.sh)\b`)
-	// `${NAME:+...}`, at most one `${...}` deep.
-	conditionalExpansion = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*):\+(?:[^{}]|\$\{[A-Za-z0-9_]+\})*\}`)
-	packagePattern       = regexp.MustCompile(`^\./(\.\.\.|[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*(/\.\.\.)?)$`)
-	makeCommand          = regexp.MustCompile(`^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*make(?:\s+(.*))?$`)
-	// Flags of `go test` whose value may be the next word.
-	goTestValueFlags = map[string]bool{"-timeout": true, "-tags": true, "-count": true, "-p": true,
-		"-parallel": true, "-coverprofile": true, "-covermode": true, "-coverpkg": true}
+	makeTargetLine = regexp.MustCompile(`^([a-z][a-z0-9-]*):`)
+	goTestLine     = regexp.MustCompile(`\bgo test\b(.*)`)
+	hackScript     = regexp.MustCompile(`hack/[A-Za-z0-9_-]+\.sh`)
+	packagePattern = regexp.MustCompile(`^\./(\.\.\.|[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*(/\.\.\.)?)$`)
+	ciMakeLine     = regexp.MustCompile(`^make\s+(.*)$`)
+	targetName     = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 )
 
 // logicalLines splits text into lines, joining a line that ends in `\` to the
@@ -370,9 +417,8 @@ func logicalLines(text string) []string {
 	var out []string
 	var cur strings.Builder
 	for _, line := range strings.Split(text, "\n") {
-		if strings.HasSuffix(line, "\\") {
-			cur.WriteString(strings.TrimSuffix(line, "\\"))
-			cur.WriteString(" ")
+		if rest, ok := strings.CutSuffix(line, "\\"); ok {
+			cur.WriteString(rest + " ")
 			continue
 		}
 		cur.WriteString(line)
@@ -382,18 +428,14 @@ func logicalLines(text string) []string {
 	return out
 }
 
-// parseMakefile maps each target to its recipe text, including a recipe given
-// inline after `;`, and reports whether the Makefile defines GO.
-func parseMakefile(text string) (map[string]string, bool) {
+// parseRecipes maps each target to its tab-indented recipe lines.
+func parseRecipes(makefile string) map[string]string {
 	recipes := map[string]string{}
 	current := ""
-	for _, line := range logicalLines(text) {
-		if m := makeTargetLine.FindStringSubmatch(line); m != nil && !strings.HasPrefix(m[2], "=") {
+	for _, line := range logicalLines(makefile) {
+		if m := makeTargetLine.FindStringSubmatch(line); m != nil {
 			current = m[1]
 			recipes[current] += ""
-			if _, inline, ok := strings.Cut(m[2], ";"); ok {
-				recipes[current] += inline + "\n"
-			}
 			continue
 		}
 		if strings.HasPrefix(line, "\t") && current != "" {
@@ -404,12 +446,12 @@ func parseMakefile(text string) (map[string]string, bool) {
 			current = ""
 		}
 	}
-	return recipes, makeDefinesGO.MatchString(text)
+	return recipes
 }
 
 // makeTestPrerequisites returns the targets `make test` depends on.
-func makeTestPrerequisites(text string) ([]string, error) {
-	for _, line := range logicalLines(text) {
+func makeTestPrerequisites(makefile string) ([]string, error) {
+	for _, line := range logicalLines(makefile) {
 		if rest, ok := strings.CutPrefix(line, "test:"); ok {
 			deps, _, _ := strings.Cut(rest, "##")
 			if fields := strings.Fields(deps); len(fields) > 0 {
@@ -420,10 +462,10 @@ func makeTestPrerequisites(text string) ([]string, error) {
 	return nil, errors.New("the Makefile has no `test:` rule with prerequisites")
 }
 
-// recipePatterns returns the package patterns a recipe's `go test` lines run,
-// with those of the hack/ scripts it calls.
-func recipePatterns(target, recipe string, definesGO bool, ciYAML string, script func(string) (string, error)) ([]string, error) {
-	out, err := goTestPatternsIn(target, recipe, definesGO, ciYAML)
+// recipePatterns returns the literal package patterns of the `go test` lines
+// in a recipe and in the hack/ scripts it names. Comment lines are skipped.
+func recipePatterns(fsys fs.FS, target, recipe string) ([]string, error) {
+	out, err := goTestPatterns(target, recipe)
 	if err != nil {
 		return nil, err
 	}
@@ -431,12 +473,12 @@ func recipePatterns(target, recipe string, definesGO bool, ciYAML string, script
 		if isComment(line) {
 			continue
 		}
-		for _, m := range hackScript.FindAllStringSubmatch(line, -1) {
-			body, err := script(m[1])
+		for _, script := range hackScript.FindAllString(line, -1) {
+			b, err := fs.ReadFile(fsys, script)
 			if err != nil {
-				return nil, fmt.Errorf("target %s calls %s, which cannot be read: %w", target, m[1], err)
+				return nil, fmt.Errorf("target %s calls %s, which cannot be read: %w", target, script, err)
 			}
-			p, err := goTestPatternsIn(m[1], body, false, ciYAML)
+			p, err := goTestPatterns(script, string(b))
 			if err != nil {
 				return nil, err
 			}
@@ -446,130 +488,62 @@ func recipePatterns(target, recipe string, definesGO bool, ciYAML string, script
 	return out, nil
 }
 
-// goTestPatternsIn returns the package arguments of every `go test` at command
-// position in text. Comment lines run nothing and are skipped.
-func goTestPatternsIn(where, text string, definesGO bool, ciYAML string) ([]string, error) {
+func goTestPatterns(where, text string) ([]string, error) {
 	var out []string
 	for _, line := range logicalLines(text) {
 		if isComment(line) {
 			continue
 		}
-		for _, seg := range commandSegments(line) {
-			m := goTestCommand.FindStringSubmatch(strings.TrimSpace(seg))
-			if m == nil {
-				continue
+		m := goTestLine.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		found := false
+		for _, field := range strings.Fields(m[1]) {
+			if packagePattern.MatchString(field) {
+				out = append(out, field)
+				found = true
 			}
-			if m[1] == "$(GO)" && !definesGO {
-				return nil, fmt.Errorf("%s: `$(GO) test`, but the Makefile defines no GO", where)
-			}
-			p, err := goTestPackages(where, m[2], ciYAML)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, p...)
+		}
+		if !found {
+			return nil, fmt.Errorf("%s: a `go test` line names no literal package pattern, so this check "+
+				"cannot read what it runs: %q", where, strings.TrimSpace(line))
 		}
 	}
 	return out, nil
-}
-
-// goTestPackages classifies each argument of one `go test` command and returns
-// its package patterns, or refuses the first argument it cannot classify. A
-// shell substitution or a make variable is never a literal package path, so
-// it is refused by the same rule.
-func goTestPackages(where, args, ciYAML string) ([]string, error) {
-	unparsed := func(arg string) error {
-		return fmt.Errorf("%s: unparsed `go test` argument %q in `go test %s`; this check reads "+
-			"literal package paths only", where, arg, strings.TrimSpace(args))
-	}
-	for _, m := range conditionalExpansion.FindAllStringSubmatch(args, -1) {
-		if strings.Contains(ciYAML, m[1]) {
-			return nil, fmt.Errorf("%s: `go test` carries %q, and ci.yml mentions %s, so CI may set it "+
-				"and change what runs", where, m[0], m[1])
-		}
-	}
-	args = conditionalExpansion.ReplaceAllString(args, "")
-	// Output redirection and a pipe end the arguments.
-	if i := strings.IndexAny(args, "|>"); i >= 0 {
-		args = args[:i]
-		args = strings.TrimSuffix(strings.TrimSpace(args), "2")
-	}
-	var out []string
-	fields := strings.Fields(args)
-	for i := 0; i < len(fields); i++ {
-		f := fields[i]
-		name, _, hasValue := strings.Cut(f, "=")
-		switch {
-		case name == "-run" || name == "-skip":
-			return nil, fmt.Errorf("%s: `go test %s` filters tests with %s, which this check cannot "+
-				"read; it would count a package as run while running none of its tests",
-				where, strings.TrimSpace(args), name)
-		case strings.HasPrefix(f, "-"):
-			if !hasValue && goTestValueFlags[name] {
-				i++
-			}
-		case packagePattern.MatchString(f):
-			out = append(out, f)
-		default:
-			return nil, unparsed(f)
-		}
-	}
-	return out, nil
-}
-
-// commandSegments splits a shell line on `&&`, `||` and `;`.
-func commandSegments(line string) []string {
-	line = strings.NewReplacer("&&", "\x00", "||", "\x00", ";", "\x00").Replace(line)
-	return strings.Split(line, "\x00")
 }
 
 func isComment(line string) bool {
 	return strings.HasPrefix(strings.TrimSpace(line), "#")
 }
 
-// ciMakeTargets returns the make targets the steps of a workflow invoke at
-// command position. It refuses a step, or a job, that calls one and is marked
-// `continue-on-error`, because that step's failure does not fail CI.
-func ciMakeTargets(ciYAML string) ([]string, error) {
+// ciMakeTargets returns the targets of every line of a step's `run` that
+// starts with `make`, skipping a variable override.
+func ciMakeTargets(ciYAML []byte) ([]string, error) {
 	var wf struct {
 		Jobs map[string]struct {
-			ContinueOnError any `yaml:"continue-on-error"`
-			Steps           []struct {
-				Name            string `yaml:"name"`
-				Run             string `yaml:"run"`
-				ContinueOnError any    `yaml:"continue-on-error"`
+			Steps []struct {
+				Run string `yaml:"run"`
 			} `yaml:"steps"`
 		} `yaml:"jobs"`
 	}
-	if err := yaml.Unmarshal([]byte(ciYAML), &wf); err != nil {
+	if err := yaml.Unmarshal(ciYAML, &wf); err != nil {
 		return nil, fmt.Errorf("parse ci.yml: %w", err)
 	}
-	jobs := make([]string, 0, len(wf.Jobs))
-	for name := range wf.Jobs {
-		jobs = append(jobs, name)
-	}
-	sort.Strings(jobs)
 	seen := map[string]bool{}
 	var targets []string
-	for _, job := range jobs {
-		j := wf.Jobs[job]
-		for _, step := range j.Steps {
-			stepTargets, err := runMakeTargets(step.Run)
-			if err != nil {
-				return nil, fmt.Errorf("ci.yml job %s: %w", job, err)
-			}
-			if len(stepTargets) == 0 {
-				continue
-			}
-			for _, coe := range []any{j.ContinueOnError, step.ContinueOnError} {
-				if coe != nil && coe != false {
-					return nil, fmt.Errorf("ci.yml job %s calls `make %s` with continue-on-error: %v, "+
-						"so its failure would not fail CI", job, strings.Join(stepTargets, " "), coe)
+	for _, job := range wf.Jobs {
+		for _, step := range job.Steps {
+			for _, line := range logicalLines(step.Run) {
+				m := ciMakeLine.FindStringSubmatch(strings.TrimSpace(line))
+				if m == nil {
+					continue
 				}
-			}
-			for _, target := range stepTargets {
-				if !seen[target] {
-					seen[target] = true
-					targets = append(targets, target)
+				for _, f := range strings.Fields(m[1]) {
+					if targetName.MatchString(f) && !seen[f] {
+						seen[f] = true
+						targets = append(targets, f)
+					}
 				}
 			}
 		}
@@ -577,120 +551,20 @@ func ciMakeTargets(ciYAML string) ([]string, error) {
 	if len(targets) == 0 {
 		return nil, errors.New("ci.yml invokes no make target; the parse is broken")
 	}
+	sort.Strings(targets)
 	return targets, nil
 }
 
-// runMakeTargets returns the targets of every `make` at command position in a
-// step's script. A `make` inside a string or a substitution is not one.
-func runMakeTargets(run string) ([]string, error) {
-	var out []string
-	for _, line := range logicalLines(run) {
-		if isComment(line) {
-			continue
-		}
-		for _, seg := range commandSegments(line) {
-			m := makeCommand.FindStringSubmatch(strings.TrimSpace(seg))
-			if m == nil {
-				continue
-			}
-			for _, f := range strings.Fields(m[1]) {
-				switch {
-				case strings.HasPrefix(f, "-"):
-					return nil, fmt.Errorf("`make %s` passes %s, which this check cannot read", m[1], f)
-				case strings.Contains(f, "="):
-					// A variable override, not a target.
-				default:
-					out = append(out, f)
-				}
-			}
-		}
-	}
-	return out, nil
-}
-
-// testedPackages lists, relative to the module root, every package matched by
-// the patterns that holds at least one untagged test file.
-func testedPackages(t *testing.T, patterns ...string) []string {
-	t.Helper()
-	args := append([]string{"list", "-f", "{{if or .TestGoFiles .XTestGoFiles}}{{.Dir}}{{end}}"}, patterns...)
-	cmd := exec.Command("go", args...)
-	cmd.Dir = repoRoot
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("go list %s: %v", strings.Join(patterns, " "), err)
-	}
-	root, err := filepath.Abs(repoRoot)
-	if err != nil {
-		t.Fatalf("resolve repository root: %v", err)
-	}
-	var pkgs []string
-	for _, dir := range strings.Fields(string(out)) {
-		rel, err := filepath.Rel(root, dir)
-		if err != nil {
-			t.Fatalf("relativize %s: %v", dir, err)
-		}
-		pkgs = append(pkgs, filepath.ToSlash(rel))
-	}
-	sort.Strings(pkgs)
-	return pkgs
-}
-
-// onlyTaggedTestPackages lists the packages that hold test files only among
-// the files the default build excludes, which is how `go list` reports a
-// build-tagged test.
-func onlyTaggedTestPackages(t *testing.T) []string {
-	t.Helper()
-	cmd := exec.Command("go", "list", "-f",
-		`{{if not (or .TestGoFiles .XTestGoFiles)}}{{range .IgnoredGoFiles}}{{$.ImportPath}} {{.}}{{"\n"}}{{end}}{{end}}`, "./...")
-	cmd.Dir = repoRoot
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("go list ignored files: %v", err)
-	}
-	seen := map[string]bool{}
-	var pkgs []string
-	for _, line := range strings.Split(string(out), "\n") {
-		pkg, file, ok := strings.Cut(line, " ")
-		if ok && strings.HasSuffix(file, "_test.go") && !seen[pkg] {
-			seen[pkg] = true
-			pkgs = append(pkgs, strings.TrimPrefix(pkg, "github.com/Quinyte/assayd/"))
-		}
-	}
-	return pkgs
-}
-
-// resolvePatterns returns the tested packages the patterns match.
-func resolvePatterns(t *testing.T, patterns []string) map[string]bool {
-	t.Helper()
-	reached := map[string]bool{}
-	if len(patterns) == 0 {
-		return reached
-	}
-	for _, pkg := range testedPackages(t, patterns...) {
-		reached[pkg] = true
-	}
-	return reached
-}
-
-func readRepoFile(t *testing.T, path string) string {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(repoRoot, path))
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return string(b)
-}
-
-func sameSet(a, b []string) bool {
-	x, y := append([]string(nil), a...), append([]string(nil), b...)
-	sort.Strings(x)
-	sort.Strings(y)
-	return strings.Join(x, "\x00") == strings.Join(y, "\x00")
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
+// matchesAny reports whether a `go test` package pattern names dir.
+func matchesAny(patterns []string, dir string) bool {
+	for _, p := range patterns {
+		p = strings.TrimPrefix(p, "./")
+		switch base, recursive := strings.CutSuffix(p, "/..."); {
+		case p == "...":
+			return true
+		case recursive && (dir == base || strings.HasPrefix(dir, base+"/")):
+			return true
+		case !recursive && dir == p:
 			return true
 		}
 	}
