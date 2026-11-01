@@ -1531,7 +1531,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/release.go:150` in `reportUnresolvablePin()` — from the local `reason`, one of 2 reasons it folds to
+- `internal/controller/release.go:144` in `reportUnresolvablePin()` — from the local `reason`, one of 2 reasons it folds to
 
 **Referenced by a test:** `test/envtest/pin_test.go`
 
@@ -1617,7 +1617,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Set at:**
 
-- `internal/controller/release.go:150` in `reportUnresolvablePin()` — from the local `reason`, one of 2 reasons it folds to
+- `internal/controller/release.go:144` in `reportUnresolvablePin()` — from the local `reason`, one of 2 reasons it folds to
 
 **Referenced by a test:** `test/envtest/imagesignature_test.go`, `test/envtest/pin_test.go`, `test/envtest/pinhold_test.go`, `test/envtest/release_test.go`
 
