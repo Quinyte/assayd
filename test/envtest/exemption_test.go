@@ -6,12 +6,17 @@ package envtest
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -485,11 +490,80 @@ func TestAFailedForeignListHoldsTheExemptLock(t *testing.T) {
 // over 10 s of eval and Agent passes the Agent's resourceVersion does not
 // change.
 //
+// Every read in the window — the two controllers', the probe oracle's and
+// the row's own — goes through steadyReads, which retries a read the API
+// server did not answer. Without it the row was load-sensitive (#126). The
+// Agent reconciler reports a Gateway or EvalSuite read that failed, as it
+// must (Ready=False naming the unread Gateway, or GatesPassed=False naming
+// the unread suite), and retracts the report on the next pass, so one dropped
+// connection moves the resourceVersion twice with no loop in either
+// controller. The two rows after this one pin that retraction. A loop needs
+// no failed read, so the row still sees one. Each pass that writes is named
+// in the failure, with what it changed, so a write in the window says which
+// controller made it, and the number of retried reads is logged.
+//
 // Mutations: clear blocked whenever clause 5 finds no hold (the
 // resourceVersion bound); or show EvalRunning when blocked is not the hold
 // (the reason).
 func TestAnExemptLocksUnusableBindingWritesNoLoop(t *testing.T) {
-	g, c, cd := exemptJ2(t, "jtwobind", 0, nil)
+	g, c, steady := bindingUnsupported(t, "jtwobind")
+	read := func() *assaydv1alpha1.Agent {
+		t.Helper()
+		var a assaydv1alpha1.Agent
+		if err := steady.Get(context.Background(), client.ObjectKeyFromObject(g.a), &a); err != nil {
+			t.Fatalf("read agent: %v", err)
+		}
+		return &a
+	}
+	start := read()
+	prev := start
+	var writes []string
+	pass := func(who string, run func(*testing.T)) {
+		run(t)
+		cur := read()
+		if cur.ResourceVersion != prev.ResourceVersion {
+			writes = append(writes, fmt.Sprintf("the %s pass at %s wrote %s -> %s: %s", who,
+				time.Now().Format(time.RFC3339Nano), prev.ResourceVersion, cur.ResourceVersion,
+				statusChange(&prev.Status, &cur.Status)))
+		}
+		prev = cur
+	}
+	end := time.Now().Add(10 * time.Second)
+	for time.Now().Before(end) {
+		pass("eval", func(t *testing.T) { g.evalPass(t) })
+		pass("Agent", g.agentPass)
+		time.Sleep(500 * time.Millisecond)
+	}
+	if got := read().ResourceVersion; got != start.ResourceVersion {
+		if len(writes) > 3 {
+			writes = append(writes[:3], fmt.Sprintf("and %d more passes wrote", len(writes)-3))
+		}
+		t.Errorf("the Agent's resourceVersion moved from %s to %s over 10 s: a write loop. %s",
+			start.ResourceVersion, got, strings.Join(writes, "; "))
+	}
+	if g.hits(c) != 0 {
+		t.Errorf("a card with no usable interface was sent %d cases", g.hits(c))
+	}
+	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalBindingUnsupported)
+	t.Logf("steadyReads retried %d reads the API server did not answer", steady.retries.Load())
+}
+
+// bindingUnsupported builds T57's state on name: exemptJ2's Lock, beside a
+// candidate C whose recorded card serves only a JSON-RPC interface, after
+// the eval and Agent passes that record GatesPassed=False/
+// EvalBindingUnsupported. From here on the Agent reconciler, the eval
+// controller and the probe oracle read through the steadyReads it returns.
+func bindingUnsupported(t *testing.T, name string) (*authEvalRig, string, steadyReads) {
+	t.Helper()
+	g, c, cd := exemptJ2(t, name, 0, nil)
+	steady := newSteadyReads(k8s)
+	g.r.Client, g.r.Reader, g.prober.reads = steady, steady, steady
+	e, err := controller.NewEvalReconciler(steady, steady, func() bool { return true }, g.r.Gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.A2A.HTTP, e.CardFetchTimeout = g.stub, time.Second
+	g.e = e
 	jsonrpc := strings.Replace(stubCard(g.name), "HTTP+JSON", "JSONRPC", 1)
 	g.stub.setCard(g.name, jsonrpc)
 	writeAgentStatus(t, g.a, func(st *assaydv1alpha1.AgentStatus) {
@@ -502,20 +576,253 @@ func TestAnExemptLocksUnusableBindingWritesNoLoop(t *testing.T) {
 	g.evalPass(t)
 	g.agentPass(t)
 	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalBindingUnsupported)
-	rv := liveAgent(t, g.a).ResourceVersion
-	end := time.Now().Add(10 * time.Second)
-	for time.Now().Before(end) {
-		g.evalPass(t)
-		g.agentPass(t)
-		time.Sleep(500 * time.Millisecond)
+	return g, c, steady
+}
+
+// failOnce fails the next n reads of an object of match's type with a
+// transport error, as a dropped connection does, and passes every other read
+// through.
+type failOnce struct {
+	client.Reader
+	match func(any) bool
+	n     *atomic.Int32
+}
+
+func (f failOnce) fail(obj any) error {
+	if f.match(obj) && f.n.Add(-1) >= 0 {
+		return &url.Error{Op: "Get", URL: "https://apiserver.invalid", Err: errors.New("http2: client connection lost")}
 	}
-	if got := liveAgent(t, g.a).ResourceVersion; got != rv {
-		t.Errorf("the Agent's resourceVersion moved from %s to %s over 10 s: a write loop", rv, got)
+	return nil
+}
+
+func (f failOnce) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if err := f.fail(obj); err != nil {
+		return err
 	}
-	if g.hits(c) != 0 {
-		t.Errorf("a card with no usable interface was sent %d cases", g.hits(c))
+	return f.Reader.Get(ctx, key, obj, opts...)
+}
+
+func (f failOnce) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if err := f.fail(list); err != nil {
+		return err
 	}
-	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalBindingUnsupported)
+	return f.Reader.List(ctx, list, opts...)
+}
+
+// failNextRead makes the Agent reconciler's next read of an object match
+// accepts fail once, past steady's retries; every other read goes through
+// steady.
+func failNextRead(g *authEvalRig, steady steadyReads, match func(any) bool) {
+	n := &atomic.Int32{}
+	n.Store(1)
+	g.r.Reader = failOnce{Reader: steady, match: match, n: n}
+}
+
+// agent reads a through s, so a dropped connection is retried rather than
+// failing the row.
+func (s steadyReads) agent(t *testing.T, a *assaydv1alpha1.Agent) *assaydv1alpha1.Agent {
+	t.Helper()
+	var got assaydv1alpha1.Agent
+	if err := s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
+		t.Fatalf("read agent: %v", err)
+	}
+	return &got
+}
+
+// condIs is condIs read through s.
+func (s steadyReads) condIs(t *testing.T, a *assaydv1alpha1.Agent, typ assaydv1alpha1.ConditionType,
+	status metav1.ConditionStatus, reason string) *metav1.Condition {
+	t.Helper()
+	c := condition(s.agent(t, a), typ)
+	if c == nil {
+		t.Fatalf("%s is absent, want %s/%s", typ, status, reason)
+	}
+	if c.Status != status || c.Reason != reason {
+		t.Errorf("%s is %s/%s, want %s/%s: %s", typ, c.Status, c.Reason, status, reason, c.Message)
+	}
+	return c
+}
+
+// The first of the two rows T57's exclusion rests on (#126): in T57's state,
+// one Gateway read that fails is reported on that pass — Ready=False,
+// Degraded=True and PolicyApplyIncomplete=True, all GatewayAuthPolicy — and
+// the next pass, whose read succeeds, retracts all of it. A further eval and
+// Agent pass then writes nothing.
+//
+// Mutation: remember a failed Gateway read per host and report it on every
+// later pass.
+func TestAFailedGatewayReadIsReportedAndRetracted(t *testing.T) {
+	g, _, steady := bindingUnsupported(t, "jtwogwread")
+	before := steady.agent(t, g.a)
+	failNextRead(g, steady, func(o any) bool { _, ok := o.(*gatewayv1.Gateway); return ok })
+	g.agentPass(t)
+	for _, typ := range []assaydv1alpha1.ConditionType{assaydv1alpha1.CondReady,
+		assaydv1alpha1.CondDegraded, assaydv1alpha1.CondPolicyApplyIncomplete} {
+		want := metav1.ConditionTrue
+		if typ == assaydv1alpha1.CondReady {
+			want = metav1.ConditionFalse
+		}
+		steady.condIs(t, g.a, typ, want, controller.ReasonGatewayAuthPolicy)
+	}
+	if c := condition(steady.agent(t, g.a), assaydv1alpha1.CondReady); !strings.Contains(c.Message, "could not be read") {
+		t.Errorf("Ready does not say the Gateway could not be read: %s", c.Message)
+	}
+	g.r.Reader = steady
+	g.agentPass(t)
+	retracted(t, g, steady, before)
+}
+
+// The second: one EvalSuite read that fails turns GatesPassed to
+// EvalSuiteUnreadable on that pass, and the next pass puts back
+// EvalBindingUnsupported. A further eval and Agent pass then writes nothing.
+//
+// Mutation: keep EvalSuiteUnreadable on the pass after a failed suite read.
+func TestAFailedEvalSuiteReadIsReportedAndRetracted(t *testing.T) {
+	g, _, steady := bindingUnsupported(t, "jtwosuiteread")
+	before := steady.agent(t, g.a)
+	failNextRead(g, steady, func(o any) bool { _, ok := o.(*assaydv1alpha1.EvalSuite); return ok })
+	g.agentPass(t)
+	steady.condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalSuiteUnreadable)
+	g.r.Reader = steady
+	g.agentPass(t)
+	steady.condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalBindingUnsupported)
+	retracted(t, g, steady, before)
+}
+
+// retracted asserts that the Agent's conditions and phase are what they
+// were before the failed read, and that one more eval and Agent pass leaves
+// its resourceVersion where it is.
+func retracted(t *testing.T, g *authEvalRig, steady steadyReads, before *assaydv1alpha1.Agent) {
+	t.Helper()
+	after := steady.agent(t, g.a)
+	if diff := statusChange(&before.Status, &after.Status); !strings.HasPrefix(diff, "no condition") {
+		t.Errorf("the pass after the failed read did not retract its report: %s", diff)
+	}
+	g.evalPass(t)
+	g.agentPass(t)
+	if now := steady.agent(t, g.a); now.ResourceVersion != after.ResourceVersion {
+		t.Errorf("the resourceVersion moved from %s to %s on a pass after the retraction: %s",
+			after.ResourceVersion, now.ResourceVersion, statusChange(&after.Status, &now.Status))
+	}
+}
+
+// steadyReads is a client whose reads are retried while the API server does
+// not answer them: a transport error, or a timeout, throttle or 5xx status.
+// An answer, NotFound and Forbidden included, is returned as it came, and
+// writes are not retried. A row that bounds writes uses it to keep a load
+// artefact out of the bound (#126); retries counts the reads it retried.
+type steadyReads struct {
+	client.Client
+	retries *atomic.Int64
+}
+
+func newSteadyReads(c client.Client) steadyReads {
+	return steadyReads{Client: c, retries: &atomic.Int64{}}
+}
+
+func (s steadyReads) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	return s.retry(ctx, func() error { return s.Client.Get(ctx, key, obj, opts...) })
+}
+
+func (s steadyReads) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	return s.retry(ctx, func() error { return s.Client.List(ctx, list, opts...) })
+}
+
+func (s steadyReads) retry(ctx context.Context, read func() error) error {
+	var err error
+	for i := 0; i < 20; i++ {
+		if err = read(); !unanswered(err) {
+			return err
+		}
+		s.retries.Add(1)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return err
+}
+
+func unanswered(err error) bool {
+	var ue *url.Error
+	return err != nil && (errors.As(err, &ue) || apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) ||
+		apierrors.IsTooManyRequests(err) || apierrors.IsInternalError(err) ||
+		apierrors.IsServiceUnavailable(err))
+}
+
+// unanswered retries what the API server did not answer, and nothing it did.
+//
+// Mutation: retry NotFound too.
+func TestSteadyReadsRetriesOnlyUnansweredReads(t *testing.T) {
+	gr := schema.GroupResource{Group: "assayd.dev", Resource: "agents"}
+	lost := &url.Error{Op: "Get", URL: "https://apiserver.invalid", Err: errors.New("http2: client connection lost")}
+	for _, c := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"a transport error", lost, true},
+		{"a wrapped transport error", fmt.Errorf("get agent: %w", lost), true},
+		{"429", apierrors.NewTooManyRequests("slow down", 1), true},
+		{"500", apierrors.NewInternalError(errors.New("etcd is unavailable")), true},
+		{"503", apierrors.NewServiceUnavailable("unavailable"), true},
+		{"504", apierrors.NewTimeoutError("timed out", 1), true},
+		{"a server timeout", apierrors.NewServerTimeout(gr, "get", 1), true},
+		// An unexpected status the client reads as InternalError.
+		{"502", apierrors.NewGenericServerResponse(502, "get", gr, "a", "bad gateway", 0, true), true},
+		{"NotFound", apierrors.NewNotFound(gr, "a"), false},
+		{"Forbidden", apierrors.NewForbidden(gr, "a", errors.New("no grant")), false},
+		{"Conflict", apierrors.NewConflict(gr, "a", errors.New("stale")), false},
+		{"Invalid", apierrors.NewInvalid(schema.GroupKind{Group: "assayd.dev", Kind: "Agent"}, "a", nil), false},
+		{"nil", nil, false},
+	} {
+		if got := unanswered(c.err); got != c.want {
+			t.Errorf("%s: unanswered is %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// statusChange names what a status write changed: the conditions whose
+// status, reason or message moved, and phase and status.eval.blocked.
+func statusChange(a, b *assaydv1alpha1.AgentStatus) string {
+	var out []string
+	for _, nc := range b.Conditions {
+		oc := meta.FindStatusCondition(a.Conditions, nc.Type)
+		if oc == nil || oc.Status != nc.Status || oc.Reason != nc.Reason || oc.Message != nc.Message {
+			out = append(out, fmt.Sprintf("%s=%s/%s", nc.Type, nc.Status, nc.Reason))
+		}
+	}
+	for _, oc := range a.Conditions {
+		if meta.FindStatusCondition(b.Conditions, oc.Type) == nil {
+			out = append(out, oc.Type+" removed")
+		}
+	}
+	if a.Phase != b.Phase {
+		out = append(out, fmt.Sprintf("phase %s -> %s", a.Phase, b.Phase))
+	}
+	var ab, bb *assaydv1alpha1.EvalBlocked
+	if a.Eval != nil {
+		ab = a.Eval.Blocked
+	}
+	if b.Eval != nil {
+		bb = b.Eval.Blocked
+	}
+	if !reflect.DeepEqual(ab, bb) {
+		out = append(out, fmt.Sprintf("status.eval.blocked %s -> %s", blockedReason(ab), blockedReason(bb)))
+	}
+	if len(out) == 0 {
+		return "no condition, phase or blocked differs between the reads before and after it, so it " +
+			"wrote another field, or wrote and restored one"
+	}
+	return strings.Join(out, ", ")
+}
+
+func blockedReason(b *assaydv1alpha1.EvalBlocked) string {
+	if b == nil {
+		return "empty"
+	}
+	return b.Reason
 }
 
 // T58: a stale hold. A J2 Lock in the Gateway-level row's state has blocked
