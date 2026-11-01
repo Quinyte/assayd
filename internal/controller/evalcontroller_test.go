@@ -44,11 +44,15 @@ type candidateStub struct {
 	cardGets int
 	// refuse fails the card fetch at the connection.
 	refuse bool
-	// hang holds the card fetch until its request's context ends, or for
-	// hangFor, after which the card is served: a fetch with no bound of its
-	// own then starts a run rather than hanging the test.
-	hang    bool
-	hangFor time.Duration
+	// hang holds the card fetch, before its headers, until its request's
+	// context ends, or for hangFor, after which the card is served: a fetch
+	// with no bound of its own then starts a run rather than hanging the
+	// test. stallBody holds it the same way after the headers, at the first
+	// read of the body.
+	hang, stallBody bool
+	hangFor         time.Duration
+	// cardBody, when set, is the card's body in place of card.
+	cardBody io.Reader
 	// deadline is the last card fetch's request deadline, and hasDeadline
 	// whether it had one.
 	deadline    time.Time
@@ -68,7 +72,7 @@ func (s *candidateStub) Do(req *http.Request) (*http.Response, error) {
 		s.mu.Lock()
 		s.cardGets++
 		s.deadline, s.hasDeadline = req.Context().Deadline()
-		refuse, hang, hangFor, card := s.refuse, s.hang, s.hangFor, s.card
+		refuse, hang, stall, hangFor, card, cardBody := s.refuse, s.hang, s.stallBody, s.hangFor, s.card, s.cardBody
 		s.mu.Unlock()
 		if refuse {
 			return nil, errors.New("connection refused")
@@ -80,7 +84,11 @@ func (s *candidateStub) Do(req *http.Request) (*http.Response, error) {
 			case <-time.After(hangFor):
 			}
 		}
-		return answer(http.StatusOK, card)
+		if cardBody == nil {
+			cardBody = strings.NewReader(card)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Request: req,
+			Body: io.NopCloser(&contextBody{ctx: req.Context(), r: cardBody, stall: stall, stallFor: hangFor})}, nil
 	}
 	var m struct {
 		Message struct {
@@ -102,6 +110,43 @@ func (s *candidateStub) Do(req *http.Request) (*http.Response, error) {
 		"status":    map[string]any{"state": "TASK_STATE_COMPLETED"},
 		"artifacts": []any{map[string]any{"artifactId": "a", "parts": []any{map[string]any{"text": "echo: " + text}}}}}})
 	return answer(http.StatusOK, string(out))
+}
+
+// contextBody is a card body read as net/http's transport reads one: tied to
+// the request's context, so a read after that context ends fails with its
+// error. stall holds the first read until the context ends or stallFor
+// passes.
+type contextBody struct {
+	ctx      context.Context
+	r        io.Reader
+	stall    bool
+	stallFor time.Duration
+}
+
+func (b *contextBody) Read(p []byte) (int, error) {
+	if b.stall {
+		b.stall = false
+		select {
+		case <-b.ctx.Done():
+		case <-time.After(b.stallFor):
+		}
+	}
+	if err := b.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return b.r.Read(p)
+}
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
 }
 
 func (s *candidateStub) count(text string) int {
@@ -278,6 +323,11 @@ func TestEachWaitingPassReturnsItsInterval(t *testing.T) {
 		"a body that does not parse": {card: "not json", want: CardRetryInterval},
 		"a refusal that read a card": {card: strings.Replace(evalCard, "HTTP+JSON", "JSONRPC", 1),
 			want: CardDriftInterval},
+		// A card that does not match the one status.cards[] records is a
+		// refusal that read a card too, not a failed fetch.
+		"a card whose digest is not the recorded one": {edit: func(a *assaydv1alpha1.Agent, _ *evalFixture) {
+			a.Status.Cards[0].Digest = digestOfCard("another card")
+		}, want: CardDriftInterval},
 		"a final verdict": {edit: func(a *assaydv1alpha1.Agent, f *evalFixture) {
 			a.Status.Eval = &assaydv1alpha1.EvalStatus{RevisionDigest: a.Status.CandidateRevisionDigest,
 				SuiteDigest: f.sd, Verdict: assaydv1alpha1.EvalVerdictFailed}
@@ -1025,13 +1075,15 @@ func TestAFailedFetchNamesItsOwnClass(t *testing.T) {
 	}
 }
 
-// The run-start card fetch reads at most 1 MiB (§1.1 step 2): a card of
-// exactly 1 MiB starts a run, and one a byte longer is a fetch that did not
+// The run-start card fetch reads at most 1 MiB + 1 byte (§1.1 step 2): a card
+// of exactly 1 MiB starts a run, and one a byte longer is a fetch that did not
 // succeed, EvalAwaitingCard naming the bound, retried at CardRetryInterval.
 // The recorded digest is the whole body's, so a fetch that read past the
-// bound would match it and start the run.
+// bound would match it and start the run. Of a 4 MiB body, at most 1 MiB + 1
+// byte is read, as evalclient's TestTheBodyCap measures for an answer.
 //
-// Mutation (#115 item 2): delete the length check after the LimitReader.
+// Mutations (#115 item 2): delete the length check after the LimitReader;
+// read the body with no LimitReader.
 func TestTheRunStartCardFetchIsBoundedAtOneMiB(t *testing.T) {
 	for name, tc := range map[string]struct {
 		size   int
@@ -1071,6 +1123,21 @@ func TestTheRunStartCardFetchIsBoundedAtOneMiB(t *testing.T) {
 			}
 		})
 	}
+	t.Run("4 MiB, of which at most 1 MiB + 1 byte is read", func(t *testing.T) {
+		f := newEvalFixture(t, nil, echoCase("a", "one"))
+		body := &countingReader{r: strings.NewReader(evalCard + strings.Repeat(" ", 4*evalclient.MaxBodyBytes))}
+		f.stub.cardBody = body
+		if _, err := f.pass(t); err != nil {
+			t.Fatal(err)
+		}
+		if body.n > evalclient.MaxBodyBytes+1 {
+			t.Errorf("%d bytes of the card were read; at most 1 MiB + 1 (%d) may be", body.n, evalclient.MaxBodyBytes+1)
+		}
+		if e := f.agent(t).Status.Eval; e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalAwaitingCard ||
+			!strings.Contains(e.Blocked.Message, "the body is over 1 MiB") {
+			t.Errorf("a 4 MiB card: status.eval %+v; want EvalAwaitingCard naming the bound", e)
+		}
+	})
 }
 
 // The run-start card fetch is bounded by CardFetchTimeout: a candidate that
@@ -1103,6 +1170,39 @@ func TestTheRunStartCardFetchTimesOut(t *testing.T) {
 	}
 }
 
+// The bound covers the body too: a candidate that sends its headers and then
+// stalls the body ends the fetch within CardFetchTimeout. The class it
+// reports is "the body was cut short", not "no answer within", because the
+// read, not the request, is what the deadline ends; this row pins that class
+// as the code reports it. The body is tied to the request's context, as
+// net/http's is, so a fetch that ends that context once the headers arrive
+// reads no card at all, and every run-start row here fails with it.
+//
+// Mutations (#115 item 2): derive the fetch's context with WithCancel in place
+// of WithTimeout; cancel it as soon as Do returns.
+func TestTheRunStartCardFetchTimesOutMidBody(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"))
+	f.r.CardFetchTimeout = 50 * time.Millisecond
+	f.stub.stallBody, f.stub.hangFor = true, 3*time.Second
+	start := time.Now()
+	res, err := f.pass(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took >= f.stub.hangFor {
+		t.Errorf("the pass took %v; the body read was not bounded at 50ms", took)
+	}
+	e := f.agent(t).Status.Eval
+	if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalAwaitingCard ||
+		!strings.Contains(e.Blocked.Message, "the body was cut short") {
+		t.Fatalf("a stalled body: status.eval %+v; want EvalAwaitingCard, the body cut short", e)
+	}
+	if e.Verdict != "" || f.stub.total() != 0 || res.RequeueAfter != CardRetryInterval {
+		t.Errorf("a stalled body: verdict %q, %d sends, requeue %v; want no run, no send, "+
+			"CardRetryInterval", e.Verdict, f.stub.total(), res.RequeueAfter)
+	}
+}
+
 // At its zero value CardFetchTimeout is 5 s, as §1.1 step 2 gives the
 // run-start fetch: the request the candidate is sent carries a deadline 5 s
 // after the pass began it.
@@ -1124,10 +1224,13 @@ func TestTheRunStartCardFetchDefaultsToFiveSeconds(t *testing.T) {
 }
 
 // The run-start patch writes blocked empty (A20.25, taken): a refusal stored
-// by an earlier pass for the same pair does not stand beside the run that
-// starts once the card is repaired, and blockedFor names the pair.
+// by an earlier pass does not stand beside the run that starts once the card
+// is repaired, and blockedFor names the run's pair, not the one stored, which
+// is seeded with another suite digest.
 //
-// Mutation (#115 item 3): keep the stored blocked in the run-start patch.
+// Mutations (#115 item 3): keep the stored blocked in the run-start patch,
+// alone and with the read-back's blocked check removed; keep the stored
+// blockedFor, alone and with the read-back's blockedFor check removed.
 func TestARunStartWritesBlockedEmpty(t *testing.T) {
 	f := newEvalFixture(t, nil, echoCase("a", "one"), echoCase("b", "two"))
 	tenanted := strings.Replace(evalCard, `"protocolVersion":"1.0"`, `"protocolVersion":"1.0","tenant":"t1"`, 1)
@@ -1146,6 +1249,7 @@ func TestARunStartWritesBlockedEmpty(t *testing.T) {
 	f.stub.card = evalCard
 	a = f.agent(t)
 	a.Status.Cards[0].Digest = digestOfCard(evalCard)
+	a.Status.Eval.BlockedFor.SuiteDigest = "another-suite-digest"
 	if err := f.c.Status().Update(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
