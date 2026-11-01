@@ -30,16 +30,21 @@ import (
 //
 // This is a change detector over package lists, built on simple text rules;
 // it is not a shell or Make parser. It reads the literal `./x` and `./x/...`
-// arguments of `go test` lines in the recipes `make test` and ci.yml's `make`
-// lines reach, and in the hack/ scripts those recipes name. It also checks that
+// arguments of `go test` lines in the recipes of `test`'s direct
+// prerequisites and of the targets ci.yml's `make` lines name, and in the
+// hack/ scripts those recipes name. It also checks that
 // `make race` names what `make unit` names, and that no directory's tests are
 // all excluded from a linux/amd64 build with cgo on, as CI builds them. Its
 // rules: a `#` after the line's start, whitespace or a shell metacharacter
-// ends a line; a recipe line that runs `go test` or a script with make's `-`
-// prefix is refused; a target may have one recipe.
+// ends a recipe, script or ci.yml `run` line; a recipe line that runs
+// `go test` or a hack/ script with make's `-` prefix is refused; a `go test`
+// line with no literal package pattern is refused; a target may have one
+// tab-indented recipe under a `name:` line, and an inline `name: ; cmd`
+// recipe, `name :` and a multi-target rule are not read.
 //
 // Shell and Make syntax beyond those rules — quoting, metacharacters, `cd`,
-// `||`, pipes, variables, recursive make, `.IGNORE`, `-i`/`-k` — is not
+// `||`, pipes, variables, recursive make, transitive prerequisites,
+// `.IGNORE`, make's flags — is not
 // modelled, and neither are test flags, environment variables or CI
 // conditions. Changes to the Makefile, ci.yml and hack/ scripts are reviewed
 // by hand. `test/conformance`'s `cluster` files run only in
