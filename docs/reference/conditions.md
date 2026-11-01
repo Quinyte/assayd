@@ -1128,7 +1128,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 - `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/gate_test.go`
+**Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/exemption_test.go`, `test/envtest/gate_test.go`
 
 **State:** The EvalSuite that `spec.gates` names could not be read, with an error that is not NotFound, such as `Forbidden`.
 
@@ -1258,7 +1258,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/authtxn.go:2103` in `runLock()` — constant at the call site
 - `internal/controller/agent_controller.go:1304` in `withholdReady()` — from `w.reason`, one of the 13 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/e2e/gate_test.go`, `test/e2e/gatewayhold_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authgate_test.go`, `test/envtest/authserved_test.go`
+**Referenced by a test:** `internal/controller/authserved_unit_test.go`, `test/e2e/gate_test.go`, `test/e2e/gatewayhold_test.go`, `test/envtest/authabove_test.go`, `test/envtest/authgate_test.go`, `test/envtest/authserved_test.go`, `test/envtest/exemption_test.go`
 
 **State:** Something on the assayd Gateway could have answered the anonymous `401` the compiler is about to credit — a counting Gateway-level policy, a Gateway that admits ListenerSets, or a Gateway or policy list that cannot be read. Also W1: a served API-key Agent beside a Gateway-level policy that could widen its route.
 
