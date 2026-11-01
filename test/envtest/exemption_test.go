@@ -610,11 +610,37 @@ func (f failOnce) List(ctx context.Context, list client.ObjectList, opts ...clie
 }
 
 // failNextRead makes the Agent reconciler's next read of an object match
-// accepts fail once, unretried.
-func failNextRead(g *authEvalRig, match func(any) bool) {
+// accepts fail once, past steady's retries; every other read goes through
+// steady.
+func failNextRead(g *authEvalRig, steady steadyReads, match func(any) bool) {
 	n := &atomic.Int32{}
 	n.Store(1)
-	g.r.Reader = failOnce{Reader: k8s, match: match, n: n}
+	g.r.Reader = failOnce{Reader: steady, match: match, n: n}
+}
+
+// agent reads a through s, so a dropped connection is retried rather than
+// failing the row.
+func (s steadyReads) agent(t *testing.T, a *assaydv1alpha1.Agent) *assaydv1alpha1.Agent {
+	t.Helper()
+	var got assaydv1alpha1.Agent
+	if err := s.Get(context.Background(), client.ObjectKeyFromObject(a), &got); err != nil {
+		t.Fatalf("read agent: %v", err)
+	}
+	return &got
+}
+
+// condIs is condIs read through s.
+func (s steadyReads) condIs(t *testing.T, a *assaydv1alpha1.Agent, typ assaydv1alpha1.ConditionType,
+	status metav1.ConditionStatus, reason string) *metav1.Condition {
+	t.Helper()
+	c := condition(s.agent(t, a), typ)
+	if c == nil {
+		t.Fatalf("%s is absent, want %s/%s", typ, status, reason)
+	}
+	if c.Status != status || c.Reason != reason {
+		t.Errorf("%s is %s/%s, want %s/%s: %s", typ, c.Status, c.Reason, status, reason, c.Message)
+	}
+	return c
 }
 
 // The first of the two rows T57's exclusion rests on (#126): in T57's state,
@@ -626,9 +652,9 @@ func failNextRead(g *authEvalRig, match func(any) bool) {
 // Mutation: remember a failed Gateway read per host and report it on every
 // later pass.
 func TestAFailedGatewayReadIsReportedAndRetracted(t *testing.T) {
-	g, _, _ := bindingUnsupported(t, "jtwogwread")
-	before := liveAgent(t, g.a)
-	failNextRead(g, func(o any) bool { _, ok := o.(*gatewayv1.Gateway); return ok })
+	g, _, steady := bindingUnsupported(t, "jtwogwread")
+	before := steady.agent(t, g.a)
+	failNextRead(g, steady, func(o any) bool { _, ok := o.(*gatewayv1.Gateway); return ok })
 	g.agentPass(t)
 	for _, typ := range []assaydv1alpha1.ConditionType{assaydv1alpha1.CondReady,
 		assaydv1alpha1.CondDegraded, assaydv1alpha1.CondPolicyApplyIncomplete} {
@@ -636,14 +662,14 @@ func TestAFailedGatewayReadIsReportedAndRetracted(t *testing.T) {
 		if typ == assaydv1alpha1.CondReady {
 			want = metav1.ConditionFalse
 		}
-		condIs(t, g.a, typ, want, controller.ReasonGatewayAuthPolicy)
+		steady.condIs(t, g.a, typ, want, controller.ReasonGatewayAuthPolicy)
 	}
-	if c := condition(liveAgent(t, g.a), assaydv1alpha1.CondReady); !strings.Contains(c.Message, "could not be read") {
+	if c := condition(steady.agent(t, g.a), assaydv1alpha1.CondReady); !strings.Contains(c.Message, "could not be read") {
 		t.Errorf("Ready does not say the Gateway could not be read: %s", c.Message)
 	}
-	g.r.Reader = k8s
+	g.r.Reader = steady
 	g.agentPass(t)
-	retracted(t, g, before)
+	retracted(t, g, steady, before)
 }
 
 // The second: one EvalSuite read that fails turns GatesPassed to
@@ -652,31 +678,31 @@ func TestAFailedGatewayReadIsReportedAndRetracted(t *testing.T) {
 //
 // Mutation: keep EvalSuiteUnreadable on the pass after a failed suite read.
 func TestAFailedEvalSuiteReadIsReportedAndRetracted(t *testing.T) {
-	g, _, _ := bindingUnsupported(t, "jtwosuiteread")
-	before := liveAgent(t, g.a)
-	failNextRead(g, func(o any) bool { _, ok := o.(*assaydv1alpha1.EvalSuite); return ok })
+	g, _, steady := bindingUnsupported(t, "jtwosuiteread")
+	before := steady.agent(t, g.a)
+	failNextRead(g, steady, func(o any) bool { _, ok := o.(*assaydv1alpha1.EvalSuite); return ok })
 	g.agentPass(t)
-	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalSuiteUnreadable)
-	g.r.Reader = k8s
+	steady.condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalSuiteUnreadable)
+	g.r.Reader = steady
 	g.agentPass(t)
-	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalBindingUnsupported)
-	retracted(t, g, before)
+	steady.condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalBindingUnsupported)
+	retracted(t, g, steady, before)
 }
 
 // retracted asserts that the Agent's conditions and phase are what they
 // were before the failed read, and that one more eval and Agent pass leaves
 // its resourceVersion where it is.
-func retracted(t *testing.T, g *authEvalRig, before *assaydv1alpha1.Agent) {
+func retracted(t *testing.T, g *authEvalRig, steady steadyReads, before *assaydv1alpha1.Agent) {
 	t.Helper()
-	after := liveAgent(t, g.a)
+	after := steady.agent(t, g.a)
 	if diff := statusChange(&before.Status, &after.Status); !strings.HasPrefix(diff, "no condition") {
 		t.Errorf("the pass after the failed read did not retract its report: %s", diff)
 	}
 	g.evalPass(t)
 	g.agentPass(t)
-	if rv := liveAgent(t, g.a).ResourceVersion; rv != after.ResourceVersion {
+	if now := steady.agent(t, g.a); now.ResourceVersion != after.ResourceVersion {
 		t.Errorf("the resourceVersion moved from %s to %s on a pass after the retraction: %s",
-			after.ResourceVersion, rv, statusChange(&after.Status, &liveAgent(t, g.a).Status))
+			after.ResourceVersion, now.ResourceVersion, statusChange(&after.Status, &now.Status))
 	}
 }
 
@@ -722,7 +748,7 @@ func unanswered(err error) bool {
 	var ue *url.Error
 	return err != nil && (errors.As(err, &ue) || apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) ||
 		apierrors.IsTooManyRequests(err) || apierrors.IsInternalError(err) ||
-		apierrors.IsServiceUnavailable(err) || apierrors.IsUnexpectedServerError(err))
+		apierrors.IsServiceUnavailable(err))
 }
 
 // unanswered retries what the API server did not answer, and nothing it did.
@@ -742,6 +768,9 @@ func TestSteadyReadsRetriesOnlyUnansweredReads(t *testing.T) {
 		{"500", apierrors.NewInternalError(errors.New("etcd is unavailable")), true},
 		{"503", apierrors.NewServiceUnavailable("unavailable"), true},
 		{"504", apierrors.NewTimeoutError("timed out", 1), true},
+		{"a server timeout", apierrors.NewServerTimeout(gr, "get", 1), true},
+		// An unexpected status the client reads as InternalError.
+		{"502", apierrors.NewGenericServerResponse(502, "get", gr, "a", "bad gateway", 0, true), true},
 		{"NotFound", apierrors.NewNotFound(gr, "a"), false},
 		{"Forbidden", apierrors.NewForbidden(gr, "a", errors.New("no grant")), false},
 		{"Conflict", apierrors.NewConflict(gr, "a", errors.New("stale")), false},
