@@ -110,10 +110,13 @@ print-crdoc-version: ## the pinned crdoc version, for CI to key a cache on
 .PHONY: fmt vet unit envtest docs conformance conformance-cluster chart chart-conform release-workflow test race cover e2e verify
 fmt: ; go fmt ./...
 vet: ; go vet ./...
+# The e2e fixtures' own tests are unit tests too (#129): hack/e2e.sh builds the
+# fixtures, but runs none of their tests. test/docs fails on a tested package
+# that `make test` or CI does not reach.
 unit: ## pure logic, no cluster
-	go test ./internal/... ./api/... ./cmd/... -count=1
+	go test ./internal/... ./api/... ./cmd/... ./test/responder/... ./test/mcpserver/... -count=1
 race: ## unit tests under the race detector (required evidence for review)
-	go test -race ./internal/... ./api/... ./cmd/... -count=1
+	go test -race ./internal/... ./api/... ./cmd/... ./test/responder/... ./test/mcpserver/... -count=1
 envtest: $(SETUP_ENVTEST) ## reconcile behaviour against a real API server
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S) -p path)" go test ./test/envtest/... -count=$(ENVTEST_COUNT) -timeout=$(ENVTEST_TIMEOUT)
 cover: ## coverage over changed packages
