@@ -1099,7 +1099,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			// status.activeRevision as the pass found it, or none; on any
 			// other, this writes its text again.
 			conds.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "NoGatesDeclared",
-				removedGateMessage(desired, desiredDigest, removedGateNote(status.Eval, desired, desiredDigest)))
+				removedGateMessage(desired, desiredDigest, removedGateNote(status.Eval, desired, desiredDigest,
+					status.ActiveRevisionDigest, specPinDigest(&agent))))
 		}
 	}
 
@@ -2105,7 +2106,8 @@ func (r *AgentReconciler) assessGates(agent *assaydv1alpha1.Agent, mode gateMode
 	// so reporting "holding rather than promoting ungated" on an agent that just
 	// promoted would be loud and wrong, which is exactly what NFR-8 forbids.
 	case gateNone:
-		removed := removedGateNote(agent.Status.Eval, desired, desiredDigest)
+		removed := removedGateNote(agent.Status.Eval, desired, desiredDigest,
+			agent.Status.ActiveRevisionDigest, specPinDigest(agent))
 		c.set(assaydv1alpha1.CondGatesSkipped, metav1.ConditionTrue, "NoGatesDeclared",
 			"no spec.gates are declared, so this rollout is not eval-gated"+removed)
 		// GatesPassed is sticky, so on an Agent whose gate was removed it would
@@ -2168,16 +2170,38 @@ func removedGateMessage(active, activeDigest, note string) string {
 }
 
 // removedGateNote names a Failed or Running verdict status.eval records for
-// the revision this pass converges, which removing the gate overrides
-// (design 16 Q9 (a)), or is empty.
-func removedGateNote(e *assaydv1alpha1.EvalStatus, desired, desiredDigest string) string {
+// desired, which removing the gate overrides (design 16 Q9 (a)), or is empty.
+// assessGates passes the revision the spec mints, before the pin step; the
+// promotion branch, the revision it promotes. Its last clause says whether
+// that revision serves, from what the pass knows without a read (A27.1): it is
+// activeDigest, status.activeRevisionDigest as the caller has it; or pin,
+// spec.release.targetRevisionDigest, names another revision; or it takes
+// traffic once it is available. The pin is read from the spec and never
+// resolved, so a refused pin to the named revision is not seen here, and the
+// refusal's Degraded message says it is not served.
+func removedGateNote(e *assaydv1alpha1.EvalStatus, desired, desiredDigest, activeDigest, pin string) string {
 	if desiredDigest == "" || e == nil || e.RevisionDigest != desiredDigest ||
 		(e.Verdict != assaydv1alpha1.EvalVerdictFailed && e.Verdict != assaydv1alpha1.EvalVerdictRunning) {
 		return ""
 	}
+	traffic := "and it takes traffic once it is available"
+	switch {
+	case desiredDigest == activeDigest:
+		traffic = "and it is the active revision"
+	case pin != "" && pin != desiredDigest:
+		traffic = "but it takes no traffic while spec.release.targetRevisionDigest names another revision"
+	}
 	return fmt.Sprintf(". status.eval records verdict %s for revision %s (digest %s) against suite %s "+
-		"(digest %s); with no gate declared that verdict does not hold it, and it takes traffic once "+
-		"it is available (design 16 Q9)", e.Verdict, desired, desiredDigest, e.Suite, e.SuiteDigest)
+		"(digest %s); with no gate declared that verdict does not hold it, %s (design 16 Q9)",
+		e.Verdict, desired, desiredDigest, e.Suite, e.SuiteDigest, traffic)
+}
+
+// specPinDigest is spec.release.targetRevisionDigest, or empty when unset.
+func specPinDigest(agent *assaydv1alpha1.Agent) string {
+	if agent.Spec.Release == nil {
+		return ""
+	}
+	return agent.Spec.Release.TargetRevisionDigest
 }
 
 // assessPromotedGate sets GatesPassed in the promotion branch of a gated

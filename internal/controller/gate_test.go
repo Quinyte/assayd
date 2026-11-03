@@ -428,7 +428,7 @@ func TestRemovingTheGateNamesTheVerdictItOverrides(t *testing.T) {
 	} {
 		e := &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: gRev, RevisionDigest: gDigest,
 			SuiteDigest: gSuite, Verdict: verdict}
-		note := removedGateNote(e, gRev, gDigest)
+		note := removedGateNote(e, gRev, gDigest, "", "")
 		if got := note != ""; got != named {
 			t.Errorf("verdict %q: named = %v, want %v (%q)", verdict, got, named, note)
 		}
@@ -436,8 +436,35 @@ func TestRemovingTheGateNamesTheVerdictItOverrides(t *testing.T) {
 			!strings.Contains(note, gSuite)) {
 			t.Errorf("verdict %q: the note does not name the verdict and its digests: %s", verdict, note)
 		}
-		if note := removedGateNote(e, gRev, "sha256:another"); note != "" {
+		if note := removedGateNote(e, gRev, "sha256:another", "", ""); note != "" {
 			t.Errorf("verdict %q recorded for another revision is named: %s", verdict, note)
+		}
+	}
+}
+
+// A27.1 (#137): the note's last clause says whether the named revision
+// serves: it is the active revision, a pin to another revision keeps it from
+// traffic, or it takes traffic once it is available. Being active wins over a
+// pin, and a pin to the named revision itself is no other revision.
+func TestRemovingTheGateNoteSaysWhatTheRevisionTakesOfTraffic(t *testing.T) {
+	e := &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: gRev, RevisionDigest: gDigest,
+		SuiteDigest: gSuite, Verdict: assaydv1alpha1.EvalVerdictFailed}
+	const (
+		active  = "and it is the active revision (design 16 Q9)"
+		pinned  = "but it takes no traffic while spec.release.targetRevisionDigest names another revision (design 16 Q9)"
+		pending = "and it takes traffic once it is available (design 16 Q9)"
+	)
+	for _, c := range []struct{ name, activeDigest, pin, want string }{
+		{"active, unpinned", gDigest, "", active},
+		{"active, pinned elsewhere", gDigest, "sha256:another", active},
+		{"not active, pinned elsewhere", "sha256:other", "sha256:another", pinned},
+		{"not active, pinned to it", "sha256:other", gDigest, pending},
+		{"not active, unpinned", "sha256:other", "", pending},
+		{"nothing active, unpinned", "", "", pending},
+	} {
+		note := removedGateNote(e, gRev, gDigest, c.activeDigest, c.pin)
+		if !strings.HasSuffix(note, c.want) {
+			t.Errorf("%s: the note does not end %q: %s", c.name, c.want, note)
 		}
 	}
 }

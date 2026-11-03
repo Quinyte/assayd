@@ -1061,7 +1061,12 @@ reasons:
       pass that promotes names the revision it promotes. Where `status.eval`
       records a `Failed` or `Running` verdict for the revision the pass
       converges, both messages name the verdict and its digests (design 16
-      Q9).
+      Q9), and end by saying that revision is the active revision, or takes
+      no traffic while `spec.release.targetRevisionDigest` names another
+      revision, or takes traffic once it is available; the pin is read from
+      the spec and not resolved (A27.1). Once a pin serves another revision,
+      `GatesPassed` is built for that revision and names no verdict, while
+      `GatesSkipped` still names the spec's revision's.
 
   - reason: NoPassedVerdictRecorded
     state: >-
