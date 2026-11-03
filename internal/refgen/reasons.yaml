@@ -1064,9 +1064,7 @@ reasons:
       Q9), and end by saying that revision is the active revision, or takes
       no traffic while `spec.release.targetRevisionDigest` names another
       revision, or takes traffic once it is available; the pin is read from
-      the spec and not resolved (A27.1). Once a pin serves another revision,
-      `GatesPassed` is built for that revision and names no verdict, while
-      `GatesSkipped` still names the spec's revision's.
+      the spec and not resolved (A27.1).
 
   - reason: NoPassedVerdictRecorded
     state: >-

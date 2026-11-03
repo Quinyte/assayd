@@ -1097,7 +1097,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			// A removed gate's GatesPassed, naming the revision now active
 			// (Q9, A5). On a pass that promotes, assessGates named
 			// status.activeRevision as the pass found it, or none; on any
-			// other, this writes its text again.
+			// other, this writes its text again. status.activeRevisionDigest
+			// was just set to desiredDigest, so the note's first clause, "is
+			// the active revision", always wins here; the pin is passed only
+			// so both callers take A27.1's arguments alike.
 			conds.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "NoGatesDeclared",
 				removedGateMessage(desired, desiredDigest, removedGateNote(status.Eval, desired, desiredDigest,
 					status.ActiveRevisionDigest, specPinDigest(&agent))))
