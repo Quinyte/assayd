@@ -775,6 +775,10 @@ func (r *EvalReconciler) fetchCard(ctx context.Context, addr, path string) ([]by
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, evalclient.MaxBodyBytes+1))
 	switch {
+	case err != nil && errors.Is(fctx.Err(), context.DeadlineExceeded):
+		// The bound, as step 6 counts a send's mid-body timeout as a
+		// timeout (design 16 A27.7).
+		return nil, fmt.Sprintf("the body was still arriving after %s", timeout)
 	case err != nil:
 		return nil, "the body was cut short"
 	case len(body) > evalclient.MaxBodyBytes:
