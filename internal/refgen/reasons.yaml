@@ -767,7 +767,8 @@ reasons:
       before the gate set the same reason and leave phase, `Progressing` and
       `Ready` as they set them. `Ready` stays `True` where an earlier revision
       serves, and goes `False` with this reason where none does. The message
-      names the error.
+      names the error's class, as `readErrorClass` gives it; the error is
+      logged.
     traffic: not-withdrawn
     note: >-
       Not withdrawn where an earlier revision is active. Where the Agent has
@@ -830,16 +831,18 @@ reasons:
 
   - reason: EvalSuiteUnreadable
     state: >-
-      The EvalSuite that `spec.gates` names could not be read, with an
-      error that is not NotFound, such as `Forbidden`.
+      The EvalSuite that `spec.gates` names could not be read, with an error
+      that is not NotFound, such as `Forbidden`, or was read and cannot be
+      digested.
     operator: >-
       Sets `GatesPassed=False` with this reason in the gate branch, holds the
       candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`.
       For a candidate not available yet, or no longer, the not-ready branches
       before the gate set the same reason and leave phase, `Progressing` and
       `Ready` as they set them. `Ready` stays `True` where an earlier revision
-      serves, and goes `False/AwaitingGates` where none does. The message names
-      the error.
+      serves, and goes `False/AwaitingGates` where none does. The message
+      names the error's class, as `readErrorClass` gives it, or says the suite
+      was read and cannot be digested; the error is logged.
     traffic: not-withdrawn
     note: >-
       Not withdrawn where an earlier revision is active. Where the Agent has

@@ -122,9 +122,12 @@ type gateInput struct {
 	// has no answer at all.
 	missing   []string
 	recordErr error
-	// suite is the EvalSuite as read this pass; suiteErr when it could not be.
+	// suite is the EvalSuite as read this pass; suiteErr when it could not be,
+	// and digestErr when it was read and cannot be digested, which is not a
+	// read failure and has its own message (design 16 A27.8).
 	suite       *assaydv1alpha1.EvalSuite
 	suiteErr    error
+	digestErr   error
 	suiteDigest string
 	// status is the pass's working status: the card step has already run on
 	// it, so a card a failed re-read cleared this pass reads cleared.
@@ -233,9 +236,9 @@ func decideGate(in gateInput) gateDecision {
 		return gateDecision{reason: ReasonEvalRecordUnverifiable, readyReason: ReasonEvalRecordUnverifiable,
 			message: fmt.Sprintf(
 				"the installed Agent CRD could not be read to check that it keeps status.eval's eval "+
-					"record: %v. %s holds at zero traffic until it can be: a verdict the API server "+
+					"record (%s). %s holds at zero traffic until it can be: a verdict the API server "+
 					"prunes would be lost, and its case claims with it (design 16 §1.1 step 11)",
-				in.recordErr, rev)}
+				readErrorClass(in.recordErr), rev)}
 	case len(in.missing) == 1 && in.missing[0] == "passed":
 		// Only passed[] is pruned: verdicts are kept, and what is lost is the
 		// Passed record a later run start replaces (A25.6).
@@ -264,9 +267,15 @@ func decideGate(in gateInput) gateDecision {
 	case in.suiteErr != nil:
 		return gateDecision{reason: ReasonEvalSuiteUnreadable, readyReason: reasonAwaitingGates,
 			message: fmt.Sprintf(
-				"EvalSuite %q, which spec.gates names, could not be read: %v. %s holds at zero traffic "+
+				"EvalSuite %q, which spec.gates names, could not be read (%s). %s holds at zero traffic "+
 					"until it can be: a gate whose suite cannot be read cannot be passed",
-				in.suiteName, in.suiteErr, rev)}
+				in.suiteName, readErrorClass(in.suiteErr), rev)}
+	case in.digestErr != nil:
+		return gateDecision{reason: ReasonEvalSuiteUnreadable, readyReason: reasonAwaitingGates,
+			message: fmt.Sprintf(
+				"EvalSuite %q, which spec.gates names, was read and cannot be digested. %s holds at zero "+
+					"traffic until it can be: a gate whose suite cannot be digested cannot be passed",
+				in.suiteName, rev)}
 	}
 
 	pair := fmt.Sprintf("%s against suite %s (digest %s)", rev, in.suiteName, in.suiteDigest)
@@ -591,9 +600,20 @@ func (r *AgentReconciler) gateFor(ctx context.Context, agent *assaydv1alpha1.Age
 			Name: in.suiteName}, &s)
 		if in.suiteErr == nil {
 			in.suite = &s
-			if in.suiteDigest, in.suiteErr = evalsuite.Digest(s.Spec); in.suiteErr != nil {
-				in.suiteErr = fmt.Errorf("digest it: %w", in.suiteErr)
-			}
+			in.suiteDigest, in.digestErr = evalsuite.Digest(s.Spec)
+		}
+		// The message names the failure's class, which is stable from pass to
+		// pass where the text is not, so a failure that persists writes once;
+		// the text is logged here, on every pass, since a per-Agent read
+		// keeps no streak state (design 16 A27.8).
+		switch {
+		case in.suiteErr != nil:
+			log.FromContext(ctx).V(1).Info("could not read the EvalSuite spec.gates names; the "+
+				"candidate holds", "evalSuite", in.suiteName, "error", in.suiteErr.Error())
+		case in.digestErr != nil:
+			log.FromContext(ctx).V(1).Info("the EvalSuite spec.gates names was read and cannot be "+
+				"digested; the candidate holds under EvalSuiteUnreadable", "evalSuite", in.suiteName,
+				"error", in.digestErr.Error())
 		}
 	}
 	return decideGate(in)

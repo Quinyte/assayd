@@ -292,6 +292,11 @@ func TestAPinWithoutACurrentSuiteOrWithoutTheCRD(t *testing.T) {
 			t.Errorf("GatesBypassed does not say the suite could not be read, which is why failed[] "+
 				"was not consulted: %s", c.Message)
 		}
+		// The read's class, not its text (design 16 A27.8).
+		if !strings.Contains(c.Message, `EvalSuite "absent" could not be read (NotFound)`) ||
+			strings.Contains(c.Message, "not found") {
+			t.Errorf("GatesBypassed does not name the suite read's class alone: %s", c.Message)
+		}
 		reconcileOnce(t, r, a)
 		bypassed(t, a, revB, dB, pinServing)
 	})

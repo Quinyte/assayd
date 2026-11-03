@@ -6,7 +6,11 @@ package envtest
 import (
 	"context"
 	"errors"
+	"net"
+	"net/url"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -296,8 +300,14 @@ func TestASuiteThatIsMissingOrUnreadableHoldsTheCandidate(t *testing.T) {
 			t.Errorf("GatesPassed is %s/%s, want False/EvalSuiteUnreadable: the suite exists, and "+
 				"the read failed with Forbidden, not NotFound", c.Status, c.Reason)
 		}
-		if !strings.Contains(c.Message, "injected by the test") {
-			t.Errorf("EvalSuiteUnreadable does not name the error: %s", c.Message)
+		// The class, not the text, which can change from pass to pass while
+		// the class stands (design 16 A27.8).
+		if !strings.Contains(c.Message, "could not be read (Forbidden)") {
+			t.Errorf("EvalSuiteUnreadable does not name the error's class as \"could not be read "+
+				"(Forbidden)\": %s", c.Message)
+		}
+		if strings.Contains(c.Message, "injected by the test") {
+			t.Errorf("EvalSuiteUnreadable carries the error's text: %s", c.Message)
 		}
 		// The control: the same Agent, read with a reader that works, is
 		// held for the reason after the suite read, not by the suite.
@@ -308,6 +318,93 @@ func TestASuiteThatIsMissingOrUnreadableHoldsTheCandidate(t *testing.T) {
 				"(no card is recorded for the candidate)", c.Reason)
 		}
 	})
+}
+
+// varyingSuiteReads fails every EvalSuite get with a transport error whose
+// text differs on each call, as a connection reset's ephemeral source port
+// does, and counts the calls (#155).
+type varyingSuiteReads struct {
+	client.Reader
+	calls atomic.Int64
+}
+
+func (v *varyingSuiteReads) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*assaydv1alpha1.EvalSuite); ok {
+		n := v.calls.Add(1)
+		return &url.Error{Op: "Get", URL: "https://10.96.0.1:443/apis/assayd.dev/v1alpha1/evalsuites/" + key.Name,
+			Err: &net.OpError{Op: "read", Net: "tcp", Source: &net.TCPAddr{IP: net.IPv4(10, 0, 0, 7),
+				Port: 40000 + int(n)}, Addr: &net.TCPAddr{IP: net.IPv4(10, 96, 0, 1), Port: 443},
+				Err: syscall.ECONNRESET}}
+	}
+	return v.Reader.Get(ctx, key, obj, opts...)
+}
+
+// agentStatusWrites counts the Agent status updates the API server accepted.
+type agentStatusWrites struct {
+	client.Client
+	n atomic.Int64
+}
+
+type agentStatusWriter struct {
+	client.SubResourceWriter
+	c *agentStatusWrites
+}
+
+func (c *agentStatusWrites) Status() client.SubResourceWriter {
+	return &agentStatusWriter{c.Client.Status(), c}
+}
+
+func (w *agentStatusWriter) Update(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+	err := w.SubResourceWriter.Update(ctx, obj, opts...)
+	if _, ok := obj.(*assaydv1alpha1.Agent); ok && err == nil {
+		w.c.n.Add(1)
+	}
+	return err
+}
+
+// #155, design 16 A27.8: a suite read that fails on every pass, through the
+// uncached reader, with a text that differs each time, writes status once.
+// The manager's watch on the Agent has no predicate, so a message carrying
+// the text would change on every pass, and every write would bring the next
+// pass: with "%v" back in EvalSuiteUnreadable this row counts one status
+// write per suite read.
+func TestAVaryingSuiteReadFailureWritesStatusOnce(t *testing.T) {
+	ns := newNamespace(t)
+	mustCreateSuite(t, ns, "smoke")
+	a, setup := servedUngated(t, ns, "varyingread")
+	gatedCandidate(t, setup, a, imageB, "smoke")
+
+	mgr := newTestManager(t)
+	writes := &agentStatusWrites{Client: mgr.GetClient()}
+	reads := &varyingSuiteReads{Reader: mgr.GetAPIReader()}
+	r, err := controller.NewAgentReconciler(writes, reads, mgr.GetScheme(), operatorNamespace,
+		func() bool { return true }, labelAuthorityPresent, controller.InjectedEnvConfig{}, controller.GatewayConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.CardFetchTimeout = 100 * time.Millisecond
+	if err := r.SetupWithManager(mgr); err != nil {
+		t.Fatal(err)
+	}
+	startStoppable(t, mgr)
+	eventually(t, "GatesPassed=False/EvalSuiteUnreadable", func() bool {
+		c := condition(liveAgent(t, a), assaydv1alpha1.CondGatesPassed)
+		return c != nil && c.Reason == controller.ReasonEvalSuiteUnreadable
+	})
+	// The fixed interval, counted from the first EvalSuiteUnreadable write.
+	w0, r0 := writes.n.Load(), reads.calls.Load()
+	time.Sleep(5 * time.Second)
+	w, n := writes.n.Load()-w0, reads.calls.Load()-r0
+	t.Logf("in 5 s after EvalSuiteUnreadable was written: %d Agent status writes, %d suite reads", w, n)
+	if w > 0 {
+		t.Errorf("the Agent reconciler wrote status %d times in 5 s while the suite read failed with "+
+			"one class and changing text (%d reads); the message must not change while the class "+
+			"stands, or each write brings another pass (#155)", w, n)
+	}
+	if c := gatesPassed(t, a); !strings.Contains(c.Message, "could not be read (an error of another class)") ||
+		strings.Contains(c.Message, "connection reset") {
+		t.Errorf("EvalSuiteUnreadable does not name the transport error's class alone: %s", c.Message)
+	}
 }
 
 // T29, with T63's second half. Removing spec.gates while a failed candidate
@@ -698,8 +795,13 @@ func TestAnAgentCRDThatWouldPruneTheEvalRecordIsNamed(t *testing.T) {
 			t.Fatalf("GatesPassed is %s/%s, want False/EvalRecordUnverifiable: a CRD that cannot "+
 				"be read is not a CRD that keeps the record", c.Status, c.Reason)
 		}
-		if !strings.Contains(c.Message, "injected CRD read failure") {
-			t.Errorf("EvalRecordUnverifiable does not name the error: %s", c.Message)
+		// The class, not the text (design 16 A27.8).
+		if !strings.Contains(c.Message, "eval record (a server error)") {
+			t.Errorf("EvalRecordUnverifiable does not name the error's class as \"eval record (a "+
+				"server error)\": %s", c.Message)
+		}
+		if strings.Contains(c.Message, "injected CRD read failure") {
+			t.Errorf("EvalRecordUnverifiable carries the error's text: %s", c.Message)
 		}
 	})
 }
