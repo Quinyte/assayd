@@ -4,12 +4,14 @@
 package controller
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -1173,17 +1175,16 @@ func TestTheRunStartCardFetchTimesOut(t *testing.T) {
 }
 
 // The bound covers the body too: a candidate that sends its headers and then
-// stalls the body ends the fetch within CardFetchTimeout. The class it
-// reports is "the body was cut short", not "no answer within", because the
-// read, not the request, is what the deadline ends; this row pins that class
-// as the code reports it; whether it should name the bound instead is #154.
-// The body is tied to the request's context, as net/http's is, so a fetch that
-// ends that context once the headers arrive reads no card at all: that
-// mutation (cancel the context as soon as Do returns) is killed by every
-// run-start row here, not by this one, which reports the same class under it.
+// stalls the body ends the fetch within CardFetchTimeout, and the class names
+// the bound, "the body was still arriving after 50ms", as step 6 counts a
+// send's mid-body timeout as a timeout (design 16 A27.7). The body is tied to
+// the request's context, as net/http's is, so a fetch that ends that context
+// once the headers arrive reads no card at all: that mutation (cancel the
+// context as soon as Do returns) is killed by every row whose pass reads the
+// card, this one included.
 //
-// Mutation (#115 item 2): derive the fetch's context with WithCancel in place
-// of WithTimeout.
+// Mutations: derive the fetch's context with WithCancel in place of
+// WithTimeout (#115 item 2); drop the deadline test on the body path (A27.7).
 func TestTheRunStartCardFetchTimesOutMidBody(t *testing.T) {
 	f := newEvalFixture(t, nil, echoCase("a", "one"))
 	f.r.CardFetchTimeout = 50 * time.Millisecond
@@ -1198,12 +1199,87 @@ func TestTheRunStartCardFetchTimesOutMidBody(t *testing.T) {
 	}
 	e := f.agent(t).Status.Eval
 	if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalAwaitingCard ||
-		!strings.Contains(e.Blocked.Message, "the body was cut short") {
-		t.Fatalf("a stalled body: status.eval %+v; want EvalAwaitingCard, the body cut short", e)
+		!strings.Contains(e.Blocked.Message, "the body was still arriving after 50ms") {
+		t.Fatalf("a stalled body: status.eval %+v; want EvalAwaitingCard naming the bound", e)
 	}
 	if e.Verdict != "" || f.stub.total() != 0 || res.RequeueAfter != CardRetryInterval {
 		t.Errorf("a stalled body: verdict %q, %d sends, requeue %v; want no run, no send, "+
 			"CardRetryInterval", e.Verdict, f.stub.total(), res.RequeueAfter)
+	}
+}
+
+// A body that breaks off before its deadline is "the body was cut short",
+// not the bound: a candidate that declares a Content-Length longer than the
+// body it sends and closes the connection ends the read with
+// io.ErrUnexpectedEOF while the 5 s deadline is far off. The answer comes over
+// a real connection, through net/http's client, as the eval client's does.
+//
+// Mutation (A27.7): report the bound on every body failure.
+func TestTheRunStartCardFetchNamesABodyCutShort(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"))
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				if _, err := http.ReadRequest(bufio.NewReader(conn)); err != nil {
+					return
+				}
+				_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"+
+					"Content-Length: "+strconv.Itoa(len(evalCard)+100)+"\r\n\r\n"+evalCard)
+			}()
+		}
+	}()
+	f.r.A2A.HTTP = &http.Client{Transport: &http.Transport{Proxy: nil,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", ln.Addr().String())
+		}}}
+	res, err := f.pass(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := f.agent(t).Status.Eval
+	if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalAwaitingCard ||
+		!strings.Contains(e.Blocked.Message, "the body was cut short") ||
+		strings.Contains(e.Blocked.Message, "still arriving") {
+		t.Fatalf("a body cut short: status.eval %+v; want EvalAwaitingCard, the body cut short", e)
+	}
+	if e.Verdict != "" || res.RequeueAfter != CardRetryInterval {
+		t.Errorf("a body cut short: verdict %q, requeue %v; want no run, CardRetryInterval",
+			e.Verdict, res.RequeueAfter)
+	}
+}
+
+// Only the deadline names the bound on the body path: a pass whose own
+// context is cancelled while the body stalls is "the body was cut short", as
+// A27.7 tests fctx's deadline, not that its context ended. No stored status
+// carries this on a cluster, since a cancelled pass's status write fails too;
+// the fake client here ignores the cancellation, so the row reads the class.
+//
+// Mutation: test fctx.Err() != nil in place of its deadline.
+func TestACancelledPassMidBodyIsNotNamedAsTheBound(t *testing.T) {
+	f := newEvalFixture(t, nil, echoCase("a", "one"))
+	f.r.CardFetchTimeout = 3 * time.Second
+	f.stub.stallBody, f.stub.hangFor = true, 3*time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	timer := time.AfterFunc(50*time.Millisecond, cancel)
+	defer timer.Stop()
+	defer cancel()
+	if _, err := f.r.Reconcile(ctx, ctrl.Request{NamespacedName: f.key}); err != nil {
+		t.Fatal(err)
+	}
+	e := f.agent(t).Status.Eval
+	if e == nil || e.Blocked == nil || e.Blocked.Reason != ReasonEvalAwaitingCard ||
+		!strings.Contains(e.Blocked.Message, "the body was cut short") {
+		t.Fatalf("a cancelled pass mid-body: status.eval %+v; want EvalAwaitingCard, the body cut short", e)
 	}
 }
 
