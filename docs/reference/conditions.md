@@ -1046,11 +1046,11 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 - `internal/controller/agent_controller.go:1059` in `Reconcile()` — from `gate.readyReason`, one of the 4 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/gate_test.go`
+**Referenced by a test:** `internal/controller/gate_test.go`, `internal/controller/readclass_test.go`, `test/envtest/gate_test.go`
 
 **State:** The installed Agent CRD could not be read for that check, and no earlier answer is cached in this process. With one cached, however old, the cached answer stands instead.
 
-**What the operator does:** Sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. For a candidate not available yet, or no longer, the not-ready branches before the gate set the same reason and leave phase, `Progressing` and `Ready` as they set them. `Ready` stays `True` where an earlier revision serves, and goes `False` with this reason where none does. The message names the error.
+**What the operator does:** Sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. For a candidate not available yet, or no longer, the not-ready branches before the gate set the same reason and leave phase, `Progressing` and `Ready` as they set them. `Ready` stays `True` where an earlier revision serves, and goes `False` with this reason where none does. The message names the error's class, as `readErrorClass` gives it; the error is logged.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
@@ -1128,11 +1128,11 @@ One section per reason string the operator can set, in alphabetical order.
 
 - `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/gate_test.go`, `test/envtest/exemption_test.go`, `test/envtest/gate_test.go`
+**Referenced by a test:** `internal/controller/gate_test.go`, `internal/controller/readclass_test.go`, `test/envtest/exemption_test.go`, `test/envtest/gate_test.go`
 
-**State:** The EvalSuite that `spec.gates` names could not be read, with an error that is not NotFound, such as `Forbidden`.
+**State:** The EvalSuite that `spec.gates` names could not be read, with an error that is not NotFound, such as `Forbidden`, or was read and cannot be digested.
 
-**What the operator does:** Sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. For a candidate not available yet, or no longer, the not-ready branches before the gate set the same reason and leave phase, `Progressing` and `Ready` as they set them. `Ready` stays `True` where an earlier revision serves, and goes `False/AwaitingGates` where none does. The message names the error.
+**What the operator does:** Sets `GatesPassed=False` with this reason in the gate branch, holds the candidate at zero traffic, phase `Held`, `Progressing=True/AwaitingGates`. For a candidate not available yet, or no longer, the not-ready branches before the gate set the same reason and leave phase, `Progressing` and `Ready` as they set them. `Ready` stays `True` where an earlier revision serves, and goes `False/AwaitingGates` where none does. The message names the error's class, as `readErrorClass` gives it, or says the suite was read and cannot be digested; the error is logged.
 
 **Traffic:** **not withdrawn** — the route goes on serving; only status changes.
 
@@ -1425,7 +1425,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `ActiveRevisionPassUnrecorded=True`
 
-**Constant:** `ReasonNoPassedVerdictRecorded` (`internal/controller/pinrule.go:137`)
+**Constant:** `ReasonNoPassedVerdictRecorded` (`internal/controller/pinrule.go:147`)
 
 > ReasonNoPassedVerdictRecorded is ActiveRevisionPassUnrecorded's one reason (design 16 A25.7 (a)).
 
@@ -1525,7 +1525,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `Degraded=True`
 
-**Constant:** `ReasonPinnedRevisionNotEligible` (`internal/controller/pinrule.go:25`)
+**Constant:** `ReasonPinnedRevisionNotEligible` (`internal/controller/pinrule.go:26`)
 
 > ReasonPinnedRevisionNotEligible is Degraded's reason for a pin the rule refuses, through the unresolvable-pin path: nothing is rolled back.
 
@@ -1547,7 +1547,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Conditions:** `GatesBypassed=True`
 
-**Constant:** `ReasonPinnedRollback` (`internal/controller/pinrule.go:22`)
+**Constant:** `ReasonPinnedRollback` (`internal/controller/pinrule.go:23`)
 
 > ReasonPinnedRollback is GatesBypassed's reason for a pin the rule admits on a gated Agent: the pinned revision is promoted, not evaluated.
 

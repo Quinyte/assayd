@@ -43,6 +43,7 @@ func everyCause(now time.Time) gateInput {
 		recordErr:   errors.New("injected"),
 		missing:     []string{"blockedFor"},
 		suiteErr:    apierrors.NewNotFound(evalSuiteGR, "smoke"),
+		digestErr:   errors.New("injected digest failure"),
 		suite:       twoCaseSuite(),
 		suiteDigest: gSuite,
 		now:         now,
@@ -97,7 +98,11 @@ func TestTheGateBranchsReasonsTakeTheirPrecedence(t *testing.T) {
 	step("the suite is unreadable", ReasonEvalSuiteUnreadable, func(in *gateInput) {
 		in.suiteErr = apierrors.NewForbidden(evalSuiteGR, "smoke", errors.New("no"))
 	})
-	step("a Failed verdict for the pair", ReasonEvalFailed, func(in *gateInput) { in.suiteErr = nil })
+	step("the suite cannot be digested", ReasonEvalSuiteUnreadable, func(in *gateInput) { in.suiteErr = nil })
+	if d := decideGate(in); !strings.Contains(d.message, "was read and cannot be digested") {
+		t.Fatalf("a suite that cannot be digested is not named as one: %s", d.message)
+	}
+	step("a Failed verdict for the pair", ReasonEvalFailed, func(in *gateInput) { in.digestErr = nil })
 	step("the pair is in failed[]", ReasonEvalPairAlreadyFailed, func(in *gateInput) {
 		in.status.Eval.Verdict = ""
 	})
@@ -134,7 +139,7 @@ func TestTheGateBranchsReasonsTakeTheirPrecedence(t *testing.T) {
 // transaction.
 func TestAPassedVerdictOutranksWhatARunWouldWaitFor(t *testing.T) {
 	in := everyCause(time.Now())
-	in.recordErr, in.missing, in.suiteErr = nil, nil, nil
+	in.recordErr, in.missing, in.suiteErr, in.digestErr = nil, nil, nil, nil
 	in.status.Eval.Verdict = assaydv1alpha1.EvalVerdictPassed
 	if d := decideGate(in); d.satisfied || d.reason != ReasonEvalAwaitingCard {
 		t.Fatalf("Passed with no card: satisfied=%v reason %q, want EvalAwaitingCard", d.satisfied, d.reason)

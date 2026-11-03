@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 	"github.com/Quinyte/assayd/internal/evalsuite"
@@ -90,14 +91,23 @@ func (r *AgentReconciler) pinRule(ctx context.Context, agent *assaydv1alpha1.Age
 	// Any failure to learn the digest — NotFound, another read error, or a
 	// suite that cannot be digested — leaves no current suite digest, which
 	// Q5 (a) treats alike.
+	// The reason names the failure's class, not its text, which can differ
+	// from pass to pass while the class stands; the text is logged. A suite
+	// that cannot be digested keeps the "could not be read" lead Q5 fixes,
+	// and says which (design 16 A27.8).
 	suiteDigest, unread := "", ""
 	var s assaydv1alpha1.EvalSuite
 	err := r.reader().Get(ctx, types.NamespacedName{Namespace: agent.Namespace, Name: suiteName}, &s)
-	if err == nil {
-		suiteDigest, err = evalsuite.Digest(s.Spec)
+	class := ""
+	if err != nil {
+		class = readErrorClass(err)
+	} else if suiteDigest, err = evalsuite.Digest(s.Spec); err != nil {
+		class = "it cannot be digested"
 	}
 	if err != nil {
-		suiteDigest, unread = "", fmt.Sprintf("EvalSuite %q could not be read (%v)", suiteName, err)
+		log.FromContext(ctx).V(1).Info("the pin rule could not learn the current suite digest; "+
+			"status.eval.failed[] is not consulted", "evalSuite", suiteName, "error", err.Error())
+		suiteDigest, unread = "", fmt.Sprintf("EvalSuite %q could not be read (%s)", suiteName, class)
 	}
 	if why := pinIneligible(pin.Digest, specDigest, status, suiteName, suiteDigest); why != "" {
 		return &unresolvablePinError{digest: pin.Digest, reason: why, ineligible: true}, ""
