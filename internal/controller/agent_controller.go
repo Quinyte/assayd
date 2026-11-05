@@ -444,7 +444,17 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// No revision is minted and no workload is created. A missing referent is
 		// UNRESOLVED, never a zero digest: a zero would let deleting an object
 		// mint the same hash as never having referenced it.
-		return ctrl.Result{}, r.reportUnresolvedSources(ctx, &agent, unresolved, cmp.Or(herr, derr))
+		//
+		// Nothing watches env sources, so while a referenced one is unresolved
+		// the pass requeues at CardDriftInterval: a source created or made
+		// readable is found within it with no Agent event (design 02 A80). A
+		// hash or digest error with every source resolved keeps no requeue,
+		// since only a spec write ends it.
+		res := ctrl.Result{}
+		if len(unresolved) > 0 {
+			res = ctrl.Result{RequeueAfter: CardDriftInterval}
+		}
+		return res, r.reportUnresolvedSources(ctx, &agent, unresolved, cmp.Or(herr, derr))
 	}
 	// The digest the current spec mints, kept after a pin puts the pinned
 	// revision's digest in desiredDigest: a pin refusal's message judges the
@@ -494,7 +504,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			return ctrl.Result{}, err
 		}
 		if rerr.terminal {
-			return ctrl.Result{}, nil
+			// A human must act, and nothing watches what they repair, so the
+			// repair is found within CardDriftInterval with no Agent event
+			// (design 02 A80 (R)).
+			return ctrl.Result{RequeueAfter: CardDriftInterval}, nil
 		}
 		// Terminating clears by itself; nothing watches the binding record, so
 		// poll rather than wait for an event that never comes.

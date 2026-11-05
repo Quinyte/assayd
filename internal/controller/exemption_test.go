@@ -447,9 +447,9 @@ func TestAVerdictPassBesideAnExemptLockReadsNoClauseFive(t *testing.T) {
 			// The stored hold was computed for another Lock, so the pass must
 			// rewrite blockedFor as well as clear blocked.
 			another := metav1.NewTime(deadline.Add(time.Hour))
-			a.Status.Eval = &assaydv1alpha1.EvalStatus{RevisionDigest: "sha256:candidate", SuiteDigest: f.sd,
+			a.Status.Eval = &assaydv1alpha1.EvalStatus{RevisionDigest: f.digest, SuiteDigest: f.sd,
 				Blocked: &assaydv1alpha1.EvalBlocked{Reason: ReasonEvalWaitingForAuth, Message: "a hold" + holdClaimsTail},
-				BlockedFor: &assaydv1alpha1.EvalBlockedFor{RevisionDigest: "sha256:candidate", SuiteDigest: f.sd,
+				BlockedFor: &assaydv1alpha1.EvalBlockedFor{RevisionDigest: f.digest, SuiteDigest: f.sd,
 					LockDeadline: &another}}
 			record(a.Status.Eval)
 			if err := f.c.Status().Update(context.Background(), a); err != nil {
@@ -467,7 +467,7 @@ func TestAVerdictPassBesideAnExemptLockReadsNoClauseFive(t *testing.T) {
 			if e.Blocked != nil {
 				t.Errorf("the stored hold was not cleared: %+v", e.Blocked)
 			}
-			if bf := e.BlockedFor; bf == nil || bf.RevisionDigest != "sha256:candidate" || bf.SuiteDigest != f.sd ||
+			if bf := e.BlockedFor; bf == nil || bf.RevisionDigest != f.digest || bf.SuiteDigest != f.sd ||
 				bf.LockDeadline == nil || !bf.LockDeadline.Equal(deadline) {
 				t.Errorf("blockedFor does not name the pair and the Lock: %+v", bf)
 			}

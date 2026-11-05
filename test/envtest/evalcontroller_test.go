@@ -849,20 +849,31 @@ func TestASuiteReorderedMidRunSendsEachCaseOnce(t *testing.T) {
 }
 
 // T64: generation lag. With no Agent reconciler pass after a spec edit, the
-// old candidate stays recorded, and the eval controller sends it nothing.
+// old candidate stays recorded, and the eval controller sends it nothing. The
+// edit is outside the revision's projection, a pin to the revision already
+// serving, so the spec still mints the candidate and only the generation
+// predicate holds it (design 16 A28.1); the next Agent pass admits the pin,
+// supersedes the candidate and keeps the serving revision active.
 func TestTheEvalWaitsForTheNewGenerationToBeObserved(t *testing.T) {
 	g := newEvalRig(t, "genlag", echo("a", "one"))
-	mustEdit(t, g.a, func(a *assaydv1alpha1.Agent) {
-		a.Spec.Runtime.Image = "ghcr.io/acme/agent@sha256:d0d0000000000000000000000000000000000000000000000000000000000000"
-	})
+	pinTo(t, g.a, g.active)
 	if got := liveAgent(t, g.a); got.Status.CandidateRevisionDigest != g.dgst || got.Status.ObservedGeneration == got.Generation {
 		t.Fatal("setup: the edit is already observed")
+	}
+	if d := revision.MustDigest(liveAgent(t, g.a).Spec); d != g.dgst {
+		t.Fatalf("setup: the edit changed the digest the spec mints (%s, was %s)", d, g.dgst)
 	}
 	for i := 0; i < 3; i++ {
 		g.evalPass(t)
 	}
 	if n := g.stub.sentTo(g.name, g.rev); n != 0 {
 		t.Errorf("a candidate the spec has superseded was sent %d cases", n)
+	}
+	g.agentPass(t)
+	if got := liveAgent(t, g.a); got.Status.ActiveRevisionDigest != g.active ||
+		got.Status.CandidateRevisionDigest == g.dgst {
+		t.Errorf("the Agent pass after the pin left active %s and candidate %s; want the serving revision "+
+			"active and the candidate superseded", got.Status.ActiveRevisionDigest, got.Status.CandidateRevisionDigest)
 	}
 }
 

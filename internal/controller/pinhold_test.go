@@ -16,18 +16,20 @@ import (
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 )
 
-// Design 16 A26.1, A26.2 (b) and A26.5 (a): the pinned-rollback hold as a pure
-// function. The envtest rows R1 to R9, RY and RZ measure it through both
+// Design 16 A26.1, A26.2 (b), A26.5 (a) and A28.1: the hold of a candidate
+// the current spec does not mint, pinned or not, as a pure function. The
+// envtest rows R1 to R9, RY and RZ, and N1 to N4, measure it through both
 // controllers; this enumerates its edges.
-func TestPinnedRollbackHoldsWhileAPinIsSetAndTheSpecDoesNotMintTheCandidate(t *testing.T) {
+func TestTheCandidateHoldRuleHoldsWhenTheSpecDoesNotMintTheCandidate(t *testing.T) {
 	const cand, spec, other = "sha256:cand", "sha256:spec", "sha256:other"
 	cases := []struct {
 		name           string
 		pin, spec      string
 		computed, want bool
 	}{
-		{"no pin", "", spec, true, false},
-		{"no pin, no digest", "", "", false, false},
+		{"no pin, the spec minting the candidate", "", cand, true, false},
+		{"no pin, the spec not minting the candidate (A28.1)", "", spec, true, true},
+		{"no pin, no digest (A28.1)", "", "", false, true},
 		{"a pin to the candidate, which the spec mints", cand, cand, true, false},
 		{"a pin to the candidate, which the spec does not mint", cand, spec, true, true},
 		{"a pin to the spec's revision, not the candidate (A22.33 (b))", spec, spec, true, true},

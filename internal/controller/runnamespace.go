@@ -232,7 +232,8 @@ func (b *binding) encode() {
 }
 
 // runNamespaceError is the typed failure of ensureRunNamespace. terminal means
-// a human must act; otherwise the reconcile requeues.
+// a human must act, and the reconcile requeues at CardDriftInterval; otherwise
+// it requeues at 5 s.
 type runNamespaceError struct {
 	reason   string
 	message  string

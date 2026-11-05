@@ -369,7 +369,8 @@ reasons:
       decoder for. Nothing is defaulted.
     operator: >-
       Terminal. Sets `RunNamespaceUnavailable=True`, `Ready=False`,
-      `Degraded=True`, phase `Degraded`, and returns without retrying. Recovery
+      `Degraded=True`, phase `Degraded`, and requeues at `CardDriftInterval`,
+      so a repair is found within that interval with no Agent event. Recovery
       is a human correcting the record.
     traffic: not-withdrawn
     note: >-
@@ -513,8 +514,11 @@ reasons:
       `spec.runtime.envFrom` is missing or unreadable, so the revision cannot be
       hashed.
     operator: >-
-      Sets `Ready=False` naming each unresolved reference and phase `Pending`. No
-      revision is minted and no workload is created.
+      Sets `Ready=False` naming each unresolved reference and phase `Pending`.
+      No revision is minted and no workload is created. When a referenced
+      source is unresolved, the pass requeues at `CardDriftInterval`, because
+      nothing watches env sources; a hash or digest error with every source
+      resolved, reported under the same reasons, does not requeue.
     traffic: not-withdrawn
     note: >-
       This is the reason on `Ready`; the same pass puts `Unresolved` on the
@@ -1004,7 +1008,9 @@ reasons:
     operator: >-
       Terminal, and checked before any namespace is read. Sets
       `RunNamespaceUnavailable=True`, `Ready=False`, `Degraded=True`, phase
-      `Degraded`. NO RUN NAMESPACE IS CREATED.
+      `Degraded`, and requeues at `CardDriftInterval`, so the policies'
+      installation is found within that interval with no Agent event. NO RUN
+      NAMESPACE IS CREATED.
     traffic: not-withdrawn
     note: >-
       Presence is checked by policy NAME only. A policy of that name that
@@ -1044,8 +1050,10 @@ reasons:
       name.
     operator: >-
       Terminal. Sets `RunNamespaceUnavailable=True`, `Ready=False`,
-      `Degraded=True`, phase `Degraded`, and returns without retrying. Nothing
-      belonging to the first tenant is touched; recovery is renaming a namespace.
+      `Degraded=True`, phase `Degraded`, and requeues at `CardDriftInterval`,
+      so a repair is found within that interval with no Agent event. Nothing
+      belonging to the first tenant is touched; recovery is renaming a
+      namespace.
     traffic: not-withdrawn
     note: Only the SECOND tenant's Agents are affected.
 
@@ -1141,8 +1149,9 @@ reasons:
       a UID that disagrees with a bound record.
     operator: >-
       Terminal. Sets `RunNamespaceUnavailable=True`, `Ready=False`,
-      `Degraded=True`, phase `Degraded`, and returns without retrying. NOTHING IS
-      WRITTEN INTO THAT NAMESPACE.
+      `Degraded=True`, phase `Degraded`, and requeues at `CardDriftInterval`,
+      so a repair is found within that interval with no Agent event. NOTHING
+      IS WRITTEN INTO THAT NAMESPACE.
     traffic: not-withdrawn
 
   - reason: PinnedRevisionNotEligible
@@ -1474,8 +1483,9 @@ reasons:
     operator: >-
       This is the reason on `Ready=False` and, for a terminal cause, on
       `Degraded=True`; the `RunNamespaceUnavailable` condition carries the
-      specific cause. A terminal cause returns without retrying and sets phase
-      `Degraded`; a transient one sets phase `Pending` and requeues.
+      specific cause. A terminal cause sets phase `Degraded` and requeues at
+      `CardDriftInterval`; a transient one sets phase `Pending` and requeues
+      at 5 s.
     traffic: not-withdrawn
     note: >-
       The pass returns before the gateway step, so a route stays published even
@@ -1595,6 +1605,10 @@ reasons:
     operator: >-
       This is the reason on the `EnvSourceUnresolved` condition; the same pass
       puts `EnvSourceUnresolved` on `Ready=False` and sets phase `Pending`.
+      When a referenced source is unresolved, the pass requeues at
+      `CardDriftInterval`, because nothing watches env sources; a hash or
+      digest error with every source resolved, reported under the same
+      reasons, does not requeue.
     traffic: not-withdrawn
 
   - reason: Unstamped
