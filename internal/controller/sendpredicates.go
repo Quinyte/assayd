@@ -74,7 +74,8 @@ func candidatePending(status *assaydv1alpha1.AgentStatus) bool {
 // a real request to a revision nothing will promote. And with no pin set, a
 // candidate the spec has moved off stays recorded wherever an Agent pass
 // stamps observedGeneration without reaching the supersession, or before any
-// Agent pass after an env source's content changes (A28.1).
+// Agent pass after an env source's content changes or a source it reads is
+// deleted (A28.1).
 //
 // It reads no condition, so a forged GatesBypassed pauses nothing, and which
 // refusal, if any, the Agent reconciler gives for the pin does not enter it.

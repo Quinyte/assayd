@@ -12,8 +12,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // Design 16 A26.1, A26.2 (b), A26.5 (a) and A28.1: the hold of a candidate
@@ -145,6 +147,34 @@ func TestATransientEnvSourceReadErrorHoldsAPinnedPass(t *testing.T) {
 		held, err := pinnedRollbackCandidate(context.Background(), failingReader{unavailable}, a)
 		if !held || !apierrors.IsServiceUnavailable(err) {
 			t.Errorf("pin %s: pinnedRollbackCandidate = (%v, %v), want (true, the read error)", pin, held, err)
+		}
+	}
+}
+
+// A28.1 with no pin set, read through pinnedRollbackCandidate: no release
+// block, and a release block whose targetRevisionDigest is empty — which a
+// merge patch clearing it to null leaves as release: {} — are both no pin,
+// and the recorded candidate the spec does not mint is held; the candidate
+// the spec mints is not.
+func TestAnEmptyReleaseIsNoPinAndHoldsAStaleCandidate(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(testScheme()).Build()
+	spec := assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{
+		Image: "ghcr.io/acme/agent@sha256:" + strings.Repeat("a", 64)}}
+	minted := revision.MustDigest(spec)
+	for _, rel := range []*assaydv1alpha1.ReleaseSpec{nil, {}} {
+		for _, c2 := range []struct {
+			cand string
+			want bool
+		}{{"sha256:stale", true}, {minted, false}} {
+			s := spec.DeepCopy()
+			s.Release = rel
+			a := &assaydv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "a"}, Spec: *s,
+				Status: assaydv1alpha1.AgentStatus{CandidateRevisionDigest: c2.cand}}
+			held, err := pinnedRollbackCandidate(context.Background(), c, a)
+			if err != nil || held != c2.want {
+				t.Errorf("release %+v, candidate %s: pinnedRollbackCandidate = (%v, %v), want (%v, nil)",
+					rel, c2.cand, held, err, c2.want)
+			}
 		}
 	}
 }

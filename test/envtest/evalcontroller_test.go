@@ -870,10 +870,9 @@ func TestTheEvalWaitsForTheNewGenerationToBeObserved(t *testing.T) {
 		t.Errorf("a candidate the spec has superseded was sent %d cases", n)
 	}
 	g.agentPass(t)
-	if got := liveAgent(t, g.a); got.Status.ActiveRevisionDigest != g.active ||
-		got.Status.CandidateRevisionDigest == g.dgst {
-		t.Errorf("the Agent pass after the pin left active %s and candidate %s; want the serving revision "+
-			"active and the candidate superseded", got.Status.ActiveRevisionDigest, got.Status.CandidateRevisionDigest)
+	if got := liveAgent(t, g.a); got.Status.ActiveRevisionDigest != g.active || !superseded(t, g.a, g.rev, g.dgst) {
+		t.Errorf("the Agent pass after the pin left active %s and superseded %v; want the serving revision "+
+			"active and the candidate superseded", got.Status.ActiveRevisionDigest, got.Status.SupersededCandidates)
 	}
 }
 
