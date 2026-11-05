@@ -277,14 +277,18 @@ func (r *EvalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("digest EvalSuite %s/%s: %w", suite.Namespace, suite.Name, err)
 	}
-	// While a pin is set, a recorded candidate the current spec does not mint
-	// is held (Q5 (a); design 16 A26.1, A26.5 (a)): an admitted pinned
-	// rollback is promoted, not evaluated, and beside a refused pin the
-	// candidate is one nothing will promote. The Agent reconciler's status
-	// write when it promotes, when the pin goes, or when a refusal's message
-	// changes, brings the next pass.
+	// A recorded candidate the current spec does not mint is held, pinned or
+	// not (Q5 (a); design 16 A26.1, A26.5 (a), A28.1): an admitted pinned
+	// rollback is promoted, not evaluated, beside a refused pin the candidate
+	// is one nothing will promote, and with no pin set it is held until the
+	// spec mints it again or an Agent pass that reaches the supersession
+	// supersedes it. The Agent reconciler's status write when it promotes,
+	// when the pin goes, when a refusal's message changes, or when it
+	// supersedes the candidate, brings the next pass; a held pass otherwise
+	// returns at CardDriftInterval.
 	if pinned, err := pinnedRollbackCandidate(ctx, r.Client, agent); err != nil {
-		return ctrl.Result{}, fmt.Errorf("decide whether the pin on %s is admitted: %w", req.NamespacedName, err)
+		return ctrl.Result{}, fmt.Errorf("decide whether the current spec of %s mints the recorded candidate: %w",
+			req.NamespacedName, err)
 	} else if pinned {
 		return r.wait(waitHeld)
 	}

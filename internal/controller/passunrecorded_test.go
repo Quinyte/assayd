@@ -109,13 +109,13 @@ func TestTheRunStartMovesAPassedRecordIntoPassed(t *testing.T) {
 			}
 			// A Failed record for a revision the spec has left is cleared
 			// first (#111), on a pass of its own.
-			for i := 0; i < 2 && f.agent(t).Status.Eval.RevisionDigest != "sha256:candidate"; i++ {
+			for i := 0; i < 2 && f.agent(t).Status.Eval.RevisionDigest != f.digest; i++ {
 				if _, err := f.pass(t); err != nil {
 					t.Fatal(err)
 				}
 			}
 			e := f.agent(t).Status.Eval
-			if e.RevisionDigest != "sha256:candidate" {
+			if e.RevisionDigest != f.digest {
 				t.Fatalf("setup: no run started: %+v", e)
 			}
 			if len(e.Passed) != len(tc.want) {
@@ -282,7 +282,7 @@ func TestTheRunStartNeverEvictsTheActiveRevisionsEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := f.agent(t).Status.Eval
-	if e.RevisionDigest != "sha256:candidate" {
+	if e.RevisionDigest != f.digest {
 		t.Fatalf("setup: no run started: %+v", e)
 	}
 	if len(e.Passed) != maxPassedPairs || e.Passed[0] != pair("sha256:active", "s0") ||

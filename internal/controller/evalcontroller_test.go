@@ -33,6 +33,7 @@ import (
 	assaydv1alpha1 "github.com/Quinyte/assayd/api/v1alpha1"
 	"github.com/Quinyte/assayd/internal/evalclient"
 	"github.com/Quinyte/assayd/internal/evalsuite"
+	"github.com/Quinyte/assayd/internal/revision"
 )
 
 // candidateStub answers in the candidate's place: its card at the card path,
@@ -172,19 +173,38 @@ func digestOfCard(card string) string {
 }
 
 // evalFixture is a gated Agent whose candidate is available, carded, and
-// observed at its generation, beside its suite, in a fake API server.
+// observed at its generation, beside its suite, in a fake API server. The
+// candidate's digest is the one its spec mints, so the hold of a candidate the
+// spec does not mint (design 16 A28.1) does not hold it.
 type evalFixture struct {
-	r     *EvalReconciler
-	c     client.Client
-	stub  *candidateStub
-	key   types.NamespacedName
-	suite *assaydv1alpha1.EvalSuite
-	sd    string
+	r      *EvalReconciler
+	c      client.Client
+	stub   *candidateStub
+	key    types.NamespacedName
+	suite  *assaydv1alpha1.EvalSuite
+	sd     string
+	digest string
+}
+
+// evalFixtureSpec is the fixture Agent's spec, on port.
+func evalFixtureSpec(port int32) assaydv1alpha1.AgentSpec {
+	return assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{Port: port},
+		Gates: []assaydv1alpha1.GateRef{{EvalSuiteRef: "smoke"}}}
 }
 
 func newEvalFixture(t *testing.T, funcs *interceptor.Funcs, cases ...assaydv1alpha1.EvalCase) *evalFixture {
 	t.Helper()
-	const ns, name, rev, digest = "team", "gated", "cand000001", "sha256:candidate"
+	return newEvalFixtureOnPort(t, 8080, funcs, cases...)
+}
+
+// newEvalFixtureOnPort is newEvalFixture with spec.runtime.port set to port,
+// recording the digest that spec mints.
+func newEvalFixtureOnPort(t *testing.T, port int32, funcs *interceptor.Funcs,
+	cases ...assaydv1alpha1.EvalCase) *evalFixture {
+	t.Helper()
+	const ns, name, rev = "team", "gated", "cand000001"
+	spec := evalFixtureSpec(port)
+	digest := revision.MustDigest(spec)
 	suite := &assaydv1alpha1.EvalSuite{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "smoke"},
 		Spec: assaydv1alpha1.EvalSuiteSpec{Dataset: assaydv1alpha1.EvalDataset{Cases: cases},
 			CaseTimeoutSeconds: 10}}
@@ -194,8 +214,7 @@ func newEvalFixture(t *testing.T, funcs *interceptor.Funcs, cases ...assaydv1alp
 	}
 	agent := &assaydv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, UID: "agent-uid", Generation: 2},
-		Spec: assaydv1alpha1.AgentSpec{Runtime: &assaydv1alpha1.AgentRuntime{Port: 8080},
-			Gates: []assaydv1alpha1.GateRef{{EvalSuiteRef: "smoke"}}},
+		Spec:       spec,
 		Status: assaydv1alpha1.AgentStatus{ObservedGeneration: 2, ActiveRevision: "active0001",
 			ActiveRevisionDigest: "sha256:active", CandidateRevision: rev, CandidateRevisionDigest: digest,
 			Cards: []assaydv1alpha1.CardStatus{{Revision: rev, RevisionDigest: digest, Digest: digestOfCard(evalCard)}}},
@@ -220,7 +239,7 @@ func newEvalFixture(t *testing.T, funcs *interceptor.Funcs, cases ...assaydv1alp
 	stub := newCandidateStub(evalCard)
 	r.A2A.HTTP = stub
 	return &evalFixture{r: r, c: c, stub: stub, key: types.NamespacedName{Namespace: ns, Name: name},
-		suite: suite, sd: sd}
+		suite: suite, sd: sd, digest: digest}
 }
 
 func (f *evalFixture) pass(t *testing.T) (ctrl.Result, error) {
@@ -430,7 +449,7 @@ func TestAnUnusableAddressClaimsNothing(t *testing.T) {
 	if e.Blocked == nil || e.Blocked.Reason != ReasonEvalCandidateUnaddressable {
 		t.Errorf("blocked is %+v, want %s", e.Blocked, ReasonEvalCandidateUnaddressable)
 	}
-	if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != "sha256:candidate" || e.BlockedFor.SuiteDigest != f.sd {
+	if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != f.digest || e.BlockedFor.SuiteDigest != f.sd {
 		t.Errorf("blockedFor %+v does not name the pair", e.BlockedFor)
 	}
 }
@@ -442,11 +461,12 @@ var candidateServiceKey = types.NamespacedName{Namespace: RunNamespaceName("team
 // breakCandidateService makes the candidate's address underivable: "missing"
 // deletes its Service, "headless" stores it with ClusterIP None, "zoned"
 // stores it with a zoned IPv6 ClusterIP whose escaped zone no request can
-// carry, and "port" gives the Agent a port no address can carry. The fake
-// client validates none of these writes. A real API server refuses the
-// in-place ClusterIP changes, so there the Service would have to be
-// re-created to reach those states; it would accept the port, since
-// spec.runtime.port declares no bounds.
+// carry. The fake client validates none of these writes. A real API server
+// refuses the in-place ClusterIP changes, so there the Service would have to
+// be re-created to reach those states. A port no address can carry is a
+// fixture built on it (newEvalFixtureOnPort): a real API server accepts it,
+// since spec.runtime.port declares no bounds, and an edit to it bumps the
+// generation, which the generation predicate holds first.
 func breakCandidateService(t *testing.T, f *evalFixture, how string) {
 	t.Helper()
 	ctx := context.Background()
@@ -465,12 +485,6 @@ func breakCandidateService(t *testing.T, f *evalFixture, how string) {
 			svc.Spec.ClusterIP = "fe80::1%a/b"
 		}
 		if err := f.c.Update(ctx, &svc); err != nil {
-			t.Fatal(err)
-		}
-	case "port":
-		a := f.agent(t)
-		a.Spec.Runtime.Port = 70000
-		if err := f.c.Update(ctx, a); err != nil {
 			t.Fatal(err)
 		}
 	default:
@@ -519,18 +533,44 @@ func TestAnUnaddressableCandidateIsNamed(t *testing.T) {
 					}
 					return c.Get(ctx, key, obj, opts...)
 				}}
-				f := newEvalFixture(t, funcs, echoCase("a", "one"), echoCase("b", "two"))
-				if phase == "mid-run" {
-					if _, err := f.pass(t); err != nil {
-						t.Fatal(err)
+				cases := []assaydv1alpha1.EvalCase{echoCase("a", "one"), echoCase("b", "two")}
+				var f *evalFixture
+				if how == "port" {
+					// The spec on port 70000 records the digest it mints, so
+					// the pass is not held as a candidate the spec does not
+					// mint (design 16 A28.1). Mid-run, the run is one pass
+					// of a fixture on port 8080, keyed to the new digest.
+					f = newEvalFixtureOnPort(t, 70000, funcs, cases...)
+					if phase == "mid-run" {
+						src := newEvalFixture(t, nil, cases...)
+						if _, err := src.pass(t); err != nil {
+							t.Fatal(err)
+						}
+						e := src.agent(t).Status.Eval.DeepCopy()
+						if c := caseRecord(e.Cases, "a"); c == nil || !outcomeRecorded(c.Outcome) {
+							t.Fatalf("setup: the first case was not recorded: %+v", e)
+						}
+						e.RevisionDigest = f.digest
+						a := f.agent(t)
+						a.Status.Eval = e
+						if err := f.c.Status().Update(context.Background(), a); err != nil {
+							t.Fatal(err)
+						}
 					}
-					if c := caseRecord(f.agent(t).Status.Eval.Cases, "a"); c == nil || !outcomeRecorded(c.Outcome) {
-						t.Fatalf("setup: the first case was not recorded: %+v", f.agent(t).Status.Eval)
+				} else {
+					f = newEvalFixture(t, funcs, cases...)
+					if phase == "mid-run" {
+						if _, err := f.pass(t); err != nil {
+							t.Fatal(err)
+						}
+						if c := caseRecord(f.agent(t).Status.Eval.Cases, "a"); c == nil || !outcomeRecorded(c.Outcome) {
+							t.Fatalf("setup: the first case was not recorded: %+v", f.agent(t).Status.Eval)
+						}
 					}
 				}
 				if how == "unreadable" {
 					failRead = true
-				} else {
+				} else if how != "port" {
 					breakCandidateService(t, f, how)
 				}
 				cardGets := f.stub.cardGets
@@ -551,7 +591,7 @@ func TestAnUnaddressableCandidateIsNamed(t *testing.T) {
 				if strings.Contains(e.Blocked.Message, "injected") {
 					t.Errorf("the message carries an error's text: %s", e.Blocked.Message)
 				}
-				if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != "sha256:candidate" ||
+				if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != f.digest ||
 					e.BlockedFor.SuiteDigest != f.sd || e.BlockedFor.LockDeadline != nil {
 					t.Errorf("blockedFor %+v does not name the pair and no Lock", e.BlockedFor)
 				}
@@ -673,7 +713,7 @@ func TestARunStartRefusalIsWrittenToBlocked(t *testing.T) {
 			if e.Verdict != "" || e.EndpointPath != "" || f.stub.total() != 0 {
 				t.Errorf("a refused card started a run: %+v, %d sends", e, f.stub.total())
 			}
-			if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != "sha256:candidate" || e.BlockedFor.SuiteDigest != f.sd {
+			if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != f.digest || e.BlockedFor.SuiteDigest != f.sd {
 				t.Errorf("blockedFor %+v does not name the pair blocked was computed for", e.BlockedFor)
 			}
 		})
@@ -1340,7 +1380,7 @@ func TestARunStartWritesBlockedEmpty(t *testing.T) {
 	if e == nil || e.Verdict != assaydv1alpha1.EvalVerdictRunning || e.Blocked != nil {
 		t.Fatalf("the run-start pass left status.eval %+v; want a run started and blocked empty", e)
 	}
-	if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != "sha256:candidate" || e.BlockedFor.SuiteDigest != f.sd {
+	if e.BlockedFor == nil || e.BlockedFor.RevisionDigest != f.digest || e.BlockedFor.SuiteDigest != f.sd {
 		t.Errorf("blockedFor %+v does not name the pair the run started for", e.BlockedFor)
 	}
 	if f.stub.count("one") != 1 {
