@@ -430,12 +430,10 @@ func TestARevertToARevisionThatPassedReadsEvalPassed(t *testing.T) {
 	noUnpassed(t, g.a, "B active again, in passed[]")
 }
 
-// A25.5's pin row: a pin to a revision that is not active and that passed[]
-// holds reads GatesBypassed's serving form, naming the entry, and leaves
-// GatesPassed's reason and message as they were before the pin.
-func TestAPinToARevisionPassedHoldsKeepsGatesPassed(t *testing.T) {
+// A25.5's pin row, updated by A29: a pin to a revision that is not active
+// reads both GatesBypassed's serving form and EvalPassed from its passed[] entry.
+func TestAPinToARevisionPassedHoldsRederivesGatesPassed(t *testing.T) {
 	g, _, _ := passedTwice(t, "pinpassedentry")
-	before := *gatesPassed(t, g.a)
 	pinTo(t, g.a, g.dgst)
 	g.agentPass(t)
 	if got := liveAgent(t, g.a).Status.ActiveRevisionDigest; got != g.dgst {
@@ -446,11 +444,7 @@ func TestAPinToARevisionPassedHoldsKeepsGatesPassed(t *testing.T) {
 	if !strings.Contains(c.Message, "status.eval.passed[] records a Passed verdict for it against suite digest "+g.suiteDgst) {
 		t.Errorf("the serving form does not name B's passed[] entry: %s", c.Message)
 	}
-	after := *gatesPassed(t, g.a)
-	if after.Reason != before.Reason || after.Message != before.Message {
-		t.Errorf("GatesPassed moved under the pin: %s %q, was %s %q", after.Reason, after.Message,
-			before.Reason, before.Message)
-	}
+	a29PassedEntry(t, g.a, g.rev, g.dgst, g.suiteDgst)
 }
 
 // A25.5's revert-then-pin row: after the revert to B, which reads EvalPassed

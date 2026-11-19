@@ -138,7 +138,10 @@ func TestAPinOnAGatedAgentIsAdmittedOrRefusedByQ5(t *testing.T) {
 			e.Failed[0].SuiteDigest != sd1 {
 			t.Fatalf("setup: failed[] is %+v, want B against S1", e.Failed)
 		}
-		before := *gatesPassed(t, a)
+		before := condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, controller.ReasonEvalPassed)
+		if !strings.Contains(before.Message, dC) {
+			t.Fatalf("setup: expected the gate pass for C, got %s", before.Message)
+		}
 
 		// B's workload is not available when the pin arrives, so the pass
 		// that resolves it records B as the candidate while C serves. The
@@ -165,13 +168,7 @@ func TestAPinOnAGatedAgentIsAdmittedOrRefusedByQ5(t *testing.T) {
 				got.Status.ActiveRevisionDigest, got.Status.Phase)
 		}
 		bypassed(t, a, revB, dB, pinServing)
-		// GatesPassed is sticky and the pin does not assert it: it goes on
-		// describing the revision status.eval names (§1.1).
-		after := *gatesPassed(t, a)
-		if after.Status != before.Status || after.Reason != before.Reason || after.Message != before.Message {
-			t.Errorf("GatesPassed moved on a pinned rollback: %s/%s %q, was %s/%s %q", after.Status,
-				after.Reason, after.Message, before.Status, before.Reason, before.Message)
-		}
+		a29UnevaluatedPin(t, a, revB, dB)
 
 		// The pin cleared: nothing is bypassed any more.
 		mustEdit(t, a, func(a *assaydv1alpha1.Agent) { a.Spec.Release = nil })
@@ -977,7 +974,8 @@ func TestAForgedGatesBypassedOnAServingPinIsRecomputedAway(t *testing.T) {
 
 // A serving pinned rollback's GatesBypassed costs nothing permanent when the
 // EvalSuite CRD is undiscoverable for one pass: it is derived again on the
-// next, and GatesPassed is not asserted for the pinned revision meanwhile.
+// next, and GatesPassed is not asserted for the pinned revision on the pass
+// that does not enforce the gate.
 func TestAServingPinsBypassIsDerivedAgainAfterTheCRDReturns(t *testing.T) {
 	_, a, r, revB, dB, _ := pinFixture(t, "pinderive")
 	pinTo(t, a, dB)
@@ -1036,9 +1034,7 @@ func TestAServingPinThatPassedEarlierSaysOnlyWhatIsRecorded(t *testing.T) {
 	if u := condition(liveAgent(t, a), assaydv1alpha1.CondActiveRevisionPassUnrecorded); u != nil {
 		t.Errorf("B, in status.eval.passed[], is named unpassed: %+v", u)
 	}
-	// GatesPassed is not asserted for the pinned revision: it keeps the
-	// failed candidate's verdict, which is §1.1's sticky rule.
-	condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "EvalFailed")
+	a29PassedEntry(t, a, revB, dB, sd)
 }
 
 // A pending pin's GatesBypassed is withdrawn on a pass that returns before

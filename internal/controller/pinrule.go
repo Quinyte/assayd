@@ -121,9 +121,8 @@ func (r *AgentReconciler) pinRule(ctx context.Context, agent *assaydv1alpha1.Age
 }
 
 // evalPassedFor reports whether status.eval's pair records a Passed verdict
-// for the digest. It reads the pair alone, never status.eval.passed[]: the
-// promotion branch's pinned skip and the serving form's predicate share it,
-// and design 16 A25.5 keeps both on the pair.
+// for the digest. The serving form's predicate reads the pair alone, never
+// status.eval.passed[] (design 16 A25.5).
 func evalPassedFor(e *assaydv1alpha1.EvalStatus, digest string) bool {
 	return e != nil && e.Verdict == assaydv1alpha1.EvalVerdictPassed && e.RevisionDigest == digest
 }
@@ -152,7 +151,7 @@ const ReasonNoPassedVerdictRecorded = "NoPassedVerdictRecorded"
 // active revision digest, and no Passed verdict is recorded for that digest,
 // in status.eval's pair or in status.eval.passed[], pinned or not. It reads
 // no stored condition, and its own test is written here rather than through
-// evalPassedFor, which the pinned skip and the serving form keep on the pair.
+// evalPassedFor, which the serving form's predicate keeps on the pair.
 //
 // The message names only the active revision and no status.eval pair, so a
 // run start, a claim and a case record leave it unchanged; it says nothing
@@ -208,7 +207,7 @@ func servingPinBypass(agent *assaydv1alpha1.Agent, status *assaydv1alpha1.AgentS
 		msg += "; design 16 Q5 (a) admitted the pin: " + why
 	}
 	return msg + ". " + servingRecord(status.Eval, d) + " While the pin stands nothing is evaluated " +
-		"in its place, and GatesPassed is not asserted again, so where it is set it keeps its last reading"
+		"in its place, and GatesPassed is asserted for the revision serving on each pass that reaches the promotion branch, as with no pin set, except on a pass that stops earlier"
 }
 
 // servingRecord is what status.eval records about digest d, which has no

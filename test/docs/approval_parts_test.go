@@ -80,6 +80,7 @@ var humanApprovedParts = []grant{
 // (b), and recorded here before its fold, which under its own A28.2 the code PR
 // for #144 makes. Design 02 A80, decided with it, has no row: design 02 has no
 // approved part, so A80 is recorded in its own entry and README row.
+// A29 was decided on 2026-11-19, option (b), and recorded with its code fold.
 // Making one an approved part would take an ADR-0024 amendment and a change to
 // design 16's Status line and README row, which only the human's process makes.
 //
@@ -96,6 +97,7 @@ var humanDecidedParts = []grant{
 	{"16", "A26", "2026-11-01"}, // design 16 §14 A26, decided as recommended on PR #147; folded by the code PR for #135
 	{"16", "A27", "2026-11-03"}, // design 16 §14 A27, decided as recommended on PR #156; A27.3 and A27.6 folded by its record, the rest by the code PRs for #137, #154 and #155
 	{"16", "A28", "2026-11-05"}, // design 16 §14 A28, decided as recommended on PR #162, A28.4 (b); folded by the code PR for #144, with design 02 A80
+	{"16", "A29", "2026-11-19"}, // design 16 §14 A29, option (b), recorded and folded with the code PR for #139
 }
 
 // humanApprovals reduces humanApprovedParts to the claim each design may make
