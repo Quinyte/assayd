@@ -160,7 +160,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 - `internal/controller/agent_controller.go:2257` in `assessPromotedGate()` — constant at the call site
 
-**Referenced by a test:** `internal/controller/passunrecorded_test.go`, `test/envtest/a29_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/passunrecorded_test.go`
+**Referenced by a test:** `internal/controller/passunrecorded_test.go`, `test/envtest/a29_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/passunrecorded_test.go`, `test/envtest/pin_test.go`
 
 **State:** The Agent declares a gate, the EvalSuite CRD is installed, and the revision being served is the desired one, but `status.eval`'s pair records no `Passed` verdict for its digest and `status.eval.passed[]` holds no entry for it. A gate added after the revision began serving is one cause; a revert to a revision whose own `Passed` record a later candidate's record has replaced, where `passed[]` no longer holds it — a run start before the upgrade that built `passed[]`, a run start on a CRD that does not keep `passed`, an eviction, or a later `Failed` verdict for it — is another; a pin that design 16 Q5 (a) admits, serving a retained revision for which neither records a `Passed` verdict, is a third; and the reason does not tell them apart.
 
