@@ -45,8 +45,8 @@ byte-for-byte after the runs; the implementation worktree was never mutated.
 
 The tests assert transitions and the serving revision's digest, not only a
 condition value. The existing `settle` helper checks only phase and active/candidate revision
-convergence, not resourceVersion stability. An ungated serving revision retains
-the existing unpinned wording until the pin is set; R6 checks that transition explicitly.
+convergence, not resourceVersion stability. In R6, adding a gate to the serving revision produces the unpinned wording;
+pinning that same revision replaces it with the pinned tail.
 
 To reproduce a focused unmutated run:
 
@@ -92,3 +92,7 @@ resourceVersion over three further reconciliations after convergence. This
 proves absence of persisted churn in those fixture states, not absence of API
 write attempts. The surviving mutation is retained here as that limitation,
 not counted as a kill. All mutation copies were restored and byte-compared.
+
+Independent recheck of `70ddd58`: **PASS**, all original findings closed; report
+`docs/designs/reviews/16-a29-option-b-codex-recheck.md`. The remaining research-note
+wording minor is corrected above. No production code changed after the review.
