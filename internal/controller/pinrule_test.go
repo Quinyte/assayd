@@ -157,8 +157,8 @@ func TestServingPinBypassIsTheRecordAndNothingElse(t *testing.T) {
 	st := &assaydv1alpha1.AgentStatus{ActiveRevision: "rev", ActiveRevisionDigest: d,
 		Eval: &assaydv1alpha1.EvalStatus{RevisionDigest: d, SuiteDigest: "sha256:s1",
 			Verdict: assaydv1alpha1.EvalVerdictFailed}}
-	tail := " While the pin stands nothing is evaluated in its place, and GatesPassed is not asserted " +
-		"again, so where it is set it keeps its last reading"
+	tail := " While the pin stands nothing is evaluated in its place, and GatesPassed is asserted " +
+		"for the revision serving on each pass that reaches the promotion branch, as with no pin set, except on a pass that stops earlier"
 	head := "spec.release.targetRevisionDigest pins revision rev (digest sha256:pinned), the revision serving, " +
 		"and it serves by pin"
 	rec := ". status.eval records a Failed verdict for it against suite digest sha256:s1."

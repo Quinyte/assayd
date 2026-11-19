@@ -138,7 +138,10 @@ func TestAPinOnAGatedAgentIsAdmittedOrRefusedByQ5(t *testing.T) {
 			e.Failed[0].SuiteDigest != sd1 {
 			t.Fatalf("setup: failed[] is %+v, want B against S1", e.Failed)
 		}
-		before := *gatesPassed(t, a)
+		before := condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, controller.ReasonEvalPassed)
+		if !strings.Contains(before.Message, dC) {
+			t.Fatalf("setup: expected the gate pass for C, got %s", before.Message)
+		}
 
 		// B's workload is not available when the pin arrives, so the pass
 		// that resolves it records B as the candidate while C serves. The
@@ -165,13 +168,7 @@ func TestAPinOnAGatedAgentIsAdmittedOrRefusedByQ5(t *testing.T) {
 				got.Status.ActiveRevisionDigest, got.Status.Phase)
 		}
 		bypassed(t, a, revB, dB, pinServing)
-		// GatesPassed is sticky and the pin does not assert it: it goes on
-		// describing the revision status.eval names (§1.1).
-		after := *gatesPassed(t, a)
-		if after.Status != before.Status || after.Reason != before.Reason || after.Message != before.Message {
-			t.Errorf("GatesPassed moved on a pinned rollback: %s/%s %q, was %s/%s %q", after.Status,
-				after.Reason, after.Message, before.Status, before.Reason, before.Message)
-		}
+		a29UnevaluatedPin(t, a, revB, dB)
 
 		// The pin cleared: nothing is bypassed any more.
 		mustEdit(t, a, func(a *assaydv1alpha1.Agent) { a.Spec.Release = nil })
@@ -975,26 +972,44 @@ func TestAForgedGatesBypassedOnAServingPinIsRecomputedAway(t *testing.T) {
 	condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, "EvalPassed")
 }
 
-// A serving pinned rollback's GatesBypassed costs nothing permanent when the
-// EvalSuite CRD is undiscoverable for one pass: it is derived again on the
-// next, and GatesPassed is not asserted for the pinned revision meanwhile.
+// A pass with the EvalSuite CRD undiscoverable does not reassert GatesPassed.
+// When discovery returns, the very next enforced pass must derive the reading
+// from current eval status, even though the spec and serving pin did not change.
 func TestAServingPinsBypassIsDerivedAgainAfterTheCRDReturns(t *testing.T) {
-	_, a, r, revB, dB, _ := pinFixture(t, "pinderive")
+	_, a, r, revB, dB, sd := pinFixture(t, "pinderive")
 	pinTo(t, a, dB)
 	reconcileOnce(t, r, a)
 	bypassed(t, a, revB, dB, pinServing)
-	before := *gatesPassed(t, a)
 	prev := r.EvalSuiteInstalled
 	r.EvalSuiteInstalled = func() bool { return false }
 	reconcileOnce(t, r, a)
+	if got := liveAgent(t, a); condition(got, assaydv1alpha1.CondGatesBypassed) != nil {
+		t.Error("serving bypass persisted while EvalSuite CRD was undiscoverable")
+	}
 	r.EvalSuiteInstalled = prev
 	reconcileOnce(t, r, a)
-	reconcileOnce(t, r, a)
 	bypassed(t, a, revB, dB, pinServing)
-	after := *gatesPassed(t, a)
-	if after.Reason != before.Reason || after.Message != before.Message {
-		t.Errorf("GatesPassed moved for a revision serving by pin: %s %q, was %s %q",
-			after.Reason, after.Message, before.Reason, before.Message)
+
+	before := *a29UnevaluatedPin(t, a, revB, dB)
+	r.EvalSuiteInstalled = func() bool { return false }
+	// Controlled status input, not an eval run while the CRD is absent.
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: revB, RevisionDigest: dB,
+			SuiteDigest: sd, Verdict: assaydv1alpha1.EvalVerdictPassed, Score: "1/1"}
+	})
+	reconcileOnce(t, r, a)
+	after := condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonActiveRevisionNotEvaluated)
+	if after.Message != before.Message {
+		t.Errorf("CRD-absent pass changed the previous GatesPassed message: %s; was %s", after.Message, before.Message)
+	}
+	r.EvalSuiteInstalled = prev
+	reconcileOnce(t, r, a)
+	passed := condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, controller.ReasonEvalPassed)
+	if want := fmt.Sprintf("revision %s (digest %s) passed suite smoke (digest %s), score 1/1", revB, dB, sd); passed.Message != want {
+		t.Errorf("first enforced pass reads %q, want %q", passed.Message, want)
+	}
+	if got := liveAgent(t, a); condition(got, assaydv1alpha1.CondGatesBypassed) != nil {
+		t.Error("serving bypass persisted despite a passed pair for the active pin")
 	}
 }
 
@@ -1036,9 +1051,7 @@ func TestAServingPinThatPassedEarlierSaysOnlyWhatIsRecorded(t *testing.T) {
 	if u := condition(liveAgent(t, a), assaydv1alpha1.CondActiveRevisionPassUnrecorded); u != nil {
 		t.Errorf("B, in status.eval.passed[], is named unpassed: %+v", u)
 	}
-	// GatesPassed is not asserted for the pinned revision: it keeps the
-	// failed candidate's verdict, which is §1.1's sticky rule.
-	condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "EvalFailed")
+	a29PassedEntry(t, a, revB, dB, sd)
 }
 
 // A pending pin's GatesBypassed is withdrawn on a pass that returns before

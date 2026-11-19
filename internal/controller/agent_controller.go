@@ -1098,14 +1098,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		conds.set(assaydv1alpha1.CondReady, metav1.ConditionTrue, "Available",
 			fmt.Sprintf("revision %s is serving", desired))
 		switch {
-		case pin != nil && gating == gateEnforced && !evalPassedFor(status.Eval, desiredDigest):
-			// GatesPassed is not asserted for a pinned rollback whose
-			// revision status.eval's pair records no Passed verdict for: it
-			// stays sticky and, where it is set, keeps its last reading
-			// (design 16 §1.1's table). status.eval.passed[] is not read here
-			// (A25.5).
 		case gating == gateEnforced:
-			assessPromotedGate(conds, status.Eval, desired, desiredDigest)
+			assessPromotedGate(conds, status.Eval, desired, desiredDigest, specPinDigest(&agent))
 		case gating == gateNone && findCondition(agent.Status.Conditions, string(assaydv1alpha1.CondGatesPassed)) != nil:
 			// A removed gate's GatesPassed, naming the revision now active
 			// (Q9, A5). On a pass that promotes, assessGates named
@@ -2225,10 +2219,11 @@ func specPinDigest(agent *assaydv1alpha1.Agent) string {
 // for the revision being promoted, or status.eval.passed[] holds an entry for
 // it, never merely because this branch ran. A revision serving with no such
 // verdict is not re-evaluated, because gates are policy surface (design 16
-// §1.1). It is the one gate reader that reads passed[] (A25.5), so a revert
-// to a revision that passed reads EvalPassed after a later run start has
-// replaced the pair; passed[] keeps no score, and the message says so.
-func assessPromotedGate(c *conditionSet, e *assaydv1alpha1.EvalStatus, desired, desiredDigest string) {
+// §1.1); beside a pin the message says only that it serves by pin. A revert
+// or pin to a revision that passed reads EvalPassed after a later run start
+// has replaced the pair, if passed[] still holds it (A25.5, A29.1). passed[]
+// keeps no score, and the message says so.
+func assessPromotedGate(c *conditionSet, e *assaydv1alpha1.EvalStatus, desired, desiredDigest, specPin string) {
 	if e != nil && e.Verdict == assaydv1alpha1.EvalVerdictPassed && e.RevisionDigest == desiredDigest {
 		c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, ReasonEvalPassed,
 			fmt.Sprintf("revision %s (digest %s) passed suite %s (digest %s), score %s",
@@ -2244,17 +2239,23 @@ func assessPromotedGate(c *conditionSet, e *assaydv1alpha1.EvalStatus, desired, 
 	// Say what status.eval records, not why: a gate added after the revision
 	// began serving is one cause, and a revert to a revision whose own Passed
 	// record a later candidate's run replaced, outside what status.eval.passed[]
-	// holds, is another.
+	// holds, is another; a pin Q5 (a) admits to a retained revision with no
+	// recorded pass is a third.
 	recorded := "status.eval records no verdict, and status.eval.passed[] holds no entry for it"
 	if e != nil && e.RevisionDigest != "" {
 		recorded = fmt.Sprintf("status.eval's pair records %s for revision %s (digest %s) against suite %s "+
 			"(digest %s), not a Passed verdict for this one, and status.eval.passed[] holds no entry for it",
 			cmp.Or(string(e.Verdict), "no verdict"), e.Revision, e.RevisionDigest, e.Suite, e.SuiteDigest)
 	}
+	tail := "A gate does not re-evaluate the revision serving, because gates are policy surface; " +
+		"the next revision this spec mints is held for its gate before it takes traffic"
+	if specPin != "" {
+		tail = "It serves by pin, and while the pin stands nothing is evaluated in its place; " +
+			"GatesBypassed or Degraded says what the pin does, except on a pass that stops earlier, " +
+			"such as one on an unresolved env source"
+	}
 	c.set(assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, ReasonActiveRevisionNotEvaluated,
-		fmt.Sprintf("revision %s (digest %s) is serving, and %s. A gate does not re-evaluate the "+
-			"revision serving, because gates are policy surface; the next revision this spec mints is "+
-			"held for its gate before it takes traffic", desired, desiredDigest, recorded))
+		fmt.Sprintf("revision %s (digest %s) is serving, and %s. %s", desired, desiredDigest, recorded, tail))
 }
 
 // assessSandbox reports the §3.2 downgrade. The agent-sandbox CRD is not bound

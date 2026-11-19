@@ -200,13 +200,14 @@ func TestTheUnpassedStatementSaysOnlyWhatIsRecorded(t *testing.T) {
 	}
 }
 
-// The promotion branch reads passed[] when the spec mints the active
-// revision, and asserts EvalPassed from its entry, with no score (A25.5).
+// The promotion branch reads passed[] for the serving revision, including
+// one selected by pin (exercised in envtest), and asserts EvalPassed from
+// its entry, with no score (A25.5, A29.1).
 func TestAPassedEntryReadsEvalPassedWithNoScore(t *testing.T) {
 	c := newConditionSet(1)
 	e := &assaydv1alpha1.EvalStatus{Revision: "c", RevisionDigest: "sha256:c", SuiteDigest: "s3",
 		Verdict: assaydv1alpha1.EvalVerdictFailed, Passed: []assaydv1alpha1.EvalPair{pair("sha256:b", "s1")}}
-	assessPromotedGate(c, e, "b", "sha256:b")
+	assessPromotedGate(c, e, "b", "sha256:b", "")
 	got, _ := c.get(assaydv1alpha1.CondGatesPassed)
 	want := "revision b (digest sha256:b) passed against suite digest s1, as status.eval.passed[] records; " +
 		"passed[] keeps no score"
@@ -218,7 +219,7 @@ func TestAPassedEntryReadsEvalPassedWithNoScore(t *testing.T) {
 	c = newConditionSet(1)
 	assessPromotedGate(c, &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: "b", RevisionDigest: "sha256:b",
 		SuiteDigest: "s2", Verdict: assaydv1alpha1.EvalVerdictPassed, Score: "1/1",
-		Passed: []assaydv1alpha1.EvalPair{pair("sha256:b", "s1")}}, "b", "sha256:b")
+		Passed: []assaydv1alpha1.EvalPair{pair("sha256:b", "s1")}}, "b", "sha256:b", "")
 	got, _ = c.get(assaydv1alpha1.CondGatesPassed)
 	if got.Reason != ReasonEvalPassed || !strings.Contains(got.Message, "(digest s2), score 1/1") ||
 		strings.Contains(got.Message, "s1") {
@@ -226,7 +227,7 @@ func TestAPassedEntryReadsEvalPassedWithNoScore(t *testing.T) {
 	}
 	e.Passed = nil
 	c = newConditionSet(1)
-	assessPromotedGate(c, e, "b", "sha256:b")
+	assessPromotedGate(c, e, "b", "sha256:b", "")
 	got, _ = c.get(assaydv1alpha1.CondGatesPassed)
 	if got.Reason != ReasonActiveRevisionNotEvaluated ||
 		!strings.Contains(got.Message, "status.eval.passed[] holds no entry for it") {
