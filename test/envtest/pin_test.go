@@ -972,27 +972,44 @@ func TestAForgedGatesBypassedOnAServingPinIsRecomputedAway(t *testing.T) {
 	condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, "EvalPassed")
 }
 
-// A serving pinned rollback's GatesBypassed costs nothing permanent when the
-// EvalSuite CRD is undiscoverable for one pass: it is derived again on the
-// next, and GatesPassed is not asserted for the pinned revision on the pass
-// that does not enforce the gate.
+// A pass with the EvalSuite CRD undiscoverable does not reassert GatesPassed.
+// When discovery returns, the very next enforced pass must derive the reading
+// from current eval status, even though the spec and serving pin did not change.
 func TestAServingPinsBypassIsDerivedAgainAfterTheCRDReturns(t *testing.T) {
-	_, a, r, revB, dB, _ := pinFixture(t, "pinderive")
+	_, a, r, revB, dB, sd := pinFixture(t, "pinderive")
 	pinTo(t, a, dB)
 	reconcileOnce(t, r, a)
 	bypassed(t, a, revB, dB, pinServing)
-	before := *gatesPassed(t, a)
 	prev := r.EvalSuiteInstalled
 	r.EvalSuiteInstalled = func() bool { return false }
 	reconcileOnce(t, r, a)
+	if got := liveAgent(t, a); condition(got, assaydv1alpha1.CondGatesBypassed) != nil {
+		t.Error("serving bypass persisted while EvalSuite CRD was undiscoverable")
+	}
 	r.EvalSuiteInstalled = prev
 	reconcileOnce(t, r, a)
-	reconcileOnce(t, r, a)
 	bypassed(t, a, revB, dB, pinServing)
-	after := *gatesPassed(t, a)
-	if after.Reason != before.Reason || after.Message != before.Message {
-		t.Errorf("GatesPassed moved for a revision serving by pin: %s %q, was %s %q",
-			after.Reason, after.Message, before.Reason, before.Message)
+
+	before := *a29UnevaluatedPin(t, a, revB, dB)
+	r.EvalSuiteInstalled = func() bool { return false }
+	// Controlled status input, not an eval run while the CRD is absent.
+	writeAgentStatus(t, a, func(st *assaydv1alpha1.AgentStatus) {
+		st.Eval = &assaydv1alpha1.EvalStatus{Suite: "smoke", Revision: revB, RevisionDigest: dB,
+			SuiteDigest: sd, Verdict: assaydv1alpha1.EvalVerdictPassed, Score: "1/1"}
+	})
+	reconcileOnce(t, r, a)
+	after := condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonActiveRevisionNotEvaluated)
+	if after.Message != before.Message {
+		t.Errorf("CRD-absent pass changed the previous GatesPassed message: %s; was %s", after.Message, before.Message)
+	}
+	r.EvalSuiteInstalled = prev
+	reconcileOnce(t, r, a)
+	passed := condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionTrue, controller.ReasonEvalPassed)
+	if want := fmt.Sprintf("revision %s (digest %s) passed suite smoke (digest %s), score 1/1", revB, dB, sd); passed.Message != want {
+		t.Errorf("first enforced pass reads %q, want %q", passed.Message, want)
+	}
+	if got := liveAgent(t, a); condition(got, assaydv1alpha1.CondGatesBypassed) != nil {
+		t.Error("serving bypass persisted despite a passed pair for the active pin")
 	}
 }
 

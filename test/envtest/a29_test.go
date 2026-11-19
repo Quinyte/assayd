@@ -19,10 +19,14 @@ func a29UnevaluatedPin(t *testing.T, a *assaydv1alpha1.Agent, rev, digest string
 		t.Fatalf("expected pinned revision %s serving, got %s", digest, got)
 	}
 	c := condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonActiveRevisionNotEvaluated)
-	for _, want := range []string{"revision " + rev + " (digest " + digest + ") is serving", "serves by pin", "nothing is evaluated in its place"} {
-		if !strings.Contains(c.Message, want) {
-			t.Errorf("pinned GatesPassed is missing %q: %s", want, c.Message)
-		}
+	const tail = ". It serves by pin, and while the pin stands nothing is evaluated in its place; " +
+		"GatesBypassed or Degraded says what the pin does, except on a pass that stops earlier, " +
+		"such as one on an unresolved env source"
+	if !strings.HasSuffix(c.Message, tail) {
+		t.Errorf("pinned GatesPassed does not end with the approved tail: %s", c.Message)
+	}
+	if want := "revision " + rev + " (digest " + digest + ") is serving"; !strings.Contains(c.Message, want) {
+		t.Errorf("pinned GatesPassed is missing %q: %s", want, c.Message)
 	}
 	for _, stale := range []string{"spec.gates was removed", "because gates are policy surface", "the next revision this spec mints is held", "Q5 (a)"} {
 		if strings.Contains(c.Message, stale) {
@@ -38,6 +42,20 @@ func a29PassedEntry(t *testing.T, a *assaydv1alpha1.Agent, rev, digest, suiteDig
 	for _, want := range []string{"revision " + rev + " (digest " + digest + ") passed", suiteDigest, "passed[] keeps no score"} {
 		if !strings.Contains(c.Message, want) {
 			t.Errorf("pinned GatesPassed from passed[] is missing %q: %s", want, c.Message)
+		}
+	}
+}
+
+// The first repeated pass can remove the transient pin-admission explanation.
+// Once settled, further passes must not change the persisted Agent.
+func a29NoPersistedStatusChanges(t *testing.T, r *controller.AgentReconciler, a *assaydv1alpha1.Agent) {
+	t.Helper()
+	settle(t, r, a)
+	rv := liveAgent(t, a).ResourceVersion
+	for i := 0; i < 3; i++ {
+		reconcileOnce(t, r, a)
+		if got := liveAgent(t, a).ResourceVersion; got != rv {
+			t.Fatalf("steady pinned pass %d changed Agent resourceVersion from %s to %s", i+1, rv, got)
 		}
 	}
 }
@@ -73,7 +91,7 @@ func TestA29RestoredGateRederivesPinnedStatus(t *testing.T) {
 	if !strings.Contains(c.Message, "GatesPassed is asserted for the revision serving on each pass that reaches the promotion branch") {
 		t.Errorf("serving form still describes the old sticky rule: %s", c.Message)
 	}
-	settle(t, r, a)
+	a29NoPersistedStatusChanges(t, r, a)
 	mustEdit(t, a, func(a *assaydv1alpha1.Agent) { a.Spec.Release = nil })
 	reconcileOnce(t, r, a)
 	condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, "EvalFailed")
@@ -94,7 +112,7 @@ func TestA29PinToRetainedRevisionReplacesCandidateStatus(t *testing.T) {
 	if strings.Contains(c.Message, before.CandidateRevisionDigest) {
 		t.Errorf("condition still names superseded candidate: %s", c.Message)
 	}
-	settle(t, r, a)
+	a29NoPersistedStatusChanges(t, r, a)
 }
 
 // R3 and R6 differ in order: the gate arrives beside an existing pin, or a
@@ -135,7 +153,7 @@ func TestA29SameServingRevisionRederivesPinnedStatus(t *testing.T) {
 				pinActive()
 			}
 			a29UnevaluatedPin(t, a, active.ActiveRevision, active.ActiveRevisionDigest)
-			settle(t, r, a)
+			a29NoPersistedStatusChanges(t, r, a)
 		})
 	}
 }

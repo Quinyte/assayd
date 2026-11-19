@@ -200,8 +200,9 @@ func TestTheUnpassedStatementSaysOnlyWhatIsRecorded(t *testing.T) {
 	}
 }
 
-// The promotion branch reads passed[] when the spec mints the active
-// revision, and asserts EvalPassed from its entry, with no score (A25.5).
+// The promotion branch reads passed[] for the serving revision, including
+// one selected by pin (exercised in envtest), and asserts EvalPassed from
+// its entry, with no score (A25.5, A29.1).
 func TestAPassedEntryReadsEvalPassedWithNoScore(t *testing.T) {
 	c := newConditionSet(1)
 	e := &assaydv1alpha1.EvalStatus{Revision: "c", RevisionDigest: "sha256:c", SuiteDigest: "s3",
