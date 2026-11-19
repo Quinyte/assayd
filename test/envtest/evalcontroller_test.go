@@ -20,6 +20,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -640,6 +641,18 @@ func TestARestartedControllerSendsOnlyTheRest(t *testing.T) {
 	}
 }
 
+// A20.28: a waiting pass without a status write needs its fallback timer.
+func evalWaitWithoutWrite(t *testing.T, e *controller.EvalReconciler, a *assaydv1alpha1.Agent) {
+	t.Helper()
+	before := liveAgent(t, a).ResourceVersion
+	if res := evalOnce(t, e, a); res.RequeueAfter != controller.CardDriftInterval {
+		t.Errorf("held eval returned %+v, want RequeueAfter=%s", res, controller.CardDriftInterval)
+	}
+	if after := liveAgent(t, a).ResourceVersion; after != before {
+		t.Errorf("held eval changed Agent resourceVersion from %s to %s", before, after)
+	}
+}
+
 // T23: no case is sent before the candidate's card is recorded; a card
 // fetched at run start whose digest differs from the recorded one starts no
 // run; a card with no usable interface reads EvalBindingUnsupported.
@@ -652,7 +665,10 @@ func TestTheCardPreconditionHoldsTheRun(t *testing.T) {
 			}
 		}
 	})
-	g.evalPass(t)
+	if cardRecorded(&liveAgent(t, g.a).Status, g.dgst) {
+		t.Fatal("setup: the candidate still has a recorded card")
+	}
+	evalWaitWithoutWrite(t, g.e, g.a)
 	if g.stub.sentTo(g.name, g.rev) != 0 || g.eval(t) != nil {
 		t.Fatalf("a candidate with no recorded card was evaluated: %+v", g.eval(t))
 	}
@@ -674,6 +690,33 @@ func TestTheCardPreconditionHoldsTheRun(t *testing.T) {
 		t.Fatal("a card with no HTTP+JSON 1.0 interface was sent a case")
 	}
 	condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalBindingUnsupported)
+}
+
+// Nothing watches suites. A missing suite waits on the fallback timer even
+// with an available, carded candidate, then permits evaluation after creation.
+func TestAMissingSuiteRequeuesWithoutStartingEval(t *testing.T) {
+	g := newEvalRig(t, "missing-suite-requeue", echo("a", "one"))
+	ctx := context.Background()
+	key := client.ObjectKey{Namespace: g.ns, Name: "smoke"}
+	var suite assaydv1alpha1.EvalSuite
+	if err := k8s.Get(ctx, key, &suite); err != nil {
+		t.Fatal(err)
+	}
+	if err := k8s.Delete(ctx, &suite); err != nil {
+		t.Fatal(err)
+	}
+	if err := k8s.Get(ctx, key, &suite); !apierrors.IsNotFound(err) {
+		t.Fatalf("setup: suite read after deletion returned %v, want NotFound", err)
+	}
+	evalWaitWithoutWrite(t, g.e, g.a)
+	if g.stub.sentTo(g.name, g.rev) != 0 || g.eval(t) != nil {
+		t.Fatalf("a candidate with a missing suite was evaluated: %+v", g.eval(t))
+	}
+	putSuite(t, g.ns, "smoke", echo("a", "one"))
+	g.evalPass(t)
+	if n := g.stub.sent(g.name, g.rev, "one"); n != 1 {
+		t.Errorf("the newly created suite did not unblock the same candidate: %d sends", n)
+	}
 }
 
 // recordServedCard records the digest of the card the stub now serves, as
@@ -786,7 +829,15 @@ func TestAnOrphanedClaimIsInterrupted(t *testing.T) {
 		st.Eval.Cases = append(st.Eval.Cases, assaydv1alpha1.EvalCaseRecord{ID: "b",
 			Outcome: assaydv1alpha1.EvalCaseSending, Claim: "a-stopped-controller"})
 	})
-	g.both(t, 3)
+	if res := g.evalPass(t); res.RequeueAfter != 5*time.Second {
+		t.Errorf("Interrupted recording returned %+v, want RequeueAfter=5s", res)
+	}
+	interrupted := caseOf(g.eval(t), "b")
+	if interrupted == nil || interrupted.Outcome != assaydv1alpha1.EvalCaseFailed || interrupted.Reason != "Interrupted" || interrupted.Claim != "a-stopped-controller" {
+		t.Fatalf("the requeueing pass did not record the orphaned claim as Failed/Interrupted: %+v", interrupted)
+	}
+	g.agentPass(t)
+	g.both(t, 2)
 	e := g.eval(t)
 	b := caseOf(e, "b")
 	if b == nil || b.Outcome != assaydv1alpha1.EvalCaseFailed || b.Reason != "Interrupted" || b.Claim != "a-stopped-controller" {
@@ -904,8 +955,9 @@ func TestACandidateUnderTheI1HoldIsSentNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.A2A.HTTP = stub
+	condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalHeldForAuth)
 	for i := 0; i < 3; i++ {
-		evalOnce(t, e, a)
+		evalWaitWithoutWrite(t, e, a)
 		reconcileOnce(t, r, a)
 	}
 	if n := stub.sentTo("i1eval", second); n != 0 {
