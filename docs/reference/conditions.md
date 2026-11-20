@@ -160,7 +160,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 - `internal/controller/agent_controller.go:2257` in `assessPromotedGate()` — constant at the call site
 
-**Referenced by a test:** `internal/controller/passunrecorded_test.go`, `test/envtest/a29_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/passunrecorded_test.go`, `test/envtest/pin_test.go`
+**Referenced by a test:** `internal/controller/passunrecorded_test.go`, `test/envtest/a29_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/passunrecorded_test.go`, `test/envtest/pin_test.go`, `test/envtest/suite_reads_test.go`
 
 **State:** The Agent declares a gate, the EvalSuite CRD is installed, and the revision being served is the desired one, but `status.eval`'s pair records no `Passed` verdict for its digest and `status.eval.passed[]` holds no entry for it. A gate added after the revision began serving is one cause; a revert to a revision whose own `Passed` record a later candidate's record has replaced, where `passed[]` no longer holds it — a run start before the upgrade that built `passed[]`, a run start on a CRD that does not keep `passed`, an eviction, or a later `Failed` verdict for it — is another; a pin that design 16 Q5 (a) admits, serving a retained revision for which neither records a `Passed` verdict, is a third; and the reason does not tell them apart.
 
@@ -862,7 +862,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 - `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/a29_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/pin_test.go`
+**Referenced by a test:** `internal/controller/evalcontroller_test.go`, `internal/controller/exemption_test.go`, `internal/controller/gate_test.go`, `test/envtest/a29_test.go`, `test/envtest/evalcontroller_test.go`, `test/envtest/gate_test.go`, `test/envtest/pin_test.go`, `test/envtest/suite_reads_test.go`
 
 **State:** A gated candidate has no card digest recorded in `status.cards[]` for its full digest, whether or not it has a `Passed` verdict for the current suite (a failed drift re-read clears a recorded one); or `status.eval.blocked` records that the eval controller's run-start card fetch failed or did not match the recorded digest, and `status.eval.blockedFor` matches the current candidate, suite and `Lock`; in either case with no `Failed` verdict for the pair and no entry in `failed[]`, which are answered first.
 
@@ -1025,7 +1025,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 - `internal/controller/agent_controller.go:1072` in `Reconcile()` — from `gate.readyReason`, one of the 4 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/gate_test.go`, `internal/controller/passunrecorded_test.go`, `test/envtest/gate_test.go`, `test/envtest/passunrecorded_test.go`
+**Referenced by a test:** `internal/controller/gate_test.go`, `internal/controller/passunrecorded_test.go`, `test/envtest/gate_test.go`, `test/envtest/passunrecorded_test.go`, `test/envtest/suite_reads_test.go`
 
 **State:** A gated candidate's pass reads the installed `agents.assayd.dev` CRD, through the uncached reader behind a 30 s cache, and its `v1alpha1` schema lacks one of `status.eval`'s `suiteDigest`, `endpointPath`, `cardDigest`, `blocked`, `blockedFor`, `verdict`, `cases` (with `claim`), `failed` or `passed`. Such a CRD prunes them from every write without an error. It is what an upgraded install has, because `helm upgrade` never updates a chart's `crds/`. Where only `passed` is missing, verdicts are kept and what is lost is each `Passed` record a later run start replaces; the eval controller still starts runs and records verdicts, because it does not read `passed[]` back, so the hold stops promotion, not evaluation.
 
@@ -1046,7 +1046,7 @@ One section per reason string the operator can set, in alphabetical order.
 - `internal/controller/gate.go:113` in `report()` — from `d.reason`, one of the 12 reasons that field can hold
 - `internal/controller/agent_controller.go:1072` in `Reconcile()` — from `gate.readyReason`, one of the 4 reasons that field can hold
 
-**Referenced by a test:** `internal/controller/gate_test.go`, `internal/controller/readclass_test.go`, `test/envtest/gate_test.go`
+**Referenced by a test:** `internal/controller/gate_test.go`, `internal/controller/readclass_test.go`, `test/envtest/gate_test.go`, `test/envtest/suite_reads_test.go`
 
 **State:** The installed Agent CRD could not be read for that check, and no earlier answer is cached in this process. With one cached, however old, the cached answer stands instead.
 

@@ -601,7 +601,10 @@ func TestASpecEditAbandonsTheRun(t *testing.T) {
 // sent the second case and not the first.
 func TestAnUnavailableCandidatePausesTheRun(t *testing.T) {
 	g := newEvalRig(t, "paused", echo("a", "one"), echo("b", "two"), echo("c", "three"))
+	reads := &a20SuiteReads{Reader: k8s}
+	g.e = a20EvalReader(t, g.stub, controller.GatewayConfig{}, reads)
 	g.both(t, 1)
+	reads.assert(t, "EvalSuite "+g.ns+"/smoke")
 	markAvailable(t, g.ns, controller.WorkloadName(g.name, g.rev), 0)
 	g.agentPass(t)
 	c := condIs(t, g.a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalPaused)
@@ -610,6 +613,7 @@ func TestAnUnavailableCandidatePausesTheRun(t *testing.T) {
 	}
 	res := g.evalPass(t)
 	g.evalPass(t)
+	reads.assert(t)
 	if g.stub.sentTo(g.name, g.rev) != 1 {
 		t.Fatalf("a paused candidate was sent a case: %d sends", g.stub.sentTo(g.name, g.rev))
 	}
@@ -618,6 +622,7 @@ func TestAnUnavailableCandidatePausesTheRun(t *testing.T) {
 	}
 	markAvailable(t, g.ns, controller.WorkloadName(g.name, g.rev), 1)
 	g.both(t, 1)
+	reads.assert(t, "EvalSuite "+g.ns+"/smoke")
 	if g.stub.sent(g.name, g.rev, "two") != 1 || g.stub.sent(g.name, g.rev, "one") != 1 {
 		t.Errorf("after the pause the run sent one=%d two=%d; want the second case, and the first not again",
 			g.stub.sent(g.name, g.rev, "one"), g.stub.sent(g.name, g.rev, "two"))
@@ -658,6 +663,8 @@ func evalWaitWithoutWrite(t *testing.T, e *controller.EvalReconciler, a *assaydv
 // run; a card with no usable interface reads EvalBindingUnsupported.
 func TestTheCardPreconditionHoldsTheRun(t *testing.T) {
 	g := newEvalRig(t, "cardpre", echo("a", "one"))
+	reads := &a20SuiteReads{Reader: k8s}
+	g.e = a20EvalReader(t, g.stub, controller.GatewayConfig{}, reads)
 	writeAgentStatus(t, g.a, func(st *assaydv1alpha1.AgentStatus) {
 		for i := range st.Cards {
 			if st.Cards[i].RevisionDigest == g.dgst {
@@ -669,11 +676,13 @@ func TestTheCardPreconditionHoldsTheRun(t *testing.T) {
 		t.Fatal("setup: the candidate still has a recorded card")
 	}
 	evalWaitWithoutWrite(t, g.e, g.a)
+	reads.assert(t)
 	if g.stub.sentTo(g.name, g.rev) != 0 || g.eval(t) != nil {
 		t.Fatalf("a candidate with no recorded card was evaluated: %+v", g.eval(t))
 	}
 	writeAgentStatus(t, g.a, func(st *assaydv1alpha1.AgentStatus) { putCard(st, g.rev, g.dgst, time.Now()) })
 	g.evalPass(t)
+	reads.assert(t, "EvalSuite "+g.ns+"/smoke")
 	e := g.eval(t)
 	if g.stub.sentTo(g.name, g.rev) != 0 || e.Verdict != "" {
 		t.Fatalf("a card whose digest differs from the recorded one started a run: %+v", e)
@@ -950,16 +959,20 @@ func TestACandidateUnderTheI1HoldIsSentNothing(t *testing.T) {
 	if !cardRecorded(&liveAgent(t, a).Status, digest) {
 		t.Fatal("setup: the held candidate's card was not recorded")
 	}
-	e, err := controller.NewEvalReconciler(k8s, k8s, func() bool { return true }, r.Gateway)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e.A2A.HTTP = stub
+	reads := &a20SuiteReads{Reader: k8s}
+	e := a20EvalReader(t, stub, r.Gateway, reads)
 	condIs(t, a, assaydv1alpha1.CondGatesPassed, metav1.ConditionFalse, controller.ReasonEvalHeldForAuth)
 	for i := 0; i < 3; i++ {
 		evalWaitWithoutWrite(t, e, a)
+		reads.assert(t)
 		reconcileOnce(t, r, a)
 	}
+	// Positive control: the identical reader sees suite access in an eligible
+	// candidate pass, without changing the held Agent or its auth path.
+	control := newEvalRig(t, "a20-i1-read-control", echo("a", "one"))
+	control.e = a20EvalReader(t, control.stub, controller.GatewayConfig{}, reads)
+	control.evalPass(t)
+	reads.assert(t, "EvalSuite "+control.ns+"/smoke")
 	if n := stub.sentTo("i1eval", second); n != 0 {
 		t.Errorf("a candidate under the I1 hold was sent %d cases", n)
 	}
