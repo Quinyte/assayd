@@ -318,7 +318,10 @@ var chartFilesNotInFiles = map[string]bool{"Chart.yaml": true, "values.yaml": tr
 // kind or a path built at render time — with printf, cat, or a concatenated
 // string, as in `ClusterRole{{ "Binding" }}` or `index . (printf "Rel%s"
 // "ease")` — is not seen here, and is seen only by the render test, under
-// bindingProfiles.
+// bindingProfiles. Nor is a packaged subchart under charts/, whose templates
+// sit compressed inside a .tgz this check reads as bytes; the chart vendors
+// none today. And the root-as-map check cannot tell the root from a range or
+// with element, so `get . "k"` inside one fails here too: it fails closed.
 func TestBindingTemplatesReadOnlyTheValuesTheRenderTestVaries(t *testing.T) {
 	err := filepath.WalkDir(chartPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
