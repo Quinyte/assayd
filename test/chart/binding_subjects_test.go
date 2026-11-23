@@ -381,15 +381,29 @@ func isRoot(n parse.Node) bool {
 	return false
 }
 
-// rootPath returns the root-object path n reads, `.Values.gateway.name` or
-// `$.Values.gateway.name` as [Values gateway name], or nil.
+// checkedRootObjects are the root objects checkPath holds a read of to a rule.
+var checkedRootObjects = map[string]bool{"Values": true, "Release": true, "Capabilities": true, "Files": true}
+
+// rootPath returns the root-object path n reads, from the first of
+// checkedRootObjects in it, or nil. `.Values.gateway.name` and
+// `$.Values.gateway.name` read [Values gateway name]; so do
+// `$root.Values.gateway.name`, after `$root := .`, and `.ctx.Values.gateway.name`,
+// where the root was passed in as `(dict "ctx" .)`. The guard cannot tell
+// which variable or field holds the root, so any that names one of these is
+// read as the root: it fails closed.
 func rootPath(n parse.Node) []string {
+	var path []string
 	switch n := n.(type) {
 	case *parse.FieldNode:
-		return n.Ident
+		path = n.Ident
 	case *parse.VariableNode:
-		if len(n.Ident) > 1 && n.Ident[0] == "$" {
-			return n.Ident[1:]
+		path = n.Ident[1:]
+	case *parse.ChainNode:
+		path = n.Field
+	}
+	for i, field := range path {
+		if checkedRootObjects[field] {
+			return path[i:]
 		}
 	}
 	return nil
@@ -488,6 +502,9 @@ func checkTree(t *testing.T, ct *chartTree, where string, rbac bool) {
 			if path := nilSafeRead(n); path != nil {
 				checkPath(n, path)
 				return false
+			}
+			if path := rootPath(n); len(path) > 0 {
+				checkPath(n, path)
 			}
 		case *parse.FieldNode, *parse.VariableNode:
 			if path := rootPath(n); len(path) > 0 {

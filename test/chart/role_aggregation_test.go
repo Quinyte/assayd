@@ -17,8 +17,9 @@ import (
 // `rbac.authorization.k8s.io/aggregate-to-edit: "true"` on the operator's
 // ClusterRole has it selected by `edit`, and through `edit` by every role
 // that aggregates that one. Another key under the prefix, or another value,
-// is selected only if some role's aggregationRule selects it. An aggregationRule on a chart ClusterRole makes
-// its rules whatever the ClusterRoles its selectors match say.
+// is selected only if some role's aggregationRule selects it. An
+// aggregationRule on a chart ClusterRole makes its rules whatever the
+// ClusterRoles its selectors match say.
 //
 // What this pins, and no more: no Role or ClusterRole the chart renders carries
 // a label key under that prefix, or an aggregationRule. The controller honours
