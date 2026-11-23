@@ -94,6 +94,25 @@ var varyingCases = []struct {
 	vary   bool
 }{{"stable text", "s", false}, {"varying text", "v", true}}
 
+// The three Gateway rows below pin the CURRENT behaviour, which is the defect
+// #155 names, and not the intended one. Once #155's fix lands and the message
+// names the error's class instead of its text, each fails in two places:
+// first at quotesRawText, its "connection reset by peer" assertion, which
+// fails in the stable subtests too, since the text is gone whatever the port;
+// then at the varying subtest's write count. flipNote says what to do then.
+const flipNote = "if #155's fix has landed, flip this row: want 0 writes with a varying text too, " +
+	"and drop the raw-text assertion (quotesRawText)"
+
+// quotesRawText requires c's message to quote the injected error's text, as
+// authabove.go:212's "(%v)" does today.
+func quotesRawText(t *testing.T, c *metav1.Condition, what string) {
+	t.Helper()
+	if c != nil && !strings.Contains(c.Message, "connection reset by peer") {
+		t.Errorf("%s does not quote the read error's text, which this row pins (#155); %s: %s",
+			what, flipNote, c.Message)
+	}
+}
+
 // pinnedWrites is what a Gateway row pins: no write with a stable text, and
 // one on every pass with a varying one.
 func pinnedWrites(t *testing.T, name string, vary bool, writes int) {
@@ -103,8 +122,8 @@ func pinnedWrites(t *testing.T, name string, vary bool, writes int) {
 		want = varyingPasses
 	}
 	if writes != want {
-		t.Errorf("%d of %d passes wrote status with a %s; this row pins %d (#155)", writes,
-			varyingPasses, name, want)
+		t.Errorf("%d of %d passes wrote status with a %s; this row pins %d (#155); %s", writes,
+			varyingPasses, name, want, flipNote)
 	}
 }
 
@@ -115,11 +134,9 @@ func pinnedWrites(t *testing.T, name string, vary bool, writes int) {
 // AuthVerifiedOnOneReplica, so it does not page. With a stable text the served
 // Agent writes status on no pass; with a varying one it writes on every pass.
 //
-// This row pins the CURRENT behaviour, which is the defect #155 names: each
-// write is an Agent update that the manager's predicate-free watch turns into
-// the next pass, so a sustained, varying failure is a status write loop. It
-// does not change the message, which is design 03's to change. When #155's
-// fix lands, the varying count must become zero and this row be flipped.
+// Each write is an Agent update that the manager's predicate-free watch turns
+// into the next pass, so a sustained, varying failure is a status write loop.
+// The row pins the defect; see flipNote.
 func TestAVaryingGatewayReadFailureRewritesAServedAgentsStatusEveryPass(t *testing.T) {
 	for _, c := range varyingCases {
 		t.Run(c.name, func(t *testing.T) {
@@ -128,7 +145,8 @@ func TestAVaryingGatewayReadFailureRewritesAServedAgentsStatusEveryPass(t *testi
 			r.Reader = reads
 			writes, msgs := passesThatWrite(t, r, a, varyingPasses, assaydv1alpha1.CondGovernanceSkipped)
 			g := condIs(t, a, assaydv1alpha1.CondGovernanceSkipped, metav1.ConditionFalse, "AuthVerifiedOnOneReplica")
-			mustContain(t, g, "GovernanceSkipped", "could not be read", "connection reset by peer", "not held")
+			mustContain(t, g, "GovernanceSkipped", "could not be read", "not held")
+			quotesRawText(t, g, "GovernanceSkipped")
 			t.Logf("served API-key Agent, %s: %d of %d passes wrote status, %d distinct GovernanceSkipped "+
 				"messages, %d Gateway reads", c.name, writes, varyingPasses, msgs, reads.calls.Load())
 			pinnedWrites(t, c.name, c.vary, writes)
@@ -140,9 +158,12 @@ func TestAVaryingGatewayReadFailureRewritesAServedAgentsStatusEveryPass(t *testi
 // count infers — each write brings the next pass — is measured as a rate. The
 // Agent is served by hand, then handed to a reconciler built as the binary
 // builds it, on the manager's client and an uncached reader whose Gateway get
-// fails. Status writes the API server accepted are counted for 5 s from the
-// first message that quotes the failure. Like the rows above, it pins the
-// CURRENT behaviour: none with a stable text, a loop with a varying one.
+// fails. Status writes the API server accepted are counted from the first
+// message that names the failure. With a stable text, it requires none in
+// 5 s. With a varying one, it waits up to 30 s for varyingPasses writes, so a
+// loaded runner slows the row rather than failing it, and it requires the
+// writes to track the Gateway reads, one write a pass. The row pins the
+// defect; see flipNote.
 func TestAVaryingGatewayReadFailureLoopsThroughTheManager(t *testing.T) {
 	for _, c := range varyingCases {
 		t.Run(c.name, func(t *testing.T) {
@@ -166,17 +187,37 @@ func TestAVaryingGatewayReadFailureLoopsThroughTheManager(t *testing.T) {
 				return g != nil && strings.Contains(g.Message, "could not be read")
 			})
 			w0, r0 := writes.n.Load(), reads.calls.Load()
-			time.Sleep(5 * time.Second)
-			w, n := writes.n.Load()-w0, reads.calls.Load()-r0
+			counts := func() (int64, int64) { return writes.n.Load() - w0, reads.calls.Load() - r0 }
+			if !c.vary {
+				time.Sleep(5 * time.Second)
+				w, n := counts()
+				stop()
+				t.Logf("served API-key Agent through the manager, stable text: %d Agent status writes and "+
+					"%d Gateway reads in 5 s", w, n)
+				if w != 0 {
+					t.Errorf("%d status writes in 5 s with a stable text; this row pins none (#155)", w)
+				}
+				return
+			}
+			start := time.Now()
+			for deadline := start.Add(30 * time.Second); time.Now().Before(deadline); {
+				if w, _ := counts(); w >= varyingPasses {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
 			stop()
-			t.Logf("served API-key Agent through the manager, %s: %d Agent status writes and %d Gateway "+
-				"reads in 5 s", c.name, w, n)
-			switch {
-			case !c.vary && w != 0:
-				t.Errorf("%d status writes in 5 s with a stable text; this row pins none (#155)", w)
-			case c.vary && w < varyingPasses:
-				t.Errorf("%d status writes in 5 s with a varying text; this row pins a loop, at least %d "+
-					"(#155)", w, varyingPasses)
+			w, n := counts()
+			t.Logf("served API-key Agent through the manager, varying text: %d Agent status writes and %d "+
+				"Gateway reads in %s", w, n, time.Since(start).Round(time.Millisecond))
+			if w < varyingPasses {
+				t.Errorf("%d status writes in 30 s with a varying text; this row pins a loop, at least %d "+
+					"(#155); %s", w, varyingPasses, flipNote)
+			}
+			// One Gateway read and one status write a pass. The two counters
+			// are read a moment apart, so a pass either way is allowed.
+			if d := w - n; d < -2 || d > 2 {
+				t.Errorf("%d status writes against %d Gateway reads: the loop should write once a pass", w, n)
 			}
 		})
 	}
@@ -184,7 +225,7 @@ func TestAVaryingGatewayReadFailureLoopsThroughTheManager(t *testing.T) {
 
 // #155, design 03 A75: the same read on a Create held at ProbingAfter, where
 // the quoted text reaches PolicyApplyIncomplete=GatewayAuthPolicy's hold
-// message. Like the row above, it pins the CURRENT behaviour, the defect.
+// message. The row pins the defect; see flipNote.
 func TestAVaryingGatewayReadFailureRewritesAHeldCreatesStatusEveryPass(t *testing.T) {
 	for _, c := range varyingCases {
 		t.Run(c.name, func(t *testing.T) {
@@ -197,7 +238,8 @@ func TestAVaryingGatewayReadFailureRewritesAHeldCreatesStatusEveryPass(t *testin
 				t.Fatalf("the Create does not hold at ProbingAfter: %+v", tx)
 			}
 			p := condIs(t, a, assaydv1alpha1.CondPolicyApplyIncomplete, metav1.ConditionTrue, "GatewayAuthPolicy")
-			mustContain(t, p, "PolicyApplyIncomplete", "could not be read", "connection reset by peer")
+			mustContain(t, p, "PolicyApplyIncomplete", "could not be read")
+			quotesRawText(t, p, "PolicyApplyIncomplete")
 			t.Logf("held Create, %s: %d of %d passes wrote status, %d distinct PolicyApplyIncomplete "+
 				"messages, %d Gateway reads", c.name, writes, varyingPasses, msgs, reads.calls.Load())
 			pinnedWrites(t, c.name, c.vary, writes)

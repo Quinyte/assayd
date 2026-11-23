@@ -11,7 +11,7 @@ human's to decide. The rows are in `test/envtest/varyingreaderror_test.go`.
 - **The Gateway read (`internal/controller/authabove.go`, `could not be read (%v)`): yes, it
   loops.** A Gateway read that fails on every pass, with a text that changes each time, writes
   the Agent's status on every pass. Through the manager, each write triggers the next pass.
-  Over 5 s a served API-key Agent was written 47 times. With the same failure and a stable text,
+  Over 5 s, a served API-key Agent was written 47 times. With the same failure and a stable text,
   it was written 0 times.
 - **The EvalSuite read (`internal/controller/gate.go`): no, not any more.** Design 16 A27.8
   (PR #160) replaced that message's `%v` with `readErrorClass`, so the issue's `could not be
@@ -25,6 +25,11 @@ point is the reconciler's existing exported `Reader` field, the uncached reader 
 get and the EvalSuite get both use. Existing rows already inject through it: `gatewayUnreadable`
 in `authabove_test.go` and `varyingSuiteReads` in `gate_test.go`. No production seam was added.
 
+The measurement assumes the Gateway read fails while status writes still succeed. A partial
+or intermittent failure can produce that state, for example a reset on one connection, or one
+API server replica out of several. A total outage, where the status write fails too, was not
+measured: then no write lands, and the loop described here cannot form.
+
 The injected error is what client-go returns for a connection reset: a `*url.Error` around a
 `*net.OpError` with `ECONNRESET`. `readErrorClass` gives it no class of its own ("an error of
 another class"). The only part that varies is the ephemeral source port, `10.0.0.7:<port>`. The
@@ -36,10 +41,13 @@ There are two ways of counting:
   `reconcileOnce` and counts each pass after which the Agent's `resourceVersion` moved. The API
   server does not bump `resourceVersion` for an update that changes nothing, so a moved
   `resourceVersion` is a status write that changed the object.
-- **Through the manager, 5 s.** The Agent is served by hand. It is then handed to a reconciler
-  built as the binary builds it, on the manager's client, with `SetupWithManager`. The test
-  counts the Agent status updates that the API server accepted (`agentStatusWrites`). The window
-  is the 5 s after the first message that names the failure.
+- **Through the manager.** The Agent is served by hand. It is then handed to a reconciler built
+  as the binary builds it, on the manager's client, with `SetupWithManager`. The test counts the
+  Agent status updates that the API server accepted (`agentStatusWrites`), starting from the first
+  message that names the failure. With a stable text, the window is a fixed 5 s. With a varying
+  text, the row polls until it has seen 10 writes, with a 30 s deadline, so a loaded runner
+  slows the row down rather than failing it. It also requires the write count to stay within
+  two of the Gateway read count.
 
 ## Numbers
 
@@ -48,7 +56,7 @@ There are two ways of counting:
 | Gateway read, served API-key Agent (`GovernanceSkipped=False/AuthVerifiedOnOneReplica` note), by hand | stable | 0 of 10 passes | 1 | 11 |
 | same | varying | **10 of 10 passes** | 10 | 11 |
 | Gateway read, served API-key Agent, through the manager | stable | 0 in 5 s | — | 1 |
-| same | varying | **47 in 5 s** | — | 47 |
+| same | varying | **47 in 5 s** (first fixed-window run); **10 in 1.27–1.28 s** (polling row, two runs) | — | 47; 10 |
 | Gateway read, `Create` held at `ProbingAfter` (`PolicyApplyIncomplete=True/GatewayAuthPolicy`), by hand | stable | 0 of 10 passes | 1 | 22 |
 | same | varying | **10 of 10 passes** | 10 | 22 |
 | EvalSuite read, gated candidate (`GatesPassed=False/EvalSuiteUnreadable`), by hand | varying | 0 of 10 passes | 1 | 11 |
@@ -70,9 +78,11 @@ Each mutation was applied through `go test -overlay` from a scratch copy. The so
 was not edited, and no mutant was committed.
 
 - **`authabove.go:212` changed from `%v` to `readErrorClass(err)`:** all three Gateway rows
-  fail. Both varying counts drop from 10 of 10 to 0 of 10. The manager row never sees the
-  quoted text, because the message now says "(an error of another class)". This confirms the
-  rows measure the text and would flag the fix when it lands.
+  fail. Every hand-driven subtest fails first at the raw-text assertion. Both varying counts
+  drop from 10 of 10 to 0 of 10. The manager row's varying half counts 1 write against 3
+  Gateway reads in 30 s. Every failure message carries the row's instructions for flipping it.
+  The manager row's stable half still passes, because it has no raw-text assertion. This
+  confirms the rows measure the text and would flag the fix when it lands.
 - **`gate.go:272` changed from `readErrorClass(in.suiteErr)` to `in.suiteErr.Error()`:** both
   EvalSuite rows fail. The new hand row counts 10 of 10. The existing manager row counts 1404
   writes and 1405 suite reads in 5 s.
@@ -80,18 +90,28 @@ was not edited, and no mutant was committed.
 ## How the rows are written
 
 The three Gateway rows assert the **current** behaviour, which is the defect. A stable text
-writes nothing, and a varying text writes on every pass (by hand) or at least ten times in 5 s
-(through the manager). Each row's comment names #155 and says it must be flipped when the fix
-lands. That keeps them green in `make test`, rather than leaving a permanently red row or a
+writes nothing. A varying text writes on every pass by hand, and at least ten times, one write
+a pass, through the manager. One shared comment and every failure message say how to flip the
+rows when the fix lands: want 0 writes, and drop the `connection reset by peer` assertion,
+which fails first, even in the stable subtests. That keeps them green in `make test`, rather than leaving a permanently red row or a
 skipped row that nothing runs. The EvalSuite row asserts the intended behaviour, because A27.8
 already holds it.
 
 ## Not measured
 
 - Other condition messages that quote a read error's text, which #155 does not name:
-  `card.go:182` (the revision's Service read) and `authkeysource.go:59` (the live
-  `<agent>-auth` read on the key-source pass). Whether either reaches status on a pass that
-  would otherwise write nothing was not measured.
+  - `card.go:182`, the revision's Service read.
+  - `authkeysource.go:57`, `keySourceListFailedNote` ("the list failed (%v)").
+  - `authkeysource.go:59`, `keySourcePolicyErrNote`, the live `<agent>-auth` read on the
+    key-source pass.
+
+  Reading `judgeKeySource` shows that both key-source notes reach status only while a
+  `keySourceEmpty` claim stands. There they are appended to the held
+  `PolicyApplyIncomplete=ApiKeySourceEmpty` message. When no claim stands, the list failure is
+  logged and written to no condition. So a varying list or policy-read error, after a pass that
+  found the key source empty, would plausibly rewrite status every pass, in the same way.
+  Whether it does was not measured. The same holds for `keySourceStepErroredNote` (`%v` of the
+  `-auth` step's error), through `holdKeySource`.
 - The policy list on the same Gateway path (`could not be listed (%v)`, `authabove.go:229-230`).
   It quotes the error the same way. The Forbidden branch of the Gateway get (`may not read
   ... (%v)`) also quotes it. The rows here inject only a transport error on the Gateway get.
