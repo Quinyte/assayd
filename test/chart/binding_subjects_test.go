@@ -267,9 +267,6 @@ var bindingTemplateForbidden = []struct {
 	re  *regexp.Regexp
 	why string
 }{
-	// Helm's root context is a map, so `index . "Values" "operator"` and
-	// `index $ "Values"` read a value without writing `.Values`.
-	{regexp.MustCompile("[\"`]Values[\"`]"), "reads .Values by key, past the value allowlist"},
 	// The API versions of the cluster the chart is installed into; a render
 	// reports the defaults Helm assumes, so a gate on them is never taken here.
 	{regexp.MustCompile(`\.Capabilities\b`), "gates on the cluster, which no render here varies"},
@@ -282,30 +279,72 @@ var bindingTemplateForbidden = []struct {
 	{regexp.MustCompile(`(^|[\s({|])tpl\s`), "renders text as a template, which this guard cannot read"},
 }
 
-// The render test above sees only bindingProfiles. So every file under
-// templates/, helpers and NOTES.txt included, that mentions a binding kind may
-// read only bindingTemplateValues, include only bindingTemplateIncludes, and use
-// none of bindingTemplateForbidden. The check is per file, not per document,
-// because a conditional that wraps a binding opens before its `---`. A binding
-// can also come from a file the templates read, so every template may use
-// .Files only as `.Files.Get "files/<path>"`, and no file under files/ may
-// mention a binding kind. A stated limit: a kind or a name spelt out of pieces
-// (`ClusterRole{{ "Binding" }}`) is not seen here, and is seen by the render
-// test only under bindingProfiles.
+var (
+	// templateAction is one `{{ … }}` action, where the checks below apply.
+	templateAction = regexp.MustCompile(`(?s)\{\{.*?\}\}`)
+	// rootKeyLiteral is a string naming one of Helm's root objects. The root
+	// context is a map, so `index . "Release"`, `get $ "Files"` or
+	// `pluck "Values" .` reach that object without writing `.Release`.
+	rootKeyLiteral = regexp.MustCompile("[\"`](Values|Release|Capabilities|Files|Template|Chart|Subcharts)[\"`]")
+	// rootIndex is `index` applied to the root context.
+	rootIndex = regexp.MustCompile(`\bindex\s+[$.][\s)]`)
+	// mapFunc and rootArg together are the root context passed to a map
+	// function.
+	mapFunc = regexp.MustCompile(`\b(get|pluck|dig)\b`)
+	rootArg = regexp.MustCompile(`(^|[\s(])[$.]([\s)]|$)`)
+)
+
+// chartFilesNotInFiles are the files at the chart root that `.Files` cannot
+// read: Helm loads them as the chart's metadata and values, not as files
+// (measured with helm v4.2.3: `.Files.Get` of each returns ""). values.yaml
+// mentions the gateway RoleBinding in a comment, and cannot be rendered.
+var chartFilesNotInFiles = map[string]bool{"Chart.yaml": true, "values.yaml": true}
+
+// The render test above sees only bindingProfiles, so this guard reads the
+// chart's source for what the profiles cannot vary.
+//
+//   - Every template may reach Helm's root objects only by name, as
+//     `.Values`, `.Release` and so on: no string naming one, no `index` of the
+//     root, and no root passed to get, pluck or dig.
+//   - Every template may use .Files only as `.Files.Get "files/<path>"`, and no
+//     chart file outside templates/ and crds/ that .Files can read may mention
+//     a binding kind.
+//   - Every template that mentions a binding kind may read only
+//     bindingTemplateValues, include only bindingTemplateIncludes, and use none
+//     of bindingTemplateForbidden. The check is per file, not per document,
+//     because a conditional that wraps a binding opens before its `---`.
+//
+// The limit, stated plainly: this is a lexical check of source text. A key, a
+// kind or a path built at render time — with printf, cat, or a concatenated
+// string, as in `ClusterRole{{ "Binding" }}` or `index . (printf "Rel%s"
+// "ease")` — is not seen here, and is seen only by the render test, under
+// bindingProfiles.
 func TestBindingTemplatesReadOnlyTheValuesTheRenderTestVaries(t *testing.T) {
-	filesDir := filepath.Join(chartPath, "files")
-	err := filepath.WalkDir(filesDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	err := filepath.WalkDir(chartPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
 			return err
+		}
+		rel, err := filepath.Rel(chartPath, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if rel == "templates" || rel == "crds" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if chartFilesNotInFiles[rel] {
+			return nil
 		}
 		src, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
 		if bindingKind.Match(src) {
-			rel, _ := filepath.Rel(chartPath, path)
 			t.Errorf("%s mentions a binding kind: a template can render it with .Files.Get, under a gate "+
-				"this guard does not read", filepath.ToSlash(rel))
+				"this guard does not read", rel)
 		}
 		return nil
 	})
@@ -327,6 +366,16 @@ func TestBindingTemplatesReadOnlyTheValuesTheRenderTestVaries(t *testing.T) {
 		src, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
 			t.Fatal(err)
+		}
+		for _, action := range templateAction.FindAllString(string(src), -1) {
+			if m := rootKeyLiteral.FindString(action); m != "" {
+				t.Errorf("templates/%s names the root object %s in %s: reached by key, it is past every "+
+					"check here", e.Name(), m, action)
+			}
+			if rootIndex.MatchString(action) || (mapFunc.MatchString(action) && rootArg.MatchString(action)) {
+				t.Errorf("templates/%s reads the root context as a map in %s: every root object is reachable "+
+					"that way, past every check here", e.Name(), action)
+			}
 		}
 		for _, m := range filesRef.FindAllString(string(src), -1) {
 			if !filesGet.MatchString(m) {
