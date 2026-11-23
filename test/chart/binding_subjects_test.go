@@ -5,9 +5,12 @@ package chart
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -25,6 +28,13 @@ import (
 // subject of every binding is the operator's ServiceAccount, and a value set
 // that names other identities is rendered precisely so that one templated into
 // a binding fails here.
+//
+// A render sees only the value sets it is given. A binding templated on any
+// other value — `{{ if .Values.operator.metrics.enabled }}`, say — renders
+// past every one of them, so the render test alone cannot see it.
+// TestBindingTemplatesReadOnlyTheValuesTheRenderTestVaries covers that half
+// at the source: a template that writes a binding may read only the values
+// bindingProfiles varies.
 
 // bindingProfile is one value set the chart is rendered under, with the
 // namespaces the expectation table below is resolved against.
@@ -39,8 +49,6 @@ type bindingProfile struct {
 	gateway          bool
 }
 
-const gatewayServingURL = "http://gw.example:8080"
-
 // identityArgs set every identity value the chart has to a non-default value.
 var identityArgs = []string{
 	"--set", "admission.extraOperators={system:serviceaccount:tenancy:tenant-operator,platform-bot}",
@@ -50,36 +58,47 @@ var identityArgs = []string{
 	"--set", "admission.apiKeyWriters.groups={key-admins}",
 }
 
+// defaultBindingProfile is a value set that leaves namespace and
+// gateway.namespace at their defaults, so the operator and, when the gateway
+// is on, its Roles are in assayd-system.
+func defaultBindingProfile(name string, args []string) bindingProfile {
+	p := bindingProfile{name: name, args: args, namespace: "assayd-system"}
+	if contains(args, "gateway.enabled=true") {
+		p.gateway, p.gatewayNamespace = true, "assayd-system"
+	}
+	return p
+}
+
 // bindingProfiles are renderMatrix's four rows, every value set the
 // EvalSuite-writer tests render the chart under, and the identity values set
-// with the gateway on, off, in the operator's namespace and in another.
+// with the gateway on, off, in the operator's namespace and in another. The
+// last of those also moves gateway.name off its default, which
+// templates/rbac.yaml reads, and sets the operator and gateway values no
+// binding template may read, so the render half sees them too.
 func bindingProfiles() []bindingProfile {
-	gatewayOn := []string{"--set", "gateway.enabled=true", "--set", "gateway.servingUrl=" + gatewayServingURL}
+	gatewayOn := []string{"--set", "gateway.enabled=true", "--set", "gateway.servingUrl=http://gw.example:8080"}
 	local := []string{"-f", filepath.Join(chartPath, "values-local.yaml")}
-	ps := []bindingProfile{
-		{"extraOperators set", []string{"--set", "admission.extraOperators={tenant-operator}"}, "assayd-system", "", false},
-		{"toolRouteWriters.users set", []string{"--set", "admission.toolRouteWriters.users={tool-author}"}, "assayd-system", "", false},
-		{"gateway enabled, served elsewhere", []string{"--set", "gateway.enabled=true",
-			"--set", "gateway.servingUrl=http://assayd-gateway.agentgateway-system.svc"}, "assayd-system", "assayd-system", true},
-		{"identities set", identityArgs, "assayd-system", "", false},
-		{"identities set, gateway enabled", append(append([]string{}, gatewayOn...), identityArgs...),
-			"assayd-system", "assayd-system", true},
-		{"identities set, gateway in its own namespace, operator moved",
-			append(append(append([]string{}, gatewayOn...), identityArgs...),
-				"--set", "gateway.namespace=agentgateway-system", "--set", "namespace=assayd-elsewhere"),
-			"assayd-elsewhere", "agentgateway-system", true},
-		{"local, identities set, gateway enabled",
-			append(append(append([]string{}, local...), gatewayOn...), identityArgs...),
-			"assayd-system", "assayd-system", true},
-	}
+	var ps []bindingProfile
 	for _, row := range renderMatrix {
-		gw := contains(row.args, "gateway.enabled=true")
-		ns := ""
-		if gw {
-			ns = "assayd-system"
-		}
-		ps = append(ps, bindingProfile{"renderMatrix " + row.name, row.args, "assayd-system", ns, gw})
+		ps = append(ps, defaultBindingProfile("renderMatrix "+row.name, row.args))
 	}
+	for i, args := range evalSuiteWriterValueSets() {
+		ps = append(ps, defaultBindingProfile(fmt.Sprintf("EvalSuite-writer value set %d %v", i, args), args))
+	}
+	ps = append(ps,
+		defaultBindingProfile("identities set", identityArgs),
+		defaultBindingProfile("identities set, gateway enabled", append(append([]string{}, gatewayOn...), identityArgs...)),
+		defaultBindingProfile("local, identities set, gateway enabled",
+			append(append(append([]string{}, local...), gatewayOn...), identityArgs...)),
+		bindingProfile{
+			name: "identities set, gateway renamed in its own namespace, operator moved",
+			args: append(append(append([]string{}, gatewayOn...), identityArgs...),
+				"--set", "gateway.namespace=agentgateway-system", "--set", "namespace=assayd-elsewhere",
+				"--set", "gateway.name=gw", "--set", "gateway.url=http://gw.example:8081",
+				"--set", "gateway.hostnameSuffix=example.test", "--set", "operator.metrics.enabled=true"),
+			namespace: "assayd-elsewhere", gatewayNamespace: "agentgateway-system", gateway: true,
+		},
+	)
 	return ps
 }
 
@@ -195,5 +214,90 @@ func TestEveryBindingTheChartRendersBindsOnlyTheOperatorToTheChartsOwnRoles(t *t
 			t.Errorf("%s: the chart renders no %s, which the table expects: the expectation is stale "+
 				"or the operator has lost a grant it needs", p.name, key)
 		}
+	}
+}
+
+// bindingTemplateValues are the only values a template that writes a binding
+// may read. Each is one bindingProfiles sets off its default, so whatever a
+// binding does with it is rendered and held to the table above.
+var bindingTemplateValues = map[string]bool{
+	// The namespace of the operator ServiceAccount, every binding's one
+	// subject. Moved by the operator-moved profile.
+	"namespace": true,
+	// Whether the gateway Roles and their RoleBindings render at all. Off and
+	// on across renderMatrix.
+	"gateway.enabled": true,
+	// Where the gateway Roles and RoleBindings are. Moved by the operator-moved
+	// profile.
+	"gateway.namespace": true,
+	// The one Gateway the gateway-labels Role names in resourceNames. Renamed
+	// by the operator-moved profile.
+	"gateway.name": true,
+}
+
+// bindingTemplateIncludes are the only helpers a template that writes a binding
+// may include. Each renders a fixed string or labels, or fails the render; a
+// helper file that itself wrote a binding would be scanned below like any
+// other template.
+var bindingTemplateIncludes = map[string]bool{
+	"assayd.validate":      true,
+	"assayd.operator.name": true,
+	"assayd.labels":        true,
+}
+
+var (
+	// bindingKind matches any mention of a binding kind, so a commented or
+	// conditional one counts; ValidatingAdmissionPolicyBinding does not match.
+	bindingKind = regexp.MustCompile(`(Cluster)?RoleBinding`)
+	// valuesRef matches every reference to .Values, with its dotted path:
+	// `.Values.gateway.name`, `$.Values.namespace`, or bare `.Values`, whose
+	// empty path no allowlist entry matches.
+	valuesRef = regexp.MustCompile(`\.Values((?:\.[A-Za-z0-9_]+)*)`)
+	includeOf = regexp.MustCompile(`include\s+"([^"]+)"`)
+)
+
+// The render test above sees only bindingProfiles. So every file under
+// templates/, helpers and NOTES.txt included, that mentions a binding kind may
+// read only bindingTemplateValues and include only bindingTemplateIncludes. The
+// check is per file, not per document, because a conditional that wraps a
+// binding opens before its `---`. A stated limit: a kind spelt out of pieces
+// (`ClusterRole{{ "Binding" }}`), or read from a file with .Files.Get, is not
+// seen here, and is seen by the render test only under bindingProfiles.
+func TestBindingTemplatesReadOnlyTheValuesTheRenderTestVaries(t *testing.T) {
+	dir := filepath.Join(chartPath, "templates")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanned := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			t.Errorf("templates/%s is a directory, which this guard does not read: Helm renders it", e.Name())
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bindingKind.Match(src) {
+			continue
+		}
+		scanned++
+		for _, m := range valuesRef.FindAllStringSubmatch(string(src), -1) {
+			path := strings.TrimPrefix(m[1], ".")
+			if !bindingTemplateValues[path] {
+				t.Errorf("templates/%s writes a binding and reads %s, which bindingProfiles does not vary: "+
+					"a binding templated on it renders past every value set the render test reads", e.Name(), m[0])
+			}
+		}
+		for _, m := range includeOf.FindAllStringSubmatch(string(src), -1) {
+			if !bindingTemplateIncludes[m[1]] {
+				t.Errorf("templates/%s writes a binding and includes %q, which is not in bindingTemplateIncludes: "+
+					"what it reads is not checked here", e.Name(), m[1])
+			}
+		}
+	}
+	if scanned == 0 {
+		t.Error("no template mentions a binding kind, but the chart binds the operator: the guard reads nothing")
 	}
 }
