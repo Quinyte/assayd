@@ -4,32 +4,44 @@
 package chart
 
 import (
+	"sort"
 	"strings"
 	"testing"
 )
 
 // Issue #170: TestEveryBindingTheChartRendersBindsOnlyTheOperatorToTheChartsOwnRoles
-// pins who a chart role is bound to, but a role can be granted without a
-// binding. `rbac.authorization.k8s.io/aggregate-to-edit: "true"` on the
-// operator's ClusterRole folds its rules into the built-in `edit`, held by
-// every user an administrator lets edit a namespace; an `aggregationRule` on it
-// makes its rules whatever any other ClusterRole carrying the selected label
-// says. Both are literals in templates/rbac.yaml, past
-// TestBindingTemplatesReadOnlyTheValuesTheRenderTestVaries, which reads only
-// what a binding template takes from values, so the render has to be read.
-// Roles are held to the same rule although the API server aggregates only
+// pins who a chart role is bound to, but kube-controller-manager's
+// clusterrole-aggregation controller grants a ClusterRole's rules with no
+// binding. The built-in admin, edit and view roles carry aggregationRules that
+// select labels under rbac.authorization.k8s.io/aggregate-to-, so
+// `rbac.authorization.k8s.io/aggregate-to-edit: "true"` on the operator's
+// ClusterRole has it selected by `edit`, and through `edit` by every role
+// that aggregates that one. An aggregationRule on a chart ClusterRole makes
+// its rules whatever the ClusterRoles its selectors match say.
+//
+// What this pins, and no more: no Role or ClusterRole the chart renders carries
+// a label key under that prefix, or an aggregationRule. The controller honours
+// any label selector in any ClusterRole's aggregationRule, so a ClusterRole the
+// cluster carries can select a third-party aggregation label, or one the chart
+// already ships, such as app.kubernetes.io/part-of. What else aggregates a
+// chart role depends on what the cluster carries, and no render can pin it.
+//
+// Roles are held to the same rule although the controller aggregates only
 // ClusterRoles: the label on a Role is inert, and it is not inert once the
 // Role is made a ClusterRole.
+//
+// The render sees only bindingProfiles. A role gated on a value no profile
+// sets renders past it, and TestRBACTemplatesReadOnlyTheValuesTheRenderTestVaries
+// covers that half at the source.
 
-// aggregateLabelPrefix is the label key prefix the API server's ClusterRole
-// aggregation controller selects on for the built-in admin, edit and view.
+// aggregateLabelPrefix is the label key prefix that the built-in admin, edit
+// and view ClusterRoles' aggregationRules select on.
 const aggregateLabelPrefix = "rbac.authorization.k8s.io/aggregate-to-"
 
 // No Role or ClusterRole the chart renders, under any value set the binding
-// test renders, carries an aggregate-to-* label or an aggregationRule: its
-// rules reach only the subjects of its own binding, and say only what the
-// chart's source says.
-func TestNoRoleTheChartRendersAggregatesIntoOrFromAnotherRole(t *testing.T) {
+// test renders, carries a label key under the prefix the built-in roles
+// aggregate on, or an aggregationRule.
+func TestNoRoleTheChartRendersCarriesABuiltInAggregationLabelOrAnAggregationRule(t *testing.T) {
 	for _, p := range bindingProfiles() {
 		docs := render(t, p.args...)
 		seen := 0
@@ -37,22 +49,36 @@ func TestNoRoleTheChartRendersAggregatesIntoOrFromAnotherRole(t *testing.T) {
 			for _, d := range kindsOf(docs, kind) {
 				seen++
 				key := bindingKey(kind, toStr(dig(d, "metadata")["namespace"]), nameOf(d))
+				var labels []string
 				for label := range dig(d, "metadata", "labels") {
-					if !strings.HasPrefix(label, aggregateLabelPrefix) {
-						continue
-					}
-					if kind == "ClusterRole" {
-						t.Errorf("%s: %s carries the label %s, which grants its rules to every holder of the "+
-							"built-in role it names, through no binding the chart renders", p.name, key, label)
-					} else {
-						t.Errorf("%s: %s carries the label %s: aggregation selects only ClusterRoles, so on a "+
-							"Role it grants nothing, and it grants the role's rules to every holder of the "+
-							"built-in role it names once the Role becomes a ClusterRole", p.name, key, label)
+					if strings.HasPrefix(label, aggregateLabelPrefix) {
+						labels = append(labels, label)
 					}
 				}
-				if _, ok := d["aggregationRule"]; ok {
-					t.Errorf("%s: %s has an aggregationRule, so its rules are whatever ClusterRoles the "+
-						"selector matches say, not what the chart ships", p.name, key)
+				sort.Strings(labels)
+				for _, label := range labels {
+					if kind == "ClusterRole" {
+						t.Errorf("%s: %s carries the label %s, under the prefix the built-in roles aggregate on: "+
+							"kube-controller-manager's clusterrole-aggregation controller has it selected by the "+
+							"built-in role the label names, and through that one by every role that aggregates it, "+
+							"with no binding the chart renders", p.name, key, label)
+					} else {
+						t.Errorf("%s: %s carries the label %s, under the prefix the built-in roles aggregate on: "+
+							"the controller aggregates only ClusterRoles, so on a Role it is inert, and once the "+
+							"Role is made a ClusterRole it is selected by the built-in role the label names",
+							p.name, key, label)
+					}
+				}
+				if _, ok := d["aggregationRule"]; !ok {
+					continue
+				}
+				if kind == "ClusterRole" {
+					t.Errorf("%s: %s has an aggregationRule, so the clusterrole-aggregation controller replaces "+
+						"its rules with those of the ClusterRoles its selectors match on the cluster, not what "+
+						"the chart ships", p.name, key)
+				} else {
+					t.Errorf("%s: %s has an aggregationRule, which rbac/v1 Role has no field for: the API server "+
+						"drops it or, under strict field validation, refuses the Role", p.name, key)
 				}
 			}
 		}
