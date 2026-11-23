@@ -254,16 +254,65 @@ var (
 	// empty path no allowlist entry matches.
 	valuesRef = regexp.MustCompile(`\.Values((?:\.[A-Za-z0-9_]+)*)`)
 	includeOf = regexp.MustCompile(`include\s+"([^"]+)"`)
+	// filesRef matches every use of .Files; filesGet is the one form a
+	// template may use, a literal path under files/, which the guard scans.
+	filesRef = regexp.MustCompile(`\.Files\b[.A-Za-z]*(\s+"[^"]*")?`)
+	filesGet = regexp.MustCompile(`^\.Files\.Get "files/[^"]+"$`)
 )
+
+// bindingTemplateForbidden are what a file that writes a binding may not use,
+// each a way to gate or write a binding that neither valuesRef nor the render
+// test sees.
+var bindingTemplateForbidden = []struct {
+	re  *regexp.Regexp
+	why string
+}{
+	// Helm's root context is a map, so `index . "Values" "operator"` and
+	// `index $ "Values"` read a value without writing `.Values`.
+	{regexp.MustCompile("[\"`]Values[\"`]"), "reads .Values by key, past the value allowlist"},
+	// The API versions of the cluster the chart is installed into; a render
+	// reports the defaults Helm assumes, so a gate on them is never taken here.
+	{regexp.MustCompile(`\.Capabilities\b`), "gates on the cluster, which no render here varies"},
+	// IsUpgrade, IsInstall, Revision, and the release's name and namespace:
+	// every render here is one install of release assayd.
+	{regexp.MustCompile(`\.Release\b`), "gates on the release, which no render here varies"},
+	// A live read of the cluster; `helm template` gets an empty answer.
+	{regexp.MustCompile(`\blookup\s`), "gates on a live cluster read, which a render does not make"},
+	// Renders a string as a template, which can hold any of the above.
+	{regexp.MustCompile(`(^|[\s({|])tpl\s`), "renders text as a template, which this guard cannot read"},
+}
 
 // The render test above sees only bindingProfiles. So every file under
 // templates/, helpers and NOTES.txt included, that mentions a binding kind may
-// read only bindingTemplateValues and include only bindingTemplateIncludes. The
-// check is per file, not per document, because a conditional that wraps a
-// binding opens before its `---`. A stated limit: a kind spelt out of pieces
-// (`ClusterRole{{ "Binding" }}`), or read from a file with .Files.Get, is not
-// seen here, and is seen by the render test only under bindingProfiles.
+// read only bindingTemplateValues, include only bindingTemplateIncludes, and use
+// none of bindingTemplateForbidden. The check is per file, not per document,
+// because a conditional that wraps a binding opens before its `---`. A binding
+// can also come from a file the templates read, so every template may use
+// .Files only as `.Files.Get "files/<path>"`, and no file under files/ may
+// mention a binding kind. A stated limit: a kind or a name spelt out of pieces
+// (`ClusterRole{{ "Binding" }}`) is not seen here, and is seen by the render
+// test only under bindingProfiles.
 func TestBindingTemplatesReadOnlyTheValuesTheRenderTestVaries(t *testing.T) {
+	filesDir := filepath.Join(chartPath, "files")
+	err := filepath.WalkDir(filesDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bindingKind.Match(src) {
+			rel, _ := filepath.Rel(chartPath, path)
+			t.Errorf("%s mentions a binding kind: a template can render it with .Files.Get, under a gate "+
+				"this guard does not read", filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	dir := filepath.Join(chartPath, "templates")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -279,10 +328,21 @@ func TestBindingTemplatesReadOnlyTheValuesTheRenderTestVaries(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		for _, m := range filesRef.FindAllString(string(src), -1) {
+			if !filesGet.MatchString(m) {
+				t.Errorf("templates/%s uses %s: a template reads chart files only as "+
+					"`.Files.Get \"files/<path>\"`, the directory this guard scans", e.Name(), m)
+			}
+		}
 		if !bindingKind.Match(src) {
 			continue
 		}
 		scanned++
+		for _, f := range bindingTemplateForbidden {
+			if loc := f.re.FindString(string(src)); loc != "" {
+				t.Errorf("templates/%s writes a binding and uses %q: it %s", e.Name(), strings.TrimSpace(loc), f.why)
+			}
+		}
 		for _, m := range valuesRef.FindAllStringSubmatch(string(src), -1) {
 			path := strings.TrimPrefix(m[1], ".")
 			if !bindingTemplateValues[path] {
