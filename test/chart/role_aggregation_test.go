@@ -16,7 +16,8 @@ import (
 // select labels under rbac.authorization.k8s.io/aggregate-to-, so
 // `rbac.authorization.k8s.io/aggregate-to-edit: "true"` on the operator's
 // ClusterRole has it selected by `edit`, and through `edit` by every role
-// that aggregates that one. An aggregationRule on a chart ClusterRole makes
+// that aggregates that one. Another key under the prefix, or another value,
+// is selected only if some role's aggregationRule selects it. An aggregationRule on a chart ClusterRole makes
 // its rules whatever the ClusterRoles its selectors match say.
 //
 // What this pins, and no more: no Role or ClusterRole the chart renders carries
@@ -31,8 +32,9 @@ import (
 // Role is made a ClusterRole.
 //
 // The render sees only bindingProfiles. A role gated on a value no profile
-// sets renders past it, and TestRBACTemplatesReadOnlyTheValuesTheRenderTestVaries
-// covers that half at the source.
+// sets renders past it; TestRBACTemplatesReadOnlyTheValuesTheRenderTestVaries
+// covers that half at the source, against a careless change and not a
+// determined one, as its threat model says.
 
 // aggregateLabelPrefix is the label key prefix that the built-in admin, edit
 // and view ClusterRoles' aggregationRules select on.
@@ -59,13 +61,13 @@ func TestNoRoleTheChartRendersCarriesABuiltInAggregationLabelOrAnAggregationRule
 				for _, label := range labels {
 					if kind == "ClusterRole" {
 						t.Errorf("%s: %s carries the label %s, under the prefix the built-in roles aggregate on: "+
-							"kube-controller-manager's clusterrole-aggregation controller has it selected by the "+
-							"built-in role the label names, and through that one by every role that aggregates it, "+
-							"with no binding the chart renders", p.name, key, label)
+							"a built-in role may select it, and kube-controller-manager's clusterrole-aggregation "+
+							"controller then copies its rules into that role, and through it into every role that "+
+							"aggregates that one, with no binding the chart renders", p.name, key, label)
 					} else {
 						t.Errorf("%s: %s carries the label %s, under the prefix the built-in roles aggregate on: "+
 							"the controller aggregates only ClusterRoles, so on a Role it is inert, and once the "+
-							"Role is made a ClusterRole it is selected by the built-in role the label names",
+							"Role is made a ClusterRole a built-in role may select it",
 							p.name, key, label)
 					}
 				}

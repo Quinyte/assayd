@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"text/template/parse"
 )
 
 // Issue #127: the rules of the chart's Roles and ClusterRoles are pinned
@@ -222,31 +223,35 @@ func TestEveryBindingTheChartRendersBindsOnlyTheOperatorToTheChartsOwnRoles(t *t
 }
 
 // rbacTemplateValues are the only values that a template writing a role or a
-// binding, or any helper it includes, may read. Each is one that bindingProfiles
-// sets off its default, or one that has a single value the chart renders at
-// all, so whatever a role or binding does with it is rendered and held to the
-// tests that read them.
+// binding, or any template it calls, may read. Each is one that bindingProfiles
+// sets off its default, or one with a single value the chart renders at all.
+//
+// A value is allowed by its path, not by what is done with it. The four
+// boolean or enumerated entries below take every value a render accepts
+// across bindingProfiles. The rest are free strings: bindingProfiles renders
+// one or two of them, and a gate such as `eq .Values.operator.image.tag
+// "v9.9.9"` renders past every profile and is not seen here.
 var rbacTemplateValues = map[string]bool{
 	// The namespace of the operator ServiceAccount, every binding's one
-	// subject. Moved by the operator-moved profile.
+	// subject. A free string; moved by the operator-moved profile.
 	"namespace": true,
 	// Whether the gateway Roles and their RoleBindings render at all. Off and
 	// on across renderMatrix.
 	"gateway.enabled": true,
-	// Where the gateway Roles and RoleBindings are. Moved by the operator-moved
-	// profile.
-	"gateway.namespace": true,
-	// The one Gateway the gateway-labels Role names in resourceNames. Renamed
-	// by the operator-moved profile.
-	"gateway.name": true,
-	// assayd.validate refuses a value that is not a lowercase DNS name. Set by
+	// Where the gateway Roles and RoleBindings are. A free string; moved by
 	// the operator-moved profile.
+	"gateway.namespace": true,
+	// The one Gateway the gateway-labels Role names in resourceNames. A free
+	// string; renamed by the operator-moved profile.
+	"gateway.name": true,
+	// assayd.validate refuses a value that is not a lowercase DNS name. A free
+	// string; set by the operator-moved profile.
 	"gateway.hostnameSuffix": true,
-	// assayd.validate refuses an empty tag and `latest`. Moved by the
-	// operator-moved profile.
+	// assayd.validate refuses an empty tag and `latest`. A free string; moved
+	// by the operator-moved profile.
 	"operator.image.tag": true,
 	// assayd.validate and assayd.labels read it. prod and local across
-	// renderMatrix, which are the only values assayd.validate accepts.
+	// renderMatrix, the only values assayd.validate accepts.
 	"profile": true,
 	// assayd.validate and assayd.labels read it. assayd.validate refuses
 	// every value but core, so every render that succeeds sees the one value
@@ -254,82 +259,22 @@ var rbacTemplateValues = map[string]bool{
 	"tier": true,
 }
 
-// rbacTemplateIncludes are the only helpers that a template writing a role or a
-// binding may include. The guard reads each one's define body, transitively,
-// and holds it to the same rules as the template.
-var rbacTemplateIncludes = map[string]bool{
-	"assayd.validate":      true,
-	"assayd.operator.name": true,
-	"assayd.labels":        true,
-	"assayd.name":          true,
+// rbacKind matches any mention of a role or binding kind: Role, ClusterRole,
+// RoleBinding and ClusterRoleBinding, as whole words, so a conditional one
+// counts. ValidatingAdmissionPolicyBinding does not match, nor does a plural
+// in prose.
+var rbacKind = regexp.MustCompile(`\b(Cluster)?Role(Binding)?\b`)
+
+// helmRootObjects are the fields of the root context Helm renders a template
+// with.
+var helmRootObjects = map[string]bool{
+	"Values": true, "Release": true, "Capabilities": true, "Files": true,
+	"Template": true, "Chart": true, "Subcharts": true,
 }
 
-var (
-	// rbacKind matches any mention of a role or binding kind: Role,
-	// ClusterRole, RoleBinding and ClusterRoleBinding, as whole words, so a
-	// conditional one counts. ValidatingAdmissionPolicyBinding does not match,
-	// nor does a plural in prose.
-	rbacKind = regexp.MustCompile(`\b(Cluster)?Role(Binding)?\b`)
-	// yamlCommentLine is a YAML comment line with no template action on it. It
-	// renders nothing a manifest can carry, so a kind it names is prose:
-	// admission.yaml explains the operator's ClusterRole in one.
-	yamlCommentLine = regexp.MustCompile(`(?m)^[ \t]*#[^{\n]*$`)
-	// valuesRef matches every reference to .Values, with its dotted path:
-	// `.Values.gateway.name`, `$.Values.namespace`, or bare `.Values`, whose
-	// empty path no allowlist entry matches.
-	valuesRef = regexp.MustCompile(`\.Values((?:\.[A-Za-z0-9_]+)*)`)
-	// nilSafeRead is `(.Values.gateway | default dict).hostnameSuffix`, which
-	// assayd.validate uses to read a key under a map that may be null. It
-	// reads `.Values.gateway.hostnameSuffix`, and is checked as that.
-	nilSafeRead = regexp.MustCompile(`\(\s*\.Values((?:\.[A-Za-z0-9_]+)*)\s*\|\s*default\s+dict\s*\)((?:\.[A-Za-z0-9_]+)+)`)
-	includeOf   = regexp.MustCompile(`include\s+"([^"]+)"`)
-	// filesRef matches every use of .Files; filesGet is the one form a
-	// template may use, a literal path under files/, which the guard scans.
-	filesRef = regexp.MustCompile(`\.Files\b[.A-Za-z]*(\s+"[^"]*")?`)
-	filesGet = regexp.MustCompile(`^\.Files\.Get "files/[^"]+"$`)
-	// releaseInterpolation is an action that only prints the release's name or
-	// its service, as assayd.labels does in two label values. It prints a
-	// string and gates nothing, so rbacTemplateForbidden's `.Release` does
-	// not apply to it. Any other use of .Release does.
-	releaseInterpolation = regexp.MustCompile(`\{\{-?\s*\.Release\.(Name|Service)\s*-?\}\}`)
-	defineName           = regexp.MustCompile(`^define\s+"([^"]+)"`)
-)
-
-// rbacTemplateForbidden are what a file that writes a role or a binding, or a
-// helper it includes, may not use. Each is a way to gate or write one that
-// neither valuesRef nor the render test sees.
-var rbacTemplateForbidden = []struct {
-	re  *regexp.Regexp
-	why string
-}{
-	// The API versions of the cluster the chart is installed into; a render
-	// reports the defaults Helm assumes, so a gate on them is never taken here.
-	{regexp.MustCompile(`\.Capabilities\b`), "gates on the cluster, which no render here varies"},
-	// IsUpgrade, IsInstall, Revision, and the release's name and namespace:
-	// every render here is one install of release assayd.
-	{regexp.MustCompile(`\.Release\b`), "gates on the release, which no render here varies"},
-	// A live read of the cluster; `helm template` gets an empty answer.
-	{regexp.MustCompile(`\blookup\s`), "gates on a live cluster read, which a render does not make"},
-	// Renders a string as a template, which can hold any of the above.
-	{regexp.MustCompile(`(^|[\s({|])tpl\s`), "renders text as a template, which this guard cannot read"},
-}
-
-var (
-	// templateAction is one `{{ … }}` action, where the checks below apply.
-	templateAction = regexp.MustCompile(`(?s)\{\{.*?\}\}`)
-	// actionKeyword is the first word of an action, past its delimiters.
-	actionKeyword = regexp.MustCompile(`^\{\{-?\s*([a-z]+)`)
-	// rootKeyLiteral is a string naming one of Helm's root objects. The root
-	// context is a map, so `index . "Release"`, `get $ "Files"` or
-	// `pluck "Values" .` reach that object without writing `.Release`.
-	rootKeyLiteral = regexp.MustCompile("[\"`](Values|Release|Capabilities|Files|Template|Chart|Subcharts)[\"`]")
-	// rootIndex is `index` applied to the root context.
-	rootIndex = regexp.MustCompile(`\bindex\s+[$.][\s)]`)
-	// mapFunc and rootArg together are the root context passed to a map
-	// function.
-	mapFunc = regexp.MustCompile(`\b(get|pluck|dig)\b`)
-	rootArg = regexp.MustCompile(`(^|[\s(])[$.]([\s)]|$)`)
-)
+// rootAsMap are the functions that, given the root context, reach any of
+// helmRootObjects by a key: `index . "Release"`, `get $ "Files"`.
+var rootAsMap = map[string]bool{"index": true, "get": true, "pluck": true, "dig": true}
 
 // chartFilesNotInFiles are the files at the chart root that `.Files` cannot
 // read: Helm loads them as the chart's metadata and values, not as files
@@ -337,123 +282,331 @@ var (
 // mentions the gateway RoleBinding in a comment, and cannot be rendered.
 var chartFilesNotInFiles = map[string]bool{"Chart.yaml": true, "values.yaml": true}
 
-// templatesNeverApplied are the templates Helm renders only to print after an
-// install, never as manifests, so a kind they name is prose.
-var templatesNeverApplied = map[string]bool{"NOTES.txt": true}
+// notesFile is rendered only to print after an install, never applied as a
+// manifest, so its top level is not a role tree. The templates it defines are
+// global, and are read like any other.
+const notesFile = "templates/NOTES.txt"
 
-// defineBodies returns the body of every `define` in src, by name. Actions that
-// open a block — define, if, range, with, block — are matched with their
-// `end`, so a define's body runs to its own end and not to the first one in it.
-func defineBodies(src string) (map[string]string, error) {
-	type frame struct {
-		name  string
-		start int
-	}
-	bodies := map[string]string{}
-	var stack []frame
-	for _, loc := range templateAction.FindAllStringIndex(src, -1) {
-		action := src[loc[0]:loc[1]]
-		kw := actionKeyword.FindStringSubmatch(action)
-		if kw == nil {
-			continue
-		}
-		switch kw[1] {
-		case "define":
-			m := defineName.FindStringSubmatch(strings.TrimLeft(strings.TrimPrefix(action, "{{"), "- \t\n"))
-			if m == nil {
-				return nil, fmt.Errorf("cannot read the define name in %s", action)
-			}
-			stack = append(stack, frame{name: m[1], start: loc[1]})
-		case "if", "range", "with", "block":
-			stack = append(stack, frame{start: loc[1]})
-		case "end":
-			if len(stack) == 0 {
-				return nil, fmt.Errorf("%s closes nothing", action)
-			}
-			f := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			if f.name != "" {
-				if _, dup := bodies[f.name]; dup {
-					return nil, fmt.Errorf("%q is defined twice", f.name)
-				}
-				bodies[f.name] = src[f.start:loc[0]]
-			}
-		}
-	}
-	if len(stack) != 0 {
-		return nil, fmt.Errorf("%d blocks are never closed", len(stack))
-	}
-	return bodies, nil
+// chartTree is one parsed template: a file's top level, or one `define`.
+type chartTree struct {
+	// key is "templates/<file>" for a top level and the define's name for a
+	// define.
+	key   string
+	top   bool
+	tree  *parse.Tree
+	calls []string
 }
 
-// checkRBACSource holds src, a template that writes a role or a binding or a
-// helper it includes, to rbacTemplateForbidden, rbacTemplateValues and
-// rbacTemplateIncludes, then does the same for each helper it includes,
-// once each. where names src in a message; root is the template that writes
-// the role or binding.
-func checkRBACSource(t *testing.T, where, root, src string, defines map[string]string, seen map[string]bool) {
+// mentionsRBACKind reports whether text renders a role or binding kind outside
+// a YAML comment. A line that starts with `#` is a comment only where it is
+// known to start a rendered line: after a newline in the same text, or at the
+// very start of the file. Elsewhere it may follow an action's output on the
+// same line, and is read as it stands.
+func mentionsRBACKind(n *parse.TextNode) bool {
+	lines := strings.Split(string(n.Text), "\n")
+	for i, line := range lines {
+		atLineStart := i > 0 || n.Pos == 0
+		if atLineStart && strings.HasPrefix(strings.TrimLeft(line, " \t"), "#") {
+			continue
+		}
+		if rbacKind.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
+// walk calls visit on n and, while visit returns true, on every node under it.
+func walk(n parse.Node, visit func(parse.Node) bool) {
+	if !visit(n) {
+		return
+	}
+	branch := func(b *parse.BranchNode) {
+		walk(b.Pipe, visit)
+		walk(b.List, visit)
+		if b.ElseList != nil {
+			walk(b.ElseList, visit)
+		}
+	}
+	switch n := n.(type) {
+	case *parse.ListNode:
+		for _, c := range n.Nodes {
+			walk(c, visit)
+		}
+	case *parse.ActionNode:
+		walk(n.Pipe, visit)
+	case *parse.PipeNode:
+		for _, d := range n.Decl {
+			walk(d, visit)
+		}
+		for _, c := range n.Cmds {
+			walk(c, visit)
+		}
+	case *parse.CommandNode:
+		for _, a := range n.Args {
+			walk(a, visit)
+		}
+	case *parse.IfNode:
+		branch(&n.BranchNode)
+	case *parse.RangeNode:
+		branch(&n.BranchNode)
+	case *parse.WithNode:
+		branch(&n.BranchNode)
+	case *parse.TemplateNode:
+		if n.Pipe != nil {
+			walk(n.Pipe, visit)
+		}
+	case *parse.ChainNode:
+		walk(n.Node, visit)
+	}
+}
+
+// identifier returns the name of n if it is a function identifier.
+func identifier(n parse.Node) string {
+	if id, ok := n.(*parse.IdentifierNode); ok {
+		return id.Ident
+	}
+	return ""
+}
+
+// isRoot reports whether n is the dot or `$`, which outside a range or with is
+// the root context.
+func isRoot(n parse.Node) bool {
+	switch n := n.(type) {
+	case *parse.DotNode:
+		return true
+	case *parse.VariableNode:
+		return len(n.Ident) == 1 && n.Ident[0] == "$"
+	}
+	return false
+}
+
+// rootPath returns the root-object path n reads, `.Values.gateway.name` or
+// `$.Values.gateway.name` as [Values gateway name], or nil.
+func rootPath(n parse.Node) []string {
+	switch n := n.(type) {
+	case *parse.FieldNode:
+		return n.Ident
+	case *parse.VariableNode:
+		if len(n.Ident) > 1 && n.Ident[0] == "$" {
+			return n.Ident[1:]
+		}
+	}
+	return nil
+}
+
+// nilSafeRead returns the path `(.Values.gateway | default dict).hostnameSuffix`
+// reads, [Values gateway hostnameSuffix], which assayd.validate uses to read a
+// key under a map that may be null, or nil if n is not that form.
+func nilSafeRead(n *parse.ChainNode) []string {
+	pipe, ok := n.Node.(*parse.PipeNode)
+	if !ok || len(pipe.Decl) != 0 || len(pipe.Cmds) != 2 || len(pipe.Cmds[0].Args) != 1 {
+		return nil
+	}
+	path := rootPath(pipe.Cmds[0].Args[0])
+	def := pipe.Cmds[1].Args
+	if len(path) == 0 || path[0] != "Values" || len(def) != 2 || identifier(def[0]) != "default" ||
+		identifier(def[1]) != "dict" {
+		return nil
+	}
+	return append(append([]string{}, path...), n.Field...)
+}
+
+// isBareReleasePrint reports whether n only prints the release's name or its
+// service, as assayd.labels does in two label values. It prints a string and
+// gates nothing.
+func isBareReleasePrint(n *parse.ActionNode) bool {
+	if len(n.Pipe.Decl) != 0 || len(n.Pipe.Cmds) != 1 || len(n.Pipe.Cmds[0].Args) != 1 {
+		return false
+	}
+	p := rootPath(n.Pipe.Cmds[0].Args[0])
+	return len(p) == 2 && p[0] == "Release" && (p[1] == "Name" || p[1] == "Service")
+}
+
+// isFilesGet reports whether n is `.Files.Get "files/<path>"`, the one use of
+// .Files a template may make: a literal path under files/, the directory the
+// guard scans.
+func isFilesGet(n *parse.CommandNode) bool {
+	if len(n.Args) != 2 {
+		return false
+	}
+	p := rootPath(n.Args[0])
+	s, ok := n.Args[1].(*parse.StringNode)
+	return len(p) == 2 && p[0] == "Files" && p[1] == "Get" && ok && strings.HasPrefix(s.Text, "files/")
+}
+
+// checkTree walks ct and reports, as where, every way it reaches Helm's root
+// objects that the guard cannot follow. With rbac, ct is a role tree or one a
+// role tree calls, and is also held to rbacTemplateValues and the forbidden
+// set.
+func checkTree(t *testing.T, ct *chartTree, where string, rbac bool) {
 	t.Helper()
-	gated := releaseInterpolation.ReplaceAllString(src, "")
-	for _, f := range rbacTemplateForbidden {
-		if loc := f.re.FindString(gated); loc != "" {
-			t.Errorf("%s uses %q: it %s", where, strings.TrimSpace(loc), f.why)
+	at := func(n parse.Node) string {
+		loc, _ := ct.tree.ErrorContext(n)
+		return loc
+	}
+	checkPath := func(n parse.Node, path []string) {
+		switch path[0] {
+		case "Values":
+			if rbac && !rbacTemplateValues[strings.Join(path[1:], ".")] {
+				t.Errorf("%s reads .%s at %s, which bindingProfiles does not vary: a role or binding "+
+					"templated on it renders past every value set the render tests read",
+					where, strings.Join(path, "."), at(n))
+			}
+		case "Release":
+			if rbac {
+				t.Errorf("%s uses .%s at %s: it gates on the release, which no render here varies",
+					where, strings.Join(path, "."), at(n))
+			}
+		case "Capabilities":
+			if rbac {
+				t.Errorf("%s uses .%s at %s: it gates on the cluster, which no render here varies",
+					where, strings.Join(path, "."), at(n))
+			}
+		case "Files":
+			t.Errorf("%s uses .%s at %s: a template reads chart files only as "+
+				"`.Files.Get \"files/<path>\"`, the directory this guard scans", where, strings.Join(path, "."), at(n))
 		}
 	}
-	for _, m := range valuesRef.FindAllStringSubmatch(nilSafeRead.ReplaceAllString(src, ".Values$1$2"), -1) {
-		path := strings.TrimPrefix(m[1], ".")
-		if !rbacTemplateValues[path] {
-			t.Errorf("%s reads %s, which bindingProfiles does not vary: a role or binding templated on it "+
-				"renders past every value set the render tests read", where, m[0])
+	walk(ct.tree.Root, func(n parse.Node) bool {
+		switch n := n.(type) {
+		case *parse.ActionNode:
+			return !isBareReleasePrint(n)
+		case *parse.CommandNode:
+			if isFilesGet(n) {
+				return false
+			}
+			if fn := identifier(n.Args[0]); rootAsMap[fn] {
+				for _, a := range n.Args[1:] {
+					if isRoot(a) {
+						t.Errorf("%s reads the root context as a map with %s at %s: every root object is "+
+							"reachable that way, past every check here", where, fn, at(n))
+					}
+				}
+			}
+		case *parse.ChainNode:
+			if path := nilSafeRead(n); path != nil {
+				checkPath(n, path)
+				return false
+			}
+		case *parse.FieldNode, *parse.VariableNode:
+			if path := rootPath(n); len(path) > 0 {
+				checkPath(n, path)
+			}
+		case *parse.IdentifierNode:
+			if rbac && n.Ident == "lookup" {
+				t.Errorf("%s uses lookup at %s: it gates on a live cluster read, which a render does not make",
+					where, at(n))
+			}
+		case *parse.StringNode:
+			if helmRootObjects[n.Text] {
+				t.Errorf("%s names the root object %s at %s: reached by key, it is past every check here",
+					where, n.Text, at(n))
+			}
 		}
-	}
-	for _, m := range includeOf.FindAllStringSubmatch(src, -1) {
-		name := m[1]
-		if !rbacTemplateIncludes[name] {
-			t.Errorf("%s includes %q, which is not in rbacTemplateIncludes: what it reads is not checked here",
-				where, name)
-			continue
-		}
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		body, ok := defines[name]
-		if !ok {
-			t.Errorf("%s includes %q, which no template under templates/ defines: the guard cannot read it",
-				where, name)
-			continue
-		}
-		checkRBACSource(t, fmt.Sprintf("the helper %q, included by %s,", name, root), root, body, defines, seen)
-	}
+		return true
+	})
 }
 
-// The render tests see only bindingProfiles, so this guard reads the chart's
-// source for what the profiles cannot vary.
+// parseChartTemplates parses every file under templates/ the way Helm does,
+// with Go's own template parser, into its top level and its defines, and
+// records what each calls.
+func parseChartTemplates(t *testing.T) (map[string]*chartTree, []string) {
+	t.Helper()
+	dir := filepath.Join(chartPath, "templates")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trees := map[string]*chartTree{}
+	var tops []string
+	for _, e := range entries {
+		if e.IsDir() {
+			t.Errorf("templates/%s is a directory, which this guard does not read: Helm renders it", e.Name())
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		file := "templates/" + e.Name()
+		p := parse.New(file)
+		p.Mode = parse.SkipFuncCheck
+		set := map[string]*parse.Tree{}
+		if _, err := p.Parse(string(src), "{{", "}}", set); err != nil {
+			t.Errorf("%s does not parse: %v", file, err)
+			continue
+		}
+		trees[file] = &chartTree{key: file, top: true, tree: p}
+		tops = append(tops, file)
+		for name, tree := range set {
+			if tree == p {
+				continue
+			}
+			if _, dup := trees[name]; dup {
+				t.Errorf("%s defines %q again: which body Helm uses is not what this guard reads", file, name)
+			}
+			trees[name] = &chartTree{key: name, tree: tree}
+		}
+	}
+	for _, ct := range trees {
+		walk(ct.tree.Root, func(n parse.Node) bool {
+			switch n := n.(type) {
+			case *parse.TemplateNode:
+				ct.calls = append(ct.calls, n.Name)
+			case *parse.CommandNode:
+				switch identifier(n.Args[0]) {
+				case "include":
+					if len(n.Args) > 1 {
+						if s, ok := n.Args[1].(*parse.StringNode); ok {
+							ct.calls = append(ct.calls, s.Text)
+							break
+						}
+					}
+					loc, _ := ct.tree.ErrorContext(n)
+					t.Errorf("%s includes a template by a name built at render time, at %s: what it calls "+
+						"cannot be followed", ct.key, loc)
+				case "tpl":
+					loc, _ := ct.tree.ErrorContext(n)
+					t.Errorf("%s uses tpl at %s: it renders text as a template, which this guard cannot read",
+						ct.key, loc)
+				}
+			}
+			return true
+		})
+	}
+	sort.Strings(tops)
+	return trees, tops
+}
+
+// The guard's threat model, stated first. It catches a careless chart change
+// that hides a role or a binding behind a value no profile in bindingProfiles
+// renders, which the render tests, seeing only those profiles, cannot. It is
+// no defence against a determined author: anyone who can edit the chart can
+// edit this test, and a kind, a key or a value path built at render time —
+// with printf, cat, or a concatenated string, as in `Cluster{{ "Role" }}` —
+// is not seen here. Nor is a packaged subchart under charts/, whose templates
+// sit compressed inside a .tgz; the chart vendors none today. And a gate on a
+// free-string value in rbacTemplateValues is not seen either.
 //
-//   - Every template may reach Helm's root objects only by name, as
-//     `.Values`, `.Release` and so on: no string naming one, no `index` of the
-//     root, and no root passed to get, pluck or dig.
-//   - Every template may use .Files only as `.Files.Get "files/<path>"`, and no
-//     chart file outside templates/ and crds/ that .Files can read may mention
-//     a role or binding kind.
-//   - Every template that mentions a role or binding kind outside a YAML
-//     comment line may read only rbacTemplateValues, include only
-//     rbacTemplateIncludes, and use none of rbacTemplateForbidden. So may the
-//     define body of each helper it includes, and of each helper those
-//     include. The check is per file, not per document, because a conditional
-//     that wraps a role opens before its `---`. NOTES.txt is exempt, because
-//     Helm never applies it.
+// It parses every template with text/template/parse, so a define is its own
+// tree and a `{{/* */}}` comment is gone. Then:
 //
-// The limit, stated plainly: this is a lexical check of source text. A key, a
-// kind or a path built at render time — with printf, cat, or a concatenated
-// string, as in `Cluster{{ "Role" }}` or `index . (printf "Rel%s" "ease")` —
-// is not seen here, and is seen only by the render tests, under
-// bindingProfiles. Nor is a packaged subchart under charts/, whose templates
-// sit compressed inside a .tgz this check reads as bytes; the chart vendors
-// none today. A value is allowed or not by its path, so a template that reads
-// an allowed one to write a role is caught only where bindingProfiles renders
-// what it writes. And the root-as-map check cannot tell the root from a range
-// or with element, so `get . "k"` inside one fails here too: it fails closed.
+//   - A tree is a role tree if its text, outside YAML comment lines, or one of
+//     its string literals names a role or binding kind, or if it calls a role
+//     tree, by `template` or `include`. Every file's top level that is a role
+//     tree is checked, except NOTES.txt's, which Helm never applies.
+//   - A checked tree, and every tree it calls, transitively, may read only
+//     rbacTemplateValues, and may not use .Capabilities, lookup, or .Release
+//     beyond a bare print of its Name or Service.
+//   - Every tree may reach Helm's root objects only by name: no string naming
+//     one, and no root passed to index, get, pluck or dig. It may use .Files
+//     only as `.Files.Get "files/<path>"`, and no chart file outside
+//     templates/ and crds/ that .Files can read may mention a role or binding
+//     kind. It may not use tpl, nor include a template by a name it builds.
+//
+// The root-as-map check cannot tell the root from a range or with element, so
+// `get . "k"` inside one fails here too: it fails closed.
 func TestRBACTemplatesReadOnlyTheValuesTheRenderTestVaries(t *testing.T) {
 	err := filepath.WalkDir(chartPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -487,67 +640,65 @@ func TestRBACTemplatesReadOnlyTheValuesTheRenderTestVaries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir := filepath.Join(chartPath, "templates")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sources := map[string]string{}
-	defines := map[string]string{}
-	for _, e := range entries {
-		if e.IsDir() {
-			t.Errorf("templates/%s is a directory, which this guard does not read: Helm renders it", e.Name())
-			continue
-		}
-		src, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		sources[e.Name()] = string(src)
-		bodies, err := defineBodies(string(src))
-		if err != nil {
-			t.Errorf("templates/%s: %v", e.Name(), err)
-			continue
-		}
-		for name, body := range bodies {
-			if _, dup := defines[name]; dup {
-				t.Errorf("templates/%s defines %q again: which body Helm uses is not what this guard reads",
-					e.Name(), name)
+	trees, tops := parseChartTemplates(t)
+
+	role := map[string]bool{}
+	for key, ct := range trees {
+		walk(ct.tree.Root, func(n parse.Node) bool {
+			switch n := n.(type) {
+			case *parse.TextNode:
+				role[key] = role[key] || mentionsRBACKind(n)
+			case *parse.StringNode:
+				role[key] = role[key] || rbacKind.MatchString(n.Text)
 			}
-			defines[name] = body
+			return true
+		})
+	}
+	for changed := true; changed; {
+		changed = false
+		for key, ct := range trees {
+			for _, c := range ct.calls {
+				if !role[key] && role[c] {
+					role[key], changed = true, true
+				}
+			}
 		}
 	}
 
-	scanned := 0
-	for _, e := range entries {
-		src, ok := sources[e.Name()]
-		if !ok {
+	checked := 0
+	for _, key := range tops {
+		ct := trees[key]
+		if key == notesFile || !role[key] {
+			checkTree(t, ct, key, false)
 			continue
 		}
-		for _, action := range templateAction.FindAllString(src, -1) {
-			if m := rootKeyLiteral.FindString(action); m != "" {
-				t.Errorf("templates/%s names the root object %s in %s: reached by key, it is past every "+
-					"check here", e.Name(), m, action)
+		checked++
+		checkTree(t, ct, key+", which writes a role or a binding,", true)
+		seen := map[string]bool{key: true}
+		queue := append([]string{}, ct.calls...)
+		for len(queue) > 0 {
+			name := queue[0]
+			queue = queue[1:]
+			if seen[name] {
+				continue
 			}
-			if rootIndex.MatchString(action) || (mapFunc.MatchString(action) && rootArg.MatchString(action)) {
-				t.Errorf("templates/%s reads the root context as a map in %s: every root object is reachable "+
-					"that way, past every check here", e.Name(), action)
+			seen[name] = true
+			callee, ok := trees[name]
+			if !ok {
+				t.Errorf("%s calls %q, which no template under templates/ defines: the guard cannot read it",
+					key, name)
+				continue
 			}
+			checkTree(t, callee, fmt.Sprintf("the template %q, called from %s,", name, key), true)
+			queue = append(queue, callee.calls...)
 		}
-		for _, m := range filesRef.FindAllString(src, -1) {
-			if !filesGet.MatchString(m) {
-				t.Errorf("templates/%s uses %s: a template reads chart files only as "+
-					"`.Files.Get \"files/<path>\"`, the directory this guard scans", e.Name(), m)
-			}
-		}
-		if templatesNeverApplied[e.Name()] || !rbacKind.MatchString(yamlCommentLine.ReplaceAllString(src, "")) {
-			continue
-		}
-		scanned++
-		root := "templates/" + e.Name()
-		checkRBACSource(t, root+", which writes a role or a binding,", root, src, defines, map[string]bool{})
 	}
-	if scanned == 0 {
-		t.Error("no template mentions a role or binding kind, but the chart binds the operator: the guard reads nothing")
+	for key, ct := range trees {
+		if !ct.top {
+			checkTree(t, ct, fmt.Sprintf("the template %q", key), false)
+		}
+	}
+	if checked == 0 {
+		t.Error("no template writes a role or a binding, but the chart binds the operator: the guard reads nothing")
 	}
 }
