@@ -1,7 +1,7 @@
 # A29 option (b): pinned GatesPassed verification
 
 Implementation snapshot: `3588cbbcabdb24cd6d5ed3f3fca8b3afd6bf13cc`, based on
-`fe9a52a`. Decision: Jagveer, 2026-11-19, “Go with A29 option b on assayd”,
+`fe9a52a`. Decision: the human, 2026-11-19, “Go with A29 option b on assayd”,
 [recorded on proposal #164](https://github.com/Quinyte/assayd/pull/164#issuecomment-7018260059).
 The proposal and decision fold are included in the same implementation PR;
 proposal #164 was not separately merged. Closes the behavior described in #139.
