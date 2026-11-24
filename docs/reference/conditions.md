@@ -1266,7 +1266,7 @@ One section per reason string the operator can set, in alphabetical order.
 
 **Traffic:** **depends on the arm** — this reason is raised from more than one state, and traffic stops in some of them. The note below says which.
 
-**Note:** Withdrawn for a held `Create`: its route stays prepared and unpublished. Not withdrawn for a served Agent or a held `Lock`, where the route stays open and no object is written.
+**Note:** Withdrawn for a held `Create`: its route stays prepared and unpublished. Not withdrawn for a served Agent or a held `Lock`, where the route stays open and no object is written. A Gateway or policy list that cannot be read is named by its error's class, as `readErrorClass` gives it, except a Forbidden Gateway read, which quotes the error; the error the message no longer quotes is logged at info.
 
 ### `GatewayDisabled`
 
