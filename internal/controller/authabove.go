@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/Quinyte/assayd/internal/compiler"
@@ -94,10 +95,9 @@ type gatewayAuth struct {
 	// unreadable says why the Gateway or its policies could not be read:
 	// nothing on it can then be ruled out.
 	unreadable string
-	// gatewayErr and listErr are the errors behind unreadable, kept so that a
-	// reader which must not quote an API error's raw text — the eval
-	// controller's status.eval.blocked, rewritten whenever its text changes
-	// (design 16 §1.1, "`blocked`: one slot") — can name their class instead.
+	// gatewayErr and listErr are the errors behind unreadable, for clause 5's
+	// hold (design 16 §1.1) to word by class. unreadable names it too (design
+	// 03 A90), but quotes a Forbidden get and words NotFound and NoMatch.
 	gatewayErr, listErr error
 }
 
@@ -209,7 +209,7 @@ func (r gatewayPolicyReads) gatewayAuthPolicies(ctx context.Context, host string
 	if err := r.reader().Get(ctx, client.ObjectKey{Namespace: gw.Namespace, Name: gw.Name}, &g); err != nil {
 		known = false
 		out.gatewayErr = err
-		why := fmt.Sprintf("Gateway %s/%s could not be read (%v)", gw.Namespace, gw.Name, err)
+		var why string
 		switch {
 		case meta.IsNoMatchError(err):
 			why = fmt.Sprintf("the Gateway API is not served, so Gateway %s/%s cannot be read", gw.Namespace, gw.Name)
@@ -219,6 +219,14 @@ func (r gatewayPolicyReads) gatewayAuthPolicies(ctx context.Context, host string
 		case apierrors.IsForbidden(err):
 			why = fmt.Sprintf("the operator may not read Gateway %s/%s (%v); grant get on it, as the chart's "+
 				"gateway-labels Role in %s does", gw.Namespace, gw.Name, err, gw.Namespace)
+		default:
+			// The class, which is stable from pass to pass where a transport
+			// error's text is not, so a failure that persists writes status
+			// once; the text goes to the log, on every pass, at info (design
+			// 03 A90, §9 D9's (S1) and (L1′)).
+			why = fmt.Sprintf("Gateway %s/%s could not be read (%s)", gw.Namespace, gw.Name, readErrorClass(err))
+			log.FromContext(ctx).Info("the assayd Gateway could not be read; status names the error's class",
+				"gateway", gw.Namespace+"/"+gw.Name, "error", err.Error())
 		}
 		out.unreadable = why + ", so its listeners, labels and allowedListeners are unknown"
 	} else {
@@ -226,8 +234,13 @@ func (r gatewayPolicyReads) gatewayAuthPolicies(ctx context.Context, host string
 	}
 	items, err := r.listPolicies(ctx, gw.Namespace, "a Gateway-level auth policy", false)
 	if err != nil {
+		// By class, as the Gateway get's default branch, with the text logged
+		// (design 03 A90). A Forbidden list is named "(Forbidden)" too: its
+		// identity and verb reach the log and no message.
+		log.FromContext(ctx).Info("the AgentgatewayPolicies in the assayd Gateway's namespace could not be "+
+			"listed; status names the error's class", "namespace", gw.Namespace, "error", err.Error())
 		out.unreadable = joinCauses(out.unreadable, fmt.Sprintf("the AgentgatewayPolicies in %s could not be "+
-			"listed (%v), so none on the Gateway can be ruled out", gw.Namespace, err))
+			"listed (%s), so none on the Gateway can be ruled out", gw.Namespace, readErrorClass(err)))
 		out.unlisted, out.listErr = true, err
 		return out
 	}

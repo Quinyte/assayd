@@ -12,7 +12,12 @@ import (
 // listPolicies and servingRouteLabels they call — so that a controller other
 // than the Agent reconciler can make the same reads with the same code. Design
 // 16 §1.1 owes this for the eval controller's clause 5 ("What clause 5
-// costs"): the two functions moved here with their bodies unchanged.
+// costs"): the two functions moved here with their bodies unchanged. Since
+// then gatewayAuthPolicies' body has changed twice: build step 7 added
+// gatewayAuth's gatewayErr and listErr and the two assignments that fill them,
+// for clause 5's hold (design 16 A21.14), and design 03 A90 made its messages
+// for a failed Gateway read of a class with no branch of its own, and for a
+// failed policy list, name the error's class, and added a log line for each.
 //
 // It carries the client, the uncached reader and the GatewayConfig, and
 // nothing else, so it reads exactly what the functions read where they were.
