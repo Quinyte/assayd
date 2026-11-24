@@ -184,6 +184,13 @@ func TestAVaryingGatewayReadFailureWritesAServedAgentsStatusOnNoPass(t *testing.
 // counted from the first message that names the failure, over a fixed 5 s
 // window, and both halves require none.
 //
+// Under A90 the pass that names the failure writes nothing, so nothing
+// starts another and the window sees one Gateway read in either half: the
+// varying half never meets a second text, and passing code cannot tell the
+// halves apart. What the row catches is the loop coming back, as putting
+// `%v` back in the message does, which brings a write and with it the next
+// read.
+//
 // The window must stay shorter than about 15 s. The fixture's card fetch
 // cannot succeed under its 100 ms CardFetchTimeout, so a CardRetryInterval
 // pass, about 15.5 s after the first, writes .cards[0].fetchedAt and nothing
