@@ -12,7 +12,7 @@ These are the versions the e2e suite runs against. They are what has been measur
 |---|---|---|
 | Gateway API CRDs | `v1.6.0`, standard channel | `hack/e2e.sh` (`GWAPI_VERSION`) |
 | agentgateway (CRDs and controller) | `1.5.0` | `hack/e2e.sh` (`AGW_VERSION`) |
-| assayd chart | `0.4.0`, `oci://ghcr.io/quinyte/charts/assayd`. Section 6's `admission.toolRouteWriters` arrived in it (section 6.2). **`v0.4.1` is tagged and this walkthrough has not been re-run against it**, so the pinned version here is the last one verified end to end, not the newest. | `docs/supply-chain.md` |
+| assayd chart | `0.4.0`, `oci://ghcr.io/quinyte/charts/assayd`. Section 6's `admission.toolRouteWriters` arrived in it (section 6.2). **The newest release is `v0.5.0` (2026-11-05), and this walkthrough has not been re-run against it or against `v0.4.1`**, so the pinned version here is the last one verified end to end, not the newest. | `docs/supply-chain.md` |
 | Kubernetes | k3d (k3s). The chart requires `>=1.30.0` | `charts/assayd/Chart.yaml` |
 
 The e2e runs its gateway tests on k3d only. The kind lane skips them and reports the gateway path as unverified.
@@ -69,15 +69,17 @@ Four things about it are fixed by the operator, not by your preference:
 - **The listener admits the run namespaces.** The operator puts each Agent's route in an operator-owned run namespace (section 3), labelled `assayd.dev/run-namespace: "true"`. A listener whose selector matches none of them rejects every route with `NotAllowedByListeners`.
 - **The Gateway admits no ListenerSets.** Leave `spec.allowedListeners` unset. The API server defaults it to `from: None`. Set it to `Same`, `All` or any `Selector` and no new Agent is published and no lock is recorded: each held Agent reports `PolicyApplyIncomplete`, reason `GatewayAuthPolicy`, and pages until you change it.
 
-**A wrong listener is reported for a new Agent, and not for a served one.** The operator reads a route's `Accepted` and `ResolvedRefs` status while it brings the route up, and not afterwards. This was measured on k3d with agentgateway 1.5.0, during review of this page, with the listener renamed to `web`:
+**On the pinned chart, `0.4.0`, a wrong listener is reported for a new Agent, and not for a served one.** That operator reads a route's `Accepted` and `ResolvedRefs` status while it brings the route up, and not afterwards. This was measured on k3d with agentgateway 1.5.0, on 2026-09-14, during review of this page, against the operator then on `main`, before `0.4.0` was cut, with the listener renamed to `web`:
 
 | Agent | What it reports |
 |---|---|
 | New, `auth: none` | `Ready=True` for about four minutes. Then `Ready=False` and `PolicyApplyIncomplete`, reason `AuthEnforcementUnverified`, naming `NoMatchingParent: sectionName "http" not found`. |
 | New, API-key | Stops at stage `Converging` from the first pass: `Ready=False`, reason `AuthEnforcementPending`, naming `NoMatchingParent`. `AuthEnforcementUnverified` at four minutes. |
-| Already served | `Ready=True`, indefinitely, while its route is `Accepted=False`. **Nothing reports it.** |
+| Already served | `Ready=True`, indefinitely, while its route is `Accepted=False`. **Nothing reports it** on `0.4.0` or `0.4.1`. Since design 03 A81, in chart `0.5.0` and on `main`, it is reported: see below. |
 
-With a listener selector that matches nothing, a new Agent of either mode reports `Ready=False` naming `NotAllowedByListeners`, and an Agent already served again stays silent. Once the Gateway was corrected, every held Agent recovered to `Ready` within 90 seconds, without being recreated.
+With a listener selector that matches nothing, a new Agent of either mode reports `Ready=False` naming `NotAllowedByListeners`, and, in that measurement, an Agent already served again stayed silent. Once the Gateway was corrected, every held Agent recovered to `Ready` within 90 seconds, without being recreated.
+
+**Since design 03 A81 a served Agent is reported too.** A81 is in chart `0.5.0` and on `main`, and in neither `0.4.0` nor `0.4.1`. On a pass of a served Agent with no `-auth` transaction in flight, an explicit `Accepted=False` or `ResolvedRefs=False` from the assayd Gateway at the route's current generation raises `PolicyApplyIncomplete=True`, reason `ServingRouteNotAccepted`, naming the Gateway's own condition, with `Ready=False` and phase `Degraded`. No traffic is withdrawn, and it clears once the Gateway reports both conditions again at the route's current generation (`internal/controller/authserved.go`). It reads only the route status written by agentgateway's default controller name, so where that controller runs under another name it reports nothing (#175). The listener rename was walked through on k3d with A81 built (`docs/research/a80-served-route-walkthrough-2026-09.md`). The judgement raises on `Accepted=False` whatever its reason, and Gateway API defines `NotAllowedByListeners` as a reason of `Accepted=False`, so a selector that matches nothing raises it too. That is read from the code and the Gateway API types, not measured: no test or walkthrough has produced it for a served Agent.
 
 ```bash
 kubectl apply -f - <<'EOF'
@@ -144,7 +146,7 @@ The chart takes two URLs, and they name different listeners:
 
 Install the published, signed chart. It pins the operator image by digest; `docs/supply-chain.md` shows how to verify both.
 
-**`0.4.0` is deliberate, not stale-by-accident.** A newer tag, `v0.4.1`, exists; nobody has verified its published artifacts or re-run this walkthrough against it, so it is not pinned here. Raising the version is a change to make after checking, not before — `docs/supply-chain.md` records what has actually been verified from outside and what has not.
+**`0.4.0` is deliberate, not stale-by-accident.** Two newer releases exist, `v0.4.1` and, the newest, `v0.5.0` (2026-11-05). Nobody has re-run this walkthrough against either, so neither is pinned here, and the pin stays at the last version verified end to end. Raising the version is a change to make after checking, not before — `docs/supply-chain.md` records what has actually been verified from outside and what has not.
 
 ```bash
 helm install assayd oci://ghcr.io/quinyte/charts/assayd --version 0.4.0 \
@@ -179,7 +181,7 @@ kubectl -n assayd-system get pods
 
 ### Who may write an EvalSuite
 
-No published chart version ships the `EvalSuite` CRD yet. A chart built from this repository does, with the admission policy `assayd-evalsuite-writers` (design 16 §1.1, Q6 (c)). The policy is a template, so `helm upgrade` applies it, as it does the other four. A suite's cases go to its Agent's held candidate unauthenticated, so writing one needs what editing the Agent needs:
+Chart `0.5.0` is the first published version that ships the `EvalSuite` CRD, with the admission policy `assayd-evalsuite-writers` (design 16 §1.1, Q6 (c)); `0.4.0`, pinned above, does not. A chart built from this repository ships both too. The policy is a template, so `helm upgrade` applies it, as it does the other four. A suite's cases go to its Agent's held candidate unauthenticated, so writing one needs what editing the Agent needs:
 
 - **It refuses an `EvalSuite` create or update**, in any namespace, from an identity the API server's authorizer does not let `update` Agents in that namespace. The grant must be namespace-wide. A Role that allows `update` on Agents only under `resourceNames` is refused, and so is one that allows `patch` but not `update`.
 - **Every update counts, metadata-only edits included.** Once the policy is installed, an existing suite cannot be edited by anyone who cannot update Agents in its namespace, even to change a label or an annotation or to add a finalizer. A GitOps controller, such as Argo CD or Flux, that applies suites needs `update` on `agents.assayd.dev` in every namespace it applies one to. The garbage collector, which removes a suite's finalizer to finish a foreground delete, passes where `kube-controller-manager` runs with `--use-service-account-credentials`, as kubeadm's does. That is unverified on k3s and on managed control planes; where it does not hold, a foreground delete of a suite stalls.
@@ -691,7 +693,7 @@ The last row needs no allowlist in place, so it cannot be seen after section 6.6
 | `helm install` fails naming the Gateway's namespace | The namespace does not exist yet (section 1.3). |
 | The chart refuses to render: `gateway.servingUrl is empty` | Set `gateway.servingUrl` (section 1.5). |
 | `helm install --wait` times out, the operator Deployment shows `Available: 1/2`, and the release is `failed` | The default `prod` profile runs two operator replicas, and only the lease holder is ever `Ready`: the standby is not `Ready` by design. The operator is working. Uninstall, then install again with `--set profile=local`, or under `prod` without `--wait` (section 2). |
-| Anonymous requests get `404`, and a new Agent names `NoMatchingParent` or `NotAllowedByListeners` | The listener is not named `http`, or its selector does not admit `assayd.dev/run-namespace: "true"` (section 1.4). An Agent served before the Gateway changed is reported too, since design 03 A80: `Ready=False`, phase `Degraded`, `PolicyApplyIncomplete` with reason `ServingRouteNotAccepted` naming the Gateway's own condition, and `status.auth.routeRefused` recording it. `GovernanceSkipped` reads `AuthPolicyNotAttached` at the same time, because renaming the listener also leaves `<agent>-auth` attached to nothing; the route is the cause the other three name, because nothing reaches the agent at all. Restore the listener and it clears. Walked through on k3d: `docs/research/a80-served-route-walkthrough-2026-09.md`. |
+| Anonymous requests get `404`, and a new Agent names `NoMatchingParent` or `NotAllowedByListeners` | The listener is not named `http`, or its selector does not admit `assayd.dev/run-namespace: "true"` (section 1.4). From chart `0.5.0` on, an Agent served before the Gateway changed is reported too, since design 03 A80 and A81: `Ready=False`, phase `Degraded`, `PolicyApplyIncomplete` with reason `ServingRouteNotAccepted` naming the Gateway's own condition, and `status.auth.routeRefused` recording it. `GovernanceSkipped` reads `AuthPolicyNotAttached` at the same time, because renaming the listener also leaves `<agent>-auth` attached to nothing; the route is the cause the other three name, because nothing reaches the agent at all. Restore the listener and it clears. Walked through on k3d: `docs/research/a80-served-route-walkthrough-2026-09.md`. |
 | `PolicyApplyIncomplete`, reason `AuthEnforcementUnverified` | `gateway.servingUrl` reaches no listener. |
 | `PolicyApplyIncomplete`, reason `GatewayAuthPolicy` | The Gateway admits ListenerSets, or a policy of yours targets it (section 1.4). |
 | `PolicyApplyIncomplete`, reason `AuthRecordNotKept` | The Agent CRD predates `status.auth`: apply the chart's CRDs (section 4). |
