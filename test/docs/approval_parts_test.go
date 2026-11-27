@@ -81,6 +81,9 @@ var humanApprovedParts = []grant{
 // for #144 makes. Design 02 A80, decided with it, has no row: design 02 has no
 // approved part, so A80 is recorded in its own entry and README row.
 // A29 was decided on 2026-11-19, option (b), and recorded with its code fold.
+// Design 03 A90 has no row, on purpose: the human decided §9 D9 on 2026-11-24
+// and A90 records it, but A90 amends A75, which is not an approved part — the
+// D8 → A89 shape, not an amendment to an approved slice.
 // Making one an approved part would take an ADR-0024 amendment and a change to
 // design 16's Status line and README row, which only the human's process makes.
 //
