@@ -1605,7 +1605,7 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
 
 - **D10 — what the second slice compiles, and on what input** (A91, opened by #79). **OPEN. Put to the human on 2026-11-26. Nothing here is decided, and nothing in A91 may be implemented until it is.** §11 A91 holds the comparison, the slice boundary, the failure modes, step 0 and the test plan.
 
-    There are eight questions. (a) chooses the concern. (b)–(h) shape the recommended concern, and they fall away if (a) is not (C1).
+    There are twelve questions. (a) chooses the concern. (b)–(l) shape the recommended concern, and they fall away if (a) is not (C1). (i) was added by the third critique round, and (j), (k) and (l) record that round's open findings as questions rather than leaving them in the text.
 
     **(a) Which concern.**
 
@@ -1621,7 +1621,7 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
 
     | option | input | cost |
     |---|---|---|
-    | **(P1)** — **recommended**. `spec.tools[].allow` on the Agent: required, 1–32 names in MCP's character set. The tool is a `Service` in the Agent's own namespace, labelled `assayd.dev/mcp-tool: <name>` | the Agent owner narrowing its own grant, gated by its revision. Nothing needs sealing | a CRD change. A stored Agent with tools and no `allow` is refused any edit until it gains one, which is the `spec.budget` ratchet precedent. A tool shared across namespaces is out of the slice |
+    | **(P1)** — **recommended**. `spec.tools[].allow` on the Agent: required, 1–32 names in MCP's character set. The tool is a `Service` in the Agent's own namespace, labelled `assayd.dev/mcp-tool: <name>` | the Agent owner narrowing its own grant, gated by its revision. Nothing needs sealing | a CRD change. A stored Agent with tools and no `allow` is refused any edit until it gains one, which is the `spec.budget` ratchet precedent. A tool shared across namespaces is out of the slice. **`allow` is per revision, so what narrowing it revokes depends on (i)**: under (G1), a removed tool stays reachable through every retained revision's host |
     | (P2) wait for design 11's Connector `toolAllowlist` | the tool owner's list | design 11 is a HYPOTHESIS under ADR-0030 and has no CRD |
     | (P3) a chart value naming tool namespaces, selected across namespaces | the administrator's list | a cross-namespace reference with no consent. `ToolBinding`'s comment and design 24's `can_call` derivation both refuse that |
 
@@ -1629,7 +1629,7 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
 
     | option | what holds | cost |
     |---|---|---|
-    | **(U1)** — **recommended**. Publish the route filtered and unauthenticated, marked `assayd.dev/auth: "none"`, with `GovernanceSkipped=True/ToolRouteUnauthenticated` while it is served; #81 stays open | the filter bounds an agent that uses its host | §3.3.1's tool row and its static-catalog case change for the slice, and every API-key Agent with a tool binding stops reading `Governed`. A hostile caller inside the cluster can pick any Agent's tool host, from any namespace, or call the Service directly; and a tool owner who admits only the gateway by NetworkPolicy thereby admits every Pod that can reach `egress`. **Unlike today, each tool binding also publishes the tenant's tool server, unauthenticated and filtered, wherever the Gateway is exposed**, because `egress` shares the Gateway's Service. Recommended only together with that statement in the install docs: an administrator who exposes the Gateway outside the cluster exposes `egress` too, and nothing here prevents it |
+    | **(U1)** — **recommended**. Publish the route filtered and unauthenticated, marked `assayd.dev/auth: "none"`, with `GovernanceSkipped=True/ToolRouteUnauthenticated` while it is served; #81 stays open | the filter bounds an agent that uses its host | §3.3.1's tool row and its static-catalog case change for the slice, and every API-key Agent with a tool binding stops reading `Governed`. A hostile caller inside the cluster can pick any Agent's tool host, from any namespace, or call the Service directly; and a tool owner who admits only the gateway by NetworkPolicy thereby admits every Pod that can reach `egress`. **Unlike today, each tool binding also publishes the tenant's tool server, unauthenticated and filtered, wherever the Gateway is exposed**, because `egress` shares the Gateway's Service. What is exposed is every open path's grant, so under (G1) it is the union of every retained revision's `allow` plus the candidate's. Each host's tag is the revision digest, which is in status and in the pod's environment, so a host is not a secret. Recommended only together with that statement in the install docs: an administrator who exposes the Gateway outside the cluster exposes `egress` too, and nothing here prevents it |
     | (U2) block the slice until #81 | the filter becomes a boundary | needs an agent identity, and so design 06, first |
     | (U3) an API-key `-auth` on the tool route, from the key source `-auth` already uses. The agent's key is written by an administrator into a `Secret` that the Agent's env references | outside callers and other namespaces' agents are refused | a second `-auth` render, and a `Create`-shaped transaction, on a new route kind. The key is in the agent's environment. A key in the namespace's group is also an A2A key for every Agent in that group, so a leaked tool key opens their serving routes too |
 
@@ -1670,7 +1670,45 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
     | **(A1)** — **recommended**. `ASSAYD_TOOLS_HOST`, sent as `Host` to `ASSAYD_GATEWAY_URL` | measured: the responder routes this way through the `tools` listener today | many MCP clients derive `Host` from the URL and cannot set it, so standard clients need a wrapper |
     | (A2) a path-based URL, `ASSAYD_TOOLS_URL`, `<gateway.url>/t/<tag>/<agent>/<namespace>/mcp`, with a `PathPrefix` match and a `URLRewrite` to the server's path | any MCP client that takes a URL works, and `egress` needs no hostname, which removes step 0 (c7) | UNMEASURED on 1.5.0: the rewrite on an MCP Backend, and a path match on a listener that tool route writers also use. Rule 3 reasons about hostnames, so a path-based tool route would need its own reservation |
 
-    **Recommendation: (C1), (P1), (U1), (R1), (V1), (E1), (F1), (A1).**
+    **(i) What a change to `allow` does to the revisions that are already retained.** Each retained revision keeps its own tool path, host and `allow` until it leaves the retained set, which holds at least four revisions at the default. So the question is whether a narrowing revokes access through those older revisions. Design 03 already answers this question for `-auth`, in the other direction from (G1): `-auth` follows the current spec and never a revision, so a rollback never re-admits a removed group (§3.2, F2, ADR-0034). ADR-0031 Amendment 1 says "a rollback is not authorization to restore a revoked credential or a forbidden destination".
+
+    | option | effective grant on a revision's path | cost |
+    |---|---|---|
+    | (G1) `allow` is release material: each revision serves its own | the revision's `allow` | **a narrowing revokes nothing.** A tool removed from the spec, or `spec.tools` removed entirely, stays reachable through every retained revision's host. A pinned rollback restores a wider grant with no gate and no recheck. Under (U1), what is exposed is the union of every retained revision's grant |
+    | (G2) close the tool path of every revision that carries no weight and is not the candidate, and reopen it through the probe when a rollback promotes it | (G1)'s, but only on the active revision and the candidate | a rollback's tools come back only after a probe, so a revision serves without them for that time. Narrowing still does not reach the active revision until the edit's candidate is promoted |
+    | **(G3)** — **recommended**. F2's shape: the effective grant is the current spec's `allow` intersected with the revision's own | a subset of the current spec on every path | **A narrowing reaches every revision at once**: each Backend is re-rendered tighter, in place, and re-probed with its route left open, because the new grant is narrower than the one probed. A rollback cannot restore a revoked tool. A **widening** reaches only the edit's candidate, whose `allow` is the current spec. That is the one cost: a widened grant is open on the candidate's host before its gate passes, because the eval needs it, and under (U1) that host is unauthenticated. `-auth`'s widening waits for the shift (§3.2), and the tool grant cannot, because the gate exercises it |
+
+    **Recommendation: (G3)**, because it applies to tools the rule design 03 already took for `-auth`, and the rule ADR-0031 Amendment 1 states. (G2) can be added to it later to shrink the exposed set further, and does not conflict with it.
+
+    **(j) What a failed re-probe does to a path that is already served, and how a closure is trusted.** Closing a served path is an in-place tightening of a route that is carrying traffic. §3.3.2 does not trust a control-plane write alone for that, and a rejected (NACKed) update keeps the old, open configuration.
+
+    | option | rule | cost |
+    |---|---|---|
+    | **(S1)** — **recommended**. Only `ToolFilterNotEnforced` and `ToolBackendDrifted` close a served path. Every other outcome — a `503`, a timeout, F missing tools — holds the path and reports it, as A80's unknown reading holds. A closure is claimed only after a request with no probe header, sent through the route, reaches no Backend. Until then the message says the closure was written and is not yet verified | the path closes on evidence of a widening, and is never closed on an outage of the server. Every claim of a closure is a data-plane observation | a server outage leaves a served path open and reported, which is the posture A80's (C1) took for routes |
+    | (S2) every outcome except a pass closes a served path | fail-closed on any doubt | a flaky tool server withdraws an agent's tools every interval. Closures are still unverified unless (S1)'s check is added |
+
+    **Recommendation: (S1).** The filter fails open only through a widening, so a widening is what closes the path. A closure that has not been observed is not reported as one.
+
+    **(k) Where the probe runs.** The Agent reconciler has one worker: it sets no `MaxConcurrentReconciles`, and controller-runtime's default is one. One probe is two MCP exchanges with a server the tenant controls, for each retained revision, every 5 minutes, at up to 15 seconds each. §3.3 rejected this shape of work on the worker.
+
+    | option | rule | cost |
+    |---|---|---|
+    | **(W1)** — **recommended**. A bounded pool outside the reconcile runs the probes. A result comes back as an event that enqueues the Agent, and the reconcile reads it and writes status. The reconcile never waits on a tool server | no tenant's server can delay another Agent's reconcile, kill or finalizer | a component the operator does not have today, and its own state. §3.3's fairness test is extended to cover it |
+    | (W2) a cap on the total probe time per reconcile pass, with the remaining probes deferred | simple | still on the shared worker. A tenant can use up the cap on every pass |
+    | (W3) more Agent workers | no new component | moves the bound. One worker per slow server still stalls |
+
+    **Recommendation: (W1).**
+
+    **(l) What pins `ToolRouteUnauthenticated`.** §3.3.1's registry, emit gate and static catalog are the anchor that pins a route class's mandatory set, and **none of the three is built**: there is no `RouteClass` and no `emit` in `internal/`. So "the mutation that drops the marker must fail the catalog" has nothing to run against today.
+
+    | option | rule | cost |
+    |---|---|---|
+    | **(K1)** — **recommended**. Build the registry, the emit gate and the static catalog in the slice, for the two route classes the operator emits: the serving route and the tool route | the tool route's marker and reason are pinned the way §3.3.1 specifies, and so is the serving route's `-auth` | more code in the slice. It touches the approved serving route's emission, which must keep its render byte for byte, and a golden test holds it to that |
+    | (K2) list §3.3.1's registry as owed, and pin the marker with a unit golden test and an envtest row | smaller | the dangerous mutation §3.3.1 names — dropping the requirement and editing the row to match — passes a golden test that is updated in the same change |
+
+    **Recommendation: (K1).** The slice is the first time a second route class is emitted, and that is the moment the registry exists for.
+
+    **Recommendation: (C1), (P1), (U1), (R1), (V1), (E1), (F1), (A1), (G3), (S1), (W1), (K1).**
     - **(C1)**: the smallest concern that enforces something at the gateway, replacing a measured hand-authored shape.
     - **(P1)**: the only input that needs neither a demoted design nor an unconsented cross-namespace reference.
     - **(U1)**: (U2) waits on design 06, and (U3) puts a namespace-wide key in every tool-using agent. (U1)'s cost is the exposure stated in its row. If the human judges that exposure unacceptable, (U3) is the option that closes it, at its stated cost.
@@ -1679,8 +1717,9 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
     - **(E1)**: the property is required, without it the gate records a cause it never checked, and the shape belongs to design 16's own machinery.
     - **(F1)**: it removes the one ordering problem the first draft could not solve.
     - **(A1)**: it is the only addressing measured here. (A2) is the better contract for real agents and is the next thing to measure.
+    - **(G3)**, **(S1)**, **(W1)** and **(K1)**: see their own questions above.
 
-    **If (a) is decided as (C1), A91's step 0 runs first.** Any result of (c1)–(c9) that contradicts A91 comes back to the human before code.
+    **If (a) is decided as (C1), A91's step 0 runs first.** Any result of (c1)–(c12) that contradicts A91 comes back to the human before code.
 
 ## 10. Resulting ADRs
 
@@ -1737,8 +1776,8 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
 
     | Resource | Name | Content |
     |---|---|---|
-    | `AgentgatewayBackend` | `<agent>-tools-<rev>` | `spec.mcp`: `sessionRouting: Stateless` (§3.4.2.1), and one `static` target: `host` is the resolved Service's DNS name, `<service>.<agent-namespace>.svc.<cluster-domain>`; `port` is its one port; `path` is the binding's `path`, default `/mcp`; `protocol` is `StreamableHTTP`. **The filter is carried by the Backend itself**: `spec.policies.mcp.authorization`, `action: Allow`, one expression `mcp.tool.name in [<names>]` (D10 (g)) |
-    | `HTTPRoute` | `<agent>-tools-<rev>` | `parentRef`: the assayd Gateway, listener `egress`. One hostname, `<tag>.<agent>.<agent-namespace>.tools.<suffix>`, where `<tag>` is `r-` plus the first 16 hex of the revision digest. One rule with one `backendRef`, that Backend. **While the path is unverified the rule also matches a header, `x-assayd-tool-probe: <tag>`, which no agent is given** (below). Label `assayd.dev/auth: "none"`, the marker §3.3.1 requires on a route that is unauthenticated |
+    | `AgentgatewayBackend` | `<agent>-tools-<rev>` | `spec.mcp`: `sessionRouting: Stateless` (§3.4.2.1), and one `static` target: `host` is the resolved Service's DNS name, `<service>.<agent-namespace>.svc.<cluster-domain>`; `port` is its one port; `path` is the binding's `path`, default `/mcp`; `protocol` is `StreamableHTTP`. **The filter is carried by the Backend itself**: `spec.policies.mcp.authorization`, `action: Allow`, one expression `mcp.tool.name in [<names>]` (D10 (g)). Under D10 (i)'s recommended (G3), `<names>` is the revision's `allow` intersected with the current spec's, so a narrowing re-renders every retained revision's Backend tighter, in place |
+    | `HTTPRoute` | `<agent>-tools-<rev>` | `parentRef`: the assayd Gateway, listener `egress`. One hostname, `<tag>.<agent>.<agent-namespace>.tools.<suffix>`, where `<tag>` is `r-` plus the first 16 hex of the revision digest. One rule with one `backendRef`, that Backend. **While the path is unverified the rule also matches a header, `x-assayd-tool-probe: <nonce>`**. The nonce is random per transaction and recorded in `status.tools[]`, so it is not a secret: anyone who can read the Agent's status can send it, and what they reach is the filtered Backend. It guards against an agent reaching an unverified path by accident, not against an adversary (below). Label `assayd.dev/auth: "none"`, the marker §3.3.1 requires on a route that is unauthenticated |
 
     **Why the Backend carries the filter.** A separate `AgentgatewayPolicy` attached to a Backend reports success only on the Gateway ancestor it reaches through a route (§3.3.2; `research/agentgateway-v1.4.1-spike.md` §2.1–2.2). So it cannot converge before a route exists, and a route that exists before the filter is a window with every tool open. In the Backend's own `spec.policies`, filter and target are one object, written in one request. Per the CRD, that field also takes precedence over a policy resource setting the same field. ADR-0028 decision 6 names `spec.backend.mcp.authorization` on the policy resource. This is the same field, carried by the Backend, and it is put to the human as D10 (g).
 
@@ -1798,15 +1837,18 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
     5. **Probe** through the header match (below).
     6. **Open.** On a pass, rewrite the rule to drop the header match, so the agent's requests reach the Backend. The Backend is not written in this step, so what was probed is what serves. Record the path as served.
 
-    **The record.** `status.tools[]` holds one entry per revision: `{revision, stage, deadline, verdict, key, appliedDigest, discriminating, probedAt}`.
+    **The record.** `status.tools[]` holds one entry per revision: `{revision, stage, deadline, verdict, key, nonce, appliedDigest, discriminating, probedAt}`.
     - `stage` is one of `Resolving`, `Converging`, `Probing` or `Served`.
-    - `deadline` is set once, on entering `Resolving`. It is 4 minutes, `-auth`'s `AuthTransactionDeadline`. Past it, the entry stays in its stage and keeps working, as `-auth`'s transactions do (§3.3.3), and `ToolFilterUnverified` is raised.
+    - `deadline` is set on entering `Resolving` **and reset on every move out of `Served`**, so a path that closes is judged against a fresh deadline. It is 4 minutes, `-auth`'s `AuthTransactionDeadline`. Past it, the entry stays in its stage and keeps working, as `-auth`'s transactions do (§3.3.3).
+    - **Before the deadline, an unserved path reads `Ready=False`, reason `ToolFilterPending`**, whose message names the stage. That is what `-auth`'s `AuthEnforcementPending` does for a `Create`.
+    - **Past the deadline, it raises the reason for the stage it is stuck in** (the conditions table below). A route the Gateway has not accepted is `ToolRouteNotAccepted`, not a filter failure, as A80 split `ServingRouteNotAccepted` from the policy half.
+    - **Retries.** Before a path is served, the probe is retried every 5 seconds, `-auth`'s `AuthProbeInterval`, until it passes. A failed probe raises nothing until the deadline. The e2e measures a window in which the MCP Backend answers `503` before it resolves a target (`test/e2e/mcp_test.go`), and a first probe in that window must not read as failed. A served path is re-probed every `CardDriftInterval`, 5 minutes.
     - `key` is the resolved Service's UID plus the Backend's render digest.
     - The entry stands in for §3.1's `RevisionRecord.appliedDigest`. That record is not in the API, and the entry moves into it when it lands.
 
-    **A failed probe never opens the route.** The route stays, or goes back to, probe-only. A probe through the header match reaches no agent, so it may be repeated, and it is, every `CardDriftInterval` (5 minutes). The path re-opens only on a pass. So the state the probe exists to catch, a filter that does not enforce, never reaches the agent, on any pass, however many times it recurs.
+    **A failed probe never opens the route.** Before a path is served, the route stays probe-only, and a probe through the header match reaches no agent, so it can be repeated freely. The path opens only on a pass. So, **before a path is first served**, the state the probe exists to catch — a filter that does not enforce — never reaches the agent. After the path is served the claim is narrower. What a failed re-probe does to a served path, and how a closure is verified, is §9 D10 (j), which is open. Until it is decided, three windows remain, each stated and none closed: the re-probe interval, the rewrite of an upgraded render while the route stays open (below), and the lag of a closure.
 
-    **Status writes** happen only when `stage`, `verdict`, `discriminating` or `key` changes, and on each periodic re-probe's `probedAt`. Every message names an error by its class, never its text, which is A90's rule. So a failing probe writes status at most once per interval, not once per pass.
+    **Status writes** happen only when `stage`, `verdict`, `discriminating` or `key` changes, and on each periodic re-probe's `probedAt`. A 5-second retry before the deadline writes nothing. Every message names an error by its class, never its text, which is A90's rule. So a failing probe writes status at most once per interval, not once per pass.
   - **The probe, and what it can and cannot prove.** The operator is an MCP client in two places:
     - **direct**: `tools/list` against the resolved Service's address, not through the gateway. This is the server's unfiltered surface, U.
     - **filtered**: `tools/list` through `--gateway-url`, with the revision's `Host` and, while the path is unverified, the probe header. This is F.
@@ -1835,7 +1877,7 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
   - **Out-of-band change, and when the route closes.** On every pass the Backend and the route are compared with what the operator renders (AGENTS.md rule 6). The rule is render against render, as §5's precondition for `-auth` is:
     - **A live Backend that digests to the current render** is left alone.
     - **One that digests to the `appliedDigest` recorded for the served path** is an earlier render by this operator of the same `allow`, for example after an upgrade that changed spacing. It is rewritten to the current render and re-probed with the route left open. So an upgrade that changes only the render closes nothing fleet-wide.
-    - **Anything else** — missing, edited, a target-level policy added under `mcp.targets[].static.policies` (the schema's highest-precedence carrier), `prefixMode`, `failureMode`, a second target, a changed `action` — **closes the route to probe-only**. The Backend is then rewritten, and the transaction runs from step 4.
+    - **Anything else** — missing, edited, a target-level `auth` or `tunnel` added under `mcp.targets[].static.policies`, which carries `auth`, `http`, `tcp`, `tls` and `tunnel` and is the schema's highest-precedence carrier for those, `prefixMode`, `failureMode`, a second target, a changed `action` — **closes the route to probe-only**. The Backend is then rewritten, and the transaction runs from step 4.
     - **A route edited out of band** is re-asserted in its current state, probe-only or open.
 
     A label-selected watch on `Service`s carrying `assayd.dev/mcp-tool` enqueues every Agent of that namespace.
@@ -1855,7 +1897,7 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
 
     | In | Where it is specified |
     |---|---|
-    | `spec.tools[].allow`: required, 1–32 names matching `^[A-Za-z0-9_.-]{1,128}$`, projected into the revision, so an edit mints one. `spec.tools[].path`, optional, default `/mcp` | A91; owed to design 02 §3.1 and §3.3 |
+    | `spec.tools[].allow`: required, 1–32 names matching `^[A-Za-z0-9_.-]{1,128}$`, projected into the revision so an edit mints one, and served as the revision's `allow` intersected with the current spec's (D10 (i), (G3)). `spec.tools[].path`, optional, with its `/mcp` default applied by the operator and not by the CRD, so stored bindings mint no revision on upgrade | A91; owed to design 02 §3.1 and §3.3 |
     | `ToolBinding.name` restricted to a label value | A91; owed to design 02 §3.1 |
     | **At most one** tool binding per Agent, and `requiresApproval: true` refused, as CEL on `AgentSpec` with messages that name the fix. Design 22's approval interceptor does not exist. Two targets on one Backend change tool names under `prefixMode: Conditional`, which nothing here has measured | A91; owed to design 02 §3.1 |
     | Resolution, the two per-revision resources, their names, labels, hostname, marker, deletion and drift rules | A91; §3.2 |
@@ -1882,9 +1924,16 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
     | Design 07's `07:717` (a static Backend, written outside run namespaces, naming an Agent's Service) and `07:721` (a tool route writer's plain route in a run namespace) | this slice widens neither. Each needs its own admission rule (D10 (d)) |
   - **How it composes with the conditions the approved slice writes.** It adds no condition type. Each new reason gets its entry in `internal/refgen/reasons.yaml` in the code PR, with `state`, `operator` and `traffic`.
     - **The order of steps.** The tool step runs after the `-auth` step and after A80's and A86's judgements.
-    - **`PolicyApplyIncomplete`.** The tool reasons join the end of `incompleteOrder`, below `ApiKeySourceEmpty`, in the order `ToolPathPolicy`, `ToolFilterNotEnforced`, `ToolFilterUnverified`. They join `carriedReason`, so an early-returning pass keeps them and does not flap, which is the A81 class. A tool reason never replaces an auth reason. It is listed in the same condition's message in §3.3.1's stable order.
+    - **`PolicyApplyIncomplete`.** The tool reasons join the end of `incompleteOrder`, below `ApiKeySourceEmpty`, in this order: `ToolPathPolicy`, `ToolRouteNotAccepted`, `ToolFilterNotEnforced`, `ToolBackendDrifted`, `ToolFilterUnverified`.
+      - **They do not join `carriedReason`.** `carriedReason` is what the `-auth` step withdraws on entry (`authtxn.go`), and an errored `-auth` step restores only its own reasons. A tool reason in it would be dropped on that pass and raised again on the next, which is the A81 flap class.
+      - **The tool step has its own carried set instead.** It withdraws its own reasons on entry and re-derives them. On any pass where it does not run to the end, including one where the `-auth` step errors, it re-asserts them from the stored condition, as A80's hold does.
+      - A tool reason never replaces an auth reason. It is listed in the same condition's message, in §3.3.1's stable order.
     - **`PolicyCompileFailed`** keeps its auth reason first. A tool failure is appended to its message, and the tool step never overwrites the `-auth` step's `fails[0]`.
-    - **`Ready`.** The tool step withholds it only when no earlier step on that pass already has.
+    - **`Ready`.** `withholdReady` lets the first writer win. That would contradict §3.3.1's "`PolicyCompileFailed` outranks `PolicyApplyIncomplete`" whenever a tool compile failure follows an `-auth` apply reason. So the rule is:
+      - the tool step withholds `Ready` when nothing has withheld it yet;
+      - it **replaces** a withhold whose condition ranks below its own, so a tool `PolicyCompileFailed` replaces an `-auth` `PolicyApplyIncomplete` withhold;
+      - between two reasons on one condition, the earlier in that condition's order wins, so an `-auth` reason keeps `Ready` over a tool reason on the same condition.
+    - **`GovernanceSkipped`.** `ToolRouteUnauthenticated` ranks **last**, below every existing reason, `AuthOptedOut` included. It leads only when no other reason holds the condition `True`. Otherwise its claim is appended to the leading reason's message. A85's rule, that a held `GovernanceSkipped` keeps a reason above it and appends its claim (`governanceKeptAbove`), applies unchanged. The tool reason is never "above" an auth reason.
     - **A84's `ObservedGeneration` rule** reads "nothing else writes that condition on the pass". On a pass where a tool reason is raised beside a held auth claim, the held `PolicyApplyIncomplete` takes the pass's generation, as it does beside a route reason.
     - **A candidate's failing tool path** reads as I1's held candidate does: the reason on its condition, `Ready=False` and phase `Degraded` while the active revision keeps serving. That is the approved precedent for a held candidate.
 
@@ -1895,7 +1944,10 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
     | `PolicyCompileFailed` | `ToolAllowAbsent` | a stored Agent, from before the rule, whose binding has no `allow`: a missing mandatory input (§3.3.1). The message names `spec.tools[0].allow` |
     | `PolicyCompileFailed` | `ConcernNotBuilt` (existing) | a stored Agent, from before the rules, with two bindings or `requiresApproval: true` |
     | `PolicyCompileFailed` | `ToolEgressUnconfigured` | the gateway is enabled, the Agent has a tool binding, and `--gateway-url` is unset, or the assayd Gateway has no `egress` listener, or that listener's hostname is not `*.tools.<suffix>` for the operator's suffix. The message names which |
-    | `PolicyApplyIncomplete` | `ToolFilterUnverified` | past the deadline at any stage, or any probe outcome but a pass or a listed name outside `allow`. Errors are named by class |
+    | `Ready` (withhold only) | `ToolFilterPending` | the active revision's tool path is not served, and its deadline has not passed. The message names the stage. Nothing pages on it |
+    | `PolicyApplyIncomplete` | `ToolRouteNotAccepted` | past the deadline, the assayd Gateway does not report the route `Accepted` and `ResolvedRefs` at its current generation |
+    | `PolicyApplyIncomplete` | `ToolBackendDrifted` | the route was closed because the live Backend digested to neither the current render nor the recorded one. The message names the Backend, and says that the closure is the operator's write; how that closure is verified is §9 D10 (j) |
+    | `PolicyApplyIncomplete` | `ToolFilterUnverified` | past the deadline at `Probing`, with any probe outcome except a pass or a listed name outside `allow`. Errors are named by class |
     | `PolicyApplyIncomplete` | `ToolFilterNotEnforced` | a probe listed a name outside `allow`. The route closes |
     | `PolicyApplyIncomplete` | `ToolPathPolicy` | a policy or listener that could answer for the path (above). The route is not closed, and the message says closing it would not withdraw the captured path |
 
@@ -1914,8 +1966,13 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
     - **design 03 §3.3.1's tool row and its static catalog's case** "tool route without `-auth` is withheld", which is §1.1's compile-failure rule's registry. Under (U1) the slice changes that case to "a tool route without `-auth` carries the marker and raises `ToolRouteUnauthenticated`". The catalog gains that case, and the mutation that drops the marker or the reason must fail it.
     - **design 03 A86** (approved): "Nothing unranked can co-occur today" becomes false, and `incompleteOrder` is extended as above.
     - **design 03 A84** (approved): the held `PolicyApplyIncomplete`'s `ObservedGeneration` rule gains the tool reason as a second writer.
+    - **design 03 A85** (approved): a held `GovernanceSkipped` keeps a same-pass reason above it and appends its claim. Ranking `ToolRouteUnauthenticated` last means that rule needs no change. A85's list of reasons that can stand above a held claim does gain it.
     - **design 03 §1.1, "A pinned rollback is not held"**: unchanged. A91 keeps it.
-    - **design 16 §1.1**: the send predicates, `blocked`'s reasons and precedence, the gate branch's order, and the rollout order "the not-ready branches, then the I1 hold, then the gate, then promotion". The tool hold sits after the gate. D10 (f) puts this to the human.
+    - **design 16 §1.1**, in four places. D10 (f) puts them to the human:
+      - the send predicates;
+      - `blocked`'s reasons and their precedence;
+      - the gate branch's order, and the rollout order "the not-ready branches, then the I1 hold, then the gate, then promotion". The tool hold sits after the gate;
+      - the sentence that a case "can fail" and that a `Failed` verdict is final. A tool wait makes that untrue of a held tool path.
   - **Failure modes, and what each reports (rule 8).**
 
     | State | Report | What a user sees |
@@ -1934,11 +1991,11 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
     | An Agent CRD that predates `status.tools[]` | the transaction refuses to write to the gateway, as `Create` does for `status.auth` (§3.3.3), because it could not keep its record. The reason is named in the code PR | no path |
     | A caller sends another Agent's host, from any namespace, or calls the Service directly | **nothing** beyond `ToolRouteUnauthenticated`. The call is unauthenticated and egress is unrestricted | — |
     | A caller outside the cluster, wherever the Gateway is exposed | **nothing**, under (U1). D10 (c) states it as (U1)'s cost | — |
-  - **Step 0: measure before code.** Eleven `make conformance-cluster` cases on agentgateway 1.5.0. Each has a control that makes its negative meaningful, and each decides a line above. Any result that contradicts A91 comes back to the human before code.
+  - **Step 0: measure before code.** Twelve `make conformance-cluster` cases on agentgateway 1.5.0. Each has a control that makes its negative meaningful, and each decides a line above. Any result that contradicts A91 comes back to the human before code.
     - **(c1)** A Backend in a run namespace with a `static` target naming a Service in another namespace by DNS, `protocol: StreamableHTTP`, with and without the Service's `appProtocol`, and with `svc.<cluster-domain>` and with the short `svc` form. Does `tools/list` reach the server?
     - **(c2)** What `egress` answers for a host whose only rule needs a header the request lacks. Then remove the header match: is the first `tools/list` filtered? The control is the same Backend with no filter.
     - **(c3)** `mcp.tool.name in ["a", "b"]` in `spec.policies.mcp.authorization`: it lists exactly `a` and `b`, and a call to `c` is refused. Controls: a list of one, and two expressions `mcp.tool.name == "a"`, `mcp.tool.name == "b"`, to measure the AND the schema describes. Also: `prompts/list` and `resources/list` under the rule.
-    - **(c4)** A policy resource setting `backend.mcp.authorization` on the same Backend, and a target-level `static.policies` setting it, each allowing a different tool. Which wins?
+    - **(c4)** A policy resource setting `backend.mcp.authorization` on the same Backend and allowing a different tool: which one wins? And does a target-level `static.policies.tunnel` or `auth` change where the filtered request goes?
     - **(c5)** A second target under `prefixMode: Conditional`: what names do the listing and the filter see?
     - **(c6)** The probe's answers: no `appProtocol`, a server that is down, a refused tool, a paginated listing, and a server answering `2026-07-28`.
     - **(c7)** `egress` (`*.tools.<suffix>`) and `tools` (no hostname) on one port: a tool host reaches `egress`, and any other host reaches `tools`.
@@ -1946,6 +2003,7 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
     - **(c9)** A Gateway-level `traffic` policy on `egress` (`directResponse`) and a `Service`-targeted `backend` policy on the tool Service: what reaches `tools/list` and `tools/call`?
     - **(c10)** A fixture tool that answers `tools/call` and is not listed: is a call to it refused by the Backend's filter?
     - **(c11)** An `HTTPRoute` header match on `egress`: a request without the header reaches no backend, and one with it does.
+    - **(c12)** The first `tools/list` through a Backend that has just converged: how long `503` lasts. This sizes the 5-second retry against the 4-minute deadline.
   - **Test plan by layer.** Every mutation must compile. A build error is INVALID, not killed (rule 3).
 
     | Layer | Test | Mutation it must fail under |
@@ -1963,7 +2021,7 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
     | envtest | a candidate with an unserved tool path gains no weight after its gate passes, and a new Agent's first revision is published by `Create` regardless | the hold removed; the hold applied to the first revision |
     | envtest | `assayd-gateway-backends` rendered from the chart: a non-operator `CREATE` and spec `UPDATE` refused in a run namespace, the operator admitted, the garbage collector's finalizer `UPDATE` admitted. `assayd-gateway-routes`: a tool route writer refused on `egress` | the policy not rendered; `UPDATE` not matched; rule 2 not applied to `egress` |
     | envtest | the CRD: two bindings, `requiresApproval: true`, a binding with no `allow`, 33 names, a name with a space, and a binding name that is not a label value, each refused with its message. A stored Agent with any of the first three gets its reason | each CEL rule removed |
-    | e2e (k3d, 1.5.0) | `TestAnAgentCompletesATaskByCallingAToolThroughTheGateway`, rewritten. The fixture moves into the Agent's namespace with the label, and nothing in the test writes a Backend, filter or tool route. With `allow: [echo_text]`, `echo_text` completes and `delete_everything` fails with `Unknown tool`. An edit to `allow: [echo_text, delete_everything]` mints a revision, which is served non-discriminating, promoted, and then completes it | the Backend emitted with no filter (`delete_everything` completes); the candidate's Backend rendered with the active revision's `allow`; `ASSAYD_TOOLS_HOST` not injected; the route opened without a probe |
+    | e2e (k3d, 1.5.0) | `TestAnAgentCompletesATaskByCallingAToolThroughTheGateway`, rewritten. The fixture moves into the Agent's namespace with the label, and nothing in the test writes a Backend, filter or tool route. With `allow: [echo_text]`, `echo_text` completes and `delete_everything` fails with `Unknown tool`. An edit to `allow: [echo_text, delete_everything]` mints a revision, which is served non-discriminating, promoted, and then completes it. An edit back to `allow: [echo_text]` refuses `delete_everything` through the previous revision's host as well, before any promotion (G3) | the Backend emitted with no filter (`delete_everything` completes); the candidate's Backend rendered with the active revision's `allow`; `ASSAYD_TOOLS_HOST` not injected; the retained revision rendered from its own `allow` alone (the narrowing arm fails); a probe that never passes, by a fixture flag, with the route opened anyway (the agent completes `echo_text` before any pass) |
     | e2e | `TestAnAgentCallsAnMCPToolThroughTheGateway` keeps its hand-authored filter, because it measures agentgateway, not the operator, and its comment says so | — |
     | conformance-cluster | step 0's (c1)–(c11) | each case's control |
   - **Interlocks, and text owed with the slice.**
@@ -2002,6 +2060,13 @@ The battery above needs agentgateway, SPIRE, design 04's receipt pipeline and a 
       - M6: the probe's bounds;
       - M7: `appProtocol` marked unmeasured for a static target, and `ToolEgressUnconfigured` covering the missing listener;
       - minors 1–10: cluster domain and `path`, consent, the AND control, the arithmetic, where the rules sit, the docs owed, the in-cluster exposure, D10 (h), the protocol version, a duplicate Service, and the body sentences owed.
+    - **Round 3** (`critique-design`, a fresh fork, at `79c0e32`): **REVISE, 1 BLOCKER, 6 MAJOR, 12 MINOR**. Answered in this revision:
+      - B1: D10 (i), with (G1)–(G3) and (G3) recommended; (P1)'s and (U1)'s cost rows now state what each revision's grant exposes;
+      - M1: a 5-second retry before a path is served, nothing raised until the deadline, and step 0 (c12);
+      - M2: `ToolFilterPending` before the deadline, a deadline reset on every move out of `Served`, `ToolBackendDrifted` for a drift closure, and `ToolRouteNotAccepted` split from the filter's failure;
+      - M4: the tool step's own carried set, `ToolRouteUnauthenticated` ranked last, the `Ready` precedence stated, and A85 in the sweep.
+      - M3, M5 and M6 are recorded as open questions with options and a recommendation: D10 (j), (k) and (l).
+      - Minors 1 (the nonce), 2 ((c4)), 3 (the case count), 4 (design 16's "can fail"), 10 (the e2e arm) and part of 6 (`path` defaulted by the operator) are folded in. Minors 5, 7, 8, 9, 11, 12 and the rest of 6 are **not** answered, and are listed in the PR as open.
 - **A90 (2026-11-24, the drafter's, answering #155) — a failed read of the assayd Gateway, and a failed list of the policies in its namespace, name the error's class, not its text.** **Decided by the human on 2026-11-24: §9 D9's (S1), (L1′) and (T1), each as recommended. Nothing in A90 is implemented yet**; one separate code PR builds it. *(A90's code PR: the sentence above is the record from before it landed. It is built; "Built", the last item of this entry, records what landed, against which lines, and the mutations run.)* *(Until the decision this line read "Proposed, not decided. Nothing in A90 is implemented, and §9 D9 puts its three questions to the human.")* Drafted against `main` `751fd59`. The messages A90 changes are A75's (§3.2, "Gateway-level policies above the route"), and A75 is not one of design 03's approved parts. A search of every approved part of design 03 finds no sentence the change makes false. It does make four sentences of design 16's approved §1.1 false, and one fact recorded in design 16's A21.12. Those are quoted below with their replacements. The first revision counted two §1.1 sentences. The independent critique of that revision found the third, in "What wakes the eval controller while it waits" (its MAJOR 1). The critique of the second revision found the fourth, in "In and out" (its MAJOR 1). After that, the sweep was redone by name ("Searched, by name", below). Design 16 A27.8 also records that this rule, applied here, "needs each design's own amendment". So A90 is an amendment and not a patch.
   - **The claim, measured** (`docs/research/155-varying-read-error-2026-11.md`, PR #172; rows in `test/envtest/varyingreaderror_test.go`). When the Gateway `get` in `gatewayAuthPolicies` fails, `internal/controller/authabove.go:212` writes the error's text into the message: `"Gateway %s/%s could not be read (%v)"`. The read is uncached. A transport error's text can change from pass to pass; a connection reset quotes its ephemeral source port. The measurement injected that error through the reconciler's `Reader` field, with the port fixed (the control) or moved on every call:
     - a served API-key Agent, by hand: **10 of 10 passes wrote status with a varying text**, 0 of 10 with a stable one, 10 distinct `GovernanceSkipped` messages against 1;
